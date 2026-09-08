@@ -94,6 +94,11 @@ describe("website authority continuity", () => {
       expect(evaluate(ctx, [], "open").code).toBe("invalid-attestation");
     }
   });
+  it("rejects a current website fact paired with an installed-code authorizing origin", () => {
+    const ctx = context();
+    ctx.authorizingOrigin = codeContext().authorizingOrigin;
+    expect(evaluate(ctx, [], "open").code).toBe("invalid-attestation");
+  });
   it("never borrows user, installed code or task grants", () => {
     const ctx = context();
     ctx.session.taskAuthority = "task:borrowed";

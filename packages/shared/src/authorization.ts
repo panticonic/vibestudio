@@ -82,7 +82,8 @@ export function authorityFailureForDecision(
         ...common,
         remediation: {
           kind: "connect-workspace",
-          message: "Request workspace connection separately before submitting workspace operations.",
+          message:
+            "Request workspace connection separately before submitting workspace operations.",
         },
       };
     case "approval-required":
@@ -224,6 +225,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       /* Missing or opaque origins cannot authenticate a website. */
     }
     if (
+      input.context.authorizingOrigin.kind !== "website" ||
       !website ||
       !binding ||
       !canonicalOrigin ||
@@ -234,11 +236,13 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       binding.generation < 0 ||
       !binding.documentId ||
       (input.context.authorizingOrigin.kind === "website" &&
-        (!effectBinding || effectBinding.subject !== binding.subject ||
+        (!effectBinding ||
+          effectBinding.subject !== binding.subject ||
           effectBinding.generation !== binding.generation ||
           effectBinding.documentId !== binding.documentId ||
           website.userId !== input.context.actingUser ||
-          website.workspaceId !== (input.context.sourceWorkspaceId ?? input.context.workspace?.workspaceId) ||
+          website.workspaceId !==
+            (input.context.sourceWorkspaceId ?? input.context.workspace?.workspaceId) ||
           website.subject !== input.context.authorizingOrigin.principal))
     ) {
       return {
@@ -436,7 +440,10 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     }
 
     const candidates = matchingAuthorityGrants({
-      ...input, capability: requirement.capability, subjects: authoritySubjects, now,
+      ...input,
+      capability: requirement.capability,
+      subjects: authoritySubjects,
+      now,
     });
 
     // Invocation-bound grants are single-use at every tier. Keeping a consumed
@@ -670,14 +677,20 @@ export function matchingAuthorityGrants(input: {
   now?: number;
 }): AuthorityGrant[] {
   const now = input.now ?? Date.now();
-  return input.grants.filter(grant =>
-    input.subjects.has(grant.subject) &&
-    capabilityPatternCovers(grant.capability, input.capability) &&
-    grant.createdAt <= now &&
-    (grant.revokedAt === undefined || grant.revokedAt > now) &&
-    (grant.expiresAt === undefined || grant.expiresAt > now) &&
-    grantConstraintsMatch(grant, input.context, input.invocationDigest, input.providerExecutionDigest) &&
-    scopeCovers(grant.resource, input.resourceKey)
+  return input.grants.filter(
+    (grant) =>
+      input.subjects.has(grant.subject) &&
+      capabilityPatternCovers(grant.capability, input.capability) &&
+      grant.createdAt <= now &&
+      (grant.revokedAt === undefined || grant.revokedAt > now) &&
+      (grant.expiresAt === undefined || grant.expiresAt > now) &&
+      grantConstraintsMatch(
+        grant,
+        input.context,
+        input.invocationDigest,
+        input.providerExecutionDigest
+      ) &&
+      scopeCovers(grant.resource, input.resourceKey)
   );
 }
 

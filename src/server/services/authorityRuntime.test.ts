@@ -96,11 +96,43 @@ describe("authority runtime", () => {
         issuedBy: "user:usr_alice",
         provenance: "acquisition",
       });
+      const receiverSite = grantStore.ensureWebsiteSubject({
+        userId: stored.userId,
+        workspaceId: stored.workspaceId,
+        origin: "https://receiver.example",
+      });
+      const receiverWebsite = {
+        ...caller,
+        website: {
+          ...caller.website,
+          subject: receiverSite.subject,
+          origin: receiverSite.identityKey,
+          binding: {
+            subject: receiverSite.subject,
+            generation: receiverSite.generation,
+            documentId: "receiver-doc",
+          },
+        },
+      };
+      grantStore.registerSubjectExecution(receiverWebsite.website.binding);
+      const websiteReceiver = authorizeVerifiedCaller(receiverWebsite, {
+        ...facts,
+        initiatingWebsite: caller.website,
+      });
+      expect(websiteReceiver.context.authorizingOrigin).toEqual({
+        kind: "website",
+        principal: receiverSite.subject,
+      });
+      expect(websiteReceiver.context.website).toEqual(receiverWebsite.website);
+      expect(websiteReceiver.context.subjectBinding).toEqual(receiverWebsite.website.binding);
+      expect(websiteReceiver.context.initiatingWebsite).toEqual(caller.website);
+      expect(websiteReceiver.grants).toEqual([]);
       const executionSignal = grantStore.subjectExecutionSignal(caller.website.binding);
       const delegatedFacts = { ...facts, initiatingWebsite: caller.website };
       const delegated = authorizeVerifiedCaller(receiver, delegatedFacts);
       expect(delegated.context.authorizingOrigin.kind).toBe("code");
-      expect(delegated.context.website).toEqual(caller.website);
+      expect(delegated.context.website).toBeUndefined();
+      expect(delegated.context.initiatingWebsite).toEqual(caller.website);
       expect(delegated.context.subjectBinding).toBeUndefined();
       expect(
         evaluateAuthority({
@@ -113,7 +145,16 @@ describe("authority runtime", () => {
       grantStore.invalidateAuthoritySubject(stored.subject);
       expect(executionSignal.aborted).toBe(true);
       expect(() => authorizeVerifiedCaller(caller, facts)).toThrow(/subject binding/);
-      expect(() => authorizeVerifiedCaller(receiver, delegatedFacts)).toThrow(/subject binding/);
+      const afterDisconnect = authorizeVerifiedCaller(receiver, delegatedFacts);
+      expect(afterDisconnect.context.initiatingWebsite).toEqual(caller.website);
+      expect(
+        evaluateAuthority({
+          ...afterDisconnect,
+          requirement: requirementForPrincipals(["code"], "model.use"),
+          resourceKey: "account:1",
+          tier: "gated",
+        }).allowed
+      ).toBe(true);
     } finally {
       grantStore.close();
     }

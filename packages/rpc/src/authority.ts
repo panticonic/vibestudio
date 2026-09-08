@@ -300,8 +300,10 @@ export interface ExecutionAdmissionFact {
  * authorize eval calls directly.
  */
 export interface AuthorizationContext {
-  /** Resolved afresh by the host from the initiating document and subject owner. */
+  /** Live website principal of this authenticated caller, when it is a browser document. */
   website?: WebsiteAuthorityFact;
+  /** Host-attested origin attribution for review/audit; never a transitive authority ceiling. */
+  initiatingWebsite?: WebsiteAuthorityFact;
   subjectBinding?: AuthoritySubjectBinding;
   /** Authenticated workspace of the initiating caller; `workspace` is the receiver. */
   sourceWorkspaceId?: string;
@@ -439,7 +441,7 @@ export interface AuthorizationDecision {
 }
 
 export interface InvocationSnapshot {
-  /** Disclosure/lifetime attribution, independent of the grant recipient. */
+  /** Review/audit attribution, independent of the current caller's authority and lifetime. */
   initiatingWebsite?: WebsiteAuthorityFact;
   subjectBinding?: AuthoritySubjectBinding;
   v: 2;
@@ -686,11 +688,22 @@ export type WebsiteMethodPolicy =
   | { kind: "closed"; reason: string }
   | { kind: "eligible"; rationale: string };
 
-export function validateWebsiteMethodPolicy(policy: unknown, method: string): asserts policy is WebsiteMethodPolicy {
-  const value = policy && typeof policy === "object" && !Array.isArray(policy)
-    ? policy as Record<string, unknown> : null;
-  const explanation = value?.["kind"] === "closed" ? value["reason"]
-    : value?.["kind"] === "eligible" ? value["rationale"] : null;
+export function validateWebsiteMethodPolicy(
+  policy: unknown,
+  method: string
+): asserts policy is WebsiteMethodPolicy {
+  const value =
+    policy && typeof policy === "object" && !Array.isArray(policy)
+      ? (policy as Record<string, unknown>)
+      : null;
+  const explanation =
+    value?.["kind"] === "closed"
+      ? value["reason"]
+      : value?.["kind"] === "eligible"
+        ? value["rationale"]
+        : null;
   if (typeof explanation !== "string" || !explanation.trim())
-    throw new Error(`Method ${method} requires an explicit website eligibility decision and explanation`);
+    throw new Error(
+      `Method ${method} requires an explicit website eligibility decision and explanation`
+    );
 }

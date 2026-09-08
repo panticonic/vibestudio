@@ -150,29 +150,20 @@ export function authorizeVerifiedCaller(
   const now = facts.now ?? Date.now();
   const website = caller.website;
   const initiatingWebsite = facts.initiatingWebsite ?? website;
-  if (
-    website &&
-    facts.initiatingWebsite &&
-    (website.subject !== facts.initiatingWebsite.subject ||
-      website.binding.documentId !== facts.initiatingWebsite.binding.documentId)
-  )
-    throw new Error("Website initiator does not match its authenticated subject binding");
-  if (initiatingWebsite) {
-    const stored = facts.grantStore?.getAuthoritySubject(initiatingWebsite.subject);
+  if (website) {
+    const stored = facts.grantStore?.getAuthoritySubject(website.subject);
     if (
-      (website && caller.hostOriginated) ||
+      caller.hostOriginated ||
       !stored ||
-      !facts.grantStore?.isSubjectExecutionCurrent(initiatingWebsite.binding) ||
-      stored.userId !== initiatingWebsite.userId ||
-      stored.workspaceId !== initiatingWebsite.workspaceId ||
-      stored.identityKey !== initiatingWebsite.origin ||
-      stored.generation !== initiatingWebsite.binding.generation ||
-      (website &&
-        (stored.userId !== `user:${caller.subject?.userId}` ||
-          stored.workspaceId !== (caller.workspaceId ?? facts.workspaceId)))
-    ) {
+      !facts.grantStore?.isSubjectExecutionCurrent(website.binding) ||
+      stored.userId !== website.userId ||
+      stored.workspaceId !== website.workspaceId ||
+      stored.identityKey !== website.origin ||
+      stored.generation !== website.binding.generation ||
+      stored.userId !== `user:${caller.subject?.userId}` ||
+      stored.workspaceId !== (caller.workspaceId ?? facts.workspaceId)
+    )
       throw new Error("Website authority no longer matches its authenticated subject binding");
-    }
   }
   const product = getProductBootManifest();
   const host = caller.hostOriginated === true ? product.hostPrincipal : null;
@@ -245,7 +236,8 @@ export function authorizeVerifiedCaller(
           ? ({ kind: "code", principal: code } as const)
           : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
   const context: AuthorizationContext = {
-    ...(initiatingWebsite ? { website: initiatingWebsite } : {}),
+    ...(website ? { website } : {}),
+    ...(initiatingWebsite ? { initiatingWebsite } : {}),
     ...(website ? { subjectBinding: website.binding } : {}),
     sourceWorkspaceId: caller.workspaceId ?? facts.workspaceId,
     authorizingOrigin,

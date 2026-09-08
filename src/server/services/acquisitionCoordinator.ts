@@ -3,7 +3,10 @@ import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalTargetIdentity, OperationSubstance } from "@vibestudio/shared/approvals";
-import type { AuthorityAcquisitionDecision } from "@vibestudio/shared/approvalContract";
+import {
+  AUTHORITY_ACQUISITION_DECISIONS,
+  type AuthorityAcquisitionDecision,
+} from "@vibestudio/shared/approvalContract";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   authorityPromptCardType,
@@ -1267,12 +1270,33 @@ export class AcquisitionCoordinator {
   ): Promise<void> {
     const input = validateAcquisitionGroup(inputs);
     const presentation = input.presentation;
-    const signal = combineAcquisitionSignals(invocationSignal, inputs);
+    const subjectLifetimes = inputs.flatMap((input) =>
+      input.snapshot.subjectBinding?.documentId
+        ? [this.deps.grantStore.subjectExecutionSignal(input.snapshot.subjectBinding)]
+        : []
+    );
+    const signal = combineAcquisitionSignals(invocationSignal, inputs, subjectLifetimes);
     const allowedDecisions = allowedDecisionsForGroup(inputs);
     const taskSubject =
       input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId;
     const taskTitle = this.deps.resolveTaskTitle ? await this.taskTitleFor(taskSubject) : undefined;
+    const displayedWebsite = input.caller.website ?? input.snapshot.initiatingWebsite;
     const requestBase = {
+      authoritySubject: {
+        principal: input.snapshot.callerPrincipal,
+        ...(input.snapshot.callerPrincipal.startsWith("code:") && input.caller.code
+          ? { reviewedVersion: input.caller.code.effectiveVersion }
+          : {}),
+        ...(displayedWebsite?.binding.documentId
+          ? {
+              website: {
+                origin: displayedWebsite.origin,
+                workspaceId: displayedWebsite.workspaceId,
+                documentId: displayedWebsite.binding.documentId,
+              },
+            }
+          : {}),
+      },
       callerId: input.caller.runtime.id,
       callerKind: approvalCallerKind(input.caller.runtime.kind),
       repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
@@ -1516,6 +1540,23 @@ export class AcquisitionCoordinator {
     input: AcquisitionRequestInput,
     decision: AuthorityAcquisitionDecision
   ): string | undefined {
+    const binding = input.snapshot.subjectBinding;
+    if (
+      binding &&
+      (this.deps.grantStore.getAuthoritySubject(binding.subject)?.generation !==
+        binding.generation ||
+        (binding.documentId && !this.deps.grantStore.isSubjectExecutionCurrent(binding)))
+    )
+      throw new Error("The authorizing subject retired before approval completed");
+    if (binding && binding.subject !== input.snapshot.callerPrincipal) {
+      throw new Error("Approval subject binding does not match its sealed authorizing principal");
+    }
+    const subjectConstraints = binding
+      ? {
+          subjectGeneration: binding.generation,
+          ...(binding.documentId ? { documentId: binding.documentId } : {}),
+        }
+      : {};
     const capabilityDefinition =
       input.snapshot.capabilityDefinitionDigest === "-"
         ? {}
@@ -1528,6 +1569,7 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.callerPrincipal,
         constraints: {
+          ...subjectConstraints,
           ...(input.snapshot.sourceWorkspaceId
             ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
             : {}),
@@ -1561,6 +1603,7 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: onceSubject,
         constraints: {
+          ...(onceSubject === input.snapshot.callerPrincipal ? subjectConstraints : {}),
           ...(input.snapshot.sourceWorkspaceId
             ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
             : {}),
@@ -1579,6 +1622,34 @@ export class AcquisitionCoordinator {
         ...capabilityDefinition,
       });
       return;
+    }
+    if (decision === "session" || decision === "always") {
+      if (!binding || (decision === "session" && !binding.documentId)) {
+        throw new Error(
+          "Continuing approval requires an authenticated subject and lifetime binding"
+        );
+      }
+      return this.deps.grantStore.issue({
+        effect: "allow",
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        subject: binding.subject,
+        constraints: {
+          subjectGeneration: binding.generation,
+          ...(decision === "session" ? { documentId: binding.documentId } : {}),
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
+          lineageAtConsent,
+        },
+        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        provenance: "acquisition",
+        ...capabilityDefinition,
+        scope: decision === "session" ? "session" : "system",
+        ...(input.presentation?.grantExpiresAt
+          ? { expiresAt: input.presentation.grantExpiresAt }
+          : {}),
+      }).id;
     }
     if (decision === "task") {
       if (!input.snapshot.taskAuthority) {
@@ -2007,11 +2078,14 @@ function acquisitionFacetSelectionKey(input: AcquisitionRequestInput): string {
 
 function combineAcquisitionSignals(
   invocationSignal: AbortSignal | undefined,
-  inputs: readonly AcquisitionRequestInput[]
+  inputs: readonly AcquisitionRequestInput[],
+  executionSignals: readonly AbortSignal[] = []
 ): AbortSignal | undefined {
-  const signals = [invocationSignal, ...inputs.map((input) => input.presentation?.signal)].filter(
-    (signal): signal is AbortSignal => signal !== undefined
-  );
+  const signals = [
+    invocationSignal,
+    ...executionSignals,
+    ...inputs.map((input) => input.presentation?.signal),
+  ].filter((signal): signal is AbortSignal => signal !== undefined);
   if (signals.length === 0) return undefined;
   if (signals.length === 1) return signals[0];
   return AbortSignal.any([...new Set(signals)]);
@@ -2038,6 +2112,14 @@ function decisionsForOrigin(
   input: AcquisitionRequestInput
 ): readonly AuthorityAcquisitionDecision[] {
   if (input.tier === "critical") return ["once", "deny"];
+  if (input.snapshot.subjectBinding?.subject === input.snapshot.callerPrincipal) {
+    return [
+      "once",
+      ...(input.snapshot.subjectBinding.documentId ? ["session" as const] : []),
+      "always",
+      "deny",
+    ];
+  }
   if (input.snapshot.callerPrincipal.startsWith("session:")) {
     return [
       "once",
@@ -2102,15 +2184,7 @@ function allowedDecisionsForGroup(
 function isAuthorityAcquisitionDecision(
   decision: ApprovalQueueDecision
 ): decision is AuthorityAcquisitionDecision {
-  return (
-    decision === "once" ||
-    decision === "task" ||
-    decision === "mission" ||
-    decision === "agent" ||
-    decision === "lock" ||
-    decision === "version" ||
-    decision === "deny"
-  );
+  return (AUTHORITY_ACQUISITION_DECISIONS as readonly string[]).includes(decision);
 }
 
 /**

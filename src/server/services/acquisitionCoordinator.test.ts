@@ -61,6 +61,139 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it.each([true, false])(
+    "binds approval retirement to the actual subject, not website attribution (website caller: %s)",
+    async (websiteCaller) => {
+      const grantStore = new CapabilityGrantStore({
+        statePath: mkdtempSync(join(tmpdir(), "approval-lifetime-")),
+      });
+      const subject = grantStore.ensureWebsiteSubject({
+        userId: "user:u",
+        workspaceId: "workspace-1",
+        origin: "https://example.com",
+      });
+      const binding = {
+        subject: subject.subject,
+        generation: subject.generation,
+        documentId: "doc-1",
+      };
+      grantStore.registerSubjectExecution(binding);
+      const initiatingWebsite = {
+        subject: subject.subject,
+        userId: subject.userId,
+        workspaceId: subject.workspaceId,
+        origin: subject.identityKey,
+        connected: true,
+        binding,
+      };
+      const snap = {
+        ...snapshot(),
+        callerPrincipal: websiteCaller
+          ? subject.subject
+          : (`code:extensions/templates@${"a".repeat(64)}` as const),
+        initiatingWebsite,
+        ...(websiteCaller ? { subjectBinding: binding } : {}),
+      };
+      let reviewSignal: AbortSignal | undefined;
+      const request = vi.fn(async (input: { signal?: AbortSignal }) => {
+        reviewSignal = input.signal;
+        grantStore.invalidateAuthoritySubject(subject.subject);
+        return "once";
+      });
+      const coordinator = new AcquisitionCoordinator({
+        grantStore,
+        approvalQueue: { request } as never,
+      });
+      try {
+        const result = coordinator.requestAndWait({
+          snapshot: snap,
+          snapshotDigest: invocationSnapshotDigest(snap),
+          tier: "gated",
+          caller: createVerifiedCaller("panel:receiver", "panel", null, null, {
+            userId: "u",
+            handle: "user",
+          }),
+          renderedAction: "read example.com",
+          resource: { kind: "exact", key: snap.resourceKey },
+          presentation: reviewedPresentation(),
+        });
+        if (websiteCaller) {
+          await expect(result).resolves.toMatchObject({ state: "closed" });
+          expect(reviewSignal?.aborted).toBe(true);
+          expect(grantStore.grantsForSubjects([subject.subject], snap.capability)).toEqual([]);
+        } else {
+          await expect(result).resolves.toMatchObject({ state: "decided", decision: "once" });
+          expect(reviewSignal?.aborted ?? false).toBe(false);
+          expect(
+            grantStore.grantsForSubjects([snap.callerPrincipal], snap.capability)
+          ).toHaveLength(1);
+        }
+      } finally {
+        grantStore.close();
+      }
+    }
+  );
+
+  it.each(["once", "session", "always"] as const)(
+    "persists %s consent for a mutable subject with its exact continuity constraints",
+    async (decision) => {
+      const grantStore = new CapabilityGrantStore({
+        statePath: mkdtempSync(join(tmpdir(), "website-acquisition-")),
+      });
+      const binding = grantStore.ensureWebsiteSubject({
+        userId: "user:u",
+        workspaceId: "workspace-1",
+        origin: "https://example.com",
+      });
+      const request = vi.fn(async () => decision);
+      const coordinator = new AcquisitionCoordinator({
+        grantStore,
+        approvalQueue: { request } as never,
+      });
+      const snap = {
+        ...snapshot(),
+        callerPrincipal: binding.subject,
+        sourceWorkspaceId: binding.workspaceId,
+        subjectBinding: {
+          subject: binding.subject,
+          generation: binding.generation,
+          documentId: "document-1",
+        },
+      };
+      grantStore.registerSubjectExecution(snap.subjectBinding);
+      try {
+        const result = await coordinator.requestAndWait({
+          snapshot: snap,
+          snapshotDigest: invocationSnapshotDigest(snap),
+          tier: "gated",
+          caller: createVerifiedCaller("panel:website", "panel", null, null, {
+            userId: "u",
+            handle: "user",
+          }),
+          renderedAction: "read example.com",
+          resource: { kind: "exact", key: snap.resourceKey },
+          presentation: reviewedPresentation(),
+        });
+        expect(result).toMatchObject({ state: "decided", decision });
+        expect(request).toHaveBeenCalledWith(
+          expect.objectContaining({ allowedDecisions: ["once", "session", "always", "deny"] })
+        );
+        const grant = grantStore.grantsForSubjects([binding.subject], snap.capability)[0]!;
+        expect(grant.subject).toBe(binding.subject);
+        expect(grant.constraints?.subjectGeneration).toBe(0);
+        expect(grant.constraints?.sourceWorkspaceId).toBe(binding.workspaceId);
+        expect(grant.constraints?.documentId).toBe(
+          decision === "always" ? undefined : "document-1"
+        );
+        expect(grant.constraints?.invocationDigest).toBe(
+          decision === "once" ? invocationSnapshotDigest(snap) : undefined
+        );
+      } finally {
+        grantStore.close();
+      }
+    }
+  );
+
   it.each(["waiting", "waiting-abortable", "late"])(
     "preserves presentation failures for an owner waiter (%s)",
     async (mode) => {
@@ -629,6 +762,42 @@ describe("AcquisitionCoordinator", () => {
       grantStore.grantsForSubjects([codeSnapshot.callerPrincipal], codeSnapshot.capability)
     ).toEqual([expect.objectContaining({ subject: codeSnapshot.callerPrincipal })]);
     grantStore.close();
+  });
+
+  it("refuses to widen a versioned code request into remembered identity consent", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-no-widening-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => "always" as const) } as never,
+      grantStore,
+    });
+    const codeSnapshot = { ...snapshot(), callerPrincipal: "code:panels/example@ev-test" as const };
+    try {
+      await expect(
+        coordinator.requestAndWait({
+          snapshot: codeSnapshot,
+          snapshotDigest: invocationSnapshotDigest(codeSnapshot),
+          tier: "gated",
+          caller: createVerifiedCaller("panel:example", "panel", {
+            callerId: "panel:example",
+            callerKind: "panel",
+            repoPath: "panels/example",
+            effectiveVersion: "ev-test",
+            executionDigest: "c".repeat(64),
+            requested: [],
+          }),
+          renderedAction: "use the local service",
+          resource: { kind: "exact", key: codeSnapshot.resourceKey },
+          presentation: reviewedPresentation(),
+        })
+      ).rejects.toThrow(/disallowed decision/);
+      expect(
+        grantStore.grantsForSubjects([codeSnapshot.callerPrincipal], codeSnapshot.capability)
+      ).toEqual([]);
+    } finally {
+      grantStore.close();
+    }
   });
 
   it.each(["once", "version", "deny"] as const)(
