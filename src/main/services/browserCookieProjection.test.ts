@@ -175,6 +175,55 @@ describe("canonical browser cookie projection", () => {
     expect(browserDataClient.getBrowserEnvironment).toHaveBeenCalledTimes(1);
   });
 
+  it("waits through workspace review and projects stored cookies after approval", async () => {
+    vi.useFakeTimers();
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-review-"));
+    const cookies = fakeCookieJar();
+    let approved = false;
+    const browserDataClient = {
+      getBrowserEnvironment: vi.fn(async () => {
+        if (!approved)
+          throw Object.assign(new Error("Workspace review is pending"), {
+            code: "EREVIEWPENDING",
+          });
+        return {
+          workspaceId: "workspace-test",
+          ownerUserId: "user-test",
+          environmentKey: "environment-test",
+        };
+      }),
+    };
+    const vault = { ...originScopedReads(3, [stored()]), applyCookieMutations: vi.fn() };
+    const onReady = vi.fn();
+    const onUnavailable = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
+      browserDataClient: browserDataClient as never,
+      browserVault: vault as never,
+      serverClient: { stream: vi.fn(), call: vi.fn().mockResolvedValue(null) } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      createCookieJar: () => cookies.jar,
+      onReady,
+      onUnavailable,
+    });
+    try {
+      await service.start?.(() => undefined);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(onUnavailable).not.toHaveBeenCalled();
+      expect(onReady).not.toHaveBeenCalled();
+      expect(cookies.jar.start).not.toHaveBeenCalled();
+      approved = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+      expect(cookies.current()).toMatchObject([input()]);
+      expect(onReady.mock.calls[0]![0].diagnostics().converged).toBe(true);
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("publishes a terminal browser-environment failure after startup returns", async () => {
     const unavailable = new Error("Signed-in account is required");
     const browserDataClient = {

@@ -15,6 +15,7 @@ import {
   normalizeCookieExpirationSeconds,
 } from "@vibestudio/browser-data";
 import { browserEnvironmentPartition } from "@vibestudio/shared/panelInterfaces";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -31,6 +32,7 @@ const log = createDevLogger("BrowserCookieProjection");
 const EXTENSION_WAIT_INTERVAL_MS = 3_000;
 
 function isExtensionUnavailableError(error: unknown): boolean {
+  if (isReviewPending(error)) return true;
   const message = error instanceof Error ? error.message : String(error);
   return /Extension is not installed|Extension failed to start|Unknown service|ENOEXT|ENOTREADY/i.test(
     message
