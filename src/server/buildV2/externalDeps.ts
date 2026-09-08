@@ -1480,7 +1480,7 @@ async function ensureDepsInstalledOnce(
 
     profile.publishMs = Date.now() - publishStartedAt;
     if (options.contentDeduplication === "background") {
-      scheduleDependencyContentMaintenance(cacheDir, options.appRoot);
+      scheduleDependencyContentMaintenance(cacheDir);
     }
     logProfile("installed");
 

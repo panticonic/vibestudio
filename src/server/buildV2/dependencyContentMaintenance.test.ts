@@ -22,6 +22,7 @@ describe("dependency content maintenance scheduling", () => {
   });
 
   afterEach(() => {
+    delete process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
     vi.useRealTimers();
   });
 
@@ -32,8 +33,9 @@ describe("dependency content maintenance scheduling", () => {
     const first = "/tmp/profile/derived-cache/external-deps/1111111111111111";
     const second = "/tmp/profile/derived-cache/external-deps/2222222222222222";
 
-    scheduleDependencyContentMaintenance(first, appRoot);
-    scheduleDependencyContentMaintenance(second, appRoot);
+    process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = appRoot;
+    scheduleDependencyContentMaintenance(first);
+    scheduleDependencyContentMaintenance(second);
     await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS - 1);
     expect(spawn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -41,7 +43,7 @@ describe("dependency content maintenance scheduling", () => {
     expect(spawn).toHaveBeenCalledOnce();
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
-      [dependencyContentMaintenanceEntry(appRoot), path.resolve(first), path.resolve(second)],
+      [dependencyContentMaintenanceEntry(), path.resolve(first), path.resolve(second)],
       expect.objectContaining({ detached: true, stdio: "ignore" })
     );
     expect(child.unref).toHaveBeenCalledOnce();

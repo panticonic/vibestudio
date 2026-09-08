@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveRequiredAppRoot } from "../appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash, parseSha256, sha256 } from "@vibestudio/shared/execution/identity";
@@ -177,8 +177,7 @@ function loadBundle(): InternalDOBundle {
   // Source/test path: read the prebuilt bundle from the exact application
   // root. Used by Vitest and non-bundled execution after source prerequisites
   // have produced `dist/internal-do.bundle.mjs`.
-  const appRoot = resolveRequiredAppRoot();
-  const candidates = [path.resolve(appRoot, "dist/internal-do.bundle.mjs")];
+  const candidates = [path.resolve(resolveRequiredHostArtifactRoot(), "internal-do.bundle.mjs")];
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
     const bundle = fs.readFileSync(candidate, "utf8");

@@ -5,6 +5,10 @@ process.env["VIBESTUDIO_APP_ROOT"] ??= path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../.."
 );
+process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ??= path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../dist"
+);
 
 class ResizeObserverMock {
   observe() {}

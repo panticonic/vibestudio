@@ -2,21 +2,25 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
+import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 
 export const DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS = 3 * 60_000;
 
 const pendingCacheDirs = new Set<string>();
 let maintenanceTimer: NodeJS.Timeout | null = null;
 
-export function dependencyContentMaintenanceEntry(appRoot: string): string {
-  return getPhysicalAppPath(appRoot, "dist/dependency-content-maintenance.cjs");
+export function dependencyContentMaintenanceEntry(): string {
+  return getPhysicalAppPath(
+    resolveRequiredHostArtifactRoot(),
+    "dependency-content-maintenance.cjs"
+  );
 }
 
 /**
  * Batch physical dependency sharing behind a grace period, then detach it from
  * the workspace server. Cache density must never compete with first-use work.
  */
-export function scheduleDependencyContentMaintenance(cacheDir: string, appRoot: string): void {
+export function scheduleDependencyContentMaintenance(cacheDir: string): void {
   pendingCacheDirs.add(path.resolve(cacheDir));
   if (maintenanceTimer) return;
   maintenanceTimer = setTimeout(() => {
@@ -25,7 +29,7 @@ export function scheduleDependencyContentMaintenance(cacheDir: string, appRoot: 
     pendingCacheDirs.clear();
     if (cacheDirs.length === 0) return;
 
-    const entry = dependencyContentMaintenanceEntry(appRoot);
+    const entry = dependencyContentMaintenanceEntry();
     if (!fs.existsSync(entry)) {
       console.warn(`[externalDeps] Dependency maintenance entry is missing: ${entry}`);
       return;

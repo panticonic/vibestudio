@@ -365,6 +365,9 @@ export class HubProcessManager {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
       VIBESTUDIO_APP_ROOT: this.config.appRoot,
+      ...(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]
+        ? { VIBESTUDIO_HOST_ARTIFACT_ROOT: process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] }
+        : {}),
       VIBESTUDIO_APP_VERSION: this.config.appVersion,
       ...(esbuildBinaryPath ? { ESBUILD_BINARY_PATH: esbuildBinaryPath } : {}),
       ...(this.config.logLevel ? { VIBESTUDIO_LOG_LEVEL: this.config.logLevel } : {}),

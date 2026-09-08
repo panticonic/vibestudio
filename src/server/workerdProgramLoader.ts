@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveRequiredAppRoot } from "./appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
 export interface WorkerdProgramSources {
   readonly router: string;
@@ -23,8 +23,7 @@ export function getWorkerdProgramSources(): WorkerdProgramSources {
     return cached;
   }
 
-  const appRoot = resolveRequiredAppRoot();
-  const candidates = [path.resolve(appRoot, "dist/workerd-programs")];
+  const candidates = [path.resolve(resolveRequiredHostArtifactRoot(), "workerd-programs")];
   for (const directory of candidates) {
     const loaded = readPrograms(directory);
     if (!loaded) continue;

@@ -14,6 +14,7 @@ import {
 } from "electron";
 import * as path from "path";
 import * as fs from "node:fs";
+process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = __dirname;
 import { EventService } from "@vibestudio/shared/eventsService";
 import { SHELL_SURFACE_KINDS, type ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
 // Silence Electron security warnings in dev; panels run in isolated webviews.

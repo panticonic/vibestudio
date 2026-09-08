@@ -190,12 +190,9 @@ export function getPhysicalAppPath(relativePath: string): string {
  * development and packaged builds.
  */
 export function getServerProcessEntryPath(): string {
-  const root = getAppRoot();
-  const direct = path.join(root, "server-electron.cjs");
-  if (fs.existsSync(direct)) return direct;
-  return isDev()
-    ? path.join(root, "dist", "server-electron.cjs")
-    : getPhysicalAppPath(path.join("dist", "server-electron.cjs"));
+  const artifactRoot = process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
+  if (!artifactRoot) throw new Error("VIBESTUDIO_HOST_ARTIFACT_ROOT is required");
+  return path.join(artifactRoot, "server-electron.cjs");
 }
 
 /**

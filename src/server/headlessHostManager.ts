@@ -18,7 +18,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { ClientSession } from "@vibestudio/shared/panel/panelLease";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import { resolveRequiredAppRoot } from "./appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
 const log = createDevLogger("HeadlessHostManager");
 
@@ -94,8 +94,7 @@ export function resolveHeadlessHostEntryPath(env: NodeJS.ProcessEnv = process.en
   // Every launcher pins the exact application root. An operator override is
   // likewise an exact path; the process working directory is never artifact
   // identity.
-  const appRoot = resolveRequiredAppRoot({ env });
-  return path.resolve(appRoot, "dist", "headless-host", "main.js");
+  return path.resolve(resolveRequiredHostArtifactRoot(env), "headless-host", "main.js");
 }
 
 export function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | null {

@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
-import { resolveRequiredAppRoot } from "./appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
 function loadBrowserTransport(): string {
-  const transportPath = path.join(resolveRequiredAppRoot(), "dist", "browserTransport.js");
+  const transportPath = path.join(resolveRequiredHostArtifactRoot(), "browserTransport.js");
   try {
     return fs.readFileSync(transportPath, "utf-8");
   } catch (error) {

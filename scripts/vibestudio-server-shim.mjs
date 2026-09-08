@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const env = { ...process.env };
 if (!env["VIBESTUDIO_APP_ROOT"]) env["VIBESTUDIO_APP_ROOT"] = packageRoot;
+env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.join(packageRoot, "dist");
 
 const server = path.join(packageRoot, "dist", "server.mjs");
 const child = spawn(process.execPath, [server, ...process.argv.slice(2)], {

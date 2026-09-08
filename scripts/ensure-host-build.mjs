@@ -8,6 +8,7 @@ import {
   readHostBuildFingerprint,
   sameHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
+import { publishHostBuildGeneration } from "./host-build-generations.mjs";
 
 const HOST_BUILD_LOCK_PATH = path.resolve("dist/host-build.lock");
 
@@ -94,6 +95,7 @@ try {
 
   if (sameHostBuildFingerprint(current, expected)) {
     console.log(`[host-build] Reusing current ${expected.mode} artifacts.`);
+    publishHostBuildGeneration(process.cwd(), { ...expected, kind: "desktop" });
   } else {
     console.log(`[host-build] Inputs changed; building ${expected.mode} artifacts.`);
     const result = spawnSync(process.execPath, ["build.mjs"], {
@@ -105,6 +107,7 @@ try {
       throw result.error;
     }
     exitCode = result.status ?? 1;
+    if (exitCode === 0) publishHostBuildGeneration(process.cwd(), { ...expected, kind: "desktop" });
   }
 } finally {
   releaseLock?.();

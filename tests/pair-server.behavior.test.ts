@@ -5,6 +5,11 @@ import { PassThrough } from "node:stream";
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
+import { readCurrentHostBuildGeneration } from "../scripts/host-build-generations.mjs";
+
+vi.mock("../scripts/host-build-generations.mjs", () => ({
+  readCurrentHostBuildGeneration: vi.fn(() => "/isolated/host-generation"),
+}));
 
 class FakeChild extends EventEmitter {
   pid = 43210;
@@ -69,6 +74,25 @@ afterEach(() => {
 });
 
 describe("pair-server runner", () => {
+  it("pins source pairing to the prepared generation rather than an inherited artifact root", async () => {
+    vi.stubEnv("VIBESTUDIO_SERVER_ENTRY", "live");
+    vi.stubEnv("VIBESTUDIO_HOST_ARTIFACT_ROOT", "/unrelated/host-generation");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const child = new FakeChild();
+    const prepareSourceServer = vi.fn();
+    await runPairServer(config, [], {
+      prepareSourceServer,
+      spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
+        expect(prepareSourceServer).toHaveBeenCalledOnce();
+        expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(expect.any(String), "source");
+        expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/isolated/host-generation");
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      },
+      onChildExit: () => true,
+    });
+  });
+
   it("accepts only explicit canonical unique HTTPS relays", () => {
     expect(parsePairArgs(["--relay-url", "https://relay.example/"], config).relayUrls).toEqual([
       "https://relay.example/",

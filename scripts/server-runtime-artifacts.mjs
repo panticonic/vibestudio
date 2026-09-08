@@ -34,3 +34,13 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/sql-wasm.wasm",
   "dist/host-build-fingerprint.json",
 ]);
+
+/** Complete compiled closure consumed by the TypeScript source-server mode. */
+export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
+  "dist/browserTransport.js",
+  "dist/fs-disk-worker.cjs",
+  "dist/internal-do.bundle.mjs",
+  "dist/host-build-fingerprint.json",
+  "dist/headless-host",
+  "dist/workerd-programs",
+]);

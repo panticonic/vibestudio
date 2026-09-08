@@ -148,8 +148,7 @@ describe("extension runtime dependency publication", () => {
     });
     try {
       expect(scheduleDependencyContentMaintenance).toHaveBeenCalledWith(
-        path.dirname(borrowed.nodeModulesDir),
-        process.cwd()
+        path.dirname(borrowed.nodeModulesDir)
       );
       const manifest = path.join(
         borrowed.nodeModulesDir,

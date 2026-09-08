@@ -8,6 +8,7 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 const GAD_CAPABILITY = "workspace-service:gad.workspace";
 
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+const originalArtifactRoot = process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
 const appRoot = mkdtempSync(join(tmpdir(), "vibestudio-product-authority-"));
 
 beforeAll(() => {
@@ -17,11 +18,14 @@ beforeAll(() => {
     JSON.stringify({ fingerprint: "a".repeat(64) })
   );
   process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
+  process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = join(appRoot, "dist");
 });
 
 afterAll(() => {
   if (originalAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
   else process.env["VIBESTUDIO_APP_ROOT"] = originalAppRoot;
+  if (originalArtifactRoot === undefined) delete process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
+  else process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = originalArtifactRoot;
   rmSync(appRoot, { recursive: true, force: true });
 });
 

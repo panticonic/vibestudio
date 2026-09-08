@@ -24,7 +24,7 @@ import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
-import { resolveRequiredAppRoot } from "./appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 
 const log = createDevLogger("PanelHttpServer");
@@ -34,7 +34,7 @@ const log = createDevLogger("PanelHttpServer");
 // ---------------------------------------------------------------------------
 
 function loadBrandAsset(filename: string): Buffer | null {
-  const assetPath = path.join(resolveRequiredAppRoot(), "dist", "assets", "brand", filename);
+  const assetPath = path.join(resolveRequiredHostArtifactRoot(), "assets", "brand", filename);
   try {
     return fs.readFileSync(assetPath);
   } catch {

@@ -19,6 +19,7 @@ import {
 import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
+import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
 import {
   EPHEMERAL_DEV_WORKSPACE_NAME,
@@ -198,6 +199,7 @@ async function runServer(
   const { bootstrapInstanceCli } = await import("./bootstrapInstanceCli.js");
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
@@ -294,8 +296,9 @@ async function main(): Promise<void> {
                    Use an optional template's visible worktree (repeatable)
   --production-base Ignore the configured checkout and boot the pinned Base release
 `);
-    const env = { ...process.env, NODE_ENV: "development" };
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
     await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
+    env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
     process.exitCode = await run(
       process.execPath,
       [tsxCli, "src/server/index.ts", ...parsed.forwarded],

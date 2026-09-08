@@ -11,9 +11,9 @@ import {
 } from "./headlessHostManager.js";
 
 describe("resolveHeadlessHostEntryPath", () => {
-  it("uses the single app-root build contract", () => {
-    expect(resolveHeadlessHostEntryPath({ VIBESTUDIO_APP_ROOT: "/opt/vibestudio" })).toBe(
-      "/opt/vibestudio/dist/headless-host/main.js"
+  it("uses the exact host artifact generation", () => {
+    expect(resolveHeadlessHostEntryPath({ VIBESTUDIO_HOST_ARTIFACT_ROOT: "/opt/generation" })).toBe(
+      "/opt/generation/headless-host/main.js"
     );
   });
 
@@ -33,9 +33,7 @@ describe("resolveHeadlessHostEntryPath", () => {
   });
 
   it("does not infer the host artifact from cwd", () => {
-    expect(() => resolveHeadlessHostEntryPath({})).toThrow(
-      "process working directory is not an execution input"
-    );
+    expect(() => resolveHeadlessHostEntryPath({})).toThrow("VIBESTUDIO_HOST_ARTIFACT_ROOT");
   });
 });
 

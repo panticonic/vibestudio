@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveRequiredAppRoot } from "../appRoot.js";
+import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 
 /**
  * Stable identity of the installed Vibestudio host. Userland runtime labels
@@ -16,8 +16,10 @@ let cached: ProductBootManifest | undefined;
 
 export function getProductBootManifest(): ProductBootManifest {
   if (cached) return cached;
-  const appRoot = resolveRequiredAppRoot();
-  const fingerprintPath = path.join(appRoot, "dist", "host-build-fingerprint.json");
+  const fingerprintPath = path.join(
+    resolveRequiredHostArtifactRoot(),
+    "host-build-fingerprint.json"
+  );
   let fingerprint: unknown;
   try {
     fingerprint = (JSON.parse(fs.readFileSync(fingerprintPath, "utf8")) as Record<string, unknown>)[

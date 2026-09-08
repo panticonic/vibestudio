@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createRunnerShutdown, signalExitCode } from "./run-electron-lifecycle.mjs";
+import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
+const hostGeneration = readCurrentHostBuildGeneration(process.cwd(), "desktop");
 
 const extraArgs = process.argv.slice(2);
 
@@ -17,7 +19,7 @@ function initialElectronArgs() {
     args.push(`--js-flags=--max-old-space-size=${rendererMaxOldSpace}`);
   }
 
-  args.push(".", ...extraArgs);
+  args.push(hostGeneration, ...extraArgs);
   return args;
 }
 
@@ -92,6 +94,7 @@ async function runElectron(args) {
         // Increase Node.js memory limit for main process (3GB)
         NODE_OPTIONS: "--max-old-space-size=3072",
         VIBESTUDIO_DEV_RUNNER_IPC: "1",
+        VIBESTUDIO_HOST_ARTIFACT_ROOT: hostGeneration,
       },
     });
     child = currentChild;

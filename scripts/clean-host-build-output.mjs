@@ -14,6 +14,9 @@ const PRESERVED_DIST_ENTRIES = new Set([
   "source-server-prerequisites.lock",
   // ensure-host-build serializes callers while this directory is replaced.
   "host-build.lock",
+  // Successful compiler outputs are immutable process generations. Running
+  // hosts keep resolving every lazy artifact from the generation they launched.
+  "host-generations",
 ]);
 
 /**

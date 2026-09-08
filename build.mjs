@@ -13,6 +13,7 @@ import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./scripts/build-artif
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
+import { publishHostBuildGeneration } from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
 import {
@@ -874,6 +875,7 @@ async function build() {
       process.cwd(),
       DESKTOP_HOST_BUILD_FINGERPRINT_PATH
     );
+    publishHostBuildGeneration(process.cwd(), { ...completedSnapshot, kind: "desktop" });
 
     console.log("Build successful!");
   } catch (error) {
@@ -901,6 +903,7 @@ async function buildSourceServerPrerequisites() {
     releaseLock = await acquireSourcePrerequisiteLock();
     const inputSnapshot = computeHostBuildFingerprint();
     if (sameHostBuildFingerprint(readHostBuildFingerprint(), inputSnapshot)) {
+      publishHostBuildGeneration(process.cwd(), { ...inputSnapshot, kind: "source" });
       console.log("Source server prerequisites already match the current source snapshot.");
       return;
     }
@@ -938,6 +941,7 @@ async function buildSourceServerPrerequisites() {
       );
     }
     writeHostBuildFingerprint(completedSnapshot);
+    publishHostBuildGeneration(process.cwd(), { ...completedSnapshot, kind: "source" });
     console.log("Source server prerequisites built successfully!");
   } catch (error) {
     console.error("Source server prerequisite build failed:", error);

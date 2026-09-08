@@ -12,6 +12,7 @@ import {
   type ProcessAdapterOptions,
 } from "@vibestudio/process-adapter";
 import { createFsDiskPort } from "./services/fsDiskPort.js";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
 /** Installed owner of a workspace's single native domain. The containing state
  * directory is an ownership anchor, never itself a guest resource grant. */
@@ -68,7 +69,7 @@ export async function startNativeWorkspaceRuntime(input: {
     installedRequire.resolve("@vibestudio/extension-host/child-runtime"),
     extensionEntry
   );
-  await copyFile(path.join(input.appRoot, "dist", "fs-disk-worker.cjs"), workerEntry);
+  await copyFile(path.join(resolveRequiredHostArtifactRoot(), "fs-disk-worker.cjs"), workerEntry);
   for (const name of ["workspaceChild.js", "control.js"])
     await copyFile(path.join(processRuntime, name), path.join(runtimeRoot, name));
   await writeFile(path.join(runtimeRoot, "package.json"), '{"type":"module"}\n');
