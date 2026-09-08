@@ -10,6 +10,7 @@ import type {
 } from "@vibestudio/shared/panel/panelLease";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
+import { scopedNativePartition } from "./nativeStorageScope.js";
 
 type PanelViewWebContents = Pick<
   Electron.WebContents,
@@ -91,6 +92,9 @@ function createOrchestrator(
     hasView: vi.fn((_panelId: string) => false),
     getWebContents: vi.fn((_panelId: string): PanelViewWebContents | null => null),
     getViewPartition: vi.fn((_panelId: string) => undefined as string | undefined),
+    getWorkspacePanelPartition: vi.fn((contextId?: string) =>
+      contextIdToPartition("workspace-test", contextId ?? "main")
+    ),
     setViewVisible: vi.fn((_panelId: string, _visible: boolean) => {}),
     destroyView: vi.fn((_panelId: string) => {}),
     reloadView: vi.fn(async (_panelId: string) => true),
@@ -2637,6 +2641,15 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     ]);
 
     expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      ...event,
+      version: { epoch: "test", counter: 4 },
+      previous: event.next,
+      next: { ...event.next, keepLoaded: true },
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
   });
 
   it("rebinds a retained view when the same runtime entity gets a new lease connection", async () => {
@@ -2662,6 +2675,13 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       getURL: () => "http://panel/rebound",
       isLoading: () => false,
     } as never);
+    const partitionFor = (contextId?: string) =>
+      scopedNativePartition(
+        "native-scope",
+        contextIdToPartition(registry.workspaceId, contextId ?? "main")
+      );
+    panelView.getWorkspacePanelPartition.mockImplementation(partitionFor);
+    panelView.getViewPartition.mockReturnValue(partitionFor(panel.snapshot.contextId));
     const first = runtimeLease("panel:nav-rebound", {
       slotId: panel.id,
       clientSessionId: orchestrator.getRuntimeClientSessionId(),
@@ -2678,6 +2698,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       next: first,
       reason: "acquired",
     });
+    panel.snapshot.contextId = "ctx-rebound";
     await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: 2 },
@@ -2689,6 +2710,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     });
 
     expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2);
+    expect(panelView.destroyView).toHaveBeenCalledOnce();
     expect(serverClient.call).toHaveBeenLastCalledWith("panelRuntime", "reportView", [
       next.runtimeEntityId,
       "route-new",

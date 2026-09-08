@@ -68,6 +68,7 @@ function createPanelView(): PanelViewLike {
     createViewForApp: vi.fn(async () => {}),
     hasView: vi.fn(() => false),
     getViewPartition: vi.fn(() => null),
+    getWorkspacePanelPartition: vi.fn((contextId?: string) => `partition:${contextId ?? "main"}`),
     destroyView: vi.fn(),
     reloadView: vi.fn(async () => false),
     navigateView: vi.fn(async () => {}),

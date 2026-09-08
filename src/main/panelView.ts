@@ -355,10 +355,7 @@ export class PanelView implements PanelViewLike {
       type: "panel",
       preload: this.panelPreloadPath ?? null,
       parentId: parentId ?? undefined,
-      partition: scopedNativePartition(
-        this.nativeStorageScope,
-        contextIdToPartition(this.panelRegistry.workspaceId, contextId ?? "main")
-      ),
+      partition: this.getWorkspacePanelPartition(contextId),
       injectHostThemeVariables: true,
       codeIdentity: identity,
     });
@@ -602,6 +599,12 @@ export class PanelView implements PanelViewLike {
   }
   getViewPartition(panelId: string): string | undefined | null {
     return this.viewManager.getViewPartition(panelId);
+  }
+  getWorkspacePanelPartition(contextId?: string): string {
+    return scopedNativePartition(
+      this.nativeStorageScope,
+      contextIdToPartition(this.panelRegistry.workspaceId, contextId ?? "main")
+    );
   }
   getViewManager(): WorkspaceNativeViews {
     return this.viewManager;

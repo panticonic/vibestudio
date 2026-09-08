@@ -15,7 +15,6 @@ import {
   formatPanelRuntimeLeaseDeniedMessage,
 } from "@vibestudio/shared/panel/panelLease";
 import type { PanelHttpServerLike, PanelViewLike } from "@vibestudio/shared/panelInterfaces";
-import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
@@ -1462,9 +1461,7 @@ export class PanelPresentationController {
     if (!view.hasView(panelId)) return;
     const target = snapshot.source.startsWith("browser:")
       ? assertPresent(browserPartition)
-      : snapshot.contextId
-        ? contextIdToPartition(this.deps.registry.workspaceId, snapshot.contextId)
-        : undefined;
+      : view.getWorkspacePanelPartition(snapshot.contextId);
     if (view.getViewPartition(panelId) === target) return;
     this.viewConnectionBySlot.delete(panelId);
     view.destroyView(panelId);

@@ -133,6 +133,8 @@ export interface PanelViewLike {
    *  default session). Lets the orchestrator navigate in place when the
    *  partition is unchanged instead of destroying the renderer. */
   getViewPartition(panelId: string): string | undefined | null;
+  /** Native partition selected for a workspace panel context by this host. */
+  getWorkspacePanelPartition(contextId?: string): string;
   setViewVisible?(panelId: string, visible: boolean): void;
   /** Apply keyboard focus after an explicit user/navigation focus intent. */
   focusView?(panelId: string): boolean;

@@ -1,4 +1,6 @@
 import type { TestApp } from "../../setup/electronSetup";
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Panel Lifecycle E2E Tests
  *
@@ -22,11 +24,101 @@ import {
   removeManagedTestWorkspace,
   getPanelReadiness,
   rebuildPanel,
+  executePanelScript,
 } from "../../setup/electronSetup";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 test.describe("Panel Rebuild Lifecycle", () => {
+  test("CDP keep-loaded delivery preserves the rebuilt panel target", async () => {
+    test.setTimeout(300_000);
+    const workspacePath = await createManagedTestWorkspace({
+      configureSource(sourceRoot) {
+        const manifestPath = path.join(sourceRoot, "panels/chat/package.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+          vibestudio: { authority: { requests: unknown[] } };
+        };
+        manifest.vibestudio.authority.requests.push({
+          capability: "panel.inspect",
+          resource: { kind: "prefix", prefix: "panel:tree/" },
+          tier: "gated",
+          evidence: "bounded-dynamic",
+        });
+        fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      },
+    });
+    let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
+
+    try {
+      testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
+      const caller = await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
+
+      const targetId = caller.panelId;
+      await rebuildPanel(testApp, targetId);
+      await expect
+        .poll(async () => (await getPanelReadiness(testApp!, targetId)).presentation.state, {
+          timeout: 120_000,
+        })
+        .toBe("ready");
+
+      await executePanelScript<void>(
+        testApp,
+        caller.panelId,
+        `(async () => {
+          const { getPanelHandle } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+          const handle = getPanelHandle(${JSON.stringify(caller.panelId)});
+          const session = await handle.cdp.session();
+          globalThis.__e2eRetainedCdpSession = session;
+          await session.page.locator("body").innerText();
+        })()`
+      );
+      const before = await getPanelReadiness(testApp, targetId);
+      expect(before.presentation.state).toBe("ready");
+      if (before.presentation.state !== "ready") throw new Error("Expected ready CDP target");
+
+      await expect
+        .poll(
+          () =>
+            testApp!.app.evaluate(
+              async (_electron, { workspaceId, targetId }) => {
+                const api = await globalThis.__testApi?.forWorkspace(workspaceId);
+                if (!api) throw new Error("Test API not available");
+                const snapshot = (await api.rpcCall("panelRuntime", "getSnapshot", [])) as {
+                  leases: Array<{ slotId: string; keepLoaded?: boolean }>;
+                };
+                return (
+                  snapshot.leases.find((lease) => lease.slotId === targetId)?.keepLoaded === true
+                );
+              },
+              { workspaceId: testApp!.workspaceId, targetId }
+            ),
+          { timeout: 30_000, intervals: [50, 100, 250] }
+        )
+        .toBe(true);
+
+      const body = await executePanelScript<string>(
+        testApp,
+        caller.panelId,
+        `(async () => {
+          const session = globalThis.__e2eRetainedCdpSession;
+          if (!session) throw new Error("Retained CDP session missing");
+          return session.page.locator("body").innerText();
+        })()`
+      );
+      expect(body.length).toBeGreaterThan(0);
+      const after = await getPanelReadiness(testApp, targetId);
+      expect(after.presentation).toMatchObject({
+        state: "ready",
+        webContentsId: before.presentation.webContentsId,
+      });
+    } finally {
+      if (testApp) await testApp.cleanup();
+      removeManagedTestWorkspace(workspacePath);
+    }
+  });
+
   test("visible desktop rebuild replaces the exact attempt and reaches ready", async () => {
     test.setTimeout(300_000);
     const workspacePath = await createManagedTestWorkspace();
