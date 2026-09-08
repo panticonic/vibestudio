@@ -8,7 +8,7 @@ The defining promise is **imagination with consequences**. A borrowed coat remai
 
 The world builder creates both content and executable behavior, and serves as the game's maintainer. It can inspect gameplay, repair state, and edit the engine when play exposes a defect. The design puts its richness into that living world while keeping interaction, illustration, and recovery straightforward.
 
-This document proposes a new app, not changes to Grimoire or Regency. Names, domain types, and world API examples below are proposed contracts, not claims that these APIs already exist. The platform integration section distinguishes inspected capabilities from work still required.
+This document proposes a new app, not changes to Grimoire or Regency. Names, domain types, and broad service contracts below remain design proposals except where explicitly marked implemented. Sections 16–17 record the implemented subset, and section 4 includes the working manipulation API. The platform integration section distinguishes inspected capabilities from work still required.
 
 ## 1. The experience
 
@@ -253,32 +253,32 @@ Proposed campaign methods:
 | `proposeExpansion`, `proposeBehavior`  | Accept generated places, objects, and their executable behaviors          |
 | `sceneSpec`, `publishArtwork`          | Read a visible composition contract and attach an eligible asset          |
 
-The player and NPC `eval` tool evaluates JavaScript against a participant-scoped SDK. It is a finite planning environment with immutable permitted observations and an action builder. It has no general filesystem, network, credentials, raw SQL, or canonical state object. Its output is a typed command proposal; the trusted service validates and submits it. A typed client outside eval exposes the same domain contract to authorized programmatic callers.
+The player-serving agent writes JavaScript for the user and calls `eval` to execute it against the world API. This is a direct programming interface to the simulation, not merely a planner that selects a closed list of predefined verbs. It should expose both convenient actions and lower-level manipulation of accessible entities, components, relationships, mechanisms and scheduled effects. Agents can inspect values, calculate, branch, loop and compose those operations into an intervention the content author did not pre-script.
 
-Illustrative player-agent code:
+The world service owns the actor's perspective, transaction boundary and event delivery. API mutations apply to accessible world state, with ordinary consistency and causal rules enforced by the engine; they do not expose hidden memories, raw storage or the builder's omniscient maintenance view. High-level actions are conveniences over the same mechanisms. Adding a generic `perform` or `propose` method that still dispatches only to the old fixed verbs would not meet this requirement.
+
+Implemented lower-level API (the postal campaign supplies these objects):
 
 ```ts
-// The surrounding tool owns actor identity, revision and commandId.
-// All referenced entities came from this actor's observation or memory.
-const here = world.observe();
-const coat = world.inventory().find((x) => x.name === "damp coat");
-const lantern = here.entities.find((x) => x.name === "brass lantern");
-
-return world.plan((plan) => {
-  plan.perform("cover", { covering: coat.ref, target: lantern.ref });
-  plan.perform("move", { through: here.exits.find((x) => x.name === "archway").ref });
-});
+// The agent authors and runs this code on the user's behalf.
+const lamp = world.inspect("harbour-lamp");
+world.setComponent("oilskin-wrap", "fold", { layers: 2 });
+world.transfer("oilskin-wrap", lamp.location);
+world.link("oilskin-wrap", lamp.id, "covers");
+return world.getComponent(lamp.id, "effectiveLight");
 ```
 
-The API is open to composition and newly installed affordances; it is not a menu of all permitted player intentions. The agent can inspect capabilities, loop over known objects, calculate quantities, and construct a conditional plan. It cannot read a future result during planning. Conditions evaluated during execution refer to newly permitted observations, and each consequential step is revalidated when reached.
+Public JSON fields and physical relationships are open-ended; they do not require a field registry or a named action handler. The shared covering rule derives effective light from an opaque covering. Transferring either endpoint removes the attachment. Transfers enforce reach, containment, inlet and capacity conditions. Component changes share opening prerequisites and hooks with the convenient `open` action. Private knowledge, structural fields and institutional grants remain world-owned: a physical link cannot forge a document's authority.
+
+The agent does not need the builder to register a bespoke “cover this lantern with this coat” verb. The builder participates when a genuinely missing mechanism or new lasting world content is required, and remains the ultimate authority for repairing the engine itself.
 
 Do not return a hypothetical result as though the action occurred. Planning reveals only what the actor can reasonably anticipate. Tests and the authorized authoring inspector may use omniscient dry runs; the player agent cannot probe hidden truth through simulation.
 
 ### One command through the system
 
 1. Persist the player message with a command ID and create a bounded interpretation job.
-2. Give the player agent its current observations and relevant memories. It interprets intent and produces an action plan through eval.
-3. Validate assignment, cancellation generation, revision, schema, targets, prerequisites, and budgets. Reject malformed proposals without canonical changes.
+2. Give the player agent its current observations and relevant memories. It interprets intent, writes JavaScript and calls eval against the direct world API.
+3. Validate assignment, cancellation generation, revision, schema, targets, prerequisites, and budgets. Reject invalid execution without committing its mutations.
 4. Commit command admission and scheduled work. For each due action, resolve against current state through the rule kernel; atomically store its effects, observations, receipt, and jobs for subsequent work.
 5. Let due participant decisions and scheduled processes resolve in simulation order. Stop a long plan at an interruption, unmet condition, or new choice needing player direction.
 6. Return a receipt distinguishing attempted, completed, failed, and remaining steps, with permitted observations and fictional duration. The player agent narrates only from that evidence. NPC dialogue comes from the actual speaking participant’s committed utterance.
@@ -296,7 +296,7 @@ Each important participant has a durable identity, values, current goals, relati
 
 | Agent role                      | Receives                                                                                  | May cause                                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Player interpreter and narrator | Player instruction, player perception, permitted memories, receipts                       | Player action proposals and grounded narration                                                |
+| Player interpreter and narrator | Player instruction, player perception, permitted memories, receipts                       | Executable world-interaction code and grounded narration                                                |
 | Participant                     | Own senses, delivered messages, beliefs, needs, goals, commitments                        | Own actions, speech, plans, and private belief updates                                        |
 | World builder / story master    | Full world state, canon, story context; gameplay and execution trajectories for diagnosis | New content and executable behaviors; privileged repair of engine code and any campaign state |
 | Scene artist                    | Visible scene spec, established visual references, style bible                            | Images and composition metadata                                                               |
@@ -553,7 +553,7 @@ An optional “Behind the scene” drawer demonstrates the agentic system throug
 
 | Stage                              | Deliverable                                                                                                                                  | Evidence required before proceeding                                                                                                                                                                                                                       |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Integration proof               | Empty panel, real campaign DO, one scoped agent decision, finite eval proposal, native image generation and persistent retrieval             | Reopen restores committed data and art; canceled work cannot attach late; native save failure, if present, is diagnosed at its owner                                                                                                                      |
+| 1. Integration proof               | Empty panel, real campaign DO, one scoped agent decision, finite eval execution, native image generation and persistent retrieval             | Reopen restores committed data and art; canceled work cannot attach late; native save failure, if present, is diagnosed at its owner                                                                                                                      |
 | 2. Causal vertical slice           | Authored ferry landing and customs house; physical objects, perception, communication, time, two independent NPCs, basic checkpoint recovery | Novel composed solutions, honest unsuccessful attempts, preserved player constraints, hidden conversation isolation, repeated-command safety; fresh players understand a local consequence and care what happens next                                     |
 | 3. Dynamic, self-healing expansion | Generated places and objects, attached executable behaviors, remote arrivals, world-builder maintenance access                               | New behavior runs in simulation; a letter reaches an initially ungenerated destination; returning preserves state; the builder repairs an injected behavior fault and an engine fault from gameplay evidence, then resumes without duplicating the action |
 | 4. Living story                    | Faction plans, evidence map, payoff commitments, pacing proposals, optional paths, consequential ending                                      | Early deduction and player deviation survive; losing a route leaves the designed alternatives or an honest partial resolution; NPC autonomy creates understandable consequences; one episode and the central undertaking can actually end                 |
@@ -600,7 +600,7 @@ The implementation lives in `examples`, with a deliberately small set of reusabl
 
 The concrete games exercise different parts of the same simulation. **The Dead Letter Office** makes mail custody, a tide bell, a sorting cabinet and a ferry permit causal objects. **The Embassy of a Missing Country** distinguishes an offered promise from accepted protection and institutional recognition. **The House That Crosses the World** contains its rooms and belongings inside one travelling house. Docking connects the selected stop, departure closes those routes, and returning preserves earlier destinations. Its navigation repair and recurring guests give the player a persistent home while the landscape changes. Each includes unresolved locations that the builder can materialize, rather than presenting an endless collection of disconnected generated scenes.
 
-Each panel stores only its campaign key in state arguments. The backend owns the save. The opening painting is imported into the common image service and becomes a reference for the artist; subsequent images arrive as immutable assets in the already running panel. No player action rewrites frontend source to display art.
+Each panel stores its selected campaign key and a small list of journey keys in state arguments. Starting a new journey preserves the earlier save, which can be selected again. The backend owns each save. The opening painting is imported into the common image service and becomes a reference for the artist; subsequent images arrive as immutable assets in the already running panel. No player action rewrites frontend source to display art.
 
 The engine source itself is stored with the world and evaluated through the same simulation path as player actions and generated behaviors. The builder receives the failing action, completed actions, full state and checkpoint. It repairs the existing world with JavaScript through the privileged world API, and can replace the stored engine source. Maintenance uses the canonical engine without running existing behaviors, so broken local hooks cannot prevent their own repair. The resulting state and actual continuation are checked before installation, and the failed participant resumes from its contribution without repeating committed effects. This makes maintenance available even when the ordinary gameplay API is the part that broke.
 
@@ -609,3 +609,58 @@ See the [implementation guide](../../vibestudio-release-work/examples/packages/a
 The native `adventure-campaign-play` scenario passed on 8 September 2026 (run `st_5f4d0df73b404bc3b313d632801dd5e6`). It rendered all three panels at 1440×1000 and 390×844, completed real free-text player actions in every campaign, generated and displayed a new postal scene, reopened the same saved journey with its image intact, and verified unchanged panel source and fixture cleanup. The hotel also generated a reference-based update to its lobby. This ran in an isolated Base source checkout containing the exact adventure units and service declaration from Examples; the owned instance was stopped afterward.
 
 Focused checks cover perception, authored mechanisms, hotel round trips, code-generated places and behaviors, stored-engine repair, native agent handoffs, scoped worker image calls, and changing image assets in React. The Examples typecheck reports no adventure errors; its full check still encounters existing missing ledger-test helpers and integration tsconfig files. Human playtests remain necessary to establish enjoyable pacing, long-session continuity and satisfying endings.
+
+
+## 16. Review integration: improve play without complicating the simulation
+
+The first usability pass prioritizes concrete affordances and removes unnecessary work at its owner. It does not make simultaneous player and NPC mutation a prerequisite for enjoyable play.
+
+**Turn progression.** Keep the player contribution and relevant participant contributions ordered. Wake agents from events they witnessed or were addressed by, including events from offscreen scheduled behavior. Tick handlers and existing programmed routines continue across the world without a model call for every inhabitant. This preserves causal dialogue and the rich simulation while avoiding a compulsory roll call after each action. Fully concurrent player/NPC decisions are deferred until actual play demonstrates a need.
+
+**Painting.** Complete the foreground exchange before requesting illustration. A separate persisted scene task carries the place, visible composition and visual signature; input remains available while it runs. Unchanged scenes bypass the artist altogether. Preserve an in-flight painting and coalesce queued views to the latest useful scene. A late result is stored against its original place and signature, and the UI labels an outdated image as the previous view. Use the same place's accepted painting as an edit reference; use the opening cover only as a style reference for a new location, with an explicit new composition brief. This uses the existing image service, with no additional editing infrastructure.
+
+**Working affordances.** Advertise custom verbs from executable behaviors. The sorting cabinet has one real insertion operation that delegates to the ordinary transfer API; its slot admits a letter while its closed contents remain hidden. Composed actions pay their fictional duration once. The landing has an inspectable window feature tied to the person mentioned by its opening narration. NPC observations identify the player by their campaign role rather than the ambiguous name “You.”
+
+**Readable, honest presentation.** Show witnessed engine actions as stage directions alongside narration and speech. Give the prose more space, use legible control text, submit with Enter and allow Shift+Enter for newlines. Inspecting available text and opening the journal are local operations. Name the current participant or location during a wait, distinguish normal frontier construction from repair, and label unexplored exits. Display actual environmental facts such as tide and weather; do not fabricate clock times or deadlines from arbitrary action counts.
+
+**Modest journal and recovery controls.** The initial notebook organizes witnessed events and conversations, accessible papers, observable connections and current routes. It is not yet a complete lifetime index of people, promises and discoveries. A gentle hint is an explicit request to the player-serving agent. Provide cancellation of the current contribution, a new journey that retains the previous save, and native navigation between campaigns. Cancellation stops further contribution; it does not rewind effects already committed to the world.
+
+**Save compatibility.** Upgrade persisted orchestration explicitly, preserving any already submitted image job. Do not replace a saved world's engine source or authored behaviors merely to refresh campaign content: those may include the world builder's repairs. Corrected seed puzzles and opening features apply to new journeys. A future content migration needs a concrete preservation policy, not a blanket reset.
+
+The deferred work is deliberate: concurrent NPC/player decision scheduling, an inferred long-term casebook, automatic rewriting of existing campaigns, and new image-editing machinery would increase complexity beyond the problems demonstrated by this review. Human playtests should guide further investment.
+
+
+Native profiling on 8 September 2026 compared the same opening, unchanged-scene question and walk to Lantern Quay, using `profilePanelInteraction` around submission through completed response and an enabled composer. Baseline run `st_e996bf71af534dcda2b6d58e52487235` and candidate run `st_7fa230b495164092888be7dfb4099997` both completed generated art and durable reload:
+
+| Observed boundary | Baseline | Candidate |
+| --- | ---: | ---: |
+| Open to usable world | 11.4 s | 4.0 s |
+| Open to first completed response | 31.7 s | 18.5 s |
+| Question to response and available input | 20.0 s | 13.6 s |
+| Walk to response and available input | 199.0 s | 86.8 s |
+
+These are individual live episodes, not latency guarantees: participants can choose different actions and generation times vary. The candidate walk returned input with its scene task still queued; the resulting painting subsequently became fresh and survived reload. Its remaining foreground wait included Tomas choosing to enter an unbuilt inn and speaking with a new inhabitant. This demonstrates both the preserved agency and the cost of the deliberately ordered participant lifecycle. Do not describe the current game as instant or fully asynchronous. Later layout changes and witnessed-departure handling do not change that scheduling choice.
+
+The episode motivated two small corrections: departures must notify witnesses at the source while arrival and later conversation retain their own audiences; routine frontier building should focus on the requested place and necessary local dependencies, preserving unrelated access conditions. The latter is guidance to the builder, whose ultimate maintenance authority remains intact.
+
+Validation used an isolated host at `32832b8b5` and Base at `7f79606`, plus the existing missing `workspace-dev/project-manifest` export fix and the exact game units from Examples. This avoids conflating gameplay changes with the unrelated RPC migration underway in the shared checkouts. Compatibility with that unfinished migration is not claimed.
+
+
+Final native UI validation passed in run `st_1b567187d13c441e8861523463db34ce`: all three desktop/mobile layouts, six screenshots, scrollable and focusable input, free inspection and journal tabs, Enter/Shift+Enter, and restoration of an earlier journey after starting a new one. The test exposed and verified fixes for native CDP shifted text dispatch and the player agent’s obligation to publish question answers through its terminal tool. Focused engine/campaign/backend checks, agent contracts and CDP tests pass. The native scenarios remain opt-in for Base workspaces composed with the Examples game units.
+
+## 17. Implemented mechanism step and remaining depth
+
+The implementation now exposes direct component edits, transfers and physical relationships through player-written eval programs. It remains an extensible foundation rather than the complete causal engine described above. Several campaign components are descriptive hints, and several authored behaviors recognize a particular puzzle solution. Adding fields or replacing individual methods with a generic `propose(operation)` entry point would not by itself improve this: the operations need composable, implemented consequences.
+
+Keep containment, perception, custody, event audiences and fictional scheduling as dependable engine mechanisms. Strengthen a small set of broadly useful capabilities through concrete episodes: transfers with meaningful inlet and capacity conditions; mechanisms that accept inputs and emit observable effects; documents whose authority can be checked; and communication that can travel through an established channel. Descriptive material or contact data should not advertise a capability that does not yet exist.
+
+The postal campaign is the first implemented vertical slice. The sorting cabinet consults an addressee routing table and opens the matching drawer. Both inspectors recognize a valid document whose authorizing relation matches their issuer and permission; the grant supplies the beneficiary and destination. Recognition does not depend on the document's entity ID. Another correctly addressed letter and an independently valid warrant provide alternate paths. A bell may remain a deliberately magical tide control, but its causal input and environmental consequence should be explicit enough for other mechanisms to interact with it. Preserve designed stakes and characters: generality is valuable when it supports plausible alternatives, not when it removes the story's specificity.
+
+The player agent writes and executes code through an open-ended, participant-scoped world manipulation API, as specified in section 4. Ordinary errors in its own JavaScript and expected action refusals return to the same agent for correction without committing that eval; simulation defects and broken generated behaviors retain the builder fallback. Visible physical relationships enter both the painter's composition brief and its freshness signature. It should be able to combine existing capabilities without requesting a new verb for each phrasing. When a genuinely missing capability is needed, world development is a normal task for the builder: reuse existing mechanisms first, then implement the smallest coherent extension. Keep the existing checkpoint and continuation machinery. Distinguish expected extension from defects in presentation and task purpose, without creating a competing simulation or giving the player unrestricted maintenance access.
+
+Do not require every local interaction to introduce a new component framework or universal rule. Place-specific code is an intentional part of this design. Prefer a reusable rule when the causal relationship naturally applies elsewhere; use local code for local meaning. The builder retains ultimate authority to repair state and engine faults, while ordinary expansion preserves established prerequisites and facts.
+
+Acceptance should include an alternate solution the author did not script, expressed entirely through mechanics already present, with no builder round trip. A separate episode should exercise one genuinely new capability, then reuse it with a different applicable object or participant without another extension. These tests measure actual expressiveness; they do not promise that every imaginable intention works before its underlying mechanism exists. The direct manipulation and postal slice are implemented. General communication channels, broader material simulation and a native episode that creates then reuses a genuinely new mechanism remain future work. Fresh journeys receive the new engine and campaign seed; existing journeys retain their saved engine and authored repairs, which the builder can intentionally update.
+
+
+Implementation verification: 74 focused engine/campaign/backend/agent tests and full userland typechecking pass. Native run `st_036184188ead4ad59176bfff2ab649ab` passed the ordinary-language covering episode, a new background image, and saved-state reload. The retained world trajectory shows the player agent correcting its own JavaScript error and then calling `transfer` and `link`; only player and artist seats were created, with no builder handoff. Both rejected native candidates informed the error contract: ordinary programming mistakes and unmet action prerequisites belong with the acting agent, while simulation faults remain keeper work. The isolated native instance was stopped after verification.
