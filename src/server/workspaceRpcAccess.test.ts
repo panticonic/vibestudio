@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { MembershipStore } from "@vibestudio/identity/membership";
+import { UserStore } from "@vibestudio/identity/userStore";
 import { assertWorkspaceRpcAccess } from "./workspaceRpcAccess.js";
 
 function fixture() {
@@ -33,6 +40,83 @@ function fixture() {
 }
 
 describe("live cross-workspace RPC access", () => {
+  it("applies live policy and membership changes across an existing child reader for two users", () => {
+    const root = mkdtempSync(join(tmpdir(), "workspace-rpc-access-"));
+    const databasePath = join(root, "identity.db");
+    const central = new CentralDataManager({ databasePath });
+    const writer = new IdentityDb({ path: databasePath, readOnly: false });
+    const reader = new IdentityDb({ path: databasePath, readOnly: true });
+    try {
+      const users = new UserStore(writer);
+      const alice = users.createRoot({ handle: "alice", displayName: "Alice" });
+      const bob = users.inviteUser({
+        handle: "bob",
+        displayName: "Bob",
+        role: "member",
+        createdBy: alice.id,
+      });
+      const members = new MembershipStore(writer, users);
+      const project = central.addWorkspace("Project");
+      const pin = {
+        url: "git+https://example.test/base.git",
+        ref: "refs/tags/v1",
+        commit: "1".repeat(40),
+        snapshot: `v1-sha256:${"2".repeat(64)}` as const,
+      };
+      const personal = central.ensurePrivateWorkspaces(alice.id, {
+        personal: pin,
+        system: pin,
+      }).personal;
+      for (const user of [alice, bob]) members.add(user.id, project.workspaceId, alice.id);
+      const closed = { incoming: [], outgoing: [] };
+      const scope = {
+        userId: alice.id,
+        target: "main",
+        operation: "notes.read",
+        purpose: "call" as const,
+      };
+      const outgoing = {
+        incoming: [],
+        outgoing: [{ ...scope, workspaceId: personal.workspaceId }],
+      };
+      const incoming = { incoming: [{ ...scope, workspaceId: project.workspaceId }], outgoing: [] };
+      writer.setWorkspaceRpcPolicy(project.workspaceId, outgoing, closed, alice.id);
+      const input = {
+        caller: {
+          workspaceId: project.workspaceId,
+          runtime: { kind: "panel" as const, id: "shared-panel" },
+          subject: { userId: alice.id, handle: alice.handle },
+        },
+        destinationWorkspaceId: personal.workspaceId,
+        target: scope.target,
+        operation: scope.operation,
+        purpose: scope.purpose,
+        identity: reader,
+        membership: new MembershipStore(reader, new UserStore(reader)),
+      };
+      expect(() => assertWorkspaceRpcAccess(input)).toThrow("Cross-workspace RPC is not permitted");
+      writer.setWorkspaceRpcPolicy(personal.workspaceId, incoming, closed, alice.id);
+      expect(() => assertWorkspaceRpcAccess(input)).not.toThrow();
+      expect(() =>
+        assertWorkspaceRpcAccess({
+          ...input,
+          caller: { ...input.caller, subject: { userId: bob.id, handle: bob.handle } },
+        })
+      ).toThrow("Cross-workspace RPC is not permitted");
+      writer.setWorkspaceRpcPolicy(personal.workspaceId, closed, incoming, alice.id);
+      expect(() => assertWorkspaceRpcAccess(input)).toThrow("Cross-workspace RPC is not permitted");
+      writer.setWorkspaceRpcPolicy(personal.workspaceId, incoming, closed, alice.id);
+      expect(() => assertWorkspaceRpcAccess(input)).not.toThrow();
+      members.remove(alice.id, project.workspaceId);
+      expect(() => assertWorkspaceRpcAccess(input)).toThrow("Cross-workspace RPC is not permitted");
+    } finally {
+      reader.close();
+      writer.close();
+      central.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires both exact policy scopes and rechecks membership on each use", () => {
     const input = fixture();
     expect(() => assertWorkspaceRpcAccess(input)).not.toThrow();
