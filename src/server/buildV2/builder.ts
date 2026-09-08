@@ -1909,6 +1909,10 @@ export interface BuildUnitOptions {
   priority?: BuildPriority;
 }
 
+// Bump whenever the generated sandbox test entry or its execution metadata
+// changes. Test artifacts are immutable and must never reuse an older recipe.
+const TEST_ARTIFACT_FORMAT_VERSION = 2;
+
 export function effectiveBuildVersion(
   node: GraphNode,
   ev: string,
@@ -1918,6 +1922,7 @@ export function effectiveBuildVersion(
     return `${ev}:test:${createHash("sha256")
       .update(
         JSON.stringify({
+          artifactFormat: TEST_ARTIFACT_FORMAT_VERSION,
           suite: options.test.suite,
           runtime: options.test.runtime,
           include: options.test.include,
@@ -2682,15 +2687,13 @@ function runtimeTestImports(
 function panelTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBuild): string {
   return [
     `import { rpc } from "@workspace/runtime";`,
-    `import { setCurrentTestFile, runTests as executeRegisteredTests } from "@workspace/test-runtime";`,
+    `import { setCurrentTestFile, exposeTestRunner } from "@workspace/test-runtime";`,
     runtimeTestImports(outdir, sourcePath, test.selectedFiles),
     `const root = document.getElementById("root");`,
     `if (root) root.textContent = ${JSON.stringify(`Ready to run ${test.suite} tests`)};`,
-    `rpc.expose("tests.run", async request => {`,
-    `  if (root) root.textContent = ${JSON.stringify(`Running ${test.suite} tests…`)};`,
-    `  const result = await executeRegisteredTests(request.args[0], "browser");`,
-    `  if (root) root.textContent = result.status === "passed" ? result.passed + " tests passed" : result.failed + " tests failed";`,
-    `  return result;`,
+    `exposeTestRunner(rpc, "browser", result => {`,
+    `  if (!root) return;`,
+    `  root.textContent = result ? (result.status === "passed" ? result.passed + " tests passed" : result.failed + " tests failed") : ${JSON.stringify(`Running ${test.suite} tests…`)};`,
     `});`,
     "",
   ].join("\n");
@@ -2699,14 +2702,14 @@ function panelTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBui
 function workerTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBuild): string {
   return [
     `import { createWorkerRuntime, handleWorkerRpc } from "@workspace/runtime/worker";`,
-    `import { setCurrentTestFile, runTests as executeRegisteredTests } from "@workspace/test-runtime";`,
+    `import { setCurrentTestFile, exposeTestRunner } from "@workspace/test-runtime";`,
     runtimeTestImports(outdir, sourcePath, test.selectedFiles),
     `let runtime;`,
     `let exposed = false;`,
     `export default { async fetch(request, env) {`,
     `  runtime ??= createWorkerRuntime(env);`,
     `  if (!exposed) {`,
-    `    runtime.rpc.expose("tests.run", request => executeRegisteredTests(request.args[0], "workerd"));`,
+    `    exposeTestRunner(runtime.rpc, "workerd");`,
     `    exposed = true;`,
     `  }`,
     `  return handleWorkerRpc(runtime, request) ?? new Response("Workspace test worker");`,
@@ -3070,7 +3073,7 @@ async function buildPanel(
     );
     const executableModulesReadyAt = Date.now();
     const metadata: BuildMetadata = {
-      kind: node.kind,
+      kind: runtimeTest ? "panel" : node.kind,
       name: node.name,
       buildKey,
       sourcePath: node.relativePath,
@@ -3704,7 +3707,7 @@ async function buildWorker(
         ],
       };
       const metadata: BuildMetadata = {
-        kind: node.kind as BuildMetadata["kind"],
+        kind: runtimeTest ? "worker" : (node.kind as BuildMetadata["kind"]),
         name: node.name,
         buildKey,
         sourcePath: node.relativePath,
@@ -3740,6 +3743,7 @@ async function buildWorker(
       {
         ...(runtimeTest
           ? {
+              kind: "worker" as const,
               details: {
                 kind: "test" as const,
                 suite: runtimeTest.suite,
@@ -4151,7 +4155,7 @@ function sealedExtensionMethodAuthority(
   const result: import("./buildStore.js").ExtensionMethodAuthority = {};
   for (const [method, declaration] of Object.entries(declarations)) {
     if (declaration.effect.kind === "open") {
-      result[method] = { effect: { kind: "open" } };
+      result[method] = { website: declaration.website, effect: { kind: "open" } };
       continue;
     }
     const definition = definitions.get(declaration.effect.capability);
@@ -4190,6 +4194,7 @@ function sealedExtensionMethodAuthority(
         throw new Error(`${provider}.${method} lost its userland capability binding`);
       }
       result[method] = {
+        website: declaration.website,
         effect: {
           kind: "userland-capability",
           capability: declaration.effect.capability,

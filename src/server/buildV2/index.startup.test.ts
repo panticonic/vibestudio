@@ -204,7 +204,7 @@ describe("BuildSystemV2 startup", () => {
       path.join(workerDir, "provider.ts"),
       `class NotesDO {
         /** Return one note without changing it. */
-        @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
         async getNote(id: string): Promise<{ id: string }> { return { id }; }
       }`
     );
@@ -330,14 +330,34 @@ describe("BuildSystemV2 startup", () => {
   });
 
   it("materializes the union of cold authority consumer closures once", async () => {
+    const sharedDir = path.join(workspaceRoot, "packages", "shared");
+    fs.mkdirSync(sharedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sharedDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/shared",
+        version: "0.1.0",
+        type: "module",
+        exports: "./index.ts",
+      })
+    );
+    fs.writeFileSync(path.join(sharedDir, "index.ts"), "export const shared = true;\n");
     for (const name of ["alpha", "beta"]) {
-      const unitDir = path.join(workspaceRoot, "packages", name);
+      const unitDir = path.join(workspaceRoot, "panels", name);
       fs.mkdirSync(unitDir, { recursive: true });
       fs.writeFileSync(
         path.join(unitDir, "package.json"),
-        JSON.stringify({ name: `@workspace/${name}`, version: "0.1.0", type: "module" })
+        JSON.stringify({
+          name: `@workspace-panels/${name}`,
+          version: "0.1.0",
+          type: "module",
+          dependencies: { "@workspace/shared": "workspace:*" },
+        })
       );
-      fs.writeFileSync(path.join(unitDir, "index.ts"), `export const ${name} = true;\n`);
+      fs.writeFileSync(
+        path.join(unitDir, "index.ts"),
+        `import { shared } from "@workspace/shared"; export const ${name} = shared;\n`
+      );
     }
 
     vi.doMock("./typecheckFold.js", async () => {
@@ -364,8 +384,9 @@ describe("BuildSystemV2 startup", () => {
 
     expect(materializeForBuild).toHaveBeenCalledTimes(1);
     expect(materializeForBuild.mock.calls[0]?.[0].map((unit) => unit.name)).toEqual([
-      "@workspace/alpha",
-      "@workspace/beta",
+      "@workspace-panels/alpha",
+      "@workspace-panels/beta",
+      "@workspace/shared",
     ]);
     expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 

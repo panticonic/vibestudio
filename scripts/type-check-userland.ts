@@ -46,7 +46,7 @@ try {
     "tsconfig.json",
     "tsconfig.integration.json",
     "tsconfig.integration.mobile.json",
-  ]) {
+  ].filter((name) => name === "tsconfig.json" || fs.existsSync(path.join(workspaceRoot, name)))) {
     const projectedConfig = path.join(temporaryRoot, "workspace", configName);
     try {
       execFileSync(compiler, ["--project", projectedConfig, "--pretty", "false"], {

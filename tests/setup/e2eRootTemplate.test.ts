@@ -13,7 +13,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-it("customizes the selected Personal default pin while retaining the exact System source", async () => {
+it("derives explicit Personal and ordinary project roots from their exact distributions", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-private-distributions-"));
   roots.push(root);
   const sourceRoot = path.join(root, "authoring");
@@ -23,6 +23,7 @@ it("customizes the selected Personal default pin while retaining the exact Syste
     '{"name":"@workspace/root","private":true}'
   );
   for (const [role, source] of [
+    ["base", "panels/base"],
     ["personal", "panels/chat"],
     ["system", "about/new"],
   ]) {
@@ -65,14 +66,15 @@ it("customizes the selected Personal default pin while retaining the exact Syste
       url: "git+https://example.test/defaults.git",
       ref: `refs/heads/${role}`,
     });
+  const base = await build("base");
   const personal = await build("personal");
   const system = await build("system");
   const derived = await deriveE2eRootTemplate({
     base: {
       ...system,
       materializedSource: system.checkout,
-      defaultTemplates: { base: system.pin, system: system.pin, personal: personal.pin },
-      sources: [personal, system],
+      defaultTemplates: { base: base.pin, system: system.pin, personal: personal.pin },
+      sources: [base, personal, system],
     },
     workRoot: path.join(root, "case"),
     distribution: "personal",
@@ -88,12 +90,38 @@ it("customizes the selected Personal default pin while retaining the exact Syste
   expect(derived.pin).not.toEqual(personal.pin);
   expect(derived.defaultTemplates.system).toEqual(system.pin);
   expect(derived.sources).toEqual(
-    expect.arrayContaining([{ pin: derived.pin, checkout: derived.checkout }, system])
+    expect.arrayContaining([
+      expect.objectContaining({ pin: derived.pin, checkout: derived.checkout }),
+      system,
+    ])
   );
+  expect(derived.sources.at(-1)?.review).toEqual({
+    presentation: { name: "personal" },
+    repositories: ["panels/chat"],
+    files: ["package.json"],
+  });
   const runtime = YAML.parse(
     fs.readFileSync(path.join(derived.materializedSource, "meta/vibestudio.yml"), "utf8")
   );
   expect(runtime.initPanels).toEqual([
     { source: "panels/chat", stateArgs: { initialPrompt: "Preserve the opening turn" } },
   ]);
+
+  const projectDerived = await deriveE2eRootTemplate({
+    base: {
+      ...system,
+      materializedSource: system.checkout,
+      defaultTemplates: { base: base.pin, system: system.pin, personal: personal.pin },
+      sources: [base, personal, system],
+    },
+    workRoot: path.join(root, "project-case"),
+    configureSource: (checkout) => {
+      const config = YAML.parse(
+        fs.readFileSync(path.join(checkout, "meta/vibestudio.yml"), "utf8")
+      );
+      expect(config.initPanels[0].source).toBe("panels/base");
+    },
+  });
+  expect(projectDerived.pin).not.toEqual(system.pin);
+  expect(projectDerived.defaultTemplates.base).toEqual(base.pin);
 });

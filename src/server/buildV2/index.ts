@@ -2234,15 +2234,6 @@ export async function initBuildSystemV2(
         { suites: suites.map(({ name, runtime }) => ({ name, runtime })) }
       );
     }
-    const requiredKind =
-      suite.runtime === "browser" ? "panel" : suite.runtime === "workerd" ? "worker" : null;
-    if (requiredKind && node.kind !== requiredKind) {
-      throw new BuildRequestError(
-        "test_runtime_kind_mismatch",
-        `Suite ${suite.name} declares runtime ${suite.runtime}, which requires a ${requiredKind} target; ${node.relativePath} is a ${node.kind}`,
-        { target: node.relativePath, suite: suite.name, runtime: suite.runtime, kind: node.kind }
-      );
-    }
     const ev = view.evMap[node.name];
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
     return { stateHash, view, node, suite, ev };

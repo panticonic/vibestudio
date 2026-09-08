@@ -20,12 +20,15 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
+import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
+import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import type { PanelReadinessSnapshot, TestApi } from "../../src/main/testApi.js";
 import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedger.js";
+import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
 import {
   isAutomationContextReplacement,
@@ -113,6 +116,8 @@ export function hasElectronDisplay(): boolean {
 }
 
 export interface LaunchOptions {
+  /** Visible local sources, checkpointed exactly as by pnpm dev --template-checkout. */
+  templateCheckouts?: readonly string[];
   /** Use an existing managed workspace directory instead of creating a new one */
   workspace?: string;
   /** Initial panel source to load (defaults to shell:new launcher if no panels exist) */
@@ -346,19 +351,38 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     throw new Error(ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
   }
 
-  // Launch the application directory, as the development runner does. Passing
-  // dist/main.cjs directly makes Electron use its fallback `0.0` application
-  // version instead of the package SemVer, which cannot select a workspace
-  // host generation.
+  // Pin this test process to the same immutable application directory used by
+  // the development runner. Its package metadata preserves the product version;
+  // later builds cannot remove preloads or runtime artifacts from this session.
+  const hostGeneration = readCurrentHostBuildGeneration(projectRoot, "desktop");
   const electronUserDataDir = path.join(workspaceInfo.testRoot, "electron-user-data");
   const args = [
     "--no-sandbox",
     `--user-data-dir=${electronUserDataDir}`,
-    projectRoot,
+    hostGeneration,
     ...(privateRole ? [] : [`--workspace=${workspaceInfo.workspaceName}`]),
   ];
   if (initialPanel) {
     args.push(`--panel=${initialPanel}`);
+  }
+
+  if (options.templateCheckouts?.length) {
+    if (options.templateCheckouts.length > 1)
+      throw new Error("A desktop launch can review only one template checkout");
+    const templates = await inspectWorkspaceSources({
+      checkouts: options.templateCheckouts,
+      checkpointRoot: path.join(workspaceInfo.testRoot, "selected-templates"),
+    });
+    const sources = JSON.parse(
+      env[DEV_TEMPLATE_SOURCES_ENV] ?? workspaceInfo.env[DEV_TEMPLATE_SOURCES_ENV] ?? "[]"
+    );
+    env[DEV_TEMPLATE_SOURCES_ENV] = JSON.stringify([
+      ...sources,
+      ...templates.map(({ pin, checkout, review }) => ({ pin, checkout, review })),
+    ]);
+    if (templates[0]) {
+      args.push(createShellSurfaceLink({ kind: "workspace-chooser", template: templates[0].pin }));
+    }
   }
 
   // Launch the app using the electron binary
@@ -378,6 +402,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       ELECTRON_DISABLE_SANDBOX: "1",
       ...workspaceInfo.env,
       ...env,
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: hostGeneration,
     },
     timeout: launchTimeout,
   });

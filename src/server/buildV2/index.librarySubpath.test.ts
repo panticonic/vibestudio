@@ -556,7 +556,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     );
     fs.writeFileSync(
       path.join(runtimeDir, "src", "index.ts"),
-      "export const setCurrentTestFile = (_file: string) => {}; export const test = (_name: string, _fn: () => void) => {}; export const runTests = () => ({ ok: true });\n"
+      "export const setCurrentTestFile = (_file: string) => {}; export const test = (_name: string, _fn: () => void) => {}; export const exposeTestRunner = (rpc: { expose: (...args: unknown[]) => unknown }, runtime: string) => rpc.expose('tests.run', () => ({ runtime }), { kind: 'closed', reason: 'test runner' });\n"
     );
     fs.writeFileSync(
       path.join(runtimeDir, "package.json"),
@@ -604,144 +604,156 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(artifact.execution.executionDigest).toMatch(/^[0-9a-f]{64}$/u);
   });
 
-  it("builds workerd suites with the same Node compatibility as their worker runtime", async () => {
-    const workspaceRuntimeDir = path.join(workspaceRoot, "packages", "runtime");
-    const runtimeDir = path.join(workspaceRoot, "packages", "test-runtime");
-    const workerDir = path.join(workspaceRoot, "workers", "portable");
-    fs.mkdirSync(path.join(workspaceRuntimeDir, "src"), { recursive: true });
-    fs.mkdirSync(path.join(runtimeDir, "src"), { recursive: true });
-    fs.mkdirSync(workerDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceRuntimeDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace/runtime",
-        type: "module",
-        exports: { "./worker": "./src/worker.ts" },
-      })
-    );
-    fs.writeFileSync(
-      path.join(workspaceRuntimeDir, "src", "worker.ts"),
-      "export const createWorkerRuntime = () => ({ rpc: { expose: () => {} } }); export const handleWorkerRpc = () => null;\n"
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace/test-runtime",
-        type: "module",
-        exports: { ".": "./src/index.ts" },
-      })
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "src", "index.ts"),
-      "export const setCurrentTestFile = () => {}; export const test = (_name: string, _fn: () => void) => {}; export const runTests = () => ({});\n"
-    );
-    fs.writeFileSync(
-      path.join(workerDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace-workers/portable",
-        type: "module",
-        vibestudio: {
-          entry: "index.ts",
-          tests: [{ name: "unit", runtime: "workerd", include: ["**/*.test.ts"] }],
-        },
-        dependencies: {
-          "@workspace/runtime": "workspace:*",
-          "@workspace/test-runtime": "workspace:*",
-        },
-      })
-    );
-    fs.writeFileSync(path.join(workerDir, "index.ts"), "export default {};\n");
-    fs.writeFileSync(
-      path.join(workerDir, "portable.test.ts"),
-      'import { AsyncLocalStorage } from "node:async_hooks"; import { test } from "@workspace/test-runtime"; test("context", () => { new AsyncLocalStorage(); });\n'
-    );
-    buildSystem = await initBuildSystemV2(
-      workspaceRoot,
-      fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
-      buildRoots(workspaceRoot)
-    );
+  it.each(["workers", "packages"] as const)(
+    "builds %s workerd suites with the same Node compatibility as their runtime",
+    async (unitRoot) => {
+      const workspaceRuntimeDir = path.join(workspaceRoot, "packages", "runtime");
+      const runtimeDir = path.join(workspaceRoot, "packages", "test-runtime");
+      const workerDir = path.join(workspaceRoot, unitRoot, "portable");
+      fs.mkdirSync(path.join(workspaceRuntimeDir, "src"), { recursive: true });
+      fs.mkdirSync(path.join(runtimeDir, "src"), { recursive: true });
+      fs.mkdirSync(workerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRuntimeDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/runtime",
+          type: "module",
+          exports: { "./worker": "./src/worker.ts" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(workspaceRuntimeDir, "src", "worker.ts"),
+        "export const createWorkerRuntime = () => ({ rpc: { expose: () => {} } }); export const handleWorkerRpc = () => null;\n"
+      );
+      fs.writeFileSync(
+        path.join(runtimeDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/test-runtime",
+          type: "module",
+          exports: { ".": "./src/index.ts" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(runtimeDir, "src", "index.ts"),
+        "export const setCurrentTestFile = () => {}; export const test = (_name: string, _fn: () => void) => {}; export const exposeTestRunner = (rpc: { expose: (...args: unknown[]) => unknown }, runtime: string) => rpc.expose('tests.run', () => ({ runtime }), { kind: 'closed', reason: 'test runner' });\n"
+      );
+      fs.writeFileSync(
+        path.join(workerDir, "package.json"),
+        JSON.stringify({
+          name: unitRoot === "workers" ? "@workspace-workers/portable" : "@workspace/portable",
+          type: "module",
+          vibestudio: {
+            entry: "index.ts",
+            tests: [{ name: "unit", runtime: "workerd", include: ["**/*.test.ts"] }],
+          },
+          dependencies: {
+            "@workspace/runtime": "workspace:*",
+            "@workspace/test-runtime": "workspace:*",
+          },
+        })
+      );
+      fs.writeFileSync(path.join(workerDir, "index.ts"), "export default {};\n");
+      fs.writeFileSync(
+        path.join(workerDir, "portable.test.ts"),
+        'import { AsyncLocalStorage } from "node:async_hooks"; import { test } from "@workspace/test-runtime"; test("context", () => { new AsyncLocalStorage(); });\n'
+      );
+      buildSystem = await initBuildSystemV2(
+        workspaceRoot,
+        fakeWorkspaceSource(() => workspaceRoot),
+        APP_NODE_MODULES,
+        buildRoots(workspaceRoot)
+      );
 
-    const artifact = await buildSystem.getTestArtifact(
-      "workers/portable",
-      `state:${"a".repeat(64)}`
-    );
-    expect(artifact).toMatchObject({
-      target: "workers/portable",
-      suite: "unit",
-      runtime: "workerd",
-      selectedFiles: ["portable.test.ts"],
-    });
-    expect(artifact.execution.executionDigest).toMatch(/^[0-9a-f]{64}$/u);
-  });
+      const target = `${unitRoot}/portable`;
+      const stateRef = `state:${"a".repeat(64)}`;
+      const artifact = await buildSystem.getTestArtifact(target, stateRef);
+      expect(artifact).toMatchObject({
+        target,
+        suite: "unit",
+        runtime: "workerd",
+        selectedFiles: ["portable.test.ts"],
+      });
+      expect(artifact.execution.executionDigest).toMatch(/^[0-9a-f]{64}$/u);
+      const executionBuild = await buildSystem.getBuild(target, stateRef, {
+        test: { suite: "unit", runtime: "workerd", include: ["**/*.test.ts"] },
+      });
+      expect(executionBuild.metadata.kind).toBe("worker");
+    }
+  );
 
-  it("builds browser suites with the same fs and path shims as their panel runtime", async () => {
-    const workspaceRuntimeDir = path.join(workspaceRoot, "packages", "runtime");
-    const runtimeDir = path.join(workspaceRoot, "packages", "test-runtime");
-    const panelDir = path.join(workspaceRoot, "panels", "portable");
-    fs.mkdirSync(path.join(workspaceRuntimeDir, "src"), { recursive: true });
-    fs.mkdirSync(path.join(runtimeDir, "src"), { recursive: true });
-    fs.mkdirSync(panelDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceRuntimeDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace/runtime",
-        type: "module",
-        exports: { ".": "./src/index.ts" },
-      })
-    );
-    fs.writeFileSync(
-      path.join(workspaceRuntimeDir, "src", "index.ts"),
-      "export const rpc = { expose: () => {} }; export const fs = {};\n"
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace/test-runtime",
-        type: "module",
-        exports: { ".": "./src/index.ts" },
-      })
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "src", "index.ts"),
-      "export const setCurrentTestFile = () => {}; export const test = (_name: string, _fn: () => void) => {}; export const runTests = () => ({});\n"
-    );
-    fs.writeFileSync(
-      path.join(panelDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace-panels/portable",
-        type: "module",
-        vibestudio: {
-          entry: "index.tsx",
-          tests: [{ name: "unit", runtime: "browser", include: ["**/*.test.ts"] }],
-        },
-        dependencies: {
-          "@workspace/runtime": "workspace:*",
-          "@workspace/test-runtime": "workspace:*",
-        },
-      })
-    );
-    fs.writeFileSync(path.join(panelDir, "index.tsx"), "export default null;\n");
-    fs.writeFileSync(
-      path.join(panelDir, "portable.test.ts"),
-      'import fs from "fs"; import path from "path"; import { test } from "@workspace/test-runtime"; test("runtime shims", () => { void fs; void path; });\n'
-    );
-    buildSystem = await initBuildSystemV2(
-      workspaceRoot,
-      fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
-      buildRoots(workspaceRoot)
-    );
+  it.each(["panels", "packages"] as const)(
+    "builds %s browser suites with the same fs and path shims as their runtime",
+    async (unitRoot) => {
+      const workspaceRuntimeDir = path.join(workspaceRoot, "packages", "runtime");
+      const runtimeDir = path.join(workspaceRoot, "packages", "test-runtime");
+      const panelDir = path.join(workspaceRoot, unitRoot, "portable");
+      fs.mkdirSync(path.join(workspaceRuntimeDir, "src"), { recursive: true });
+      fs.mkdirSync(path.join(runtimeDir, "src"), { recursive: true });
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRuntimeDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/runtime",
+          type: "module",
+          exports: { ".": "./src/index.ts" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(workspaceRuntimeDir, "src", "index.ts"),
+        "export const rpc = { expose: () => {} }; export const fs = {};\n"
+      );
+      fs.writeFileSync(
+        path.join(runtimeDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/test-runtime",
+          type: "module",
+          exports: { ".": "./src/index.ts" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(runtimeDir, "src", "index.ts"),
+        "export const setCurrentTestFile = () => {}; export const test = (_name: string, _fn: () => void) => {}; export const exposeTestRunner = (rpc: { expose: (...args: unknown[]) => unknown }, runtime: string) => rpc.expose('tests.run', () => ({ runtime }), { kind: 'closed', reason: 'test runner' });\n"
+      );
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({
+          name: unitRoot === "panels" ? "@workspace-panels/portable" : "@workspace/portable",
+          type: "module",
+          vibestudio: {
+            entry: "index.tsx",
+            tests: [{ name: "unit", runtime: "browser", include: ["**/*.test.ts"] }],
+          },
+          dependencies: {
+            "@workspace/runtime": "workspace:*",
+            "@workspace/test-runtime": "workspace:*",
+          },
+        })
+      );
+      fs.writeFileSync(path.join(panelDir, "index.tsx"), "export default null;\n");
+      fs.writeFileSync(
+        path.join(panelDir, "portable.test.ts"),
+        'import fs from "fs"; import path from "path"; import { test } from "@workspace/test-runtime"; test("runtime shims", () => { void fs; void path; });\n'
+      );
+      buildSystem = await initBuildSystemV2(
+        workspaceRoot,
+        fakeWorkspaceSource(() => workspaceRoot),
+        APP_NODE_MODULES,
+        buildRoots(workspaceRoot)
+      );
 
-    const artifact = await buildSystem.getTestArtifact(
-      "panels/portable",
-      `state:${"a".repeat(64)}`
-    );
-    expect(artifact).toMatchObject({
-      target: "panels/portable",
-      suite: "unit",
-      runtime: "browser",
-      selectedFiles: ["portable.test.ts"],
-    });
-  });
+      const target = `${unitRoot}/portable`;
+      const stateRef = `state:${"a".repeat(64)}`;
+      const artifact = await buildSystem.getTestArtifact(target, stateRef);
+      expect(artifact).toMatchObject({
+        target,
+        suite: "unit",
+        runtime: "browser",
+        selectedFiles: ["portable.test.ts"],
+      });
+      const executionBuild = await buildSystem.getBuild(target, stateRef, {
+        test: { suite: "unit", runtime: "browser", include: ["**/*.test.ts"] },
+      });
+      expect(executionBuild.metadata.kind).toBe("panel");
+    }
+  );
 });

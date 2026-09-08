@@ -5,7 +5,7 @@
  * descriptor naming the exact external root it was made from, plus the
  * materialization of that root. The suite therefore resolves the developer's
  * Base checkout into the same immutable pin the product uses (`pnpm dev` takes
- * the identical path through `prepareDevelopmentTemplateCheckpoint`), materializes
+ * the identical path through `checkpointWorkspaceSource`), materializes
  * it once per run, and lets every case copy that already-materialized tree.
  *
  * Resolution is asynchronous and Git-bound, so it happens once in
@@ -29,6 +29,7 @@ import {
   resolveDevelopmentBaseSelection,
 } from "../../src/dev/developmentBaseSelection.js";
 import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/baseTemplateRelease";
+import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import {
   inspectRootTemplateCheckout,
   seedRootTemplateSnapshotFromCheckout,
@@ -38,7 +39,7 @@ import { WorkspaceRootTemplateBootstrap } from "../../src/server/workspaceRootTe
 export const E2E_ROOT_TEMPLATE_ENV = "VIBESTUDIO_E2E_ROOT_TEMPLATE";
 export const DEFAULT_WORKSPACE_TEMPLATES_ENV = "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES";
 export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE";
-export const DEV_TEMPLATE_SOURCES_ENV = "VIBESTUDIO_DEV_TEMPLATE_SOURCES";
+export const DEV_TEMPLATE_SOURCES_ENV = "VIBESTUDIO_WORKSPACE_SOURCES";
 export const DEV_ROOT_TEMPLATE_WRITEBACK_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK";
 
 export const WORKSPACE_CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
@@ -53,7 +54,7 @@ export interface E2eRootTemplate {
   /** Already-materialized source tree, ready to copy into a case workspace. */
   materializedSource: string;
   defaultTemplates: DefaultWorkspaceTemplates;
-  sources: Array<{ pin: WorkspaceTemplatePin; checkout: string }>;
+  sources: WorkspaceSource[];
 }
 
 // The materialized tree carries no workspace identity, so one placeholder id
@@ -85,8 +86,8 @@ export async function prepareE2eRootTemplate(input: {
       "The Electron E2E suite needs a development Base checkout; select one with `vibestudio base use <path>`"
     );
   }
-  const pin = selection.pins.system;
-  const checkout = selection.checkouts.system;
+  const pin = selection.pins.base;
+  const checkout = selection.checkouts.base;
   const gitClient = new GitClient();
 
   const templateRoot = path.join(input.runTempRoot, "root-template");
@@ -147,7 +148,7 @@ function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): voi
 /**
  * Canonicalize the edited self-contained source manifest.
  */
-function canonicalizeRootManifest(checkout: string): void {
+function regenerateRootRuntimeManifest(checkout: string): void {
   const manifestPath = path.join(checkout, "meta", "vibestudio.yml");
   const manifest = parseTemplateManifestContent(
     fs.readFileSync(manifestPath, "utf8"),
@@ -186,7 +187,7 @@ export async function deriveE2eRootTemplate(input: {
 }): Promise<E2eRootTemplate> {
   const selectedPin = input.distribution
     ? input.base.defaultTemplates[input.distribution]
-    : input.base.pin;
+    : input.base.defaultTemplates.base;
   const selectedSource = input.base.sources.find(
     (source) =>
       source.pin.url === selectedPin.url &&
@@ -201,7 +202,11 @@ export async function deriveE2eRootTemplate(input: {
   });
   git(checkout, ["checkout", "-B", "vibestudio-e2e-case", selectedPin.commit]);
   input.configureSource(checkout);
-  canonicalizeRootManifest(checkout);
+  regenerateRootRuntimeManifest(checkout);
+  const manifest = parseTemplateManifestContent(
+    fs.readFileSync(path.join(checkout, "meta", "vibestudio.yml"), "utf8"),
+    WORKSPACE_SYSTEM_EPOCH
+  );
   git(checkout, ["add", "-A"]);
   git(checkout, [
     "-c",
@@ -236,7 +241,18 @@ export async function deriveE2eRootTemplate(input: {
     defaultTemplates: input.distribution
       ? { ...input.base.defaultTemplates, [input.distribution]: pin }
       : input.base.defaultTemplates,
-    sources: [...input.base.sources, { pin, checkout }],
+    sources: [
+      ...input.base.sources,
+      {
+        pin,
+        checkout,
+        review: {
+          ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
+          repositories: [...manifest.inventory.repositories],
+          files: [...manifest.inventory.files],
+        },
+      },
+    ],
   };
 }
 
