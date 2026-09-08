@@ -2105,7 +2105,7 @@ export async function executeHubControl(
   throw new Error(`Unknown hub RPC method: ${method}`);
 }
 
-function createDirectHubControlService(state: HubRuntimeState): ServiceDefinition {
+export function createDirectHubControlService(state: HubRuntimeState): ServiceDefinition {
   const invoke = async (
     ctx: ServiceContext,
     method: keyof typeof hubControlMethods & string,

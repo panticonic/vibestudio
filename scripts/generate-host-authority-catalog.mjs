@@ -1,3 +1,7 @@
+import {
+  loadHostServiceAuthorityMatrices,
+  mergeHostServiceAuthorityMatrices,
+} from "./lib/host-service-authority-matrices.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,10 +15,7 @@ const outputPath = path.join(
 );
 const check = process.argv.includes("--check");
 
-const matrices = [
-  "src/server/services/__serviceAuthorityMatrix.golden.json",
-  "src/main/services/__serviceAuthorityMatrix.golden.json",
-].map((relative) => JSON.parse(fs.readFileSync(path.join(root, relative), "utf8")));
+const matrices = [mergeHostServiceAuthorityMatrices(loadHostServiceAuthorityMatrices(root))];
 
 const methodDependencies = new Map();
 for (const matrix of matrices) {

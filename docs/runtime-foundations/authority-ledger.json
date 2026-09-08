@@ -7930,6 +7930,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:blobstore.putRetained",
+      "rpcPlane": "host-service",
+      "owner": "blobstore",
+      "method": "putRetained",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "blobstore.control",
+      "reviewRationale": "Workspace content retained by an authenticated caller's logical owner.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:blobstore.putRetained"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:blobstore.putRetained),allOf(capability(user,service:blobstore.putRetained),workspace-member),allOf(capability(code,service:blobstore.putRetained),workspace-member))",
+      "r3b": {
+        "review": "caller-scoped-retained-content",
+        "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+      },
+      "capability": "service:blobstore.putRetained",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:blobstore.putText",
       "rpcPlane": "host-service",
       "owner": "blobstore",
@@ -8065,6 +8111,98 @@
         "change": null
       },
       "capability": "service:blobstore.readFileAtTree",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:blobstore.releaseRetention",
+      "rpcPlane": "host-service",
+      "owner": "blobstore",
+      "method": "releaseRetention",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "blobstore.control",
+      "reviewRationale": "Release only this authenticated caller's logical content ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:blobstore.releaseRetention"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:blobstore.releaseRetention),allOf(capability(user,service:blobstore.releaseRetention),workspace-member),allOf(capability(code,service:blobstore.releaseRetention),workspace-member))",
+      "r3b": {
+        "review": "caller-scoped-retained-content",
+        "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+      },
+      "capability": "service:blobstore.releaseRetention",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:blobstore.retain",
+      "rpcPlane": "host-service",
+      "owner": "blobstore",
+      "method": "retain",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "blobstore.control",
+      "reviewRationale": "Workspace content retained by an authenticated caller's logical owner.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:blobstore.retain"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:blobstore.retain),allOf(capability(user,service:blobstore.retain),workspace-member),allOf(capability(code,service:blobstore.retain),workspace-member))",
+      "r3b": {
+        "review": "caller-scoped-retained-content",
+        "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+      },
+      "capability": "service:blobstore.retain",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -12883,7 +13021,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12906,8 +13045,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.audit),allOf(capability(user,service:credentials.audit),workspace-member),allOf(capability(code,service:credentials.audit),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.audit",
       "parityAssertion": "generated-census:host-authority"
@@ -12929,7 +13068,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -12952,8 +13092,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.cancelOAuth),allOf(capability(user,service:credentials.cancelOAuth),workspace-member),allOf(capability(code,service:credentials.cancelOAuth),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.cancelOAuth",
       "parityAssertion": "generated-census:host-authority"
@@ -12975,7 +13115,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -12998,8 +13139,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.completeCapture),allOf(capability(user,service:credentials.completeCapture),workspace-member),allOf(capability(code,service:credentials.completeCapture),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.completeCapture",
       "parityAssertion": "generated-census:host-authority"
@@ -13021,7 +13162,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "admin",
       "authenticatedFacts": [
@@ -13067,7 +13209,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13090,8 +13233,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.connect),allOf(capability(user,service:credentials.connect),workspace-member),allOf(capability(code,service:credentials.connect),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.connect",
       "parityAssertion": "generated-census:host-authority"
@@ -13163,7 +13306,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13186,8 +13330,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.forwardOAuthCallback),allOf(capability(user,service:credentials.forwardOAuthCallback),workspace-member),allOf(capability(code,service:credentials.forwardOAuthCallback),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.forwardOAuthCallback",
       "parityAssertion": "generated-census:host-authority"
@@ -13209,7 +13353,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -13232,8 +13377,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.getClientConfigStatus),allOf(capability(user,service:credentials.getClientConfigStatus),workspace-member),allOf(capability(code,service:credentials.getClientConfigStatus),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.getClientConfigStatus",
       "parityAssertion": "generated-census:host-authority"
@@ -13255,7 +13400,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -13278,8 +13424,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.inspectStoredCredentials),allOf(capability(user,service:credentials.inspectStoredCredentials),workspace-member),allOf(capability(code,service:credentials.inspectStoredCredentials),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.inspectStoredCredentials",
       "parityAssertion": "generated-census:host-authority"
@@ -13301,7 +13447,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -13324,8 +13471,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.listStoredCredentials),allOf(capability(user,service:credentials.listStoredCredentials),workspace-member),allOf(capability(code,service:credentials.listStoredCredentials),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.listStoredCredentials",
       "parityAssertion": "generated-census:host-authority"
@@ -13347,7 +13494,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13370,8 +13518,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.proxyFetch),allOf(capability(user,service:credentials.proxyFetch),workspace-member),allOf(capability(code,service:credentials.proxyFetch),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.proxyFetch",
       "parityAssertion": "generated-census:host-authority"
@@ -13393,7 +13541,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13416,8 +13565,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.proxyGitHttp),allOf(capability(user,service:credentials.proxyGitHttp),workspace-member),allOf(capability(code,service:credentials.proxyGitHttp),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.proxyGitHttp",
       "parityAssertion": "generated-census:host-authority"
@@ -13439,7 +13588,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13485,7 +13635,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -13581,7 +13732,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -13604,8 +13756,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.storeCredential),allOf(capability(user,service:credentials.storeCredential),workspace-member),allOf(capability(code,service:credentials.storeCredential),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.storeCredential",
       "parityAssertion": "generated-census:host-authority"
@@ -13627,7 +13779,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -13650,8 +13803,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.summarizeStoredCredentials),allOf(capability(user,service:credentials.summarizeStoredCredentials),workspace-member),allOf(capability(code,service:credentials.summarizeStoredCredentials),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "website-eligible-proxy-dispatch",
+        "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.summarizeStoredCredentials",
       "parityAssertion": "generated-census:host-authority"
@@ -15036,7 +15189,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15059,8 +15213,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.describe),allOf(capability(user,service:docs.describe),workspace-member),allOf(capability(code,service:docs.describe),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.describe",
       "parityAssertion": "generated-census:host-authority"
@@ -15082,7 +15236,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15105,8 +15260,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.describeService),allOf(capability(user,service:docs.describeService),workspace-member),allOf(capability(code,service:docs.describeService),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.describeService",
       "parityAssertion": "generated-census:host-authority"
@@ -15128,7 +15283,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15151,8 +15307,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.getSchema),allOf(capability(user,service:docs.getSchema),workspace-member),allOf(capability(code,service:docs.getSchema),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.getSchema",
       "parityAssertion": "generated-census:host-authority"
@@ -15174,7 +15330,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15197,8 +15354,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.listServices),allOf(capability(user,service:docs.listServices),workspace-member),allOf(capability(code,service:docs.listServices),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.listServices",
       "parityAssertion": "generated-census:host-authority"
@@ -15220,7 +15377,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15243,8 +15401,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.listSurfaces),allOf(capability(user,service:docs.listSurfaces),workspace-member),allOf(capability(code,service:docs.listSurfaces),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.listSurfaces",
       "parityAssertion": "generated-census:host-authority"
@@ -15266,7 +15424,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15289,8 +15448,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:docs.search),allOf(capability(user,service:docs.search),workspace-member),allOf(capability(code,service:docs.search),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-caller-filtered-discovery",
+        "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
       },
       "capability": "service:docs.search",
       "parityAssertion": "generated-census:host-authority"
@@ -15907,7 +16066,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15928,10 +16088,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:extensions.invoke\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "authenticated-website-extension-boundary",
+        "change": "Records the live extension contract: connected website calls may reach explicitly eligible sealed methods and acquire their receiver-declared leaves. Closed methods and native request-body callbacks retain their reviewed caller/ownership boundaries. Invocation metadata remains authenticated; initiating website attribution does not confer a receiver grant."
       },
       "capability": "service:extensions.fetchRequestBodyChunk",
       "parityAssertion": "generated-census:host-authority"
@@ -15957,7 +16117,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15976,7 +16137,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\",\"user\",\"host\"]}",
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\",\"user\",\"host\",\"website\"]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null
@@ -16047,7 +16208,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16068,10 +16230,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:extensions.invoke\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:extensions.invoke\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "authenticated-website-extension-boundary",
+        "change": "Records the live extension contract: connected website calls may reach explicitly eligible sealed methods and acquire their receiver-declared leaves. Closed methods and native request-body callbacks retain their reviewed caller/ownership boundaries. Invocation metadata remains authenticated; initiating website attribution does not confer a receiver grant."
       },
       "capability": "service:extensions.invoke",
       "parityAssertion": "generated-census:host-authority"
@@ -16097,7 +16259,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16116,7 +16279,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\",\"user\",\"host\"]}",
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\",\"user\",\"host\",\"website\"]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null
@@ -16363,12 +16526,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.access"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16389,12 +16558,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.access),allOf(capability(user,service:fs.access),workspace-member),allOf(capability(code,service:fs.access),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.access\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.access\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.access\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.access\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.access\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.access",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.access#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "access",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16409,12 +16621,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.appendFile"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16435,12 +16653,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.appendFile),allOf(capability(user,service:fs.appendFile),workspace-member),allOf(capability(code,service:fs.appendFile),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.appendFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.appendFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.appendFile\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.appendFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.appendFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.appendFile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.appendFile#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "appendFile",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16501,12 +16762,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.copyFile"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16527,12 +16794,98 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.copyFile),allOf(capability(user,service:fs.copyFile),workspace-member),allOf(capability(code,service:fs.copyFile),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.copyFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.copyFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.copyFile\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.copyFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.copyFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.copyFile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.copyFile#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "copyFile",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.copyFile#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "copyFile",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 1
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16593,12 +16946,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.exists"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16619,12 +16978,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.exists),allOf(capability(user,service:fs.exists),workspace-member),allOf(capability(code,service:fs.exists),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.exists\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.exists\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.exists\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.exists\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.exists\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.exists",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.exists#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "exists",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16731,12 +17133,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.handleClose"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16757,12 +17165,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.handleClose),allOf(capability(user,service:fs.handleClose),workspace-member),allOf(capability(code,service:fs.handleClose),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.handleClose\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.handleClose\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.handleClose\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.handleClose\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.handleClose\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.handleClose",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.handleClose#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "handleClose",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16777,12 +17228,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.handleRead"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16803,12 +17260,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.handleRead),allOf(capability(user,service:fs.handleRead),workspace-member),allOf(capability(code,service:fs.handleRead),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.handleRead\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.handleRead\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.handleRead\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.handleRead\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.handleRead\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.handleRead",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.handleRead#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "handleRead",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16823,12 +17323,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.handleStat"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16849,12 +17355,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.handleStat),allOf(capability(user,service:fs.handleStat),workspace-member),allOf(capability(code,service:fs.handleStat),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.handleStat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.handleStat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.handleStat\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.handleStat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.handleStat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.handleStat",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.handleStat#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "handleStat",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16869,12 +17418,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.handleWrite"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16895,12 +17450,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.handleWrite),allOf(capability(user,service:fs.handleWrite),workspace-member),allOf(capability(code,service:fs.handleWrite),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.handleWrite\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.handleWrite\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.handleWrite\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.handleWrite\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.handleWrite\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.handleWrite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.handleWrite#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "handleWrite",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16915,12 +17513,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.lstat"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16941,12 +17545,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.lstat),allOf(capability(user,service:fs.lstat),workspace-member),allOf(capability(code,service:fs.lstat),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.lstat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.lstat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.lstat\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.lstat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.lstat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.lstat",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.lstat#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "lstat",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -16961,12 +17608,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.mkdir"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -16987,12 +17640,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.mkdir),allOf(capability(user,service:fs.mkdir),workspace-member),allOf(capability(code,service:fs.mkdir),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.mkdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.mkdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.mkdir\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.mkdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.mkdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.mkdir",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.mkdir#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "mkdir",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17099,12 +17795,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.open"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17125,12 +17827,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.open),allOf(capability(user,service:fs.open),workspace-member),allOf(capability(code,service:fs.open),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.open\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.open",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.open#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "open",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.create",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17145,12 +17890,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.readBytes"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17171,12 +17922,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.readBytes),allOf(capability(user,service:fs.readBytes),workspace-member),allOf(capability(code,service:fs.readBytes),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.readBytes\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.readBytes\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.readBytes\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.readBytes\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.readBytes\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "bounded-workspace-binary-range-read",
         "change": "Adds the existing workspace-local fs.read authority to a bounded lossless byte-range transport. Managed files still resolve at the caller's exact semantic working head and scratch files remain context-contained; each response is capped at 1 MiB, carries canonical base64, exact byte continuation coordinates, total size, and a whole-file SHA-256, and grants no write or path-enumeration authority."
       },
       "capability": "service:fs.readBytes",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.readBytes#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readBytes",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17191,12 +17985,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.readdir"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17217,12 +18017,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.readdir),allOf(capability(user,service:fs.readdir),workspace-member),allOf(capability(code,service:fs.readdir),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.readdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.readdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.readdir\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.readdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.readdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.readdir",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.readdir#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readdir",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17237,12 +18080,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.readFile"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17263,12 +18112,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.readFile),allOf(capability(user,service:fs.readFile),workspace-member),allOf(capability(code,service:fs.readFile),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.readFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.readFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.readFile\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.readFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.readFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.readFile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.readFile#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readFile",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17329,12 +18221,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.readText"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17355,12 +18253,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.readText),allOf(capability(user,service:fs.readText),workspace-member),allOf(capability(code,service:fs.readText),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.readText\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.readText\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.readText\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.readText\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.readText\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "bounded-workspace-text-range-read",
         "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."
       },
       "capability": "service:fs.readText",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.readText#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readText",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17421,12 +18362,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.rename"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17447,12 +18394,98 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.rename),allOf(capability(user,service:fs.rename),workspace-member),allOf(capability(code,service:fs.rename),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.rename\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.rename\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.rename\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.rename\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.rename\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.rename",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.rename#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "rename",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.rename#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "rename",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 1
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17467,12 +18500,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.rm"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -17493,12 +18532,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.rm),allOf(capability(user,service:fs.rm),workspace-member),allOf(capability(code,service:fs.rm),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.rm\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.rm\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.rm\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.rm\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.rm\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.rm",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.rm#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "rm",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17513,12 +18595,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.rmdir"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -17539,12 +18627,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.rmdir),allOf(capability(user,service:fs.rmdir),workspace-member),allOf(capability(code,service:fs.rmdir),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.rmdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.rmdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.rmdir\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.rmdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.rmdir\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.rmdir",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.rmdir#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "rmdir",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17559,12 +18690,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.stat"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17585,12 +18722,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.stat),allOf(capability(user,service:fs.stat),workspace-member),allOf(capability(code,service:fs.stat),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.stat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.stat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.stat\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.stat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.stat\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.stat",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.stat#filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "stat",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17651,12 +18831,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.truncate"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17677,12 +18863,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.truncate),allOf(capability(user,service:fs.truncate),workspace-member),allOf(capability(code,service:fs.truncate),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.truncate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.truncate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.truncate\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.truncate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.truncate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.truncate",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.truncate#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "truncate",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17697,12 +18926,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.unlink"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -17723,12 +18958,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.unlink),allOf(capability(user,service:fs.unlink),workspace-member),allOf(capability(code,service:fs.unlink),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.unlink\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.unlink\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.unlink\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.unlink\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.unlink\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.unlink",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.unlink#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "unlink",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17789,12 +19067,18 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:fs.writeFile"
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "Workspace file"
+        }
       },
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17815,12 +19099,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:fs.writeFile),allOf(capability(user,service:fs.writeFile),workspace-member),allOf(capability(code,service:fs.writeFile),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.writeFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.writeFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.writeFile\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.writeFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.writeFile\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-filesystem-acquisition",
+        "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
       },
       "capability": "service:fs.writeFile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.writeFile#filesystem.write",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "writeFile",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.mutate",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.write",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared additional authority leaf satisfied",
+        "denied": "missing additional authority leaf fails with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-additional-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17839,7 +19166,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17862,8 +19190,8 @@
       ],
       "r3aRequirement": "anyOf(allOf(capability(user,service:gateway.fetch),workspace-member),allOf(capability(code,service:gateway.fetch),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "connected-website-workspace-asset-gateway",
+        "change": "Records the website principal for the existing path-allowlisted workspace gateway transport. The change does not expose a host bearer or unrestricted external egress; method/resource checks still apply."
       },
       "capability": "service:gateway.fetch",
       "parityAssertion": "generated-census:host-authority"
@@ -18291,8 +19619,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18313,7 +19640,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.addWorkspaceMember),allOf(capability(user,service:hubControl.addWorkspaceMember),workspace-member),allOf(capability(code,service:hubControl.addWorkspaceMember),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.addWorkspaceMember),allOf(capability(user,service:hubControl.addWorkspaceMember),workspace-member))",
       "r3b": {
         "review": "workspace-membership-owned-administration",
         "change": "Replaces server-wide administrator sensitivity with ordinary write sensitivity and explicit live target-workspace administrator enforcement. Server administration alone grants no membership management, and designated Personal/System workspaces reject additional members."
@@ -18332,13 +19659,18 @@
       "mechanismFamily": "hubControl.create",
       "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:hubControl.createWorkspace"
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "operationId"
+        ]
       },
       "authorityPrincipals": [
-        "user",
+        "code",
         "host",
-        "code"
+        "session",
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18359,10 +19691,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.createWorkspace),allOf(capability(user,service:hubControl.createWorkspace),workspace-member),allOf(capability(code,service:hubControl.createWorkspace),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspaces.create\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "durable-owner-scoped-workspace-creation",
+        "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
       },
       "capability": "service:hubControl.createWorkspace",
       "parityAssertion": "generated-census:host-authority"
@@ -18383,8 +19715,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18405,7 +19736,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.deleteWorkspace),allOf(capability(user,service:hubControl.deleteWorkspace),workspace-member),allOf(capability(code,service:hubControl.deleteWorkspace),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.deleteWorkspace),allOf(capability(user,service:hubControl.deleteWorkspace),workspace-member))",
       "r3b": {
         "review": "workspace-membership-owned-deletion",
         "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
@@ -18429,8 +19760,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "admin",
       "authenticatedFacts": [
@@ -18451,7 +19781,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureEphemeralWorkspace),allOf(capability(user,service:hubControl.ensureEphemeralWorkspace),workspace-member),allOf(capability(code,service:hubControl.ensureEphemeralWorkspace),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureEphemeralWorkspace),allOf(capability(user,service:hubControl.ensureEphemeralWorkspace),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18475,8 +19805,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18497,7 +19826,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureUserWorkspaces),allOf(capability(user,service:hubControl.ensureUserWorkspaces),workspace-member),allOf(capability(code,service:hubControl.ensureUserWorkspaces),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureUserWorkspaces),allOf(capability(user,service:hubControl.ensureUserWorkspaces),workspace-member))",
       "r3b": {
         "review": "authenticated-private-workspace-pair",
         "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
@@ -18521,8 +19850,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18543,7 +19871,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.getProfile),allOf(capability(user,service:hubControl.getProfile),workspace-member),allOf(capability(code,service:hubControl.getProfile),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.getProfile),allOf(capability(user,service:hubControl.getProfile),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18567,8 +19895,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18589,7 +19916,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.getWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.getWorkspaceRpcPolicy),workspace-member),allOf(capability(code,service:hubControl.getWorkspaceRpcPolicy),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.getWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.getWorkspaceRpcPolicy),workspace-member))",
       "r3b": {
         "review": "explicit-workspace-administrator-policy-read",
         "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
@@ -18613,8 +19940,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "admin",
       "authenticatedFacts": [
@@ -18635,7 +19961,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.inviteUser),allOf(capability(user,service:hubControl.inviteUser),workspace-member),allOf(capability(code,service:hubControl.inviteUser),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.inviteUser),allOf(capability(user,service:hubControl.inviteUser),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18659,8 +19985,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18681,7 +20006,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.listDevices),allOf(capability(user,service:hubControl.listDevices),workspace-member),allOf(capability(code,service:hubControl.listDevices),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.listDevices),allOf(capability(user,service:hubControl.listDevices),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18705,8 +20030,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18727,7 +20051,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.listUserPresence),allOf(capability(user,service:hubControl.listUserPresence),workspace-member),allOf(capability(code,service:hubControl.listUserPresence),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.listUserPresence),allOf(capability(user,service:hubControl.listUserPresence),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18751,8 +20075,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18773,7 +20096,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.listWorkspaceMembers),allOf(capability(user,service:hubControl.listWorkspaceMembers),workspace-member),allOf(capability(code,service:hubControl.listWorkspaceMembers),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.listWorkspaceMembers),allOf(capability(user,service:hubControl.listWorkspaceMembers),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18797,8 +20120,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -18819,7 +20141,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.listWorkspaces),allOf(capability(user,service:hubControl.listWorkspaces),workspace-member),allOf(capability(code,service:hubControl.listWorkspaces),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.listWorkspaces),allOf(capability(user,service:hubControl.listWorkspaces),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18843,8 +20165,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18865,12 +20186,57 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.pairDevice),allOf(capability(user,service:hubControl.pairDevice),workspace-member),allOf(capability(code,service:hubControl.pairDevice),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.pairDevice),allOf(capability(user,service:hubControl.pairDevice),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
       },
       "capability": "service:hubControl.pairDevice",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.registerLocalTemplateSource",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "registerLocalTemplateSource",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.create",
+      "reviewRationale": "Register one host-inspected, instance-owned source before workspace creation.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.registerLocalTemplateSource"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.registerLocalTemplateSource),allOf(capability(user,service:hubControl.registerLocalTemplateSource),workspace-member))",
+      "r3b": {
+        "review": "host-owned-exact-source-registration",
+        "change": "Records host-inspected exact source registration already implemented in the hub. The receiver remains closed to websites and shares the workspaces.create capability category; it does not expose local paths or create a second installer."
+      },
+      "capability": "service:hubControl.registerLocalTemplateSource",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -18889,8 +20255,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -18911,7 +20276,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.removeWorkspaceMember),allOf(capability(user,service:hubControl.removeWorkspaceMember),workspace-member),allOf(capability(code,service:hubControl.removeWorkspaceMember),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.removeWorkspaceMember),allOf(capability(user,service:hubControl.removeWorkspaceMember),workspace-member))",
       "r3b": {
         "review": "workspace-membership-owned-removal",
         "change": "Keeps the critical capability tier while requiring explicit target-workspace administrator membership. Ordinary write sensitivity removes the unrelated server-account role prerequisite; private workspace membership and live revocation checks remain authoritative."
@@ -18935,8 +20300,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -18957,7 +20321,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.revokeDevice),allOf(capability(user,service:hubControl.revokeDevice),workspace-member),allOf(capability(code,service:hubControl.revokeDevice),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.revokeDevice),allOf(capability(user,service:hubControl.revokeDevice),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -18981,8 +20345,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -19003,7 +20366,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.revokeUser),allOf(capability(user,service:hubControl.revokeUser),workspace-member),allOf(capability(code,service:hubControl.revokeUser),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.revokeUser),allOf(capability(user,service:hubControl.revokeUser),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -19027,8 +20390,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -19049,7 +20411,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.routeWorkspace),allOf(capability(user,service:hubControl.routeWorkspace),workspace-member),allOf(capability(code,service:hubControl.routeWorkspace),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.routeWorkspace),allOf(capability(user,service:hubControl.routeWorkspace),workspace-member))",
       "r3b": {
         "review": "read-only-exact-workspace-routing",
         "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
@@ -19073,8 +20435,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "admin",
       "authenticatedFacts": [
@@ -19095,7 +20456,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.setRole),allOf(capability(user,service:hubControl.setRole),workspace-member),allOf(capability(code,service:hubControl.setRole),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.setRole),allOf(capability(user,service:hubControl.setRole),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -19119,8 +20480,7 @@
       },
       "authorityPrincipals": [
         "user",
-        "host",
-        "code"
+        "host"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -19141,7 +20501,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.setWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.setWorkspaceRpcPolicy),workspace-member),allOf(capability(code,service:hubControl.setWorkspaceRpcPolicy),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.setWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.setWorkspaceRpcPolicy),workspace-member))",
       "r3b": {
         "review": "explicit-workspace-administrator-policy-change",
         "change": "Uses the existing protected host management path, explicit live workspace administrator membership and compare-and-swap policy expectations. System application ingress cannot be enabled. Permitting an operation to ask never grants its resource use."
@@ -19165,7 +20525,102 @@
       },
       "authorityPrincipals": [
         "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.updateProfile),allOf(capability(user,service:hubControl.updateProfile),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:hubControl.updateProfile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.workspaceCreationReceipt",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "workspaceCreationReceipt",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.creationReceipt",
+      "reviewRationale": "Creation results can disclose workspaces outside the initiating workspace and require scoped consent.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "operationId"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
         "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspaces.creation.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspaces.creation.read\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspaces.creation.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspaces.creation.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"workspaces.creation.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "durable-owner-scoped-workspace-creation",
+        "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+      },
+      "capability": "service:hubControl.workspaceCreationReceipt",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:linkedClaude.continue",
+      "rpcPlane": "host-service",
+      "owner": "linkedClaude",
+      "method": "continue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "linked-claude.session",
+      "reviewRationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:linkedClaude.continue"
+      },
+      "authorityPrincipals": [
+        "user",
         "code"
       ],
       "sensitivity": "write",
@@ -19187,12 +20642,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.updateProfile),allOf(capability(user,service:hubControl.updateProfile),workspace-member),allOf(capability(code,service:hubControl.updateProfile),workspace-member))",
+      "r3aRequirement": "anyOf(allOf(capability(user,service:linkedClaude.continue),workspace-member),allOf(capability(code,service:linkedClaude.continue),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "owned-retained-linked-provider-controls",
+        "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
       },
-      "capability": "service:hubControl.updateProfile",
+      "capability": "service:linkedClaude.continue",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -19238,6 +20693,51 @@
         "change": "Returns only bounded runtime state for the exact generation owned by the verified live extension connection."
       },
       "capability": "service:linkedClaude.inspect",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:linkedClaude.interrupt",
+      "rpcPlane": "host-service",
+      "owner": "linkedClaude",
+      "method": "interrupt",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "linked-claude.session",
+      "reviewRationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:linkedClaude.interrupt"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:linkedClaude.interrupt),workspace-member),allOf(capability(code,service:linkedClaude.interrupt),workspace-member))",
+      "r3b": {
+        "review": "owned-retained-linked-provider-controls",
+        "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
+      },
+      "capability": "service:linkedClaude.interrupt",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -19347,6 +20847,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -19368,7 +20869,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:menu.showContext),workspace-member),allOf(capability(code,service:menu.showContext),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:menu.showContext),allOf(capability(user,service:menu.showContext),workspace-member),allOf(capability(code,service:menu.showContext),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -19392,6 +20893,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -19413,7 +20915,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:menu.showHamburger),workspace-member),allOf(capability(code,service:menu.showHamburger),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:menu.showHamburger),allOf(capability(user,service:menu.showHamburger),workspace-member),allOf(capability(code,service:menu.showHamburger),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -19437,6 +20939,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -19458,7 +20961,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:menu.showPanelContext),workspace-member),allOf(capability(code,service:menu.showPanelContext),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:menu.showPanelContext),allOf(capability(user,service:menu.showPanelContext),workspace-member),allOf(capability(code,service:menu.showPanelContext),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -28431,6 +29934,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28452,7 +29956,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.createPanel),workspace-member),allOf(capability(code,service:view.createPanel),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.createPanel),allOf(capability(user,service:view.createPanel),workspace-member),allOf(capability(code,service:view.createPanel),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -28476,6 +29980,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28497,7 +30002,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.ensurePanelLoaded),workspace-member),allOf(capability(code,service:view.ensurePanelLoaded),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.ensurePanelLoaded),allOf(capability(user,service:view.ensurePanelLoaded),workspace-member),allOf(capability(code,service:view.ensurePanelLoaded),workspace-member))",
       "r3b": {
         "review": "trusted-chrome-local-panel-materialization",
         "change": "Adds an open, host-local materialization operation for one exact panel. The service handler requires the trusted panel-hosting app capability and creates the native view without changing layout focus, emitting navigation intent, waiting for visible-slot readiness, or granting cross-panel or server lifecycle authority."
@@ -28567,6 +30072,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28588,7 +30094,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.focusPanel),workspace-member),allOf(capability(code,service:view.focusPanel),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.focusPanel),allOf(capability(user,service:view.focusPanel),workspace-member),allOf(capability(code,service:view.focusPanel),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -28934,6 +30440,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28955,7 +30462,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getThemeConfig),workspace-member),allOf(capability(code,service:view.getThemeConfig),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getThemeConfig),allOf(capability(user,service:view.getThemeConfig),workspace-member),allOf(capability(code,service:view.getThemeConfig),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -30160,6 +31667,226 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:websiteHosting.begin",
+      "rpcPlane": "host-service",
+      "owner": "websiteHosting",
+      "method": "begin",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "websiteHosting.control",
+      "reviewRationale": "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:websiteHosting.begin"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:websiteHosting.begin),workspace-member)",
+      "r3b": {
+        "review": "native-attested-website-document-lifecycle",
+        "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+      },
+      "capability": "service:websiteHosting.begin",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:websiteHosting.connect",
+      "rpcPlane": "host-service",
+      "owner": "websiteHosting",
+      "method": "connect",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "websiteHosting.control",
+      "reviewRationale": "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:websiteHosting.connect"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:websiteHosting.connect),workspace-member)",
+      "r3b": {
+        "review": "native-attested-website-document-lifecycle",
+        "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+      },
+      "capability": "service:websiteHosting.connect",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:websiteHosting.end",
+      "rpcPlane": "host-service",
+      "owner": "websiteHosting",
+      "method": "end",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "websiteHosting.control",
+      "reviewRationale": "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:websiteHosting.end"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:websiteHosting.end),workspace-member)",
+      "r3b": {
+        "review": "native-attested-website-document-lifecycle",
+        "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+      },
+      "capability": "service:websiteHosting.end",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:websiteHosting.forget",
+      "rpcPlane": "host-service",
+      "owner": "websiteHosting",
+      "method": "forget",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "websiteHosting.control",
+      "reviewRationale": "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:websiteHosting.forget"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:websiteHosting.forget),workspace-member)",
+      "r3b": {
+        "review": "native-attested-website-document-lifecycle",
+        "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+      },
+      "capability": "service:websiteHosting.forget",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:websiteHosting.list",
+      "rpcPlane": "host-service",
+      "owner": "websiteHosting",
+      "method": "list",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "websiteHosting.control",
+      "reviewRationale": "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:websiteHosting.list"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:websiteHosting.list),workspace-member)",
+      "r3b": {
+        "review": "native-attested-website-document-lifecycle",
+        "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+      },
+      "capability": "service:websiteHosting.list",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workerdInspector.getEndpoint",
       "rpcPlane": "host-service",
       "owner": "workerdInspector",
@@ -30381,8 +32108,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:workers.listServices),allOf(capability(user,service:workers.listServices),workspace-member),allOf(capability(code,service:workers.listServices),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "cross-workspace-service-metadata-discovery",
+        "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
       },
       "capability": "service:workers.listServices",
       "parityAssertion": "generated-census:host-authority"
@@ -30662,8 +32389,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "cross-workspace-service-metadata-discovery",
+        "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
       },
       "capability": "service:workers.resolveService",
       "parityAssertion": "generated-census:host-authority"
@@ -33093,6 +34820,51 @@
         "change": null
       },
       "capability": "service:workspacePresence.list",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspaceTemplateSource.inspectExact",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "inspectExact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "Reviewed shell and templates-extension flows delegate verified exact source acquisition to the host; their public inspection operation owns disclosure review.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.inspectExact"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.inspectExact),workspace-member),allOf(capability(code,service:workspaceTemplateSource.inspectExact),workspace-member))",
+      "r3b": {
+        "review": "reviewed-exact-workspace-source-consumer",
+        "change": "Records the host source-acquisition endpoint for the reviewed templates extension and authenticated shell. It validates the exact pin and manifest inventory and does not authorize arbitrary website callers to inspect native source paths."
+      },
+      "capability": "service:workspaceTemplateSource.inspectExact",
       "parityAssertion": "generated-census:host-authority"
     }
   ]

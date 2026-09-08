@@ -60,6 +60,21 @@ async function focusNativeWindow(owner: TestApp): Promise<NativeWindowInfo> {
   return windowInfo;
 }
 
+/** Move through the OS so callers can observe the native hit target before clicking. */
+export async function moveWindowPointerThroughNativeInput(
+  owner: TestApp,
+  point: { x: number; y: number }
+): Promise<void> {
+  const windowInfo = await focusNativeWindow(owner);
+  await execFileAsync("xdotool", [
+    "mousemove",
+    "--window",
+    windowInfo.id,
+    String(windowInfo.contentOffset.x + point.x),
+    String(windowInfo.contentOffset.y + point.y),
+  ]);
+}
+
 export async function clickWindowPointThroughNativeInput(
   owner: TestApp,
   point: { x: number; y: number }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d91f12b16121746f3ab60482b9593358beb2d6aa0412b343ab6791b0f3177eb3",
+  "censusDigest": "sha256:fdece0351c890acac7b837f8d78ca217b729f32f6fabdcd4337945b60b3f8355",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -104,7 +104,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -612,11 +612,11 @@
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.setWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-change",
@@ -628,7 +628,7 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.removeWorkspaceMember": {
       "review": "workspace-membership-owned-removal",
@@ -761,6 +761,234 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels": {
       "review": "host-owned-once-only-distribution-panel-initialization",
       "change": "Adds a host-only workspace.runtime-state.manage write that reserves distribution initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
+    },
+    "host:fs.access": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.appendFile": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.copyFile": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.exists": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.handleClose": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.handleRead": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.handleStat": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.handleWrite": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.lstat": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.mkdir": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.open": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.readdir": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.readFile": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.rename": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.rm": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.rmdir": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.stat": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.truncate": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.unlink": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:fs.writeFile": {
+      "review": "connected-website-filesystem-acquisition",
+      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+    },
+    "host:extensions.invoke": {
+      "review": "authenticated-website-extension-boundary",
+      "change": "Records the live extension contract: connected website calls may reach explicitly eligible sealed methods and acquire their receiver-declared leaves. Closed methods and native request-body callbacks retain their reviewed caller/ownership boundaries. Invocation metadata remains authenticated; initiating website attribution does not confer a receiver grant."
+    },
+    "host:extensions.fetchRequestBodyChunk": {
+      "review": "authenticated-website-extension-boundary",
+      "change": "Records the live extension contract: connected website calls may reach explicitly eligible sealed methods and acquire their receiver-declared leaves. Closed methods and native request-body callbacks retain their reviewed caller/ownership boundaries. Invocation metadata remains authenticated; initiating website attribution does not confer a receiver grant."
+    },
+    "host:hubControl.createWorkspace": {
+      "review": "durable-owner-scoped-workspace-creation",
+      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+    },
+    "host:hubControl.workspaceCreationReceipt": {
+      "review": "durable-owner-scoped-workspace-creation",
+      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+    },
+    "host:hubControl.registerLocalTemplateSource": {
+      "review": "host-owned-exact-source-registration",
+      "change": "Records host-inspected exact source registration already implemented in the hub. The receiver remains closed to websites and shares the workspaces.create capability category; it does not expose local paths or create a second installer."
+    },
+    "host:blobstore.putRetained": {
+      "review": "caller-scoped-retained-content",
+      "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:blobstore.retain": {
+      "review": "caller-scoped-retained-content",
+      "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:blobstore.releaseRetention": {
+      "review": "caller-scoped-retained-content",
+      "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:linkedClaude.continue": {
+      "review": "owned-retained-linked-provider-controls",
+      "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
+    },
+    "host:linkedClaude.interrupt": {
+      "review": "owned-retained-linked-provider-controls",
+      "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
+    },
+    "host:workers.listServices": {
+      "review": "cross-workspace-service-metadata-discovery",
+      "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+    },
+    "host:workers.resolveService": {
+      "review": "cross-workspace-service-metadata-discovery",
+      "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+    },
+    "host:websiteHosting.begin": {
+      "review": "native-attested-website-document-lifecycle",
+      "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+    },
+    "host:websiteHosting.connect": {
+      "review": "native-attested-website-document-lifecycle",
+      "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+    },
+    "host:websiteHosting.end": {
+      "review": "native-attested-website-document-lifecycle",
+      "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+    },
+    "host:websiteHosting.forget": {
+      "review": "native-attested-website-document-lifecycle",
+      "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+    },
+    "host:websiteHosting.list": {
+      "review": "native-attested-website-document-lifecycle",
+      "change": "Records the live document lifecycle service used by trusted browser hosts. Document origin, user/workspace, generation and execution are host-attested; connection remains a separate native-input-gated approval and document retirement cancels live access. Inventory and lifecycle controls are not an open website RPC API."
+    },
+    "host:workspaceTemplateSource.inspectExact": {
+      "review": "reviewed-exact-workspace-source-consumer",
+      "change": "Records the host source-acquisition endpoint for the reviewed templates extension and authenticated shell. It validates the exact pin and manifest inventory and does not authorize arbitrary website callers to inspect native source paths."
+    },
+    "host:credentials.audit": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.cancelOAuth": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.completeCapture": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.connect": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.forwardOAuthCallback": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.getClientConfigStatus": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.inspectStoredCredentials": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.listStoredCredentials": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.proxyFetch": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.proxyGitHttp": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.storeCredential": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.summarizeStoredCredentials": {
+      "review": "website-eligible-proxy-dispatch",
+      "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:docs.describe": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:docs.describeService": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:docs.getSchema": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:docs.listServices": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:docs.listSurfaces": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:docs.search": {
+      "review": "connected-caller-filtered-discovery",
+      "change": "Records the website principal for connected-client schema discovery. The live handlers filter the inventory to callable methods; discovery grants no receiver authority and the connection gate precedes workspace access."
+    },
+    "host:gateway.fetch": {
+      "review": "connected-website-workspace-asset-gateway",
+      "change": "Records the website principal for the existing path-allowlisted workspace gateway transport. The change does not expose a host bearer or unrestricted external egress; method/resource checks still apply."
     }
   }
 }

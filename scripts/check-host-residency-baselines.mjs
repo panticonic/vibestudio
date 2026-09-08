@@ -1,3 +1,7 @@
+import {
+  loadHostServiceAuthorityMatrices,
+  mergeHostServiceAuthorityMatrices,
+} from "./lib/host-service-authority-matrices.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,10 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(root, relative), "utf8"));
 const baseline = readJson("docs/runtime-foundations/residency-baselines.json");
 const census = buildHostResidencyCensus({
-  matrices: [
-    readJson("src/server/services/__serviceAuthorityMatrix.golden.json"),
-    readJson("src/main/services/__serviceAuthorityMatrix.golden.json"),
-  ],
+  matrices: [mergeHostServiceAuthorityMatrices(loadHostServiceAuthorityMatrices(root))],
 });
 
 const measurements = baseline.measurements;

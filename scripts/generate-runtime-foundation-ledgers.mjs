@@ -1,3 +1,7 @@
+import {
+  loadHostServiceAuthorityMatrices,
+  mergeHostServiceAuthorityMatrices,
+} from "./lib/host-service-authority-matrices.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -24,35 +28,9 @@ if (!check) fs.mkdirSync(output, { recursive: true });
 const evidenceRegistry = validateEvidenceRegistry({ root, registry: runtimeFoundationEvidence });
 const usedEvidence = new Set();
 
-const serverServiceAuthority = JSON.parse(
-  fs.readFileSync(
-    path.join(root, "src/server/services/__serviceAuthorityMatrix.golden.json"),
-    "utf8"
-  )
-);
-const mainServiceAuthority = JSON.parse(
-  fs.readFileSync(path.join(root, "src/main/services/__serviceAuthorityMatrix.golden.json"), "utf8")
-);
-const serviceAuthority = structuredClone(serverServiceAuthority);
-for (const [service, entry] of Object.entries(mainServiceAuthority)) {
-  const existing = serviceAuthority[service];
-  if (!existing) {
-    serviceAuthority[service] = entry;
-    continue;
-  }
-  const mergedService = {
-    ...existing.service,
-    principals: [
-      ...new Set([...(existing.service?.principals ?? []), ...(entry.service?.principals ?? [])]),
-    ].sort(),
-  };
-  serviceAuthority[service] = {
-    service: mergedService,
-    methods: { ...existing.methods, ...entry.methods },
-  };
-}
+const serviceAuthority = mergeHostServiceAuthorityMatrices(loadHostServiceAuthorityMatrices(root));
 const { decisions: hostResidencyCensus } = buildHostResidencyCensus({
-  matrices: [serverServiceAuthority, mainServiceAuthority],
+  matrices: [serviceAuthority],
 });
 
 const principalExpression = (principals, capability) => {
@@ -232,9 +210,7 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
   }
 }
 
-const directRoots = [
-  path.join(root, "packages", "builtin"),
-];
+const directRoots = [path.join(root, "packages", "builtin")];
 const directSource = (file) => {
   const sealedPackagesRoot = path.join(root, "packages");
   if (file.startsWith(sealedPackagesRoot)) {
@@ -583,9 +559,7 @@ if (authorityReview.censusDigest !== censusDigest) {
   );
 }
 const rowsById = new Map(authorityRows.map((row) => [row.id, row]));
-const unknownReviewRows = Object.keys(authorityReview.decisions).filter(
-  (id) => !rowsById.has(id)
-);
+const unknownReviewRows = Object.keys(authorityReview.decisions).filter((id) => !rowsById.has(id));
 if (unknownReviewRows.length > 0) {
   throw new Error(`Runtime authority review names unknown rows: ${unknownReviewRows.join(", ")}`);
 }

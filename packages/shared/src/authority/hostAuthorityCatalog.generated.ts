@@ -1001,6 +1001,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "blobstore.putRetained": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Workspace content retained by an authenticated caller's logical owner.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "blobstore.putText": {
     tier: {
       tier: "open",
@@ -1033,6 +1044,28 @@ export const HOST_AUTHORITY_METHODS = {
       family: "blobstore.read",
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "blobstore.releaseRetention": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Release only this authenticated caller's logical content ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "blobstore.retain": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Workspace content retained by an authenticated caller's logical owner.",
     },
     capability: null,
     presentation: null,
@@ -3368,8 +3401,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.appendFile": {
     tier: {
@@ -3380,8 +3422,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.chmod": {
     tier: {
@@ -3404,8 +3455,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.ensureMaterialized": {
     tier: {
@@ -3428,8 +3488,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.glob": {
     tier: {
@@ -3464,8 +3533,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.handleRead": {
     tier: {
@@ -3476,8 +3554,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.handleStat": {
     tier: {
@@ -3488,8 +3575,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.handleWrite": {
     tier: {
@@ -3500,8 +3596,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.lstat": {
     tier: {
@@ -3512,8 +3617,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.mkdir": {
     tier: {
@@ -3524,8 +3638,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.mktemp": {
     tier: {
@@ -3560,8 +3683,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.readBytes": {
     tier: {
@@ -3572,8 +3704,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.readdir": {
     tier: {
@@ -3584,8 +3725,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.readFile": {
     tier: {
@@ -3596,8 +3746,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.readlink": {
     tier: {
@@ -3620,8 +3779,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.realpath": {
     tier: {
@@ -3644,8 +3812,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.rm": {
     tier: {
@@ -3656,8 +3833,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.rmdir": {
     tier: {
@@ -3668,8 +3854,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.stat": {
     tier: {
@@ -3680,8 +3875,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Share a workspace file with this website",
+      action: "read workspace files",
+      description: "This website will receive the selected file or directory contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.symlink": {
     tier: {
@@ -3704,8 +3908,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.unlink": {
     tier: {
@@ -3716,8 +3929,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "fs.utimes": {
     tier: {
@@ -3740,8 +3962,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.write",
+    presentation: {
+      title: "Let this website change a workspace file",
+      action: "change workspace files",
+      description: "This website can change the selected workspace file or directory.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
   },
   "gateway.fetch": {
     tier: {
@@ -4158,6 +4389,26 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "hubControl.registerLocalTemplateSource": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.create",
+      rationale: "Register one host-inspected, instance-owned source before workspace creation.",
+    },
+    capability: "workspaces.create",
+    presentation: {
+      title: "Use a local workspace source",
+      action: "use a local workspace source",
+      description: "Make an inspected local snapshot available for workspace creation.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "hubControl.removeWorkspaceMember": {
     tier: {
       tier: "critical",
@@ -4302,7 +4553,53 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "hubControl.workspaceCreationReceipt": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.creationReceipt",
+      rationale:
+        "Creation results can disclose workspaces outside the initiating workspace and require scoped consent.",
+    },
+    capability: "workspaces.creation.read",
+    presentation: {
+      title: "Read a workspace creation result",
+      action: "read a workspace creation result",
+      description:
+        "Read the name, identifier, and status of the workspace created by this request.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
+  "linkedClaude.continue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "linked-claude.session",
+      rationale:
+        "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+    },
+    capability: null,
+    presentation: null,
+  },
   "linkedClaude.inspect": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "linked-claude.session",
+      rationale:
+        "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "linkedClaude.interrupt": {
     tier: {
       tier: "open",
       session: "family",
@@ -7459,6 +7756,66 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "websiteHosting.begin": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "websiteHosting.control",
+      rationale:
+        "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "websiteHosting.connect": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "websiteHosting.control",
+      rationale:
+        "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "websiteHosting.end": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "websiteHosting.control",
+      rationale:
+        "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "websiteHosting.forget": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "websiteHosting.control",
+      rationale:
+        "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "websiteHosting.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "websiteHosting.control",
+      rationale:
+        "Authenticated presentation hosts attest and retire their own browser documents; each method verifies live presentation ownership.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workerdInspector.getEndpoint": {
     tier: {
       tier: "open",
@@ -8421,6 +8778,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspaceTemplateSource.inspectExact": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Reviewed shell and templates-extension flows delegate verified exact source acquisition to the host; their public inspection operation owns disclosure review.",
+    },
+    capability: null,
+    presentation: null,
+  },
 } as const satisfies Record<string, GeneratedHostAuthorityMethod>;
 
 export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
@@ -8608,6 +8977,14 @@ export const HOST_CAPABILITY_CATEGORIES = {
   },
   "external.open": {
     domain: "sharing",
+    verb: "act",
+  },
+  "filesystem.read": {
+    domain: "files",
+    verb: "see",
+  },
+  "filesystem.write": {
+    domain: "files",
     verb: "act",
   },
   "governance.read": {
@@ -8841,6 +9218,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "workspaces.create": {
     domain: "automation",
     verb: "act",
+  },
+  "workspaces.creation.read": {
+    domain: "automation",
+    verb: "see",
   },
   "workspaces.delete": {
     domain: "automation",
@@ -9174,6 +9555,26 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "network",
     authorityCategory: {
       domain: "sharing",
+      verb: "act",
+    },
+  },
+  "filesystem.read": {
+    title: "Share a workspace file with this website",
+    action: "read workspace files",
+    description: "This website will receive the selected file or directory contents.",
+    group: "workspace",
+    authorityCategory: {
+      domain: "files",
+      verb: "see",
+    },
+  },
+  "filesystem.write": {
+    title: "Let this website change a workspace file",
+    action: "change workspace files",
+    description: "This website can change the selected workspace file or directory.",
+    group: "workspace",
+    authorityCategory: {
+      domain: "files",
       verb: "act",
     },
   },
@@ -9756,6 +10157,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "automation",
       verb: "act",
+    },
+  },
+  "workspaces.creation.read": {
+    title: "Read a workspace creation result",
+    action: "read a workspace creation result",
+    description: "Read the name, identifier, and status of the workspace created by this request.",
+    group: "accounts",
+    authorityCategory: {
+      domain: "automation",
+      verb: "see",
     },
   },
   "workspaces.delete": {

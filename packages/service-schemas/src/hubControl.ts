@@ -357,7 +357,7 @@ export const hubControlMethods = defineServiceMethods({
       action: "use a local workspace source",
       description: "Make an inspected local snapshot available for workspace creation.",
       group: "accounts",
-      authorityCategory: { domain: "files", verb: "act" },
+      authorityCategory: { domain: "automation", verb: "act" },
     },
     description:
       "Register one exact host-inspected checkpoint. Local paths are never returned to clients.",

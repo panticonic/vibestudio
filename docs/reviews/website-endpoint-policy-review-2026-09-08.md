@@ -57,3 +57,28 @@ derives its target from `operationId`, so the user-facing card does not yet
 identify the requested name or exact root-template pin. The broad
 userland receiver census has explicit annotations, but each receiver's
 method-level effect review should continue as those APIs become public.
+
+## Live authority census follow-up
+
+Native website installation acceptance exposed an omitted transport in the generated
+approval vocabulary: the actual hub service lives outside the workspace/desktop service
+factory directories. The hub now has its own snapshot of the real service definition.
+All catalog, residency, manifest-inference, and ledger consumers share one loader. The
+merge resolves inherited authority inside each transport and rejects incompatible
+contracts; the workspace facade's principals cannot become defaults for hub-only methods.
+
+The refreshed snapshots record 13 workspace-server method additions, 26 changed methods,
+the website-capable defaults of credentials/docs/gateway, four native view updates, and
+22 hub methods (two exactly shared with the workspace facade). The changes match the
+live schemas and handlers. Explicit review entries cover filesystem website-only gated
+leaves, retained-content ownership, extension dispatch, creation/receipts, retained Claude
+controls, hosting lifecycle, filtered discovery, and exact source acquisition. The
+reviewed projection digest is
+`sha256:fdece0351c890acac7b837f8d78ca217b729f32f6fabdcd4337945b60b3f8355`.
+
+Five live census tests and 22 shared matrix/inference tests pass. Native Electron
+acceptance also passes creation, document reload, reconnection, and separately approved
+receipt recovery (`20260908T141703896Z-3431952-a9fce9e4`, 55.5 seconds test). Its owned
+instance and display were cleaned up. The authority digest does not include website
+annotations and therefore is not proof of website-policy enforcement by itself; the
+bounded schema/handler and native tests supply that evidence for their covered paths.

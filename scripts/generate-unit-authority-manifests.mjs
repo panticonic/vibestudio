@@ -1,3 +1,7 @@
+import {
+  loadHostServiceAuthorityMatrices,
+  mergeHostServiceAuthorityMatrices,
+} from "./lib/host-service-authority-matrices.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,24 +33,7 @@ function parseSource(file, source) {
   return parsed;
 }
 const workspaceRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
-const serverMatrix = JSON.parse(
-  fs.readFileSync(
-    path.join(root, "src/server/services/__serviceAuthorityMatrix.golden.json"),
-    "utf8"
-  )
-);
-const mainMatrix = JSON.parse(
-  fs.readFileSync(path.join(root, "src/main/services/__serviceAuthorityMatrix.golden.json"), "utf8")
-);
-const matrix = { ...serverMatrix, ...mainMatrix };
-for (const [service, entry] of Object.entries(serverMatrix)) {
-  if (mainMatrix[service]) {
-    matrix[service] = {
-      service: entry.service,
-      methods: { ...entry.methods, ...mainMatrix[service].methods },
-    };
-  }
-}
+const matrix = mergeHostServiceAuthorityMatrices(loadHostServiceAuthorityMatrices(root));
 const methodTiers = new Map();
 const methodCapabilities = new Map();
 for (const [service, entry] of Object.entries(matrix)) {
@@ -208,7 +195,7 @@ const recordWorkspaceService = (service, source) => {
 for (const service of PRODUCT_BUILTIN_CATALOG) {
   if (service.kind === "service") recordWorkspaceService(service, "product builtin catalog");
 }
-for (const configName of ["template.yml", "vibestudio.yml"]) {
+for (const configName of ["vibestudio.yml"]) {
   const config = parseYaml(fs.readFileSync(path.join(workspaceRoot, "meta", configName), "utf8"));
   for (const service of config?.services ?? []) {
     recordWorkspaceService(service, `workspace/meta/${configName}`);
