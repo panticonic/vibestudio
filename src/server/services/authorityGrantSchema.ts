@@ -26,7 +26,20 @@ export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   decided_by TEXT,
   decision_surface TEXT,
   task_ref TEXT,
-  source_workspace_id TEXT
+  source_workspace_id TEXT,
+  subject_generation INTEGER CHECK (subject_generation IS NULL OR subject_generation >= 0),
+  document_id TEXT
+)`;
+
+const AUTHORITY_SUBJECTS_SQL = `CREATE TABLE authority_subjects (
+  subject TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  created_at INTEGER NOT NULL,
+  UNIQUE(kind, user_id, workspace_id, identity_key)
 )`;
 
 const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
@@ -53,12 +66,13 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 8;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 9;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,
   objects: [
     { type: "table", name: "authority_grants", sql: AUTHORITY_GRANTS_TABLE_SQL },
+    { type: "table", name: "authority_subjects", sql: AUTHORITY_SUBJECTS_SQL },
     {
       type: "index",
       name: "ag_subject",
@@ -85,6 +99,17 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
 
 /** Old consent was workspace-local; NULL preserves that meaning. */
 export const AUTHORITY_GRANTS_MIGRATIONS = [
+  {
+    fromVersion: 8,
+    toVersion: 9,
+    migrate(db: import("node:sqlite").DatabaseSync): void {
+      db.exec(
+        "ALTER TABLE authority_grants ADD COLUMN subject_generation INTEGER CHECK (subject_generation IS NULL OR subject_generation >= 0)"
+      );
+      db.exec("ALTER TABLE authority_grants ADD COLUMN document_id TEXT");
+      db.exec(AUTHORITY_SUBJECTS_SQL);
+    },
+  },
   {
     fromVersion: 7,
     toVersion: 8,

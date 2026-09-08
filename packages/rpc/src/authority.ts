@@ -2,7 +2,11 @@
 
 import type { CallerKind } from "./types.js";
 
-export type PrincipalKind = "host" | "user" | "code" | "session" | "mission";
+export const PRINCIPAL_KINDS = ["host", "user", "code", "session", "mission", "website"] as const;
+export type PrincipalKind = (typeof PRINCIPAL_KINDS)[number];
+export function isPrincipalKind(value: string): value is PrincipalKind {
+  return (PRINCIPAL_KINDS as readonly string[]).includes(value);
+}
 export type Principal = `${PrincipalKind}:${string}`;
 export type AgentGrantPrincipal = `agent:${string}`;
 export type TaskGrantPrincipal = `task:${string}`;
@@ -119,7 +123,26 @@ export type AuthorizationOrigin =
   | { kind: "code"; principal: `code:${string}` }
   | { kind: "user"; principal: `user:${string}` }
   | { kind: "host"; principal: `host:${string}` }
-  | { kind: "session"; principal: `session:${string}` };
+  | { kind: "session"; principal: `session:${string}` }
+  | { kind: "website"; principal: `website:${string}` };
+
+/** Stable subject continuity, independently of its current transport/executor. */
+export interface AuthoritySubjectBinding {
+  subject: AuthorityGrantSubject;
+  generation: number;
+  /** Exact initiating lifetime; forwarded execution retains this identity. */
+  documentId?: string;
+}
+
+/** Host-derived website evidence. Never constructed from page RPC arguments. */
+export interface WebsiteAuthorityFact {
+  subject: `website:${string}`;
+  userId: `user:${string}`;
+  workspaceId: string;
+  origin: string;
+  binding: AuthoritySubjectBinding;
+  connected: boolean;
+}
 
 export interface ContextIntegrityFact {
   class: "internal" | "external" | "not-applicable";
@@ -277,6 +300,9 @@ export interface ExecutionAdmissionFact {
  * authorize eval calls directly.
  */
 export interface AuthorizationContext {
+  /** Resolved afresh by the host from the initiating document and subject owner. */
+  website?: WebsiteAuthorityFact;
+  subjectBinding?: AuthoritySubjectBinding;
   /** Authenticated workspace of the initiating caller; `workspace` is the receiver. */
   sourceWorkspaceId?: string;
   authorizingOrigin: AuthorizationOrigin;
@@ -318,6 +344,10 @@ export interface AuthorizationContext {
 }
 
 export interface AuthorityGrantConstraints {
+  /** Required for mutable subjects; stale generations cannot regain authority. */
+  subjectGeneration?: number;
+  /** Initiating document, not the session of a downstream executor. */
+  documentId?: string;
   /** Omitted means the workspace owning this grant; foreign callers require an exact binding. */
   sourceWorkspaceId?: string;
   sessionId?: string;
@@ -398,6 +428,7 @@ export interface AuthorizationDecision {
     | "receiver-rejected"
     | "fixed-code-not-requested"
     | "invalid-session"
+    | "connection-required"
     | "invalid-attestation";
   reason: string;
   requirement: AuthorityRequirement;
@@ -408,6 +439,9 @@ export interface AuthorizationDecision {
 }
 
 export interface InvocationSnapshot {
+  /** Disclosure/lifetime attribution, independent of the grant recipient. */
+  initiatingWebsite?: WebsiteAuthorityFact;
+  subjectBinding?: AuthoritySubjectBinding;
   v: 2;
   workspaceId?: string;
   sourceWorkspaceId?: string;
@@ -490,6 +524,7 @@ export type AuthorityFailureReasonCode =
   | "review-pending";
 
 export type AuthorityRemediationKind =
+  | "connect-workspace"
   | "request-user-approval"
   | "update-installed-code-manifest"
   | "declare-rpc-receiver"
@@ -645,3 +680,17 @@ export function prepareOpaqueHandle(
  * host dispatch, so userland cannot extend an attestation's validity.
  */
 export const DIRECT_AUTHORITY_ACCEPTED_AT_HEADER = "X-Vibestudio-Authority-Accepted-At";
+
+/** Reviewed receiver exposure, independent of operation authority. */
+export type WebsiteMethodPolicy =
+  | { kind: "closed"; reason: string }
+  | { kind: "eligible"; rationale: string };
+
+export function validateWebsiteMethodPolicy(policy: unknown, method: string): asserts policy is WebsiteMethodPolicy {
+  const value = policy && typeof policy === "object" && !Array.isArray(policy)
+    ? policy as Record<string, unknown> : null;
+  const explanation = value?.["kind"] === "closed" ? value["reason"]
+    : value?.["kind"] === "eligible" ? value["rationale"] : null;
+  if (typeof explanation !== "string" || !explanation.trim())
+    throw new Error(`Method ${method} requires an explicit website eligibility decision and explanation`);
+}

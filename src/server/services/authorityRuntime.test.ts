@@ -21,6 +21,104 @@ const executionDigest = "b".repeat(64);
 const digest = "c".repeat(64);
 
 describe("authority runtime", () => {
+  it("resolves website subjects from durable host facts and refuses stale or foreign bindings", () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "website-authority-runtime-")),
+    });
+    const stored = grantStore.ensureWebsiteSubject({
+      userId: "user:usr_alice",
+      workspaceId: "ws-1",
+      origin: "https://example.com",
+    });
+    const caller = {
+      ...createVerifiedCaller("panel:website", "panel", null, null, {
+        userId: "usr_alice",
+        handle: "alice",
+      }),
+      workspaceId: "ws-1",
+      website: {
+        subject: stored.subject,
+        userId: stored.userId,
+        workspaceId: stored.workspaceId,
+        origin: stored.identityKey,
+        connected: true,
+        binding: { subject: stored.subject, generation: stored.generation, documentId: "doc-1" },
+      },
+    };
+    grantStore.registerSubjectExecution(caller.website.binding);
+    const facts = {
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "transport-1",
+      audience: "service:model",
+      capability: "model.use",
+      resourceKey: "account:1",
+      tier: "gated" as const,
+      grantStore,
+    };
+    try {
+      grantStore.issue({
+        effect: "allow",
+        subject: "user:usr_alice",
+        capability: "model.use",
+        resource: { kind: "exact", key: "account:1" },
+        constraints: { lineageAtConsent: [] },
+        issuedBy: "user:usr_alice",
+        provenance: "acquisition",
+      });
+      const resolved = authorizeVerifiedCaller(caller, facts);
+      expect(resolved.context.authorizingOrigin).toEqual({
+        kind: "website",
+        principal: stored.subject,
+      });
+      expect(resolved.context.subjectBinding).toEqual(caller.website.binding);
+      expect(resolved.grants).toEqual([]);
+      expect(() => authorizeVerifiedCaller({ ...caller, workspaceId: "ws-2" }, facts)).toThrow(
+        /subject binding/
+      );
+      expect(() => authorizeVerifiedCaller({ ...caller, hostOriginated: true }, facts)).toThrow(
+        /subject binding/
+      );
+      const receiver = createVerifiedCaller("do:workers/helper:Helper:main", "do", {
+        callerId: "do:workers/helper:Helper:main",
+        callerKind: "do",
+        repoPath: "workers/helper",
+        effectiveVersion,
+        executionDigest,
+        requested: [{ capability: "model.use", resource: { kind: "exact", key: "account:1" } }],
+      });
+      grantStore.issue({
+        effect: "allow",
+        subject: `code:workers/helper@${effectiveVersion}`,
+        capability: "model.use",
+        resource: { kind: "exact", key: "account:1" },
+        constraints: { lineageAtConsent: [] },
+        issuedBy: "user:usr_alice",
+        provenance: "acquisition",
+      });
+      const executionSignal = grantStore.subjectExecutionSignal(caller.website.binding);
+      const delegatedFacts = { ...facts, initiatingWebsite: caller.website };
+      const delegated = authorizeVerifiedCaller(receiver, delegatedFacts);
+      expect(delegated.context.authorizingOrigin.kind).toBe("code");
+      expect(delegated.context.website).toEqual(caller.website);
+      expect(delegated.context.subjectBinding).toBeUndefined();
+      expect(
+        evaluateAuthority({
+          ...delegated,
+          requirement: requirementForPrincipals(["code"], "model.use"),
+          resourceKey: "account:1",
+          tier: "gated",
+        }).allowed
+      ).toBe(true);
+      grantStore.invalidateAuthoritySubject(stored.subject);
+      expect(executionSignal.aborted).toBe(true);
+      expect(() => authorizeVerifiedCaller(caller, facts)).toThrow(/subject binding/);
+      expect(() => authorizeVerifiedCaller(receiver, delegatedFacts)).toThrow(/subject binding/);
+    } finally {
+      grantStore.close();
+    }
+  });
+
   it("separates the sealed test conduit from its admitted EvalDO harness", () => {
     const conduit = createVerifiedCaller(
       "do:workers/system-test-runner:SystemTestRunnerDO:case-1",

@@ -77,6 +77,14 @@ export function authorityFailureForDecision(
     resourceKey: input.resourceKey,
   } as const;
   switch (decision.code) {
+    case "connection-required":
+      return {
+        ...common,
+        remediation: {
+          kind: "connect-workspace",
+          message: "Request workspace connection separately before submitting workspace operations.",
+        },
+      };
     case "approval-required":
       return {
         ...common,
@@ -202,6 +210,52 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
   const now = input.now ?? Date.now();
   if (!input.resourceKey || input.resourceKey !== input.resourceKey.trim()) {
     throw new Error("Authority resource key must be a non-empty canonical string");
+  }
+  const website = input.context.website;
+  if (input.context.authorizingOrigin.kind === "website" || website) {
+    const binding = website?.binding;
+    const effectBinding = input.context.subjectBinding;
+    let canonicalOrigin = false;
+    try {
+      const url = new URL(website?.origin ?? "");
+      canonicalOrigin =
+        (url.protocol === "https:" || url.protocol === "http:") && url.origin === website?.origin;
+    } catch {
+      /* Missing or opaque origins cannot authenticate a website. */
+    }
+    if (
+      !website ||
+      !binding ||
+      !canonicalOrigin ||
+      website.subject !== website.binding.subject ||
+      binding.subject !== website.subject ||
+      binding.generation !== website.binding.generation ||
+      !Number.isSafeInteger(binding.generation) ||
+      binding.generation < 0 ||
+      !binding.documentId ||
+      (input.context.authorizingOrigin.kind === "website" &&
+        (!effectBinding || effectBinding.subject !== binding.subject ||
+          effectBinding.generation !== binding.generation ||
+          effectBinding.documentId !== binding.documentId ||
+          website.userId !== input.context.actingUser ||
+          website.workspaceId !== (input.context.sourceWorkspaceId ?? input.context.workspace?.workspaceId) ||
+          website.subject !== input.context.authorizingOrigin.principal))
+    ) {
+      return {
+        allowed: false,
+        code: "invalid-attestation",
+        reason: "Website identity binding is invalid",
+        requirement: input.requirement,
+      };
+    }
+    if (!website.connected || input.context.session.expiresAt <= now) {
+      return {
+        allowed: false,
+        code: "connection-required",
+        reason: "Connect this page to the workspace before requesting workspace access",
+        requirement: input.requirement,
+      };
+    }
   }
   const authoritySubjects = new Set(subjectsForOrigin(input.context));
   // Critical confirmation is always a one-shot fact of the authenticated
@@ -381,21 +435,9 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       }
     }
 
-    const candidates = input.grants.filter(
-      (grant) =>
-        authoritySubjects.has(grant.subject) &&
-        capabilityPatternCovers(grant.capability, requirement.capability) &&
-        grant.createdAt <= now &&
-        (grant.revokedAt === undefined || grant.revokedAt > now) &&
-        (grant.expiresAt === undefined || grant.expiresAt > now) &&
-        grantConstraintsMatch(
-          grant,
-          input.context,
-          input.invocationDigest,
-          input.providerExecutionDigest
-        ) &&
-        scopeCovers(grant.resource, input.resourceKey)
-    );
+    const candidates = matchingAuthorityGrants({
+      ...input, capability: requirement.capability, subjects: authoritySubjects, now,
+    });
 
     // Invocation-bound grants are single-use at every tier. Keeping a consumed
     // gated grant eligible makes the dispatcher select it, fail its atomic
@@ -465,6 +507,7 @@ export function subjectsForOrigin(
   context: AuthorizationContext
 ): ReadonlySet<AuthorityGrantSubject> {
   const subjects = new Set<AuthorityGrantSubject>([context.authorizingOrigin.principal]);
+  if (context.authorizingOrigin.kind === "website") return subjects;
   if (context.session.taskAuthority) subjects.add(context.session.taskAuthority);
   if (
     context.authorizingOrigin.kind === "session" &&
@@ -611,6 +654,33 @@ function containsCapabilityRequirement(requirement: AuthorityRequirement): boole
   return false;
 }
 
+/**
+ * Canonical consent selection, shared by invocation authorization and host
+ * admission. Matching consent alone does not authorize a workspace operation:
+ * callers must still enforce their admission, membership and receiver contract.
+ */
+export function matchingAuthorityGrants(input: {
+  grants: readonly AuthorityGrant[];
+  context: AuthorizationContext;
+  subjects: ReadonlySet<import("@vibestudio/rpc").AuthorityGrantSubject>;
+  capability: string;
+  resourceKey: string;
+  invocationDigest?: string;
+  providerExecutionDigest?: string;
+  now?: number;
+}): AuthorityGrant[] {
+  const now = input.now ?? Date.now();
+  return input.grants.filter(grant =>
+    input.subjects.has(grant.subject) &&
+    capabilityPatternCovers(grant.capability, input.capability) &&
+    grant.createdAt <= now &&
+    (grant.revokedAt === undefined || grant.revokedAt > now) &&
+    (grant.expiresAt === undefined || grant.expiresAt > now) &&
+    grantConstraintsMatch(grant, input.context, input.invocationDigest, input.providerExecutionDigest) &&
+    scopeCovers(grant.resource, input.resourceKey)
+  );
+}
+
 function grantConstraintsMatch(
   grant: AuthorityGrant,
   context: AuthorizationContext,
@@ -618,6 +688,21 @@ function grantConstraintsMatch(
   providerExecutionDigest: string | undefined
 ): boolean {
   const constraints = grant.constraints;
+  const binding = context.subjectBinding;
+  if (grant.subject.startsWith("website:") && constraints?.subjectGeneration === undefined)
+    return false;
+  if (
+    constraints?.subjectGeneration !== undefined &&
+    (!binding ||
+      binding.subject !== grant.subject ||
+      binding.generation !== constraints.subjectGeneration)
+  )
+    return false;
+  if (
+    constraints?.documentId !== undefined &&
+    (!binding || binding.subject !== grant.subject || binding.documentId !== constraints.documentId)
+  )
+    return false;
   // Source identity alone is not an installation. Equal code versions or
   // conversation IDs in two workspaces never pool their grants. Existing
   // grants stay local; cross-workspace consent names the source explicitly.
@@ -692,7 +777,7 @@ export function lineageClasses(
  * has no business hard-coding.
  */
 function isCanonicalPrincipal(principal: Principal): boolean {
-  if (/^(host|user|session):[^:][^\0]*$/.test(principal)) return true;
+  if (/^(host|user|session|website):[^:][^\0]*$/.test(principal)) return true;
   if (/^agent:[^:][^\0]*$/.test(principal)) return true;
   return /^(code|mission):[^@\0]+@[^@\0]+$/.test(principal);
 }

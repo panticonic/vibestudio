@@ -19,6 +19,92 @@ const code = `code:workers/example@${codeEv}` as `code:${string}`;
 const session = "session:s1" as const;
 const mission = `mission:nightly@${"b".repeat(64)}` as `mission:${string}`;
 
+describe("website authority continuity", () => {
+  function context(documentId = "document-1", generation = 0): AuthorizationContext {
+    const subject = "website:site-1" as const;
+    const binding = { subject, generation, documentId };
+    return {
+      ...codeContext(),
+      authorizingOrigin: { kind: "website", principal: subject },
+      executingCode: null,
+      subjectBinding: binding,
+      website: {
+        subject,
+        userId: user,
+        workspaceId: "ws-1",
+        origin: "https://example.com",
+        binding,
+        connected: true,
+      },
+    };
+  }
+  function grant(documentId?: string): AuthorityGrant {
+    return {
+      subject: "website:site-1",
+      capability: "fs.write",
+      resource: { kind: "exact", key: RESOURCE },
+      effect: "allow",
+      createdAt: 0,
+      issuedBy: user,
+      provenance: "acquisition",
+      constraints: {
+        subjectGeneration: 0,
+        sourceWorkspaceId: "ws-1",
+        lineageAtConsent: [],
+        ...(documentId ? { documentId } : {}),
+      },
+    };
+  }
+  function evaluate(
+    ctx: AuthorizationContext,
+    grants = [grant()],
+    tier: "open" | "gated" = "gated"
+  ) {
+    return evaluateAuthority({
+      context: ctx,
+      requirement: capability("website", "fs.write"),
+      resourceKey: RESOURCE,
+      grants,
+      tier,
+      now: 10,
+    });
+  }
+  it("requires connection before open calls or saved grants", () => {
+    const ctx = context();
+    ctx.website!.connected = false;
+    expect(evaluate(ctx).code).toBe("connection-required");
+    expect(evaluate(ctx, [], "open").allowed).toBe(false);
+  });
+  it("retains saved consent across documents without transferring document grants", () => {
+    expect(evaluate(context("document-2")).allowed).toBe(true);
+    expect(evaluate(context("document-2"), [grant("document-1")]).allowed).toBe(false);
+    expect(evaluate(context("document-1"), [grant("document-1")]).allowed).toBe(true);
+    expect(evaluate(context("document-2", 1)).allowed).toBe(false);
+  });
+  it("rejects unbound grants and inconsistent identity evidence", () => {
+    expect(evaluate(context(), [{ ...grant(), constraints: {} }]).allowed).toBe(false);
+    for (const changed of [
+      { userId: "user:bob" as const },
+      { workspaceId: "other" },
+      { origin: "https://example.com/path" },
+      { subject: "website:other" as const },
+    ]) {
+      const ctx = context();
+      Object.assign(ctx.website!, changed);
+      expect(evaluate(ctx, [], "open").code).toBe("invalid-attestation");
+    }
+  });
+  it("never borrows user, installed code or task grants", () => {
+    const ctx = context();
+    ctx.session.taskAuthority = "task:borrowed";
+    for (const subject of [user, code, "session:s1", "task:borrowed"] as const) {
+      expect(
+        evaluate(ctx, [{ ...grant(), subject, constraints: { lineageAtConsent: [] } }]).allowed
+      ).toBe(false);
+    }
+  });
+});
+
 describe("resource prefix scopes", () => {
   it("covers hierarchical descendants without crossing a name boundary", () => {
     expect(scopeCovers({ kind: "prefix", prefix: "context" }, "context/panel")).toBe(true);

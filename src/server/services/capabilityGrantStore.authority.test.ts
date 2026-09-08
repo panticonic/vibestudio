@@ -12,6 +12,55 @@ function store(label: string): CapabilityGrantStore {
 }
 
 describe("CapabilityGrantStore agent authority", () => {
+  it("persists website identity and withdraws consent without losing identity", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-website-"));
+    let grants = new CapabilityGrantStore({ statePath });
+    const input = {
+      userId: "user:alice" as const,
+      workspaceId: "ws-1",
+      origin: "https://alice.github.io",
+    };
+    const subject = grants.ensureWebsiteSubject(input);
+    const issue = {
+      subject: subject.subject,
+      effect: "allow" as const,
+      capability: "model.use",
+      resource: { kind: "exact" as const, key: "account:one" },
+      issuedBy: input.userId,
+      provenance: "acquisition" as const,
+      constraints: {
+        subjectGeneration: subject.generation,
+        sourceWorkspaceId: "ws-1",
+        documentId: "doc-1",
+        lineageAtConsent: [],
+      },
+    };
+    const issued = grants.issue(issue);
+    expect(() => grants.issue({ ...issue, constraints: { lineageAtConsent: [] } })).toThrow(
+      /current subject/
+    );
+    grants.close();
+    grants = new CapabilityGrantStore({ statePath });
+    expect(grants.ensureWebsiteSubject(input)).toEqual(subject);
+    expect(grants.grantsForSubjects([subject.subject], "model.use")[0]?.constraints).toEqual(
+      issue.constraints
+    );
+    for (const other of [
+      { userId: "user:bob" as const },
+      { workspaceId: "ws-2" },
+      { origin: "https://bob.github.io" },
+    ]) {
+      expect(grants.ensureWebsiteSubject({ ...input, ...other }).subject).not.toBe(subject.subject);
+    }
+    expect(grants.invalidateAuthoritySubject(subject.subject)).toBe(true);
+    expect(grants.ensureWebsiteSubject(input)).toEqual({ ...subject, generation: 1 });
+    expect(grants.listAuthorityGrants().find((g) => g.id === issued.id)?.revokedAt).toBeTypeOf(
+      "number"
+    );
+    expect(() => grants.issue(issue)).toThrow(/current subject/);
+    grants.close();
+  });
+
   it("rejects an old schema version instead of migrating authority state", () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-grants-no-compat-"));
     const current = new CapabilityGrantStore({ statePath });
@@ -22,7 +71,7 @@ describe("CapabilityGrantStore agent authority", () => {
     old.close();
 
     expect(() => new CapabilityGrantStore({ statePath })).toThrow(
-      /cannot be loaded without risking data loss.*schema version is 6, expected 8/iu
+      /cannot be loaded without risking data loss.*schema version is 6, expected 9/iu
     );
   });
 
@@ -40,6 +89,9 @@ describe("CapabilityGrantStore agent authority", () => {
     });
     first.close();
     const legacy = new DatabaseSync(first.databasePath);
+    legacy.exec("DROP TABLE authority_subjects");
+    legacy.exec("ALTER TABLE authority_grants DROP COLUMN document_id");
+    legacy.exec("ALTER TABLE authority_grants DROP COLUMN subject_generation");
     legacy.exec("ALTER TABLE authority_grants DROP COLUMN source_workspace_id");
     legacy.exec("PRAGMA user_version = 7");
     legacy.close();
@@ -125,7 +177,7 @@ describe("CapabilityGrantStore agent authority", () => {
   it("suspends idle standing grants, restores them explicitly, and reports withdrawal", () => {
     const grants = store("hygiene");
     const withdrawn: string[] = [];
-    grants.onAgentGrantWithdrawal((grant) => withdrawn.push(grant.id!));
+    grants.onGrantWithdrawal((grant) => withdrawn.push(grant.id!));
     const standing = grants.issue({
       effect: "allow",
       capability: "workspace.gateway.access",

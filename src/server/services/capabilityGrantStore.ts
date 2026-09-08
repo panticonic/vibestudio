@@ -36,9 +36,24 @@ export interface IssueAuthorityGrantInput {
   capabilityDefinitionDigest?: string;
 }
 
+export interface StoredAuthoritySubject<S extends AuthorityGrantSubject = AuthorityGrantSubject> {
+  subject: S;
+  userId: `user:${string}`;
+  workspaceId: string;
+  identityKey: string;
+  generation: number;
+}
+
 export class CapabilityGrantStore {
   private readonly db: DatabaseSync;
-  private readonly agentGrantWithdrawalListeners = new Set<
+  private readonly executions = new Map<
+    string,
+    import("@vibestudio/rpc").AuthoritySubjectBinding & {
+      isCurrent: () => boolean;
+      lifetime: AbortController;
+    }
+  >();
+  private readonly grantWithdrawalListeners = new Set<
     (grant: AuthorityGrant, at: number) => void
   >();
   readonly databasePath: string;
@@ -66,11 +81,145 @@ export class CapabilityGrantStore {
   }
 
   close(): void {
+    for (const execution of this.executions.values()) execution.lifetime.abort();
+    this.executions.clear();
+    this.grantWithdrawalListeners.clear();
     this.db.close();
+  }
+
+  /** Register host-proven live execution independently of durable subject identity. */
+  registerSubjectExecution(
+    binding: import("@vibestudio/rpc").AuthoritySubjectBinding,
+    isCurrent: () => boolean = () => true
+  ): () => void {
+    const documentId = binding.documentId;
+    if (
+      !documentId ||
+      this.executions.has(documentId) ||
+      this.getAuthoritySubject(binding.subject)?.generation !== binding.generation
+    )
+      throw new Error(
+        "Subject execution requires a fresh document and current identity generation"
+      );
+    const registered = { ...binding, isCurrent, lifetime: new AbortController() };
+    this.executions.set(documentId, registered);
+    return () => {
+      if (this.executions.get(documentId) === registered) this.executions.delete(documentId);
+      registered.lifetime.abort();
+    };
+  }
+
+  isSubjectExecutionCurrent(binding: import("@vibestudio/rpc").AuthoritySubjectBinding): boolean {
+    const live = binding.documentId ? this.executions.get(binding.documentId) : undefined;
+    return Boolean(
+      live &&
+      live.subject === binding.subject &&
+      live.generation === binding.generation &&
+      live.isCurrent() &&
+      this.getAuthoritySubject(binding.subject)?.generation === binding.generation
+    );
+  }
+
+  /** Pending approvals and work share the authenticated execution lifetime. */
+  subjectExecutionSignal(binding: import("@vibestudio/rpc").AuthoritySubjectBinding): AbortSignal {
+    if (!this.isSubjectExecutionCurrent(binding))
+      return AbortSignal.abort(new Error("Subject execution retired"));
+    return this.executions.get(binding.documentId!)!.lifetime.signal;
+  }
+
+  /** Host-only binding creation; callers must establish user/workspace/document facts. */
+  ensureWebsiteSubject(input: {
+    userId: `user:${string}`;
+    workspaceId: string;
+    origin: string;
+  }): StoredAuthoritySubject<`website:${string}`> {
+    const url = new URL(input.origin);
+    if (
+      !/^user:[^\0]+$/.test(input.userId) ||
+      !input.workspaceId.trim() ||
+      !["https:", "http:"].includes(url.protocol) ||
+      url.origin !== input.origin
+    ) {
+      throw new Error(
+        "Website subject requires an exact user, workspace and canonical HTTP(S) origin"
+      );
+    }
+    this.db
+      .prepare(
+        `INSERT INTO authority_subjects
+      (subject, kind, user_id, workspace_id, identity_key, generation, created_at)
+      VALUES (?, 'website', ?, ?, ?, 0, ?) ON CONFLICT(kind, user_id, workspace_id, identity_key) DO NOTHING`
+      )
+      .run(
+        `website:${randomBytes(24).toString("hex")}`,
+        input.userId,
+        input.workspaceId,
+        input.origin,
+        Date.now()
+      );
+    const row = this.db
+      .prepare(
+        `SELECT * FROM authority_subjects
+      WHERE kind = 'website' AND user_id = ? AND workspace_id = ? AND identity_key = ?`
+      )
+      .get(input.userId, input.workspaceId, input.origin)!;
+    const stored = subjectFromRow(row);
+    if (!stored.subject.startsWith("website:")) throw new Error("Invalid website subject record");
+    return { ...stored, subject: stored.subject as `website:${string}` };
+  }
+
+  getAuthoritySubject(subject: AuthorityGrantSubject): StoredAuthoritySubject | null {
+    const row = this.db.prepare("SELECT * FROM authority_subjects WHERE subject = ?").get(subject);
+    return row ? subjectFromRow(row) : null;
+  }
+
+  /** Keep identity for audit/deduplication while atomically withdrawing all consent. */
+  invalidateAuthoritySubject(subject: AuthorityGrantSubject, now = Date.now()): boolean {
+    const grants = this.listAuthorityGrants().filter(
+      (grant) => grant.subject === subject && grant.revokedAt === undefined
+    );
+    let changed: boolean;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.db
+        .prepare("UPDATE authority_subjects SET generation = generation + 1 WHERE subject = ?")
+        .run(subject);
+      this.db
+        .prepare(
+          "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
+        )
+        .run(now, subject);
+      this.db.exec("COMMIT");
+      changed = Number(result.changes) === 1;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    // Live effects observe only a committed invalidation, including listeners that read the store.
+    for (const execution of this.executions.values())
+      if (execution.subject === subject) execution.lifetime.abort();
+    for (const grant of grants) this.emitGrantWithdrawal(grant, now);
+    return changed;
   }
 
   issue(input: IssueAuthorityGrantInput): AuthorityGrant {
     validateGrantInput(input);
+    if (
+      input.subject.startsWith("website:") ||
+      input.constraints?.subjectGeneration !== undefined ||
+      input.constraints?.documentId !== undefined
+    ) {
+      const binding = this.getAuthoritySubject(input.subject);
+      if (
+        !binding ||
+        binding.generation !== input.constraints?.subjectGeneration ||
+        binding.workspaceId !== input.constraints?.sourceWorkspaceId
+      ) {
+        throw new Error(
+          "Continuing identity grants must bind the current subject generation and source workspace"
+        );
+      }
+    }
     const id = input.id ?? ulid(input.createdAt);
     const createdAt = input.createdAt ?? Date.now();
     const constraints = input.constraints ?? {};
@@ -82,8 +231,8 @@ export class CapabilityGrantStore {
           session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
-          decided_by, decision_surface, task_ref, source_workspace_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`
+          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -109,7 +258,9 @@ export class CapabilityGrantStore {
         input.decidedBy ?? null,
         input.decisionSurface ?? null,
         constraints.taskRef ?? null,
-        constraints.sourceWorkspaceId ?? null
+        constraints.sourceWorkspaceId ?? null,
+        constraints.subjectGeneration ?? null,
+        constraints.documentId ?? null
       );
     return {
       id,
@@ -184,18 +335,23 @@ export class CapabilityGrantStore {
       .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
       .run(now, grantId);
     const changed = Number(result.changes) === 1;
-    if (changed && grant?.scope === "agent") this.emitAgentGrantWithdrawal(grant, now);
+    if (changed && grant) this.emitGrantWithdrawal(grant, now);
     return changed;
   }
 
   revokeSubject(subject: AuthorityGrantSubject, now = Date.now()): number {
-    return Number(
+    const grants = this.listAuthorityGrants().filter(
+      (grant) => grant.subject === subject && grant.revokedAt === undefined
+    );
+    const count = Number(
       this.db
         .prepare(
           "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
         )
         .run(now, subject).changes
     );
+    for (const grant of grants) this.emitGrantWithdrawal(grant, now);
+    return count;
   }
 
   touch(grantId: string, now = Date.now()): boolean {
@@ -232,7 +388,7 @@ export class CapabilityGrantStore {
         )
         .run(now, cutoff).changes
     );
-    for (const grant of candidates) this.emitAgentGrantWithdrawal(grant, now);
+    for (const grant of candidates) this.emitGrantWithdrawal(grant, now);
     return changed;
   }
 
@@ -558,9 +714,9 @@ export class CapabilityGrantStore {
     return (rows as GrantRow[]).map(rowToGrant);
   }
 
-  onAgentGrantWithdrawal(listener: (grant: AuthorityGrant, at: number) => void): () => void {
-    this.agentGrantWithdrawalListeners.add(listener);
-    return () => this.agentGrantWithdrawalListeners.delete(listener);
+  onGrantWithdrawal(listener: (grant: AuthorityGrant, at: number) => void): () => void {
+    this.grantWithdrawalListeners.add(listener);
+    return () => this.grantWithdrawalListeners.delete(listener);
   }
 
   resetAgentAuthority(
@@ -591,12 +747,12 @@ export class CapabilityGrantStore {
         );
       }
     });
-    for (const grant of withdrawn) this.emitAgentGrantWithdrawal(grant, now);
+    for (const grant of withdrawn) this.emitGrantWithdrawal(grant, now);
     return { grants, locks };
   }
 
-  private emitAgentGrantWithdrawal(grant: AuthorityGrant, at: number): void {
-    for (const listener of this.agentGrantWithdrawalListeners) listener(grant, at);
+  private emitGrantWithdrawal(grant: AuthorityGrant, at: number): void {
+    for (const listener of this.grantWithdrawalListeners) listener(grant, at);
   }
 
   transaction<T>(work: () => T): T {
@@ -614,15 +770,39 @@ export class CapabilityGrantStore {
 
 type GrantRow = Record<string, SQLOutputValue>;
 
+function subjectFromRow(row: GrantRow): StoredAuthoritySubject {
+  const subject = String(row["subject"]);
+  const generation = Number(row["generation"]);
+  if (
+    !/^(host|user|code|session|mission|agent|task|website):[^\0]+$/.test(subject) ||
+    subject.slice(0, subject.indexOf(":")) !== row["kind"] ||
+    !Number.isSafeInteger(generation) ||
+    generation < 0
+  ) {
+    throw new Error("Invalid authority subject record");
+  }
+  return {
+    subject: subject as AuthorityGrantSubject,
+    userId: String(row["user_id"]) as `user:${string}`,
+    workspaceId: String(row["workspace_id"]),
+    identityKey: String(row["identity_key"]),
+    generation,
+  };
+}
+
 function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
-  if (!/^(host|user|code|session|mission|agent|task):/.test(subject))
+  if (!/^(host|user|code|session|mission|agent|task|website):/.test(subject))
     throw new Error(`Invalid grant subject ${subject}`);
   const lineage = JSON.parse(String(row["lineage_at_consent"])) as unknown;
   if (!Array.isArray(lineage) || !lineage.every((value) => typeof value === "string")) {
     throw new Error(`Grant ${String(row["id"])} has invalid lineage_at_consent`);
   }
   const constraints = {
+    ...(row["subject_generation"] === null
+      ? {}
+      : { subjectGeneration: Number(row["subject_generation"]) }),
+    ...(row["document_id"] === null ? {} : { documentId: String(row["document_id"]) }),
     ...(row["source_workspace_id"] === null
       ? {}
       : { sourceWorkspaceId: String(row["source_workspace_id"]) }),
@@ -694,8 +874,16 @@ function rowToLock(row: GrantRow): AuthorityLock {
 
 function validateGrantInput(input: IssueAuthorityGrantInput): void {
   if (!input.capability.trim()) throw new Error("Grant capability is required");
-  if (!/^(host|user|code|session|mission|agent|task):.+/.test(input.subject))
+  if (!/^(host|user|code|session|mission|agent|task|website):.+/.test(input.subject))
     throw new Error("Grant subject is not canonical");
+  if (
+    input.constraints?.subjectGeneration !== undefined &&
+    (!Number.isSafeInteger(input.constraints.subjectGeneration) ||
+      input.constraints.subjectGeneration < 0)
+  )
+    throw new Error("Grant subject generation must be a nonnegative safe integer");
+  if (input.constraints?.documentId !== undefined && !input.constraints.documentId.trim())
+    throw new Error("Grant document identity must not be empty");
   if (input.provenance === "critical-confirmation") {
     if (
       input.effect !== "allow" ||

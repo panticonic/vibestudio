@@ -71,6 +71,8 @@ export function isAttestedSystemTestHarness(
 }
 
 export interface AuthorityFacts {
+  /** Host-retained root initiator; does not replace the effect authorizer. */
+  initiatingWebsite?: import("@vibestudio/rpc").WebsiteAuthorityFact;
   workspaceId: string;
   workspaceMember: boolean;
   workspaceRole?: string | null;
@@ -146,6 +148,32 @@ export function authorizeVerifiedCaller(
   locks: import("@vibestudio/rpc").AuthorityLock[];
 } {
   const now = facts.now ?? Date.now();
+  const website = caller.website;
+  const initiatingWebsite = facts.initiatingWebsite ?? website;
+  if (
+    website &&
+    facts.initiatingWebsite &&
+    (website.subject !== facts.initiatingWebsite.subject ||
+      website.binding.documentId !== facts.initiatingWebsite.binding.documentId)
+  )
+    throw new Error("Website initiator does not match its authenticated subject binding");
+  if (initiatingWebsite) {
+    const stored = facts.grantStore?.getAuthoritySubject(initiatingWebsite.subject);
+    if (
+      (website && caller.hostOriginated) ||
+      !stored ||
+      !facts.grantStore?.isSubjectExecutionCurrent(initiatingWebsite.binding) ||
+      stored.userId !== initiatingWebsite.userId ||
+      stored.workspaceId !== initiatingWebsite.workspaceId ||
+      stored.identityKey !== initiatingWebsite.origin ||
+      stored.generation !== initiatingWebsite.binding.generation ||
+      (website &&
+        (stored.userId !== `user:${caller.subject?.userId}` ||
+          stored.workspaceId !== (caller.workspaceId ?? facts.workspaceId)))
+    ) {
+      throw new Error("Website authority no longer matches its authenticated subject binding");
+    }
+  }
   const product = getProductBootManifest();
   const host = caller.hostOriginated === true ? product.hostPrincipal : null;
   const actingUser =
@@ -207,14 +235,18 @@ export function authorizeVerifiedCaller(
       );
     }
   }
-  const authorizingOrigin = caller.hostOriginated
-    ? ({ kind: "host", principal: product.hostPrincipal } as const)
-    : sessionOrigin
-      ? ({ kind: "session", principal: sessionPrincipal } as const)
-      : code
-        ? ({ kind: "code", principal: code } as const)
-        : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
+  const authorizingOrigin = website
+    ? ({ kind: "website", principal: website.subject } as const)
+    : caller.hostOriginated
+      ? ({ kind: "host", principal: product.hostPrincipal } as const)
+      : sessionOrigin
+        ? ({ kind: "session", principal: sessionPrincipal } as const)
+        : code
+          ? ({ kind: "code", principal: code } as const)
+          : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
   const context: AuthorizationContext = {
+    ...(initiatingWebsite ? { website: initiatingWebsite } : {}),
+    ...(website ? { subjectBinding: website.binding } : {}),
     sourceWorkspaceId: caller.workspaceId ?? facts.workspaceId,
     authorizingOrigin,
     host,
@@ -230,6 +262,7 @@ export function authorizeVerifiedCaller(
           }
         : null,
     initiatorChain: [
+      ...(initiatingWebsite ? [initiatingWebsite.subject] : []),
       ...(actingUser ? [actingUser] : []),
       ...(entity ? [entity] : []),
       ...(code ? [code] : []),
@@ -282,16 +315,18 @@ export function authorizeVerifiedCaller(
       : code
         ? { code }
         : { user: actingUser };
-  const grants = productAuthorityGrants({
-    caller,
-    principals: authorizingPrincipals,
-    capability: facts.capability,
-    resourceKey: facts.resourceKey,
-    sessionId: facts.sessionId,
-    now,
-    grantStore: facts.grantStore,
-    tier: facts.tier,
-  });
+  const grants = website
+    ? []
+    : productAuthorityGrants({
+        caller,
+        principals: authorizingPrincipals,
+        capability: facts.capability,
+        resourceKey: facts.resourceKey,
+        sessionId: facts.sessionId,
+        now,
+        grantStore: facts.grantStore,
+        tier: facts.tier,
+      });
   // A host-verified agent binding is the durable membership fact for one
   // conversation. Opening or refreshing that participant's delivery stream is
   // therefore not a new grant of conversation access: it is use of the exact
@@ -302,6 +337,7 @@ export function authorizeVerifiedCaller(
     ? `do:workers/pubsub-channel:PubSubChannel:${caller.agentBinding.channelId}`
     : null;
   if (
+    !website &&
     (caller.workspaceId === undefined || caller.workspaceId === facts.workspaceId) &&
     facts.tier !== "critical" &&
     facts.capability === "workspace-service:channel" &&
@@ -331,12 +367,12 @@ export function authorizeVerifiedCaller(
       authorizingOrigin.principal,
     ] as import("@vibestudio/rpc").AuthorityGrantSubject[];
     const bindingId = executionSession?.agentBinding?.bindingId;
-    if (bindingId) subjects.push(`agent:${bindingId}`);
+    if (bindingId && !website) subjects.push(`agent:${bindingId}`);
     if (facts.tier === "critical" && !subjects.includes(sessionPrincipal)) {
       subjects.push(sessionPrincipal);
     }
-    if (executionSession?.mission) subjects.push(executionSession.mission.subject);
-    if (context.session.taskAuthority) subjects.push(context.session.taskAuthority);
+    if (executionSession?.mission && !website) subjects.push(executionSession.mission.subject);
+    if (context.session.taskAuthority && !website) subjects.push(context.session.taskAuthority);
     grants.push(...facts.grantStore.grantsForSubjects(subjects, facts.capability, now));
   }
   const bindingId = executionSession?.agentBinding?.bindingId;
@@ -379,6 +415,7 @@ export function directAuthorityAudience(
 }
 
 export function attestDirectRpc(input: {
+  initiatingWebsite?: import("@vibestudio/rpc").WebsiteAuthorityFact;
   caller: VerifiedCaller;
   source: string;
   className: string;
@@ -419,6 +456,7 @@ export function attestDirectRpc(input: {
   const capability =
     input.capability ?? productCapability ?? directAuthorityCapability(input.method);
   const { context, grants, locks } = authorizeVerifiedCaller(input.caller, {
+    ...(input.initiatingWebsite ? { initiatingWebsite: input.initiatingWebsite } : {}),
     workspaceId: input.workspaceId,
     workspaceMember: input.workspaceMember,
     workspaceRole: input.workspaceRole,
