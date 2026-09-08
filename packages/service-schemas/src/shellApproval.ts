@@ -605,18 +605,29 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
       .strict(),
   ])
 );
+const authoritySubjectBindingSchema = z
+  .object({
+    subject: z
+      .string()
+      .regex(
+        /^(host|user|code|session|mission|website|installation|agent|task):[^\0]+$/
+      ) as z.ZodType<import("@vibestudio/rpc").AuthorityGrantSubject>,
+    generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    documentId: z.string().min(1).optional(),
+  })
+  .strict();
 export const invocationSnapshotSchema = z
   .object({
     v: z.literal(2),
-    subjectBinding: z
+    subjectBinding: authoritySubjectBindingSchema.optional(),
+    initiatingWebsite: z
       .object({
-        subject: z
-          .string()
-          .regex(/^(host|user|code|session|mission|website|agent|task):[^\0]+$/) as z.ZodType<
-          import("@vibestudio/rpc").AuthorityGrantSubject
-        >,
-        generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-        documentId: z.string().min(1).optional(),
+        subject: z.string().startsWith("website:") as z.ZodType<`website:${string}`>,
+        userId: z.string().startsWith("user:") as z.ZodType<`user:${string}`>,
+        workspaceId: z.string().min(1),
+        origin: z.string().url(),
+        connected: z.boolean(),
+        binding: authoritySubjectBindingSchema,
       })
       .strict()
       .optional(),
