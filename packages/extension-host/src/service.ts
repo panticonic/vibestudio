@@ -38,7 +38,7 @@ import type {
 } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitInstallReviewApproval, ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
-import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { UnitAuthorityManifest, UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredExtensions } from "@vibestudio/workspace/configParser";
 import {
@@ -1378,6 +1378,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       executionDigest,
       requested: authority.requests,
     };
+  }
+
+  /** Resolve admission evidence only for this registry's current sealed execution. */
+  resolveActiveAuthority(code: VerifiedCodeIdentity): UnitAuthorityManifest | null {
+    const active = this.resolveCodeIdentity(code.callerId);
+    if (!active || sha256Canonical(active) !== sha256Canonical(code)) return null;
+    const entry = this.registry.get(code.callerId);
+    return entry?.activeBundleKey
+      ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata.authority ?? null)
+      : null;
   }
 
   private createTrackedInvocation(

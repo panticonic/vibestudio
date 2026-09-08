@@ -374,6 +374,23 @@ describe("ExtensionHost invocation attribution", () => {
     });
   });
 
+  it("resolves admission evidence from the extension registry only for the exact active execution", () => {
+    const { host, extensionNode } = makeHost();
+    const code = host.resolveCodeIdentity(extensionNode.name)!;
+    expect(host.resolveActiveAuthority(code)?.requests).toEqual(code.requested);
+    for (const changed of [
+      { callerId: "@workspace-extensions/other" },
+      { repoPath: "extensions/other" },
+      { effectiveVersion: "ev-old" },
+      { executionDigest: "b".repeat(64) },
+      { requested: [] },
+    ]) {
+      expect(host.resolveActiveAuthority({ ...code, ...changed })).toBeNull();
+    }
+    host.registry.upsert({ ...host.registry.get(extensionNode.name)!, activeBundleKey: null });
+    expect(host.resolveActiveAuthority(code)).toBeNull();
+  });
+
   it("does not invent extension code identity without sealed build authority", () => {
     const { host, extensionNode } = makeHost({ sealedBuildIdentity: false });
 

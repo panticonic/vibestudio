@@ -1288,11 +1288,15 @@ async function main() {
     // (docs/template-install-unit-approval-ux-plan.md §5.5).
     const evalOwner = code.evalOrigin ? entityCache.resolveActive(code.evalOrigin.ownerId) : null;
     const approvedEntity = evalOwner ?? entityCache.resolveActive(code.callerId);
-    if (!approvedEntity?.activeAuthority) return false;
+    const authority =
+      code.callerKind === "extension"
+        ? extensionHostForGateway?.resolveActiveAuthority(code)
+        : approvedEntity?.activeAuthority;
+    if (!authority) return false;
     return unitAdmissionStore.has({
       repoPath: code.repoPath,
       effectiveVersion: code.effectiveVersion,
-      authority: approvedEntity.activeAuthority,
+      authority,
     });
   };
   const { UnitInstallReviewCoordinator } = await import("./unitInstallReviewCoordinator.js");
