@@ -13,6 +13,8 @@ import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationC
 import { WorkspaceRpcPolicySchema } from "@vibestudio/identity/workspaceRpcPolicy";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
+import { templateInspectionSchema } from "./templates.js";
+
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
@@ -217,15 +219,27 @@ const HubWorkspaceMemberSchema = HubWorkspaceMembershipSchema.extend({
 export const hubControlMethods = defineServiceMethods({
   ensureUserWorkspaces: {
     capability: "workspaces.create",
-    tier: { tier: "gated", session: "family", residency: "identity", family: "hubControl.create", rationale: "Idempotently ensure the authenticated account's own Personal and System workspaces." },
-    presentation: {
-      title: "Prepare your workspaces", action: "prepare your Personal and System workspaces",
-      description: "Create either private workspace if it does not exist yet.",
-      group: "accounts", authorityCategory: { domain: "automation", verb: "act" },
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.create",
+      rationale:
+        "Idempotently ensure the authenticated account's own Personal and System workspaces.",
     },
-    description: "Ensure the authenticated user's private Personal/System pair from host-selected exact distributions. Existing IDs and incomplete creation are preserved.",
+    presentation: {
+      title: "Prepare your workspaces",
+      action: "prepare your Personal and System workspaces",
+      description: "Create either private workspace if it does not exist yet.",
+      group: "accounts",
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
+    description:
+      "Ensure the authenticated user's private Personal/System pair from host-selected exact distributions. Existing IDs and incomplete creation are preserved.",
     args: z.tuple([]),
-    returns: z.object({ personal: HubWorkspaceEntrySchema, system: HubWorkspaceEntrySchema }).strict(),
+    returns: z
+      .object({ personal: HubWorkspaceEntrySchema, system: HubWorkspaceEntrySchema })
+      .strict(),
     access: writeAccess,
   },
   getWorkspaceRpcPolicy: {
@@ -316,6 +330,28 @@ export const hubControlMethods = defineServiceMethods({
     description: "List workspaces visible to the authenticated account.",
     args: z.tuple([]),
     returns: z.array(HubWorkspaceEntrySchema),
+    access: readAccess,
+  },
+  listTemplateCandidates: {
+    capability: "workspaces.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale: "Read host-selected workspace sources for review.",
+    },
+    presentation: {
+      title: "View workspace sources",
+      action: "view workspace sources",
+      description: "See exact workspace snapshots selected for this instance.",
+      group: "accounts",
+      authorityCategory: { domain: "files", verb: "see" },
+    },
+    description:
+      "List validated host-selected snapshots available to create new workspaces; never exposes local acquisition paths.",
+    args: z.tuple([]),
+    returns: z.array(templateInspectionSchema),
     access: readAccess,
   },
   routeWorkspace: {
@@ -449,7 +485,11 @@ export const hubControlMethods = defineServiceMethods({
     description: "Add an existing account to a workspace.",
     args: z.tuple([
       z
-        .object({ ...userRefFields, workspace: z.string().min(1), role: z.enum(["admin", "member"]).optional() })
+        .object({
+          ...userRefFields,
+          workspace: z.string().min(1),
+          role: z.enum(["admin", "member"]).optional(),
+        })
         .strict()
         .refine(requireUserRef, "userId or handle is required"),
     ]),

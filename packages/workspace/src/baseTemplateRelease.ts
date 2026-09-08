@@ -3,17 +3,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRuntimeLayout } from "@vibestudio/shared/runtimePaths";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import {
+  sameWorkspaceTemplatePin,
+  type WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
 
 export const BASE_TEMPLATE_RELEASE_ARTIFACT = "base-template-release.json" as const;
 export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE" as const;
 export const DEFAULT_WORKSPACE_TEMPLATES_ENV = "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES" as const;
 
-export const DefaultWorkspaceTemplatesSchema = z.object({
-  base: WorkspaceTemplatePinSchema,
-  personal: WorkspaceTemplatePinSchema,
-  system: WorkspaceTemplatePinSchema,
-}).strict();
+export const DefaultWorkspaceTemplatesSchema = z
+  .object({
+    base: WorkspaceTemplatePinSchema,
+    personal: WorkspaceTemplatePinSchema,
+    system: WorkspaceTemplatePinSchema,
+  })
+  .strict();
 
 export type DefaultWorkspaceTemplates = z.infer<typeof DefaultWorkspaceTemplatesSchema>;
 
@@ -33,18 +38,7 @@ export interface BaseTemplateReleaseArtifact {
 
 export type ParsedBaseTemplateRelease = BaseTemplateReleaseArtifact;
 
-export function sameWorkspaceTemplatePin(
-  left: WorkspaceTemplatePin,
-  right: WorkspaceTemplatePin
-): boolean {
-  return (
-    left.url === right.url &&
-    left.ref === right.ref &&
-    left.commit === right.commit &&
-    left.snapshot === right.snapshot &&
-    left.credential === right.credential
-  );
-}
+export { sameWorkspaceTemplatePin };
 
 export function parseBaseTemplateReleaseArtifact(value: unknown): ParsedBaseTemplateRelease {
   return BaseTemplateReleaseArtifactSchema.parse(value) as BaseTemplateReleaseArtifact;

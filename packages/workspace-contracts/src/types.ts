@@ -131,6 +131,19 @@ export interface WorkspaceTemplatePin extends WorkspaceTemplateDeclaration {
   snapshot: `v1-sha256:${string}`;
 }
 
+export function sameWorkspaceTemplatePin(
+  left: WorkspaceTemplatePin,
+  right: WorkspaceTemplatePin
+): boolean {
+  return (
+    left.url === right.url &&
+    left.ref === right.ref &&
+    left.commit === right.commit &&
+    left.snapshot === right.snapshot &&
+    left.credential === right.credential
+  );
+}
+
 /** Reviewed moving pointer used only by an explicit registry refresh. */
 export interface WorkspaceTemplateRegistryDeclaration {
   url: string;

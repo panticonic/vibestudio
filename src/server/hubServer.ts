@@ -1,3 +1,4 @@
+import { readDevelopmentTemplateSources } from "@vibestudio/workspace/developmentTemplateSources";
 import { workspaceRpcDestination } from "@vibestudio/rpc";
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
@@ -1558,6 +1559,14 @@ export async function executeHubControl(
       policy: state.identityDb.getWorkspaceRpcPolicy(workspaceId),
       incomingLocked: owner?.role === "system",
     });
+    return;
+  }
+  if (method === "listTemplateCandidates") {
+    respond(
+      readDevelopmentTemplateSources().flatMap(({ pin, review }) =>
+        review ? [{ pin, ...review }] : []
+      )
+    );
     return;
   }
   if (method === "listWorkspaces") {

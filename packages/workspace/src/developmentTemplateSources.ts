@@ -9,6 +9,12 @@ export const DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV =
 export interface DevelopmentTemplateSource {
   pin: WorkspaceTemplatePin;
   checkout: string;
+  /** Review facts from validation of this exact host-selected snapshot. */
+  review?: {
+    presentation?: { name?: string; description?: string };
+    repositories: string[];
+    files: string[];
+  };
 }
 
 const DevelopmentTemplateSourcesSchema = z.array(
@@ -16,6 +22,17 @@ const DevelopmentTemplateSourcesSchema = z.array(
     .object({
       pin: WorkspaceTemplatePinSchema,
       checkout: z.string().trim().min(1),
+      review: z
+        .object({
+          presentation: z
+            .object({ name: z.string().optional(), description: z.string().optional() })
+            .strict()
+            .optional(),
+          repositories: z.array(z.string()),
+          files: z.array(z.string()),
+        })
+        .strict()
+        .optional(),
     })
     .strict()
 );

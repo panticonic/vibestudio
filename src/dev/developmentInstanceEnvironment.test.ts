@@ -17,7 +17,17 @@ const base = {
   sourceCheckout: "/visible/base",
   writebackRepositories: ["meta", "packages/base"],
 };
-const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
+const templates = [
+  {
+    pin: pin("example"),
+    checkout: "/private/template",
+    review: {
+      presentation: { name: "Local example" },
+      repositories: ["panels/example"],
+      files: [],
+    },
+  },
+];
 
 describe("development instance environment", () => {
   it("gives only the source-coupled instance the visible checkout write-back target", () => {

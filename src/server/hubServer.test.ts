@@ -1067,6 +1067,44 @@ describe("hub RPC pairing surfacing (§5)", () => {
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
 
+  it("offers exact selected template reviews without exposing checkout paths", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const pin = {
+      url: "git+https://example.test/local.git",
+      ref: "refs/heads/local",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    const review = {
+      presentation: { name: "Local worktree" },
+      repositories: ["panels/example"],
+      files: [],
+    };
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv(
+      "VIBESTUDIO_DEV_TEMPLATE_SOURCES",
+      JSON.stringify([{ pin, checkout: "/private/checkpoint", review }])
+    );
+    try {
+      let result: unknown;
+      await executeHubControl(
+        state,
+        { userId: rootUserId, handle: "viewer", role: "member" },
+        "listTemplateCandidates",
+        [],
+        (value) => {
+          result = value;
+        }
+      );
+      expect(result).toEqual([{ pin, ...review }]);
+      expect(JSON.stringify(result)).not.toContain("/private/");
+    } finally {
+      vi.unstubAllEnvs();
+      state.identityDb.close();
+    }
+  });
+
   it("publishes an owner-projected full catalog after membership removal", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);

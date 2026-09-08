@@ -8,12 +8,11 @@ import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import type { DevelopmentTemplateSource } from "@vibestudio/workspace/developmentTemplateSources";
 import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
 import { enumerateRootTemplateRepositories } from "../server/workspaceRootTemplateBootstrap.js";
 
-export interface DevelopmentTemplateSelection {
-  pin: WorkspaceTemplatePin;
-  checkout: string;
+export interface DevelopmentTemplateSelection extends DevelopmentTemplateSource {
   sourceCheckout: string;
   changedPaths: readonly string[];
 }
@@ -78,7 +77,7 @@ export async function resolveDevelopmentTemplateSelections(input: {
       },
       reservedPaths: "exclude",
     });
-    validateRootTemplateSource({
+    const manifest = validateRootTemplateSource({
       workspaceId: "development-template",
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       readFile: snapshot.readFile,
@@ -91,7 +90,21 @@ export async function resolveDevelopmentTemplateSelections(input: {
       commit: snapshot.commit,
       snapshot: snapshot.snapshot,
     }) as WorkspaceTemplatePin;
-    selections.push({ ...checkpoint, pin });
+    selections.push({
+      ...checkpoint,
+      pin,
+      review: {
+        ...(manifest.presentation
+          ? {
+              presentation: {
+                name: manifest.presentation.name,
+                description: manifest.presentation.description,
+              },
+            }
+          : {}),
+        ...manifest.inventory,
+      },
+    });
   }
   return selections;
 }

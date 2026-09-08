@@ -23,7 +23,9 @@ export function developmentInstanceEnvironment(input: {
   instanceId: string;
   sourceCoupled: boolean;
   base?: DevelopmentBaseEnvironmentSelection;
-  templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
+  templates?: ReadonlyArray<
+    import("@vibestudio/workspace/developmentTemplateSources").DevelopmentTemplateSource
+  >;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
   const selectedBase = input.base;
@@ -49,9 +51,10 @@ export function developmentInstanceEnvironment(input: {
     ...(selectedBase || input.templates?.length
       ? {
           [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
-            [...baseSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
-              pin,
-              checkout,
+            [...baseSources, ...(input.templates ?? [])].map((source) => ({
+              pin: source.pin,
+              checkout: source.checkout,
+              ...("review" in source && source.review ? { review: source.review } : {}),
             }))
           ),
         }
