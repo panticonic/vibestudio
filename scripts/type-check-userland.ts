@@ -98,7 +98,7 @@ function projectCheckoutSource(
     if (name.endsWith(".json")) {
       if (name === "tsconfig.integration.mobile.json" && workspaceArgumentIndex < 0) {
         const config = JSON.parse(fs.readFileSync(target, "utf8"));
-        config.include.push("../tests/workspace-integration/mobile-appUpdatePrompt.test.ts");
+        config.include.unshift("../tests/workspace-integration/mobile-appUpdatePrompt.test.ts");
         fs.writeFileSync(target, JSON.stringify(config));
       }
       addDiscoveredPackagePaths(target, units);
