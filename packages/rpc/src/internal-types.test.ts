@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bindVerifiedExternalContext, verifiedExternalContextFor } from "./internal-types.js";
+import {
+  bindExecutionSession,
+  executionSessionNonceFor,
+  mergeRpcOptions,
+  bindVerifiedExternalContext,
+  verifiedExternalContextFor,
+} from "./internal-types.js";
 
 describe("verified external RPC context", () => {
   it("seals an immutable out-of-band fact that JSON cannot carry", () => {
@@ -40,5 +46,33 @@ describe("verified external RPC context", () => {
         }
       )
     ).toThrow(/bounded external lineage/);
+  });
+});
+
+describe("runtime RPC option composition", () => {
+  it("retains hidden facts, accepts an explicit admission replacement, and never serializes them", () => {
+    const controller = new AbortController();
+    const original = bindExecutionSession(
+      bindVerifiedExternalContext(
+        {
+          signal: controller.signal,
+          destination: { kind: "workspace" as const, workspaceId: "workspace:destination" },
+        },
+        { class: "external", latchEpoch: 3, externalKeys: ["api:webhook:source"] }
+      ),
+      "admission:original"
+    );
+    const traced = mergeRpcOptions(original, { readOnly: true });
+    expect(executionSessionNonceFor(traced)).toBe("admission:original");
+    expect(verifiedExternalContextFor(traced)).toEqual(verifiedExternalContextFor(original));
+    expect(traced.signal).toBe(controller.signal);
+    expect(traced.destination).toBe(original.destination);
+    const replaced = mergeRpcOptions(traced, bindExecutionSession({}, "admission:replacement"));
+    expect(executionSessionNonceFor(replaced)).toBe("admission:replacement");
+    expect(executionSessionNonceFor(original)).toBe("admission:original");
+    const wireCopy = JSON.parse(JSON.stringify(replaced));
+    expect(executionSessionNonceFor(wireCopy)).toBeUndefined();
+    expect(verifiedExternalContextFor(wireCopy)).toBeNull();
+    expect(verifiedExternalContextFor(replaced)).toEqual(verifiedExternalContextFor(original));
   });
 });

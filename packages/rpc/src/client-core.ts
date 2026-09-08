@@ -37,6 +37,7 @@ import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import {
   bindExecutionSession,
+  mergeRpcOptions,
   executionSessionNonceFor,
   type InternalRpcEvent,
   type InternalRpcRequest,
@@ -121,6 +122,34 @@ function createCallProxy<TMethods extends MethodMap>(
       },
     }
   ) as TypedCallProxy<TMethods>;
+}
+
+function createPeer<
+  TMethods extends MethodMap = MethodMap,
+  TEvents extends EventMap = EventMap,
+  TEmitEvents extends EventMap = TEvents,
+>(
+  client: Pick<RpcClient, "call" | "on" | "emit">,
+  targetId: string,
+  options?: RpcTargetOptions
+): RpcPeer<TMethods, TEvents, TEmitEvents> {
+  return {
+    id: targetId,
+    ...(options?.destination ? { destination: options.destination } : {}),
+    call: createCallProxy<TMethods>((method, args) => client.call(targetId, method, args, options)),
+    on(event, listener) {
+      return client.on(event, (ev) => {
+        if (
+          ev.caller.callerId === targetId &&
+          rpcDestinationMatchesCaller(options?.destination, ev.caller)
+        ) {
+          listener(ev as never);
+        }
+      });
+    },
+    emit: (event, payload) => client.emit(targetId, event, payload, options),
+    withContract: (_contract, _role) => createPeer(client, targetId, options) as never,
+  };
 }
 
 export function defineContract<const TContract extends Record<string, unknown>>(
@@ -938,29 +967,17 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     provenance: AuthenticatedCaller[] = baseProvenance,
     options?: RpcTargetOptions
   ): RpcPeer<TMethods, TEvents, TEmitEvents> {
-    const result: RpcPeer<TMethods, TEvents, TEmitEvents> = {
-      id: targetId,
-      ...(options?.destination ? { destination: options.destination } : {}),
-      call: createCallProxy<TMethods>((method, args) =>
-        observeOutbound(callWithProvenance(provenance, targetId, method, args, options))
-      ),
-      on(event, listener) {
-        return client.on(event, (ev) => {
-          if (
-            ev.caller.callerId === targetId &&
-            rpcDestinationMatchesCaller(options?.destination, ev.caller)
-          )
-            listener(ev as never);
-        });
+    return createPeer<TMethods, TEvents, TEmitEvents>(
+      {
+        call: (target, method, args, value) =>
+          observeOutbound(callWithProvenance(provenance, target, method, args, value)),
+        emit: (target, event, payload, value) =>
+          observeOutbound(emitWithProvenance(provenance, target, event, payload, value)),
+        on: client.on.bind(client),
       },
-      emit(event, payload) {
-        return observeOutbound(emitWithProvenance(provenance, targetId, event, payload, options));
-      },
-      withContract(_contract, _role) {
-        return peer(targetId, provenance, options) as never;
-      },
-    };
-    return result;
+      targetId,
+      options
+    );
   }
 
   async function streamImpl(
@@ -1181,65 +1198,38 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   return client;
 }
 
-/**
- * Bind one exact upstream tool invocation to every ordinary call made through
- * a client. The coordinate is carried as provenance only; authorization still
- * comes entirely from the authenticated RPC caller and service policy.
- */
-export function withCausalParent(base: RpcClient, causalParent: RpcCausalParent): RpcClient {
-  return Object.freeze({
+/** One client view path: peers must retain the same options as direct effects. */
+function withCallOptions(
+  base: RpcClient,
+  map: (options?: RpcCallOptions | RpcStreamOptions) => RpcCallOptions & RpcStreamOptions
+): RpcClient {
+  const view: RpcClient = {
     selfId: base.selfId,
     expose: base.expose.bind(base),
     exposeAll: base.exposeAll.bind(base),
     exposeStreaming: base.exposeStreaming.bind(base),
-    call: <T = unknown>(
-      targetId: string,
-      method: string,
-      args: unknown[],
-      options?: RpcCallOptions
-    ) => base.call<T>(targetId, method, args, { ...(options ?? {}), causalParent }),
-    stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
-      base.stream(targetId, method, args, { ...(options ?? {}), causalParent }),
-    streamReadable: (
-      targetId: string,
-      method: string,
-      args: unknown[],
-      options?: RpcStreamOptions
-    ) => base.streamReadable(targetId, method, args, { ...(options ?? {}), causalParent }),
-    emit: base.emit.bind(base),
+    call: (target, method, args, options) => base.call(target, method, args, map(options)),
+    stream: (target, method, args, options) => base.stream(target, method, args, map(options)),
+    streamReadable: (target, method, args, options) =>
+      base.streamReadable(target, method, args, map(options)),
+    emit: (target, event, payload, options) => base.emit(target, event, payload, map(options)),
     on: base.on.bind(base),
-    peer: base.peer.bind(base),
+    peer: (target, options) => createPeer(view, target, options),
     status: base.status.bind(base),
     ready: base.ready.bind(base),
     onStatusChange: base.onStatusChange.bind(base),
-  });
+  };
+  return Object.freeze(view);
+}
+
+/** Bind exact upstream provenance while retaining any evaluated execution admission. */
+export function withCausalParent(base: RpcClient, causalParent: RpcCausalParent): RpcClient {
+  return withCallOptions(base, (options) => mergeRpcOptions(options, { causalParent }));
 }
 
 /** Runtime-only client view that binds every outbound effect to one host admission. */
 export function withExecutionAdmission(base: RpcClient, nonce: string): RpcClient {
-  const options = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T =>
-    bindExecutionSession({ ...(value ?? {}) } as T, nonce);
-  return Object.freeze({
-    selfId: base.selfId,
-    expose: base.expose.bind(base),
-    exposeAll: base.exposeAll.bind(base),
-    exposeStreaming: base.exposeStreaming.bind(base),
-    call: <T = unknown>(
-      targetId: string,
-      method: string,
-      args: unknown[],
-      value?: RpcCallOptions
-    ) => base.call<T>(targetId, method, args, options(value)),
-    stream: (targetId: string, method: string, args: unknown[], value?: RpcStreamOptions) =>
-      base.stream(targetId, method, args, options(value)),
-    streamReadable: (targetId: string, method: string, args: unknown[], value?: RpcStreamOptions) =>
-      base.streamReadable(targetId, method, args, options(value)),
-    emit: (targetId: string, event: string, payload: unknown, value?: RpcCallOptions) =>
-      base.emit(targetId, event, payload, options(value)),
-    on: base.on.bind(base),
-    peer: base.peer.bind(base),
-    status: base.status.bind(base),
-    ready: base.ready.bind(base),
-    onStatusChange: base.onStatusChange.bind(base),
-  });
+  return withCallOptions(base, (options) =>
+    mergeRpcOptions(options, bindExecutionSession({}, nonce))
+  );
 }

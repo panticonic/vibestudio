@@ -85,6 +85,19 @@ export function verifiedExternalContextFor(
   return fact && typeof fact === "object" ? (fact as ContextIntegrityFact) : null;
 }
 
+/** Compose runtime call options without dropping their non-enumerable authority facts. */
+export function mergeRpcOptions(
+  original: RpcCallOptions | RpcStreamOptions | undefined,
+  overrides: RpcCallOptions | RpcStreamOptions
+): RpcCallOptions & RpcStreamOptions {
+  const merged = { ...original, ...overrides };
+  const nonce = executionSessionNonceFor(overrides) ?? executionSessionNonceFor(original);
+  if (nonce !== undefined) bindExecutionSession(merged, nonce);
+  const external = verifiedExternalContextFor(overrides) ?? verifiedExternalContextFor(original);
+  if (external) bindVerifiedExternalContext(merged, external);
+  return merged;
+}
+
 /** Authenticated transport caller before it is sanitized for user handlers. */
 export interface AttestedCaller extends AuthenticatedCaller {
   authorization?: DirectAuthorityAttestation;

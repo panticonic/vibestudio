@@ -1,5 +1,5 @@
 import { createRpcClient, defineContract, withCausalParent } from "./client.js";
-import { createInternalRpcClient } from "./client-core.js";
+import { createInternalRpcClient, withExecutionAdmission } from "./client-core.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
@@ -368,6 +368,58 @@ describe("createRpcClient", () => {
     controller.abort();
     await expect(pending).rejects.toThrow(/aborted/);
   });
+
+  it.each(["admission-outer", "causal-outer"] as const)(
+    "preserves execution admission through %s client views and their peers",
+    async (order) => {
+      const network = workspaceNetwork();
+      const transport = network.transport("agent", "workspace:source");
+      const send = vi.spyOn(transport, "send");
+      const base = createRpcClient({ selfId: "agent", workspaceId: "workspace:source", transport });
+      const receiver = createRpcClient({
+        selfId: "worker",
+        workspaceId: "workspace:destination",
+        transport: network.transport("worker", "workspace:destination"),
+      });
+      receiver.expose("read", () => "result");
+      receiver.exposeStreaming("readStream", async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+      });
+      const parent = {
+        kind: "trajectory-invocation" as const,
+        logId: "trajectory:automation",
+        head: "main",
+        invocationId: "invocation:tool",
+      };
+      const scoped =
+        order === "admission-outer"
+          ? withExecutionAdmission(withCausalParent(base, parent), "admission:automation")
+          : withCausalParent(withExecutionAdmission(base, "admission:automation"), parent);
+      const options = {
+        destination: { kind: "workspace" as const, workspaceId: "workspace:destination" },
+      };
+      expect(await scoped.call("worker", "read", [], options)).toBe("result");
+      await (await scoped.stream("worker", "readStream", [], options)).text();
+      expect(
+        await (await scoped.streamReadable("worker", "readStream", [], options)).body
+          .getReader()
+          .read()
+      ).toMatchObject({ done: true });
+      await scoped.emit("worker", "changed", {}, options);
+      const peer = scoped.peer<{ read: () => string }, { changed: object }>("worker", options);
+      expect(await peer.call.read()).toBe("result");
+      await peer.emit("changed", {});
+      const effects = send.mock.calls
+        .map(([envelope]) => envelope.message)
+        .filter((message) => ["request", "stream-request", "event"].includes(message.type));
+      expect(effects).toHaveLength(6);
+      for (const effect of effects) {
+        expect(effect).toMatchObject({ executionSessionNonce: "admission:automation" });
+        if (effect.type !== "event") expect(effect).toMatchObject({ causalParent: parent });
+      }
+    }
+  );
 
   it("does local dispatch without using the transport", async () => {
     const network = createInProcessNetwork();
