@@ -22,7 +22,7 @@ const SERVER_ID = `srv_${"s".repeat(24)}`;
 const PAIRING = {
   endpointId: "aa".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 };
 const ENDPOINT_SECRET = "E".repeat(43);
 

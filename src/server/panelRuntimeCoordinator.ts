@@ -306,7 +306,11 @@ export class PanelRuntimeCoordinator {
       return false;
     }
     if (!this.canAdvance(attempt, report.phase)) {
-      this.rejectReport(attemptId, report, "non-monotonic or terminal transition");
+      // Host and renderer observations are independent asynchronous evidence
+      // streams. Once either advances the attempt, a delayed duplicate or
+      // lower phase from the other is ordinary stale evidence, not a runtime
+      // fault. Preserve the monotonic state and let the boolean tell the caller
+      // that no transition occurred without polluting operator diagnostics.
       return false;
     }
     this.transitionAttempt(attempt, report);

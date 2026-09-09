@@ -64,7 +64,6 @@ export const HubPairingInviteSchema = z
     relays: z.array(z.string()).min(1).max(8),
     v: z.literal(IROH_REACH_VERSION),
     code: z.string().regex(PAIRING_CODE_PATTERN),
-    exp: z.number().int().positive(),
     deepLink: z.string().startsWith("vibestudio://connect/"),
     pairUrl: z.string().startsWith("https://vibestudio.app/p#"),
     expiresInMs: z.number().int().positive(),
@@ -87,8 +86,7 @@ export const HubPairingInviteSchema = z
         parsed.endpointId === invite.endpointId &&
         JSON.stringify(parsed.relays) === JSON.stringify(invite.relays) &&
         parsed.code === invite.code &&
-        parsed.v === invite.v &&
-        parsed.exp === invite.expiresAt;
+        parsed.v === invite.v;
       if (!matches) {
         ctx.addIssue({
           code: "custom",

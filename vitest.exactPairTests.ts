@@ -2,7 +2,6 @@
 export const exactPairTests = [
   "tests/invocation-terminal-outcome.test.ts",
   "tests/mobile-native-asset-store.test.ts",
-  "tests/mobile-script-ux.test.ts",
   "tests/onboardingTemplate.test.ts",
   "tests/remote-overhaul-skill-guard.test.ts",
   "tests/typed-service-client-guard.test.ts",

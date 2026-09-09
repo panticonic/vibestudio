@@ -1047,7 +1047,6 @@ function pairingInviteFromReach(
     relays: [...reach.relays],
     v: reach.v,
     code,
-    exp: expiresAt,
   };
   return {
     ...pairing,

@@ -7,9 +7,8 @@ describe("server pairing banner", () => {
     const pairing: ConnectPairing = {
       endpointId: "aa".repeat(32),
       relays: ["https://relay.example/"],
-      code: "A".repeat(32),
-      exp: 2_000_000_000_000,
-      v: 4,
+      code: "A".repeat(22),
+      v: 5,
     };
     expect(formatPairUrlLine(pairing)).toBe(`  Pair URL:     ${createConnectDeepLink(pairing)}`);
   });

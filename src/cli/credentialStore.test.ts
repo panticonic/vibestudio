@@ -25,12 +25,12 @@ const CURRENT: CliIrohDeviceCredentials = {
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4,
+    v: 5,
   },
   workspacePairing: {
     endpointId: "bb".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4,
+    v: 5,
   },
   pairedAt: 1,
 };
@@ -112,6 +112,7 @@ describe("CLI persisted device credential", () => {
       },
       { ...CURRENT, controlPairing: undefined },
       { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, v: undefined } },
+      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, v: 4 } },
       { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, relays: undefined } },
       {
         ...CURRENT,

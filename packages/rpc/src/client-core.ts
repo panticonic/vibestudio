@@ -38,6 +38,7 @@ import {
   type InternalRpcRequest,
   type InternalRpcStreamRequest,
 } from "./internal-types.js";
+import { secureRandomUuid } from "./randomId.js";
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
@@ -77,9 +78,7 @@ function isServerTarget(target: string): boolean {
 }
 
 function generateRequestId(): string {
-  const runtimeCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (typeof runtimeCrypto?.randomUUID === "function") return runtimeCrypto.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return secureRandomUuid();
 }
 
 function callerForSelf(

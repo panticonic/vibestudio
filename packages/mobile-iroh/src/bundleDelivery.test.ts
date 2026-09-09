@@ -33,6 +33,10 @@ function response(chunks: Uint8Array[], start: number, total: number) {
 
 function nativeHost(): NativeBundleHost {
   return {
+    openSafariBrowserDataExport: vi.fn(async () => ({ opened: false })),
+    pickBrowserImportArchive: vi.fn(async () => null),
+    readBrowserImportEntry: vi.fn(async () => ({ dataBase64: "", eof: true })),
+    releaseBrowserImportArchive: vi.fn(async () => undefined),
     appendBundleChunk: vi.fn(async () => undefined),
     finalizeBundleWrite: vi.fn(),
     activatePreparedAppBundle: vi.fn(),

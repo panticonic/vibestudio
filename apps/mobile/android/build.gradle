@@ -8,6 +8,11 @@ buildscript {
         targetSdkVersion = 34
         ndkVersion = "27.1.12297006"
         kotlinVersion = "2.2.21"
+        // VisionCamera 4.7.3 declares an early CameraX 1.5 alpha. Keep the
+        // application authoritative for the runtime family: CameraX 1.5.2+
+        // is required to ignore future Android dynamic-range profiles instead
+        // of crashing while React Native initializes native modules.
+        cameraXVersion = "1.5.3"
     }
     repositories {
         google()
@@ -28,5 +33,18 @@ allprojects {
         google()
         mavenCentral()
         maven { url("https://www.jitpack.io") }
+    }
+
+    // Native libraries may declare an older CameraX family internally, but
+    // the application owns the one version compiled and packaged everywhere.
+    // Keeping every configuration coherent also prevents a library compile
+    // graph from silently diverging from the runtime graph.
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == "androidx.camera") {
+                details.useVersion(rootProject.ext.cameraXVersion)
+                details.because("CameraX 1.5.2+ safely ignores future Android dynamic-range profiles")
+            }
+        }
     }
 }

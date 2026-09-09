@@ -2,7 +2,7 @@ import "./polyfills.js";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Keychain from "react-native-keychain";
 import { EndpointGenerationOwner } from "@vibestudio/iroh-transport";
-import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
+import { createRpcClient, secureRandomUuid, type RpcClient } from "@vibestudio/rpc";
 import {
   createIrohClientPipe,
   type IrohClientSession,
@@ -27,6 +27,7 @@ import {
   type StoredShellPairing,
 } from "./storedCredential.js";
 import { restoreRoutedConnectionPair, resumeMobileConnection } from "./resumeConnection.js";
+import { mobileConnectionRecoveryTimeoutError } from "./connectionRecovery.js";
 
 export type {
   FreshShellPairing,
@@ -112,9 +113,7 @@ export class MobileEndpointPool {
 }
 
 export function randomRequestId(prefix = "mobile-shell"): string {
-  return typeof globalThis.crypto?.randomUUID === "function"
-    ? `${prefix}-${globalThis.crypto.randomUUID()}`
-    : `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${secureRandomUuid()}`;
 }
 
 export function makeFreshShellTokenProvider(pairing: FreshShellPairing): ShellTokenProvider {
@@ -192,7 +191,7 @@ async function waitUntilConnected(
       Promise.all([transport.resume(), session.ready?.()]).then(() => undefined),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () => reject(new Error("The Iroh connection did not recover in time")),
+          () => reject(mobileConnectionRecoveryTimeoutError()),
           timeoutMs
         );
       }),
@@ -216,16 +215,29 @@ export async function establishIrohConnection(
     throw new Error("Hub and workspace attempted to use different mobile endpoint identities");
   }
   endpointPool.acquire(pairing.relays);
+  console.log("[mobile-iroh] endpoint lease acquired");
   const transport = createReconnectingIrohClientPipe({
     peerEndpointId: pairing.endpointId,
     dial: async () => {
+      console.log("[mobile-iroh] physical dial requested");
       const dialed = await endpointPool.dial(pairing);
+      console.log("[mobile-iroh] physical dial connected");
       return createIrohClientPipe(dialed.connection, dialed);
     },
     suspendEndpoint: () => endpointPool.suspend(),
     closeEndpoint: () => endpointPool.release(),
+    onReconnectAttempt: (attempt, delayMs) =>
+      console.warn(`[mobile-iroh] reconnect attempt ${attempt} in ${delayMs}ms`),
+    onReconnectResult: (result) => {
+      if (result.success) console.log("[mobile-iroh] reconnect owner connected");
+      else {
+        console.warn(`[mobile-iroh] reconnect attempt ${result.attempt} failed`, result.error);
+      }
+    },
   });
+  console.log("[mobile-iroh] reconnect owner created");
   const connectionId = randomRequestId();
+  console.log("[mobile-iroh] logical session identity created");
   const session = transport.openSession({
     connectionId,
     clientLabel: "Mobile device",
@@ -235,8 +247,11 @@ export async function establishIrohConnection(
     onPaired: handlers.onPaired,
     onRecovery: handlers.onRecovery,
   });
+  console.log("[mobile-iroh] logical session opened");
   try {
+    console.log("[mobile-iroh] waiting for authenticated session");
     await session.ready?.();
+    console.log("[mobile-iroh] authenticated session ready");
   } catch (error) {
     await session.close().catch(() => undefined);
     await transport.close().catch(() => undefined);

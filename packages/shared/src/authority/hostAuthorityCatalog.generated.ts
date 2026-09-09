@@ -613,6 +613,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "auth.getMobileAppBootstrap": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "auth.read",
+      rationale:
+        "An authenticated mobile shell reads the approved app manifest for its own workspace.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "auth.grantConnection": {
     tier: {
       tier: "gated",

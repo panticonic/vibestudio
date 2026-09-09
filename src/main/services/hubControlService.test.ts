@@ -10,9 +10,8 @@ describe("hubControlHostService", () => {
     const coordinates = {
       endpointId: "aa".repeat(32),
       relays: ["https://relay.example/"],
-      code: "C".repeat(32),
-      exp: 2_000_000_000_000,
-      v: 4 as const,
+      code: "C".repeat(21) + "A",
+      v: 5 as const,
     };
     const pairing = {
       ...coordinates,

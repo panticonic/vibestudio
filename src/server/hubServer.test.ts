@@ -798,7 +798,7 @@ function makeHubCentralData(
 const CHILD_REACH = {
   endpointId: "aa".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 };
 
 describe("hub public request schemas", () => {
@@ -810,28 +810,30 @@ describe("hub public request schemas", () => {
   it("accepts only the current pairing request contract", () => {
     expect(
       HubCompletePairingBodySchema.safeParse({
-        code: "c".repeat(32),
+        code: "c".repeat(21) + "A",
         label: "Desktop",
         platform: "linux",
       }).success
     ).toBe(true);
     expect(
       HubCompletePairingBodySchema.safeParse({
-        code: "c".repeat(32),
+        code: "c".repeat(21) + "A",
         ...credential,
       }).success
     ).toBe(false);
     expect(
       HubCompletePairingBodySchema.safeParse({
-        code: "c".repeat(32),
+        code: "c".repeat(21) + "A",
         deviceId: credential.deviceId,
       }).success
     ).toBe(false);
     expect(
-      HubCompletePairingBodySchema.safeParse({ code: "c".repeat(32), room: "legacy-room" }).success
+      HubCompletePairingBodySchema.safeParse({ code: "c".repeat(21) + "A", room: "legacy-room" })
+        .success
     ).toBe(false);
     expect(
-      HubCompletePairingBodySchema.safeParse({ code: "c".repeat(32), handle: "root_user" }).success
+      HubCompletePairingBodySchema.safeParse({ code: "c".repeat(21) + "A", handle: "root_user" })
+        .success
     ).toBe(false);
     expect(HubCompletePairingBodySchema.safeParse({ code: "short" }).success).toBe(false);
   });
@@ -926,9 +928,8 @@ describe("hub RPC pairing surfacing (§5)", () => {
       const pairing = {
         endpointId: "aa".repeat(32),
         relays: ["https://relay.example/"],
-        code: "R".repeat(32),
-        exp: 2_000_000_000_000,
-        v: 4 as const,
+        code: "R".repeat(21) + "A",
+        v: 5 as const,
       };
       return {
         ...pairing,

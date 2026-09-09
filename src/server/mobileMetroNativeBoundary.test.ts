@@ -105,4 +105,5 @@ describe("mobile Metro native capability boundary", () => {
     expect(entrypoint).not.toContain("workspace/apps/mobile");
     expect(entrypoint).not.toContain("../../workspace/apps");
   });
+
 });

@@ -329,6 +329,26 @@
         "capability": null,
         "presentation": null
       },
+      "getMobileAppBootstrap": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "auth.read",
+          "rationale": "An authenticated mobile shell reads the approved app manifest for its own workspace."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "grantConnection": {
         "authority": {
           "principals": [

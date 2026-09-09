@@ -1,4 +1,10 @@
-import { PAIRING_PROTOCOL_VERSION, parseConnectLink } from "./connect-grammar.generated.mjs";
+import {
+  MAX_RELAY_URL_BYTES,
+  MAX_RELAY_URLS,
+  PAIRING_CODE_PATTERN,
+  PAIRING_PROTOCOL_VERSION,
+  parseConnectLink,
+} from "./connect-grammar.generated.mjs";
 
 const READY_KEYS = new Set([
   "mode",
@@ -17,7 +23,6 @@ const INVITE_KEYS = new Set([
   "relays",
   "v",
   "code",
-  "exp",
   "deepLink",
   "pairUrl",
   "expiresInMs",
@@ -79,23 +84,27 @@ function parseInvite(value, label, ready) {
   if (typeof invite.endpointId !== "string" || !/^[0-9a-f]{64}$/.test(invite.endpointId)) {
     throw new Error(`${label}.endpointId must be a canonical Iroh Endpoint ID`);
   }
-  if (typeof invite.code !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(invite.code)) {
+  if (typeof invite.code !== "string" || !PAIRING_CODE_PATTERN.test(invite.code)) {
     throw new Error(`${label}.code has an unexpected format`);
   }
   if (
     !Array.isArray(invite.relays) ||
     invite.relays.length < 1 ||
-    invite.relays.length > 4 ||
+    invite.relays.length > MAX_RELAY_URLS ||
     invite.relays.some((relay) => {
       try {
         const url = new URL(relay);
-        return url.protocol !== "https:" || url.toString() !== relay;
+        return (
+          new TextEncoder().encode(relay).byteLength > MAX_RELAY_URL_BYTES ||
+          url.protocol !== "https:" ||
+          url.toString() !== relay
+        );
       } catch {
         return true;
       }
     })
   )
-    throw new Error(`${label}.relays must be one to four canonical HTTPS relay URLs`);
+    throw new Error(`${label}.relays must be one to ${MAX_RELAY_URLS} canonical HTTPS relay URLs`);
   if (invite.v !== PAIRING_PROTOCOL_VERSION) {
     throw new Error(`${label}.v must be ${PAIRING_PROTOCOL_VERSION}`);
   }
@@ -110,15 +119,11 @@ function parseInvite(value, label, ready) {
       throw new Error(`${label}.${field} does not match the ready file`);
     }
   }
-  for (const field of ["exp", "expiresInMs", "expiresAt"]) {
+  for (const field of ["expiresInMs", "expiresAt"]) {
     if (!Number.isSafeInteger(invite[field]) || invite[field] <= 0) {
       throw new Error(`${label}.${field} must be a positive integer`);
     }
   }
-  if (invite.exp !== invite.expiresAt) {
-    throw new Error(`${label}.exp must match expiresAt`);
-  }
-
   for (const [field, prefix] of [
     ["deepLink", "vibestudio://connect/"],
     ["pairUrl", "https://vibestudio.app/p#"],
@@ -133,7 +138,6 @@ function parseInvite(value, label, ready) {
       parsed.endpointId !== invite.endpointId ||
       JSON.stringify(parsed.relays) !== JSON.stringify(invite.relays) ||
       parsed.code !== invite.code ||
-      parsed.exp !== invite.exp ||
       parsed.v !== invite.v
     ) {
       throw new Error(`${label}.${field} does not match the invite coordinates`);

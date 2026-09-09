@@ -1,14 +1,17 @@
-const CONNECTION_LOSS_PATTERN =
-  /connection lost|not connected to server|pipe down|ice (?:failed|closed|disconnected)|did not recover in time/iu;
+export const MOBILE_CONNECTION_RECOVERY_TIMEOUT_CODE = "MOBILE_CONNECTION_RECOVERY_TIMEOUT";
+
+export function mobileConnectionRecoveryTimeoutError(): Error & { code: string } {
+  return Object.assign(new Error("The Iroh connection did not recover in time"), {
+    code: MOBILE_CONNECTION_RECOVERY_TIMEOUT_CODE,
+  });
+}
 
 export function isTransientConnectionError(error: unknown): boolean {
   const code =
     error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code
       : "";
-  if (code === "CONNECTION_LOST" || code === "PIPE_CLOSED") return true;
-  const message = error instanceof Error ? error.message : String(error);
-  return CONNECTION_LOSS_PATTERN.test(message);
+  return code === "CONNECTION_LOST" || code === MOBILE_CONNECTION_RECOVERY_TIMEOUT_CODE;
 }
 
 /**

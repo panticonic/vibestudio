@@ -50,8 +50,7 @@ export interface NativeBundleHost {
 }
 
 export interface BundleDeliveryTransport {
-  rpc?: BundleDeliveryRpc;
-  streamReadable?: BundleDeliveryRpc["streamReadable"];
+  rpc: BundleDeliveryRpc;
   /** Await the existing authenticated transport when a transfer trips over recovery. */
   waitUntilConnected?: (timeoutMs: number) => Promise<void>;
   /**
@@ -63,6 +62,7 @@ export interface BundleDeliveryTransport {
 }
 
 export interface BundleDeliveryRpc {
+  call(targetId: string, method: string, args: unknown[]): Promise<unknown>;
   streamReadable(
     targetId: string,
     method: string,
@@ -73,16 +73,6 @@ export interface BundleDeliveryRpc {
     headers: Array<[string, string]>;
     body: ReadableStream<Uint8Array>;
   }>;
-}
-
-export class BundleGatewayFetchError extends Error {
-  readonly status: number;
-
-  constructor(path: string, status: number, detail: string) {
-    super(`gateway.fetch ${path} failed (${status}): ${detail}`);
-    this.name = "BundleGatewayFetchError";
-    this.status = status;
-  }
 }
 
 export interface ActivateWorkspaceAppOptions {
@@ -112,14 +102,6 @@ function defaultNativeHost(): NativeBundleHost {
   const host = NativeModules["VibestudioMobileHost"] as NativeBundleHost | undefined;
   if (!host) throw new Error("VibestudioMobileHost native module is unavailable");
   return host;
-}
-
-function rpcFor(transport: BundleDeliveryTransport): BundleDeliveryRpc {
-  if (transport.rpc?.streamReadable) return transport.rpc;
-  if (transport.streamReadable) {
-    return { streamReadable: transport.streamReadable.bind(transport) };
-  }
-  throw new Error("Bundle delivery transport does not support streamReadable");
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -176,37 +158,6 @@ async function drainStream(body: ReadableStream<Uint8Array>): Promise<Uint8Array
   return out;
 }
 
-async function gatewayFetchBytes(
-  rpc: BundleDeliveryRpc,
-  descriptor: Record<string, unknown>,
-  bodyText?: string
-): Promise<Uint8Array> {
-  const body =
-    bodyText == null
-      ? undefined
-      : new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode(bodyText));
-            controller.close();
-          },
-        });
-  const decoded = await rpc.streamReadable(
-    "main",
-    "gateway.fetch",
-    [descriptor],
-    body ? { body } : undefined
-  );
-  const bytes = await drainStream(decoded.body);
-  if (decoded.status !== 200) {
-    throw new BundleGatewayFetchError(
-      String(descriptor["path"]),
-      decoded.status,
-      new TextDecoder().decode(bytes).slice(0, 300)
-    );
-  }
-  return bytes;
-}
-
 function selectPrimaryArtifact(bootstrap: Record<string, unknown>, platform: "ios" | "android") {
   const artifacts = Array.isArray(bootstrap["artifacts"]) ? bootstrap["artifacts"] : [];
   const artifact = artifacts.find(
@@ -222,29 +173,26 @@ function selectPrimaryArtifact(bootstrap: Record<string, unknown>, platform: "io
 
 function retryableMobileBootstrapError(error: unknown): boolean {
   return (
-    error instanceof BundleGatewayFetchError &&
-    error.status === 503 &&
-    error.message.includes('"code":"MOBILE_APP_UNAVAILABLE"')
+    !!error &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "MOBILE_APP_UNAVAILABLE"
   );
 }
 
 async function waitForMobileBootstrap(
   rpc: BundleDeliveryRpc,
-  bootstrapBody: Record<string, unknown>,
   options: ActivateWorkspaceAppOptions
-): Promise<Uint8Array> {
+): Promise<Record<string, unknown>> {
   const deadline = Date.now() + MOBILE_BOOTSTRAP_WAIT_MS;
   for (;;) {
     try {
-      return await gatewayFetchBytes(
-        rpc,
-        {
-          path: "/_r/s/auth/mobile-app-bootstrap",
-          method: "POST",
-          headers: { "content-type": "application/json" },
-        },
-        JSON.stringify(bootstrapBody)
-      );
+      const result = (await rpc.call("main", "auth.getMobileAppBootstrap", [
+        options.source ?? null,
+      ])) as { bootstrap?: unknown };
+      if (!result?.bootstrap || typeof result.bootstrap !== "object") {
+        throw new Error("Mobile app bootstrap returned no manifest");
+      }
+      return result.bootstrap as Record<string, unknown>;
     } catch (error) {
       if (!retryableMobileBootstrapError(error) || Date.now() >= deadline) throw error;
       options.smokePhase?.("embedded-host-target-preparing");
@@ -327,7 +275,11 @@ export async function streamArtifactToNative(
     error.code = "BUNDLE_RANGE_INCOMPLETE";
     throw error;
   }
-  if (transfer.offset === expectedOffset) throw new Error("bundle artifact stream was empty");
+  if (transfer.offset === expectedOffset) {
+    const error = new Error("bundle artifact stream was empty") as Error & { code: string };
+    error.code = "BUNDLE_RANGE_INCOMPLETE";
+    throw error;
+  }
   console.info(
     `[mobile-bundle] streamed ${received} bytes at offset ${rangeStart} in ` +
       `${Date.now() - requestStartedAt}ms (${transfer.offset}/${declaredTotal})`
@@ -340,9 +292,7 @@ function transferCanResume(error: unknown): boolean {
     error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code
       : "";
-  if (code === "CONNECTION_LOST" || code === "BUNDLE_RANGE_INCOMPLETE") return true;
-  const message = error instanceof Error ? error.message : String(error);
-  return /connection lost|not connected to server|pipe down|ice failed/iu.test(message);
+  return code === "CONNECTION_LOST" || code === "BUNDLE_RANGE_INCOMPLETE";
 }
 
 export async function activateApprovedWorkspaceApp(
@@ -359,19 +309,8 @@ export async function activateApprovedWorkspaceApp(
   if (stored.schemaVersion !== 5 || stored.phase !== "routed") {
     throw new Error("The mobile workspace route was not committed before app activation.");
   }
-  const rpc = rpcFor(transport);
-  const bootstrapBody: Record<string, unknown> = {
-    deviceId: stored.credential.deviceId,
-    refreshToken: stored.credential.refreshToken,
-  };
-  if (typeof options.source === "string" && options.source.length > 0) {
-    bootstrapBody["source"] = options.source;
-  }
-  const manifestBytes = await waitForMobileBootstrap(rpc, bootstrapBody, options);
-  const bootstrap = JSON.parse(new TextDecoder().decode(manifestBytes))?.bootstrap as
-    | Record<string, unknown>
-    | undefined;
-  if (!bootstrap) throw new Error("Mobile app bootstrap returned no manifest");
+  const rpc = transport.rpc;
+  const bootstrap = await waitForMobileBootstrap(rpc, options);
   if (bootstrap["rnHostAbi"] !== RN_HOST_ABI) {
     throw new Error(
       `React Native host ABI mismatch: expected ${RN_HOST_ABI}, got ${String(bootstrap["rnHostAbi"])}. Reinstall the Vibestudio mobile shell.`

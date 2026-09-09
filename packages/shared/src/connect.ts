@@ -1,5 +1,8 @@
 import {
+  DEFAULT_IROH_RELAYS,
   IROH_REACH_VERSION,
+  MAX_RELAY_URL_BYTES,
+  MAX_RELAY_URLS,
   PAIRING_CODE_PATTERN,
   createConnectDeepLink,
   createConnectLink,
@@ -11,6 +14,9 @@ import {
 } from "@vibestudio/iroh-transport";
 
 export {
+  DEFAULT_IROH_RELAYS,
+  MAX_RELAY_URL_BYTES,
+  MAX_RELAY_URLS,
   PAIRING_CODE_PATTERN,
   createConnectDeepLink,
   createConnectLink,

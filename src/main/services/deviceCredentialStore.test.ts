@@ -55,12 +55,12 @@ const iroh: DeviceCredentialEntry = {
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay-a.example/"],
-    v: 4,
+    v: 5,
   },
   workspacePairing: {
     endpointId: "bb".repeat(32),
     relays: ["https://relay-a.example/"],
-    v: 4,
+    v: 5,
   },
   workspaceName: "dev",
   deviceId: REMOTE_DEVICE_ID,
@@ -75,12 +75,12 @@ const iroh2: DeviceCredentialEntry = {
   controlPairing: {
     endpointId: "cc".repeat(32),
     relays: ["https://relay-b.example/"],
-    v: 4,
+    v: 5,
   },
   workspacePairing: {
     endpointId: "dd".repeat(32),
     relays: ["https://relay-b.example/"],
-    v: 4,
+    v: 5,
   },
   workspaceName: "second",
   deviceId: `dev_${"q".repeat(24)}`,

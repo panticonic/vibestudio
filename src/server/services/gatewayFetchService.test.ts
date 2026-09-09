@@ -5,9 +5,6 @@ import type { AddressInfo } from "node:net";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { GZIP_MARKER_HEADER, RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { createGatewayFetchService } from "./gatewayFetchService.js";
-import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
-
-const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
 
 interface CapturedRequest {
   method: string;
@@ -15,7 +12,6 @@ interface CapturedRequest {
   contentType: string | undefined;
   acceptEncoding: string | undefined;
   authorization: string | undefined;
-  transportEndpoint: string | undefined;
   body: string;
 }
 
@@ -44,9 +40,6 @@ async function startFakeGateway(
         contentType: req.headers["content-type"],
         acceptEncoding: req.headers["accept-encoding"],
         authorization: req.headers.authorization,
-        transportEndpoint: req.headers[MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER] as
-          | string
-          | undefined,
         body: body.toString("utf-8"),
       });
       if (respond) {
@@ -73,21 +66,6 @@ function ctxWithBody(
     caller: { runtime: { id: `${kind}:test`, kind }, remoteEndpointId },
     ...(body ? { body } : {}),
   } as unknown as ServiceContext;
-}
-
-function ctxWithSessionTransport(
-  body: ReadableStream<Uint8Array>,
-  kind: "shell" | "app",
-  remoteEndpointId: string
-): ServiceContext {
-  const ctx = ctxWithBody(body, kind);
-  ctx.wsClient = {
-    ws: {},
-    caller: { runtime: { id: `${kind}:test`, kind }, remoteEndpointId },
-    connectionId: "connection",
-    authenticated: true,
-  };
-  return ctx;
 }
 
 function streamOf(text: string): ReadableStream<Uint8Array> {
@@ -286,7 +264,7 @@ describe("gatewayFetchService — panel-origin path allowlist", () => {
 
   it("REJECTS /_r/s/ management routes and never touches the gateway", async () => {
     for (const path of [
-      MOBILE_APP_BOOTSTRAP_PATH,
+      "/_r/s/auth/mobile-app-bootstrap",
       "/_r/s/auth/issue-device",
       "/_r/s/workspaces/default",
       "/_r/s/webhookIngress/sub-1",
@@ -335,98 +313,6 @@ describe("gatewayFetchService — panel-origin path allowlist", () => {
     const { response, requests } = await fetchPath("/apps/shell/sub/../bundle.js");
     expect(response?.status).toBe(200);
     expect(requests[0]?.url).toBe("/apps/shell/bundle.js");
-  });
-});
-
-describe("gatewayFetchService — mobile native bootstrap exception", () => {
-  it("allows trusted shell/app callers to POST the exact mobile bootstrap route", async () => {
-    const gateway = await startFakeGateway();
-    const endpointId = "ab".repeat(32);
-    const service = createGatewayFetchService({
-      getGatewayPort: () => gateway.port,
-      getAdminToken: () => "host-admin-token",
-    });
-
-    for (const kind of ["shell", "app"] as const) {
-      const response = (await service.handler(
-        ctxWithSessionTransport(streamOf(`{"caller":"${kind}"}`), kind, endpointId),
-        "fetch",
-        [
-          {
-            path: MOBILE_APP_BOOTSTRAP_PATH,
-            method: "post",
-            headers: { "content-type": "application/json" },
-          },
-        ]
-      )) as Response;
-      expect(response.status, kind).toBe(200);
-    }
-
-    expect(gateway.requests).toHaveLength(2);
-    expect(gateway.requests[0]).toMatchObject({
-      method: "POST",
-      url: MOBILE_APP_BOOTSTRAP_PATH,
-      contentType: "application/json",
-      body: '{"caller":"shell"}',
-      authorization: "Bearer host-admin-token",
-      transportEndpoint: endpointId,
-    });
-    expect(gateway.requests[1]).toMatchObject({
-      method: "POST",
-      url: MOBILE_APP_BOOTSTRAP_PATH,
-      contentType: "application/json",
-      body: '{"caller":"app"}',
-      authorization: "Bearer host-admin-token",
-      transportEndpoint: endpointId,
-    });
-  });
-
-  it("rejects panel callers even when they POST the exact mobile bootstrap route", async () => {
-    const gateway = await startFakeGateway();
-    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
-
-    try {
-      await service.handler(ctxWithBody(streamOf("{}")), "fetch", [
-        { path: MOBILE_APP_BOOTSTRAP_PATH, method: "POST" },
-      ]);
-      throw new Error("expected gateway.fetch to reject");
-    } catch (err) {
-      const error = err as Error & { code?: string };
-      expect(error.code).toBe("EACCES");
-      expect(error.message).toContain("panel origin");
-    }
-    expect(gateway.requests).toHaveLength(0);
-  });
-
-  it("rejects shell callers unless the mobile bootstrap request is POST", async () => {
-    const gateway = await startFakeGateway();
-    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
-
-    try {
-      await service.handler(ctxWithBody(undefined, "shell"), "fetch", [
-        { path: MOBILE_APP_BOOTSTRAP_PATH, method: "GET" },
-      ]);
-      throw new Error("expected gateway.fetch to reject");
-    } catch (err) {
-      const error = err as Error & { code?: string };
-      expect(error.code).toBe("EACCES");
-    }
-    expect(gateway.requests).toHaveLength(0);
-  });
-
-  it("requires the concrete authenticated session transport, not projected caller metadata", async () => {
-    const gateway = await startFakeGateway();
-    const service = createGatewayFetchService({
-      getGatewayPort: () => gateway.port,
-      getAdminToken: () => "host-admin-token",
-    });
-
-    await expect(
-      service.handler(ctxWithBody(streamOf("{}"), "shell", "ab".repeat(32)), "fetch", [
-        { path: MOBILE_APP_BOOTSTRAP_PATH, method: "POST" },
-      ])
-    ).rejects.toMatchObject({ code: "EACCES" });
-    expect(gateway.requests).toHaveLength(0);
   });
 });
 

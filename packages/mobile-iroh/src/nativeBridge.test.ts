@@ -29,7 +29,7 @@ import { createMobileEndpointBinding, mobileIrohIdentity } from "./nativeBridge.
 const reach = {
   endpointId: "ab".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 };
 
 beforeEach(() => {

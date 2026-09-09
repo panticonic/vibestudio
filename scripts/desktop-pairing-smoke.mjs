@@ -358,7 +358,6 @@ function buildConnectDeepLinkFromLog(loggedLink) {
     code: parsed.code,
     relays: parsed.relays,
     v: parsed.v,
-    exp: parsed.exp,
   });
 }
 

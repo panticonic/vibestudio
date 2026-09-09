@@ -29,6 +29,7 @@ import {
   FRAME_ERROR,
   type FrameType,
 } from "../protocol/streamCodec.js";
+import { secureRandomUuid } from "../randomId.js";
 
 export interface WsClientTransportConfig {
   selfId: string;
@@ -53,8 +54,7 @@ const OPEN = 1;
 const UPLOAD_CHUNK_BYTES = 256 * 1024;
 
 function randomId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return secureRandomUuid();
 }
 
 function errorWithCode(message: string, code: string): Error {

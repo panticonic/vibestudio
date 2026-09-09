@@ -47,12 +47,12 @@ const sampleStored: StoredRemote = {
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4,
+    v: 5,
   },
   workspacePairing: {
     endpointId: "bb".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4,
+    v: 5,
   },
   deviceId: SELF_DEVICE_ID,
   refreshToken: "r".repeat(43),
@@ -150,7 +150,7 @@ describe("remoteCredService", () => {
       workspaceReach: {
         endpointId: "cc".repeat(32),
         relays: ["https://relay.example/"],
-        v: 4,
+        v: 5,
       },
       serverId: sampleStored.serverId,
       serverBootId: `boot_${"b".repeat(24)}`,
@@ -163,7 +163,7 @@ describe("remoteCredService", () => {
       workspacePairing: {
         endpointId: "cc".repeat(32),
         relays: ["https://relay.example/"],
-        v: 4,
+        v: 5,
       },
     });
   });
@@ -181,7 +181,7 @@ describe("remoteCredService", () => {
         workspaceReach: {
           endpointId: "cc".repeat(32),
           relays: ["https://relay.example/"],
-          v: 4,
+          v: 5,
         },
         serverId: `srv_${"x".repeat(24)}`,
         serverBootId: `boot_${"b".repeat(24)}`,
@@ -231,9 +231,8 @@ describe("remoteCredService", () => {
     const link = createConnectDeepLink({
       endpointId: "aa".repeat(32),
       relays: ["https://relay.example/"],
-      code: "B".repeat(32),
-      exp: Date.now() + 60_000,
-      v: 4,
+      code: "B".repeat(21) + "A",
+      v: 5,
     });
     await expect(service.handler(shellCtx, "pair", [{ link }])).resolves.toEqual({ ok: true });
     expect(mocks.app.relaunch).toHaveBeenCalledWith({

@@ -533,7 +533,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   NSString *workspace = [namespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
     ? namespace[@"workspaceIdentity"] : nil;
   if (![self isAssetDigest:server]) {
-    [NSException raise:@"VibestudioAssetNamespaceInvalid" format:@"Asset namespace has invalid server identity"];
+    [NSException raise:@"VibestudioAssetNamespaceInvalid" format:@"Asset namespace has invalid server Endpoint ID"];
   }
   NSString *nul = [NSString stringWithCharacters:(unichar[]){0} length:1];
   if (workspace.length == 0 || workspace.length > 512 || [workspace rangeOfString:nul].location != NSNotFound) {

@@ -126,7 +126,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     if (route.workspaceId !== paired.workspaceId) {
       throw new AuthError("workspace route changed the pairing target");
     }
-    const { code: _code, exp: _exp, ...stableHubReach } = pairing;
+    const { code: _code, ...stableHubReach } = pairing;
     const controlPairing = storeReach(stableHubReach);
     const workspacePairing = storeReach(route.workspaceReach);
     pairedCredential = {
@@ -276,7 +276,7 @@ function parsePairingLink(link: string): ConnectPairing {
 function storeReach(reach: {
   endpointId: string;
   relays: readonly string[];
-  v: 4;
+  v: typeof import("@vibestudio/iroh-transport").IROH_REACH_VERSION;
 }): CliStoredPairing {
   try {
     return canonicalStoredPairing({ ...reach, relays: [...reach.relays] });

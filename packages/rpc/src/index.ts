@@ -92,6 +92,7 @@ export { prepareOpaqueHandle } from "./authority.js";
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract, withCausalParent } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
+export { secureRandomUuid, type SecureRandomSource } from "./randomId.js";
 export {
   TERMINAL_CLOSE_CODES,
   isTerminalCloseCode,

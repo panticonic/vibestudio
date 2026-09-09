@@ -5,7 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { cliCredentialPath, hubIdentityPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
-import { DEFAULT_IROH_RELAYS } from "./lib/iroh-relays.mjs";
+import { DEFAULT_IROH_RELAYS } from "./lib/connect-grammar.generated.mjs";
 
 const require = createRequire(import.meta.url);
 const UNIT_NAME = "vibestudio-server.service";
