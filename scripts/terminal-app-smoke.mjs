@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { envelopeFromMessage } from "@vibestudio/rpc";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
+import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,6 +16,19 @@ const REMOTE_CLI = "@workspace-apps/remote-cli";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The build generation this smoke's server runs from.
+ *
+ * A compiled entry names its own directory; a live source entry names the
+ * current source generation, because compiled artifacts must come from exactly
+ * one of them.
+ */
+function hostArtifactRootForEntry() {
+  const entry = serverEntryArg();
+  if (entry !== "src/server/index.ts") return path.dirname(path.resolve(repoRoot, entry));
+  return readCurrentHostBuildGeneration(repoRoot, "source");
 }
 
 async function waitForReady(filePath, timeoutMs = 300_000) {
@@ -274,6 +288,10 @@ async function main() {
       env: {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
+        // A host refuses to start without being told which build generation it
+        // runs from, and this smoke launches one. Derived from the entry it is
+        // about to execute, the same way the pair server derives it.
+        VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRootForEntry(),
         HOME: serverHome,
         XDG_CONFIG_HOME: serverConfig,
         APPDATA: path.join(tempRoot, "server-appdata"),
