@@ -329,69 +329,6 @@ jobs:
             release/*.dmg
             release/SHA256SUMS-macos
 
-  publish-homebrew-cask:
-    name: Publish the Homebrew cask
-    needs: [github-release, mac-dmg]
-    # The tap is a separate repository, so this stays opt-in until its write
-    # token exists. Without it a release still ships a DMG; it just is not
-    # installable with brew.
-    if: ${{ vars.RELEASE_MAC == 'true' && vars.HOMEBREW_TAP_REPO != '' }}
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Download immutable macOS release candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: vibestudio-macos-${{ github.sha }}
-          path: release
-
-      # Publish only what the build job produced and signed off on: the cask
-      # pins a sha256, and a mismatched DMG would pin the wrong one.
-      - name: Verify DMG checksums
-        working-directory: release
-        run: sha256sum --check SHA256SUMS-macos
-
-      - name: Render the cask
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          dmg=$(find release -maxdepth 1 -name '*.dmg' -print -quit)
-          test -n "$dmg" || { echo "no DMG in the release candidate" >&2; exit 1; }
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "$dmg")"
-          mkdir -p cask/Casks
-          node scripts/publish/render-homebrew-cask.mjs \
-            "${TAG#v}" "$dmg" "$url" > cask/Casks/vibestudio.rb
-          cat cask/Casks/vibestudio.rb
-
-      - name: Push the cask to the tap
-        env:
-          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          test -n "$TAP_TOKEN" || {
-            echo "HOMEBREW_TAP_TOKEN is not configured; cannot update ${TAP_REPO}" >&2
-            exit 1
-          }
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
-          mkdir -p tap/Casks
-          cp cask/Casks/vibestudio.rb tap/Casks/vibestudio.rb
-          cd tap
-          git config user.name "vibestudio-release"
-          git config user.email "packages@vibestudio.app"
-          if git diff --quiet -- Casks/vibestudio.rb; then
-            echo "cask already current for ${TAG}"
-            exit 0
-          fi
-          git add Casks/vibestudio.rb
-          git commit -m "vibestudio ${TAG#v}"
-          git push
-
   windows-installer:
     name: Build Windows x64 installer
     needs: github-release
