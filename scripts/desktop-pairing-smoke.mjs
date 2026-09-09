@@ -1467,6 +1467,29 @@ async function getPanelTree(app) {
   );
 }
 
+/**
+ * Read the panel tree across a reconnect the scenario itself caused.
+ *
+ * The server was deliberately stopped and restarted moments earlier, so a read
+ * can land in the gap before the desktop's session is back. That is the outage
+ * under test, not a failure of the tree, and the assertions that follow still
+ * run against whatever it returns. Any other failure, and the gap outlasting
+ * the budget, still fail the run.
+ */
+async function readPanelTreeThroughReconnect(app, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await getPanelTree(app);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const transportGap = /temporarily unavailable|CONNECTION_LOST|connection lost/iu.test(message);
+      if (!transportGap || Date.now() >= deadline) throw error;
+      await sleep(250);
+    }
+  }
+}
+
 async function waitForSystemNewPanel(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
@@ -2212,7 +2235,9 @@ async function main() {
       `[desktop-smoke] Recovered Personal onboarding: ${JSON.stringify(recoveredOnboarding)}`
     );
     await selectWorkspace(electronApp, "System", 30000);
-    const systemIdsAfter = (await getPanelTree(electronApp)).map((panel) => panel.id).sort();
+    const systemIdsAfter = (await readPanelTreeThroughReconnect(electronApp, 30_000))
+      .map((panel) => panel.id)
+      .sort();
     if (JSON.stringify(systemIdsAfter) !== JSON.stringify(systemIdsBefore)) {
       throw new Error("Reconnect changed the retained System panel tree");
     }
