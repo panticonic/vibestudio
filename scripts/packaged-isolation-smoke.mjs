@@ -307,10 +307,11 @@ export async function runPackagedIsolationSmoke(options) {
       ELECTRON_RUN_AS_NODE: "1",
       VIBESTUDIO_APP_ROOT: appRoot,
       // A host refuses to start without being told which build generation it is
-      // running from. For an installed app that is the unpacked dist this entry
-      // was just resolved out of, the same coordinate the packaged server shim
-      // supplies.
-      VIBESTUDIO_HOST_ARTIFACT_ROOT: unpackedDist,
+      // running from, and it reads its build identity from that directory. The
+      // installed app sets this to its own __dirname, which is dist inside the
+      // archive — not the unpacked tree, which holds only the files packaging
+      // was told to keep outside it.
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
     };
     server = launch(
       executable,
