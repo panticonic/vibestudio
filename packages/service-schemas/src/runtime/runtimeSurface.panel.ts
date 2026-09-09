@@ -41,6 +41,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
   exports: {
     ...coreRuntimeSurface,
     isRpcConnectionLost: valueEntry("Recognize a retired or disconnected RPC session."),
+    createConversationClient: valueEntry("Bind a conversation client to an explicit RPC client. A module-level factory, not a runtime instance member."),
     createPanelRuntime: valueEntry("Create the complete panel API with explicit transport, bootstrap, presentation inputs and lifetime ownership. No injected globals are required."),
     connectWorkspace: valueEntry("Explicitly ask the presentation host to connect this website to its workspace, then bind the same runtime API used by installed panels. Calls never connect implicitly."),
     disconnectWorkspace: valueEntry("Disconnect this document and retire its RPC calls, streams and borrowed clients."),
