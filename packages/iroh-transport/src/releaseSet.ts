@@ -1,3 +1,15 @@
+/**
+ * The upstream distribution this workspace pins. It describes upstream 1.1.0,
+ * which is still what iOS and the wrapper resolve.
+ *
+ * It is no longer what every target *runs*: the Node platform packages and the
+ * Android AAR are overridden onto a build carrying the stream-cancellation
+ * repair, because upstream holds its stream mutex across network waits. Those
+ * substitutions are enforced where they are resolved -- root `pnpm.overrides`
+ * plus the lockfile for Node, and `apps/mobile/android/gradle/verification-
+ * metadata.xml` for the AAR -- so read the digests below as upstream's, not as
+ * the bytes shipped.
+ */
 export const IROH_RELEASE_SET = Object.freeze({
   id: "iroh-ffi-1.1.0-core-1.0.2",
   bindingVersion: "1.1.0",
