@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { parseOptions, resolvePackagedExecutable } from "./packaged-isolation-smoke.mjs";
+import {
+  parseOptions,
+  readableTail,
+  resolvePackagedExecutable,
+} from "./packaged-isolation-smoke.mjs";
 import includeRuntimeModuleFile from "./electron-runtime-module-files.mjs";
 
 test("preserves installed compiler declaration inputs without force-including package sources", () => {
@@ -46,4 +50,37 @@ test("accepts explicit installed executable outside checkout", async () => {
 test("all packaged harness entry points parse with the host runtime", () => {
   for (const file of ["packaged-isolation-smoke.mjs", "lib/packaged-server-bootstrap.cjs"])
     execFileSync(process.execPath, ["--check", fileURLToPath(new URL(file, import.meta.url))]);
+});
+
+test("reports the thrown error rather than the minified source that precedes it", () => {
+  // Node prints an uncaught error as its source line, a caret, then the message.
+  // From a bundled dependency that source line is minified, and reporting it
+  // verbatim buries the only part of the crash a reader can act on.
+  const crash = [
+    "/opt/app/dist/server.mjs:1",
+    `?cDt.test(e.data)||(zt(i,{validation:"base64url"${"x".repeat(3000)}`,
+    "           ^",
+    "",
+    "ZodError: Invalid base64url string at reach.endpointSecret",
+    "    at parseReach (/opt/app/dist/server.mjs:1:2)",
+  ].join("\n");
+
+  const reported = readableTail(crash);
+  assert.match(reported, /^ZodError: Invalid base64url string/u);
+  assert.ok(!reported.includes("cDt.test"), "minified source must not lead the report");
+  assert.ok(reported.length < 500, `expected a readable extract, got ${reported.length} chars`);
+});
+
+test("masks secret material without discarding the line that explains the failure", () => {
+  // Dropping every line that mentions a secret also drops the diagnostic.
+  const reported = readableTail("[pair] code AbCdEfGhIjKlMnOpQrStUv is the secret invite");
+  assert.ok(!reported.includes("AbCdEfGhIjKlMnOpQrStUv"), "secret material must not survive");
+  assert.match(reported, /is the secret invite/u);
+});
+
+test("truncates a minified line instead of dropping the surrounding context", () => {
+  const reported = readableTail(`[server] starting\n${"y".repeat(2000)}\n[server] stopped`);
+  assert.match(reported, /\[server\] starting/u);
+  assert.match(reported, /\[server\] stopped/u);
+  assert.match(reported, /… \[2000 chars\]/u);
 });
