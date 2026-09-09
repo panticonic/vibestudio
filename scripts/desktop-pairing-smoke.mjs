@@ -1610,7 +1610,6 @@ async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
 }
 
 async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
   const controlTimeoutMs = Math.min(30_000, Math.max(1_000, timeoutMs));
   const clicked = await waitAndClickHostedShellButton(app, /^New panel$/i, controlTimeoutMs);
   if (!clicked) {
@@ -1619,6 +1618,12 @@ async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
       `Hosted shell did not expose an enabled "New panel" control: ${JSON.stringify(lastShellSnapshots)}`
     );
   }
+  // Start the readiness budget once the panel has actually been asked for. Set
+  // before the click, it is shared with waiting for the control to become
+  // enabled, so a shell that is slow to settle leaves a panel almost no time to
+  // report ready — and the failure names panel readiness for what was really
+  // spent getting to the click.
+  const deadline = Date.now() + timeoutMs;
 
   let latest = null;
   while (Date.now() < deadline) {
