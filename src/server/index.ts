@@ -41,7 +41,6 @@ import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServ
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
-import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
@@ -1553,12 +1552,9 @@ async function main() {
   console.log(
     `[Perf] root template source prepared at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
-  // A freshly created external-root workspace initially contains only its
-  // creation descriptor. Bootstrap must materialize the exact Base snapshot
-  // before dependency discovery can require package/workspace metadata. Keep
-  // the strict active-workspace boundary; order its validation after the
-  // semantic source actually exists.
-  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(workspacePath);
+  // Unit manifests in the materialized semantic source own userland
+  // dependencies. The workspace root itself is not a Node package.
+  const buildDependencyWorkspaceRoot = workspacePath;
   const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
   const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
     fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf8"),
