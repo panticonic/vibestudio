@@ -32,12 +32,21 @@ describe("pinned Iroh release set", () => {
     );
   });
 
-  it("pins registry integrity for the wrapper and every optional native package", () => {
+  it("pins registry integrity for the wrapper and every package still taken upstream", () => {
     const lockfile = readFileSync(path.join(repositoryRoot, "pnpm-lock.yaml"), "utf8");
     expect(lockfile).toContain(
       `'@number0/iroh@${IROH_RELEASE_SET.bindingVersion}':\n    resolution: {integrity: ${IROH_RELEASE_SET.npmIntegrity}}`
     );
+    // A platform overridden onto the stream-cancellation repair is deliberately
+    // not upstream's binary, so it has no upstream integrity left to pin. The
+    // wrapper above and every platform still resolved from the registry keep
+    // theirs, so dropping an override silently is still caught here.
+    const manifest = JSON.parse(
+      readFileSync(path.join(repositoryRoot, "package.json"), "utf8")
+    ) as { pnpm?: { overrides?: Record<string, string> } };
+    const repaired = new Set(Object.keys(manifest.pnpm?.overrides ?? {}));
     for (const [name, integrity] of Object.entries(IROH_NODE_OPTIONAL_PACKAGE_INTEGRITIES)) {
+      if (repaired.has(name)) continue;
       expect(lockfile).toContain(
         `'${name}@${IROH_RELEASE_SET.bindingVersion}':\n    resolution: {integrity: ${integrity}}`
       );
