@@ -1330,24 +1330,44 @@ describe("credentialService", () => {
         },
       ]
     )) as StoredCredentialSummary;
-    const approvalQueue = createApprovalQueue({ eventService: new EventService() });
+    // A credential-use approval is private to the human who initiated it, so
+    // the queue refuses to enqueue one with no eligible audience. Give the
+    // worker callers a verified initiator and admit that user to the scope,
+    // exactly as a live workspace does.
+    const approvalQueue = createApprovalQueue({
+      eventService: new EventService(),
+      scopeAccess: { isMember: (userId: string) => userId === "u-consumer", isAdmin: () => false },
+    });
     const service = createCredentialService({
       credentialStore: store as never,
       approvalQueue,
       sessionGrantStore: new CredentialSessionGrantStore(),
     });
-    const callerA = createVerifiedCaller("worker:consumer-a", "worker", {
-      callerId: "worker:consumer-a",
-      callerKind: "worker",
-      repoPath: "/consumer",
-      effectiveVersion: "hash-1",
-    });
-    const callerB = createVerifiedCaller("worker:consumer-b", "worker", {
-      callerId: "worker:consumer-b",
-      callerKind: "worker",
-      repoPath: "/consumer",
-      effectiveVersion: "hash-1",
-    });
+    const initiator = { userId: "u-consumer", handle: "consumer" };
+    const callerA = createVerifiedCaller(
+      "worker:consumer-a",
+      "worker",
+      {
+        callerId: "worker:consumer-a",
+        callerKind: "worker",
+        repoPath: "/consumer",
+        effectiveVersion: "hash-1",
+      },
+      null,
+      initiator
+    );
+    const callerB = createVerifiedCaller(
+      "worker:consumer-b",
+      "worker",
+      {
+        callerId: "worker:consumer-b",
+        callerKind: "worker",
+        repoPath: "/consumer",
+        effectiveVersion: "hash-1",
+      },
+      null,
+      initiator
+    );
 
     const first = service.handler({ caller: callerA }, "resolveCredential", [
       { url: "https://api.example.test/v1" },
