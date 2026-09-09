@@ -163,17 +163,36 @@ linux:
       arch:
         - x64
         - arm64
+    # Fedora/RHEL and openSUSE. The AppArmor profile installs only where
+    # /etc/apparmor.d exists, so an SELinux host is unaffected by it.
+    - target: rpm
+      arch:
+        - x64
+        - arm64
+    - target: pacman
+      arch:
+        - x64
+        - arm64
   category: Development
   icon: build-resources/icons
 
+# Ubuntu 24.04+ denies unprivileged user namespaces to binaries shipping no
+# AppArmor profile, and a workspace runtime cannot sandbox without one. Every
+# packaged Linux format installs that profile so a fresh install just works,
+# rather than asking the reader to weaken
+# kernel.apparmor_restrict_unprivileged_userns for their whole machine. The
+# scripts no-op where AppArmor is absent, so SELinux hosts are unaffected.
 deb:
-  # Ubuntu 24.04+ denies unprivileged user namespaces to binaries shipping no
-  # AppArmor profile, and a workspace runtime cannot sandbox without one. The
-  # package installs that profile so a fresh install just works, rather than
-  # asking the reader to weaken kernel.apparmor_restrict_unprivileged_userns
-  # for their whole machine.
-  afterInstall: build-resources/deb/after-install.sh
-  afterRemove: build-resources/deb/after-remove.sh
+  afterInstall: build-resources/linux/after-install.sh
+  afterRemove: build-resources/linux/after-remove.sh
+
+rpm:
+  afterInstall: build-resources/linux/after-install.sh
+  afterRemove: build-resources/linux/after-remove.sh
+
+pacman:
+  afterInstall: build-resources/linux/after-install.sh
+  afterRemove: build-resources/linux/after-remove.sh
 
 # Auto-update configuration
 publish:
