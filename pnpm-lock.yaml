@@ -21,6 +21,11 @@ overrides:
   undici@7: ^7.29.1
   '@react-navigation/core': 7.21.13
   query-string: ^9.5.1
+  '@number0/iroh-darwin-arm64': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz
+  '@number0/iroh-linux-x64-gnu': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz
+  '@number0/iroh-linux-arm64-gnu': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz
+  '@number0/iroh-win32-x64-msvc': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz
+  '@number0/iroh-win32-arm64-msvc': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz
 
 patchedDependencies:
   '@react-navigation/core@7.21.13':
@@ -2980,12 +2985,6 @@ packages:
     cpu: [arm64]
     os: [android]
 
-  '@number0/iroh-darwin-arm64@1.1.0':
-    resolution: {integrity: sha512-CM6gaQ+6r9K0HRswc2gOKeGL8XYUHUbz7ESkgOltBFin9OsYKmIo+JVYFxlahH8C7ypGEKq1ybU22Ifcf2kXnQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
   '@number0/iroh-linux-arm-gnueabihf@1.1.0':
     resolution: {integrity: sha512-5K4Kaz4gzyPo5s5LLAFO0zLXc2F0EZ3BXeMKzQc5zuPaeHQt4XqdwxozXVtn0/3EiUYqFNH1JIowagpwahxAlw==}
     engines: {node: '>= 10'}
@@ -2998,22 +2997,10 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@number0/iroh-linux-arm64-gnu@1.1.0':
-    resolution: {integrity: sha512-AZHpCKQEcJdXya9llNld5u+S2Cz+ehWgGzILtpEJ1qljNYJAClDovzA+5ehUVaXEc+P7ZUNQ+pIjMcWXM0cAug==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
   '@number0/iroh-linux-arm64-musl@1.1.0':
     resolution: {integrity: sha512-4ZS/U2L4+zk2E5cn5WmxxuUDTkdwWiyxRq0NFArRQNFbuH7mjtQok2aDIbOIFOIrTTB4x1hwb4Gt0OJw4om4SQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
-    os: [linux]
-
-  '@number0/iroh-linux-x64-gnu@1.1.0':
-    resolution: {integrity: sha512-P2mo734gUjrfJgwbma1fHAyfeWqtY5IHTx53b1peei2/05JKZ2JJ4LS/YzI4qYW20mVtLKD9GS0T3q/iFYVC9Q==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
     os: [linux]
 
   '@number0/iroh-linux-x64-musl@1.1.0':
@@ -3021,18 +3008,6 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
-
-  '@number0/iroh-win32-arm64-msvc@1.1.0':
-    resolution: {integrity: sha512-LvG4Vcw8D7tFAxZpuZsh6rmyW1YmtS3McDIQjEUNhf9VNBFzQ7WHyEIxdr1GAg/HvC8rmPJ1MQBM24RCDbdUew==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@number0/iroh-win32-x64-msvc@1.1.0':
-    resolution: {integrity: sha512-1eSztLtesLu2tHdAgr9KNPBsSVdiz2+MDHNvCVDtH+UQAN8F+21YqAAbRJB0ctBvB5zcGeTwYawGaqVMTyRVJg==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
 
   '@number0/iroh@1.1.0':
     resolution: {integrity: sha512-DlrJ4Sza5MiI+WwQg63lg+7eSbxlfQR2Bd+wVDjo7XTqenALD2OCRoSfPTuD12IhcvDbVHr4l7qH48DilocqYA==}
@@ -3183,6 +3158,41 @@ packages:
   '@oxlint/binding-win32-x64-msvc@1.77.0':
     resolution: {integrity: sha512-+teyvPDZ2RjUvo+SuCqS/UhaJl1QtdW5fWT5NJTV61V5MIuIS90Db9LixmtEGvXixyttiK62P96MSu3UlpviBw==}
     engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [x64]
+    os: [win32]
+
+  '@panticonic/iroh-darwin-arm64@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz':
+    resolution: {tarball: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz}
+    version: 1.1.0-cancel.1
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@panticonic/iroh-linux-arm64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz':
+    resolution: {tarball: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz}
+    version: 1.1.0-cancel.1
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@panticonic/iroh-linux-x64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz':
+    resolution: {tarball: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz}
+    version: 1.1.0-cancel.1
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@panticonic/iroh-win32-arm64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz':
+    resolution: {tarball: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz}
+    version: 1.1.0-cancel.1
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz':
+    resolution: {tarball: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz}
+    version: 1.1.0-cancel.1
+    engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
 
@@ -11675,46 +11685,31 @@ snapshots:
   '@number0/iroh-android-arm64@1.1.0':
     optional: true
 
-  '@number0/iroh-darwin-arm64@1.1.0':
-    optional: true
-
   '@number0/iroh-linux-arm-gnueabihf@1.1.0':
     optional: true
 
   '@number0/iroh-linux-arm-musleabihf@1.1.0':
     optional: true
 
-  '@number0/iroh-linux-arm64-gnu@1.1.0':
-    optional: true
-
   '@number0/iroh-linux-arm64-musl@1.1.0':
     optional: true
 
-  '@number0/iroh-linux-x64-gnu@1.1.0':
-    optional: true
-
   '@number0/iroh-linux-x64-musl@1.1.0':
-    optional: true
-
-  '@number0/iroh-win32-arm64-msvc@1.1.0':
-    optional: true
-
-  '@number0/iroh-win32-x64-msvc@1.1.0':
     optional: true
 
   '@number0/iroh@1.1.0':
     optionalDependencies:
       '@number0/iroh-android-arm-eabi': 1.1.0
       '@number0/iroh-android-arm64': 1.1.0
-      '@number0/iroh-darwin-arm64': 1.1.0
+      '@number0/iroh-darwin-arm64': '@panticonic/iroh-darwin-arm64@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz'
       '@number0/iroh-linux-arm-gnueabihf': 1.1.0
       '@number0/iroh-linux-arm-musleabihf': 1.1.0
-      '@number0/iroh-linux-arm64-gnu': 1.1.0
+      '@number0/iroh-linux-arm64-gnu': '@panticonic/iroh-linux-arm64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz'
       '@number0/iroh-linux-arm64-musl': 1.1.0
-      '@number0/iroh-linux-x64-gnu': 1.1.0
+      '@number0/iroh-linux-x64-gnu': '@panticonic/iroh-linux-x64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz'
       '@number0/iroh-linux-x64-musl': 1.1.0
-      '@number0/iroh-win32-arm64-msvc': 1.1.0
-      '@number0/iroh-win32-x64-msvc': 1.1.0
+      '@number0/iroh-win32-arm64-msvc': '@panticonic/iroh-win32-arm64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz'
+      '@number0/iroh-win32-x64-msvc': '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz'
 
   '@opentelemetry/api@1.9.0':
     optional: true
@@ -11792,6 +11787,21 @@ snapshots:
     optional: true
 
   '@oxlint/binding-win32-x64-msvc@1.77.0':
+    optional: true
+
+  '@panticonic/iroh-darwin-arm64@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz':
+    optional: true
+
+  '@panticonic/iroh-linux-arm64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz':
+    optional: true
+
+  '@panticonic/iroh-linux-x64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz':
+    optional: true
+
+  '@panticonic/iroh-win32-arm64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz':
+    optional: true
+
+  '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz':
     optional: true
 
   '@peculiar/asn1-schema@2.8.0':
@@ -12928,9 +12938,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

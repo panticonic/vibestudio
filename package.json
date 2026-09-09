@@ -158,7 +158,12 @@
       "esbuild@0.27": "^0.28.2",
       "undici@7": "^7.29.1",
       "@react-navigation/core": "7.21.13",
-      "query-string": "^9.5.1"
+      "query-string": "^9.5.1",
+      "@number0/iroh-darwin-arm64": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-darwin-arm64-1.1.0-cancel.1.tgz",
+      "@number0/iroh-linux-x64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.1.tgz",
+      "@number0/iroh-linux-arm64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.1.tgz",
+      "@number0/iroh-win32-x64-msvc": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.1.tgz",
+      "@number0/iroh-win32-arm64-msvc": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.1.tgz"
     },
     "patchedDependencies": {
       "react-native-webview@13.16.1": "patches/react-native-webview@13.16.1.patch",
