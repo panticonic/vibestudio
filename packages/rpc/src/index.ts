@@ -62,7 +62,9 @@ export {
   isTerminalAuthorityFailure,
   isRpcAborted,
   isRpcConnectionLost,
+  isPanelRuntimeLeaseConflict,
   RPC_ABORTED_CODE,
+  PANEL_RUNTIME_LEASED_CODE,
 } from "./errors.js";
 export type {
   AuthorizationContext,

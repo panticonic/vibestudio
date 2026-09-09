@@ -1,4 +1,4 @@
-import type { ClientPlatform, OAuthCallbackMode } from "./wsProtocol.js";
+import type { ClientPlatform, OAuthCallbackMode, RpcCredentialFailureCode } from "./wsProtocol.js";
 
 export const RPC_WEBSOCKET_ADMISSION_PATH = "/rpc/ws-admission";
 export const RPC_CLIENT_LABEL_HEADER = "x-vibestudio-rpc-client-label";
@@ -42,9 +42,7 @@ export interface RpcWebSocketAdmissionSuccess {
 }
 
 export type RpcWebSocketAdmissionFailureCode =
-  | "invalid_credential"
-  | "admin_credential"
-  | "pairing_invalid_or_expired"
+  | RpcCredentialFailureCode
   | "admission_saturated"
   | "invalid_request"
   | "server_unavailable";

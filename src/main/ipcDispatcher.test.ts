@@ -1579,6 +1579,48 @@ describe("IpcDispatcher", () => {
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("panel relay failed"));
     });
 
+    it("relays a lease that moved as a typed failure without warning", async () => {
+      const panelWc = makeWebContents(34);
+      // What the workspace server sends when the runtime lease has moved to
+      // another connection: the holder re-leases and the panel's next attempt
+      // succeeds, so this must not surface as a defect.
+      const leased = Object.assign(new Error("Panel runtime is leased by Desktop"), {
+        code: "panel_runtime_leased",
+      });
+      const panelSend = vi.fn().mockRejectedValue(leased);
+      const close = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const openPanelSession = vi.fn(async () => ({
+        send: panelSend,
+        onMessage: vi.fn(() => vi.fn()),
+        status: () => "connecting" as const,
+        isClosed: () => false,
+        close,
+      }));
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession,
+      });
+
+      ipcHandlers.get("vibestudio:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("leased") as never
+      );
+
+      await vi.waitFor(() =>
+        expectSentRpcMessage(panelWc, "panel-1", {
+          type: "response",
+          requestId: "leased",
+          error: "Panel runtime is leased by Desktop",
+          errorKind: "transport",
+          errorCode: "panel_runtime_leased",
+        })
+      );
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("panel relay failed"));
+    });
+
     it("recycles a terminal pre-lease session and reopens only after its lease is ready", async () => {
       const panelWc = makeWebContents(31);
       let closed = false;

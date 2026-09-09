@@ -293,8 +293,11 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     );
   };
 
-  const failAuthentication = (reason: string): void => {
+  const failAuthentication = (reason: string, errorCode?: string): void => {
     const error = new Error(reason);
+    // Callers classify a refusal by code, never by message text: a lease that
+    // moved mid-admission is recoverable, a revoked credential is not.
+    if (errorCode) Object.assign(error, { code: errorCode });
     firstConnectReject?.(error);
     firstConnectReject = null;
     firstConnectResolve = null;
@@ -309,17 +312,19 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   const handleAuthFailure = async (
     rejectedToken: string,
     reason: string,
-    socketGeneration: number
+    socketGeneration: number,
+    errorCode?: string
   ): Promise<void> => {
     if (!config.adapter.refreshAuthToken) {
-      failAuthentication(`Server auth failed: ${reason}`);
+      failAuthentication(`Server auth failed: ${reason}`, errorCode);
       return;
     }
     try {
       const refreshedAuthToken = await config.adapter.refreshAuthToken();
       if (refreshedAuthToken === rejectedToken) {
         failAuthentication(
-          `Server auth failed: ${reason}; auth refresh returned the rejected token`
+          `Server auth failed: ${reason}; auth refresh returned the rejected token`,
+          errorCode
         );
         return;
       }
@@ -350,10 +355,11 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
             void handleAuthFailure(
               rejectedToken,
               msg.error ?? "Server rejected RPC authentication",
-              generation
+              generation,
+              msg.errorCode
             );
           } else {
-            failAuthentication(msg.error ?? "Server rejected RPC authentication");
+            failAuthentication(msg.error ?? "Server rejected RPC authentication", msg.errorCode);
           }
           return;
         }

@@ -57,6 +57,27 @@ export function isRpcAborted(error: unknown): boolean {
   );
 }
 
+/**
+ * A panel session was refused because the panel runtime lease belongs to a
+ * different connection. Raised while a lease moves — a reconnect re-leasing a
+ * panel, a handoff between holders — and resolved by the holder's next attempt.
+ */
+export const PANEL_RUNTIME_LEASED_CODE = "panel_runtime_leased" as const;
+
+/**
+ * True when a call failed only because it raced a panel runtime lease moving.
+ * Like {@link isRpcAborted}, this separates a self-healing transition from a
+ * defect: logged as an error it reads as a broken panel and, in the desktop
+ * smoke, fails a run whose panel recovered on its very next poll.
+ */
+export function isPanelRuntimeLeaseConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === PANEL_RUNTIME_LEASED_CODE) return true;
+  // Boundary-crossed copies keep the lower code in `errorCode` (see RemoteRpcError).
+  return (error as { errorCode?: unknown }).errorCode === PANEL_RUNTIME_LEASED_CODE;
+}
+
 /** Locally categorized failure ready to cross an RPC boundary. */
 export class RpcBoundaryError extends Error {
   constructor(

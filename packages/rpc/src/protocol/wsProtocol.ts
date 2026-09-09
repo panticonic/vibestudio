@@ -4,11 +4,26 @@ import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 export type OAuthCallbackMode = "client-loopback" | "app-scheme";
 
-/** Stable machine-readable authentication failures that clients can recover from. */
-export type RpcAuthenticationFailureCode =
+/**
+ * Verdicts on a presented credential. Reached identically from the HTTP
+ * admission handshake and from post-upgrade `ws:auth`, so both failure unions
+ * build on this one rather than restating it.
+ */
+export type RpcCredentialFailureCode =
   | "invalid_credential"
   | "admin_credential"
   | "pairing_invalid_or_expired";
+
+/** Stable machine-readable authentication failures that clients can recover from. */
+export type RpcAuthenticationFailureCode =
+  | RpcCredentialFailureCode
+  /**
+   * The panel runtime lease moved to another connection while this session was
+   * being admitted. Transient and self-healing — the holder re-leases and the
+   * next attempt succeeds — so callers recover rather than report a defect.
+   * Post-upgrade only: it is a verdict on the runtime, not on the credential.
+   */
+  | "panel_runtime_leased";
 
 /** Durable credential issued exactly once when a device pairing code is redeemed. */
 export interface DeviceCredential {

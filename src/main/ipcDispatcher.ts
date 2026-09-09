@@ -1,4 +1,4 @@
-import { workspaceRpcDestination } from "@vibestudio/rpc";
+import { workspaceRpcDestination, isPanelRuntimeLeaseConflict } from "@vibestudio/rpc";
 /**
  * IPC Dispatcher — replaces Electron-side RpcServer for shell communication.
  *
@@ -1276,7 +1276,9 @@ export class IpcDispatcher {
             ...(errorCode ? { errorCode } : {}),
           });
         }
-        if (errorCode !== SESSION_CONNECTION_LOST_CODE) {
+        // A lost session and a lease that moved are both transitions the next
+        // attempt resolves; only an unrecognised failure is worth reporting.
+        if (errorCode !== SESSION_CONNECTION_LOST_CODE && !isPanelRuntimeLeaseConflict(err)) {
           console.warn(
             `[IpcDispatcher] panel relay failed for ${callerId}: ` +
               `${err instanceof Error ? err.message : String(err)}`

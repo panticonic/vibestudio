@@ -1,5 +1,9 @@
 import { bindInvocationParent } from "@vibestudio/rpc/internal";
-import { validateWebsiteMethodPolicy, type RpcExposure } from "@vibestudio/rpc";
+import {
+  validateWebsiteMethodPolicy,
+  PANEL_RUNTIME_LEASED_CODE,
+  type RpcExposure,
+} from "@vibestudio/rpc";
 import {
   isWorkspaceRpcDestination,
   workspaceRpcDestination,
@@ -177,7 +181,7 @@ import type {
   DeviceCredential,
   OAuthCallbackMode,
   PairingContext,
-  RpcAuthenticationFailureCode,
+  RpcCredentialFailureCode,
 } from "@vibestudio/rpc/protocol/wsProtocol";
 import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
@@ -364,7 +368,8 @@ type RpcCredentialResolution =
   | { ok: true; resolved: ResolvedRpcCredential }
   | {
       ok: false;
-      code: RpcAuthenticationFailureCode;
+      // A verdict on the credential only: the runtime-lease code cannot arise here.
+      code: RpcCredentialFailureCode;
       message: string;
     };
 
@@ -2023,6 +2028,10 @@ export class RpcServer {
           type: "ws:auth-result",
           success: false,
           error: auth?.reason ?? "Panel runtime coordinator is unavailable",
+          // A lease that has moved is a transition, not a broken panel: the
+          // code lets the relay and the panel recover quietly instead of
+          // reporting a defect for something their next attempt resolves.
+          errorCode: PANEL_RUNTIME_LEASED_CODE,
         };
         ws.sendMessage(msg);
         ws.close(4090, "Panel runtime lease denied");
@@ -2072,6 +2081,10 @@ export class RpcServer {
           type: "ws:auth-result",
           success: false,
           error: auth?.reason ?? "Panel runtime coordinator is unavailable",
+          // A lease that has moved is a transition, not a broken panel: the
+          // code lets the relay and the panel recover quietly instead of
+          // reporting a defect for something their next attempt resolves.
+          errorCode: PANEL_RUNTIME_LEASED_CODE,
         };
         ws.sendMessage(msg);
         ws.close(4090, "Panel runtime lease denied");

@@ -3,6 +3,8 @@ import {
   isAuthorityDecisionDenied,
   isTerminalAuthorityFailure,
   isRpcConnectionLost,
+  isPanelRuntimeLeaseConflict,
+  PANEL_RUNTIME_LEASED_CODE,
   RemoteRpcError,
   RpcBoundaryError,
 } from "./errors.js";
@@ -89,5 +91,40 @@ describe("RpcBoundaryError", () => {
       writable: true,
       configurable: true,
     });
+  });
+});
+
+describe("isPanelRuntimeLeaseConflict", () => {
+  it("recognises the refusal on both sides of an RPC boundary", () => {
+    // As the transport raises it locally.
+    expect(
+      isPanelRuntimeLeaseConflict(
+        Object.assign(new Error("Panel runtime is leased by Desktop"), {
+          code: PANEL_RUNTIME_LEASED_CODE,
+        })
+      )
+    ).toBe(true);
+    // As the panel receives it, relayed back through an error response.
+    expect(
+      isPanelRuntimeLeaseConflict(
+        new RemoteRpcError(
+          "Panel runtime is leased by Desktop",
+          "transport",
+          PANEL_RUNTIME_LEASED_CODE
+        )
+      )
+    ).toBe(true);
+  });
+
+  it("does not match on message text or an unrelated failure", () => {
+    // The message alone must never qualify: classification is by code.
+    expect(isPanelRuntimeLeaseConflict(new Error("Panel runtime is leased by Desktop"))).toBe(
+      false
+    );
+    expect(
+      isPanelRuntimeLeaseConflict(new RemoteRpcError("revoked", "transport", "invalid_credential"))
+    ).toBe(false);
+    expect(isPanelRuntimeLeaseConflict(null)).toBe(false);
+    expect(isPanelRuntimeLeaseConflict(undefined)).toBe(false);
   });
 });
