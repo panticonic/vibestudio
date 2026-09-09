@@ -262,7 +262,10 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   // loads internal Durable Objects from a compact bundle, and auto-spawns the
   // compiled headless host. Rebuild all three at one boundary so live server
   // source can never silently run against stale transport/runtime binaries.
-  let hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
+  // Resolved after any rebuild below: a live source entry names the current
+  // source generation, and that generation is published by the rebuild. Asking
+  // for it first reads a file that does not exist yet.
+  let hostArtifactRoot = null;
   if (serverEntryArg() === "src/server/index.ts") {
     if (hooks.prepareSourceServer) {
       hooks.prepareSourceServer({ repoRoot });
@@ -283,7 +286,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
         );
       }
     }
-    // The rebuild above publishes a new source generation; resolve it again.
+    // The rebuild above published the generation this entry runs from.
     hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
   }
 
@@ -345,7 +348,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   const baseEnv = {
     ...process.env,
     ...workspaceTemplateEnv,
-    VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+    VIBESTUDIO_HOST_ARTIFACT_ROOT:
+      hostArtifactRoot ?? hostArtifactRootForServerEntry(repoRoot, serverEntryArg()),
     VIBESTUDIO_HOST: LOOPBACK_HOST,
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
     ...(options.relayUrls.length > 0

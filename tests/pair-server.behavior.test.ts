@@ -104,6 +104,12 @@ describe("pair-server runner", () => {
           expect.any(String),
           "src/server/index.ts"
         );
+        // And resolved only after the rebuild, which is what publishes the
+        // generation it names. Asking first reads a file that does not exist
+        // yet, and the server then exits before readiness.
+        expect(vi.mocked(prepareSourceServer).mock.invocationCallOrder[0]).toBeLessThan(
+          vi.mocked(hostArtifactRootForServerEntry).mock.invocationCallOrder[0]!
+        );
         expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/isolated/host-generation");
         queueMicrotask(() => child.emit("exit", 0, null));
         return child;
