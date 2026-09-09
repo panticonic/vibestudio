@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import {
-  verifiedInitiator,
+  verifiedInitiatingUserId,
   type ServiceContext,
-  type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
   BROWSER_ENVIRONMENT_KEY_VERSION,
@@ -17,14 +16,14 @@ export interface BrowserEnvironmentIdentity {
 
 /**
  * Resolve the one browser environment owned by a verified account in a
- * workspace. The subject is host-attested; callers never provide a user id or
+ * workspace. The account is host-attested; callers never provide a user id or
  * an object key.
  */
 export function browserEnvironmentIdentity(
   workspaceId: string,
-  caller: Pick<VerifiedCaller, "subject">
+  ownerUserId: string | undefined
 ): BrowserEnvironmentIdentity {
-  const normalized = browserEnvironmentKeyMaterial(workspaceId, caller.subject?.userId ?? "");
+  const normalized = browserEnvironmentKeyMaterial(workspaceId, ownerUserId ?? "");
   const digest = createHash("sha256").update(normalized.material).digest("base64url");
   return {
     workspaceId: normalized.workspaceId,
@@ -37,5 +36,8 @@ export function browserEnvironmentIdentityFromContext(
   workspaceId: string,
   ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
 ): BrowserEnvironmentIdentity {
-  return browserEnvironmentIdentity(workspaceId, verifiedInitiator(ctx));
+  // A browser environment belongs to an account, so it is resolved from the
+  // account behind the operation — not from whichever principal authorized it,
+  // which may be workspace infrastructure that owns no browser data.
+  return browserEnvironmentIdentity(workspaceId, verifiedInitiatingUserId(ctx));
 }

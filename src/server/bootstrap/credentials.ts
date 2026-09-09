@@ -1,6 +1,6 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { createVerifiedCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { RouteRegistry, ServiceRouteDecl } from "../routeRegistry.js";
 import { serviceWithHttpRoutes } from "../serviceWithHttpRoutes.js";
@@ -87,7 +87,7 @@ export function wireCredentialService(
       listActiveEntities: () => deps.entityCache.listActive(),
       resolvePanelSlotByEntity: async (entityId: string) =>
         (await deps.dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
+          { caller: createHostCaller("server") },
           "workspace-state",
           "slot.resolveByEntity",
           [entityId]
@@ -97,7 +97,7 @@ export function wireCredentialService(
         return Promise.all(
           panels.map(async (entity): Promise<CredentialRuntimePanelInfo> => {
             const panelId = (await deps.dispatcher.dispatch(
-              { caller: createVerifiedCaller("server", "server") },
+              { caller: createHostCaller("server") },
               "workspace-state",
               "slot.resolveByEntity",
               [entity.id]

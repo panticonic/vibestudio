@@ -29,6 +29,7 @@ import {
   type AuthenticatedCaller,
   type RpcCausalParent,
 } from "@vibestudio/rpc";
+import { isAccountUserId } from "@vibestudio/identity/types";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
 import type { RuntimeAgentBinding } from "./runtime/entitySpec.js";
 import type { AuthorizationContext, AuthorityGrant } from "./authorization.js";
@@ -491,9 +492,10 @@ export type ServiceContext = {
 };
 
 /**
- * Return the host-verified root initiator for attribution, presentation, and
- * user-owned durable state. The authenticated transport caller remains
- * `ctx.caller` and must still be used for authorization and domain ownership.
+ * Return the host-verified root initiator principal for attribution,
+ * presentation, and user-owned durable state. The authenticated transport
+ * caller remains `ctx.caller` and must still be used for authorization and
+ * domain ownership.
  */
 export function verifiedInitiator(
   ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
@@ -501,11 +503,36 @@ export function verifiedInitiator(
   return ctx.authorizingCaller ?? ctx.caller;
 }
 
-/** Host-verified account attribution for a deputy-mediated operation. */
+/**
+ * The account a verified caller belongs to, or undefined when it belongs to
+ * none. Every surface that records who a decision, a grant, or a piece of
+ * user-owned state belongs to reads a subject through here, so the synthetic
+ * system principal cannot enter one as if it were a person.
+ */
+export function callerAccountUserId(
+  caller: Pick<VerifiedCaller, "subject"> | null | undefined
+): string | undefined {
+  const userId = caller?.subject?.userId;
+  return isAccountUserId(userId) ? userId : undefined;
+}
+
+/**
+ * The account on whose behalf a deputy-mediated operation runs, or undefined
+ * when no account stands behind it.
+ *
+ * A principal and an account are different facts. Workspace infrastructure — a
+ * chat channel relaying a person's method call, a scheduler, any server-owned
+ * singleton — is a real authorizing principal but belongs to no account, so the
+ * account behind the operation is the executing runtime's own: the human whose
+ * lineage launched it. Reading the synthetic system principal as the answer
+ * would name an id that owns nothing, can answer no approval, and is admitted
+ * to no scope — which reads as "a stranger asked for this" rather than "you
+ * did".
+ */
 export function verifiedInitiatingUserId(
   ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
 ): string | undefined {
-  return verifiedInitiator(ctx).subject?.userId;
+  return callerAccountUserId(ctx.authorizingCaller) ?? callerAccountUserId(ctx.caller);
 }
 
 /** Review contract produced alongside a host-derived canonical authority leaf.

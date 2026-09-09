@@ -2308,6 +2308,13 @@ export class WorkspaceDO extends DurableObjectBase {
               contextId: globalThis.crypto.randomUUID(),
               stateArgs: input.stateArgs ?? {},
               parentId: "server",
+              // A seeded panel is a runtime principal, not just a slot. In a
+              // private workspace its one human owner is known here, so stamp
+              // it: an ownerless principal attributes every effect it launches
+              // to nobody, and anything downstream that needs the human — a
+              // private approval, user-owned state — has no answer. A shared
+              // workspace has no such owner and seeds an unowned panel.
+              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
             });
             this.slotCreate({
               slotId,

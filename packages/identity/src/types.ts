@@ -55,6 +55,19 @@ export const HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 /** Synthetic host principals that can never identify an account row. */
 export const RESERVED_HANDLES: ReadonlySet<string> = new Set(["system"]);
 
+/**
+ * The synthetic system principal. Workspace-local infrastructure — singletons,
+ * the internal control plane, relays owned by the server — authenticates under
+ * it. It is never an account row, so it can never be the human a private
+ * decision belongs to, own user state, or answer an approval.
+ */
+export const SYSTEM_USER_ID = "system";
+
+/** True iff `userId` names an account row rather than the synthetic system principal. */
+export function isAccountUserId(userId: string | undefined): userId is string {
+  return userId !== undefined && userId !== "" && userId !== SYSTEM_USER_ID;
+}
+
 /** True iff `handle` matches `HANDLE_PATTERN` and is not reserved. */
 export function isValidHandle(handle: string): boolean {
   return HANDLE_PATTERN.test(handle) && !RESERVED_HANDLES.has(handle.toLowerCase());

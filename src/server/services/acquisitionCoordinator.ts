@@ -1,5 +1,6 @@
 import type { AcquisitionInfo, InvocationSnapshot, ResourceScope } from "@vibestudio/rpc";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
+import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalTargetIdentity, OperationSubstance } from "@vibestudio/shared/approvals";
@@ -52,6 +53,30 @@ export interface AcquisitionOutcome {
 
 /** Internal failures travel through the existing owner wait as RPC errors. */
 type AcquisitionSettlement = AcquisitionOutcome | { state: "failed"; error: unknown };
+
+/**
+ * Who issued a grant. `user:<id>` names the account that consented. A decision
+ * settled without one is the host's own — infrastructure has no account, and
+ * writing `user:system` into the ledger would claim the account namespace for a
+ * principal that can never appear in it.
+ */
+function grantIssuer(caller: Pick<VerifiedCaller, "subject">): string {
+  const userId = callerAccountUserId(caller);
+  return userId ? `user:${userId}` : "host:approval";
+}
+
+/**
+ * The account an approval is requested on behalf of, when one is. A request
+ * raised by workspace infrastructure belongs to no account, and recording the
+ * synthetic system principal as its requester would name an id that can never
+ * answer it.
+ */
+function requestedByAccount(caller: Pick<VerifiedCaller, "subject">): {
+  requestedByUserId?: string;
+} {
+  const userId = callerAccountUserId(caller);
+  return userId ? { requestedByUserId: userId } : {};
+}
 
 function acquisitionOutcome(settlement: AcquisitionSettlement): AcquisitionOutcome {
   if (settlement.state === "failed") throw settlement.error;
@@ -976,7 +1001,7 @@ export class AcquisitionCoordinator {
         semanticFamily: "task.rules",
         sourcesShown: [...newSources],
         repeatReason: "new-source",
-        ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
+        ...requestedByAccount(input.caller),
         requesterCategory: "agent",
         dedupKey: requestKey,
         capability: input.snapshot.capability,
@@ -1315,7 +1340,7 @@ export class AcquisitionCoordinator {
         .map((item) => item.slice("source:".length))
         .sort(),
       repeatReason: "none" as const,
-      ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
+      ...requestedByAccount(input.caller),
       requesterCategory: input.caller.agentBinding
         ? ("agent" as const)
         : input.snapshot.snippetDigest === "-"
@@ -1578,7 +1603,7 @@ export class AcquisitionCoordinator {
             : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent: [],
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
         ...capabilityDefinition,
       });
@@ -1617,7 +1642,7 @@ export class AcquisitionCoordinator {
             : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: input.tier === "critical" ? "critical-confirmation" : "acquisition",
         ...capabilityDefinition,
       });
@@ -1642,7 +1667,7 @@ export class AcquisitionCoordinator {
             : {}),
           lineageAtConsent,
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
         ...capabilityDefinition,
         scope: decision === "session" ? "session" : "system",
@@ -1669,7 +1694,7 @@ export class AcquisitionCoordinator {
             : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
         ...capabilityDefinition,
         scope: "task",
@@ -1696,12 +1721,12 @@ export class AcquisitionCoordinator {
           lineageAtConsent,
           agentBindingId: input.snapshot.agentBindingId,
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
         ...capabilityDefinition,
         scope: "agent",
         lastUsedAt: Date.now(),
-        decidedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        decidedBy: grantIssuer(input.caller),
         decisionSurface: "card",
       });
       return;
@@ -1722,7 +1747,7 @@ export class AcquisitionCoordinator {
           missionSubject: input.snapshot.missionSubject,
           lineageAtConsent,
         },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
         scope: "mission",
         ...capabilityDefinition,
@@ -1737,7 +1762,7 @@ export class AcquisitionCoordinator {
         level: "resource",
         capability: input.snapshot.capability,
         resource: input.resource,
-        decidedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        decidedBy: grantIssuer(input.caller),
         surface: "card",
       });
       return;
@@ -1759,7 +1784,7 @@ export class AcquisitionCoordinator {
           ? { providerExecutionDigest: input.snapshot.providerExecutionDigest }
           : {}),
       },
-      issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+      issuedBy: grantIssuer(input.caller),
       provenance: "acquisition",
       scope: "version",
       ...capabilityDefinition,

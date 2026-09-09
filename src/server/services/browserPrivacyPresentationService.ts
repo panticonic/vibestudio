@@ -2,7 +2,7 @@ import { BrowserPrivacySectionSchema } from "@vibestudio/service-schemas/browser
 import { browserPrivacyPresentationMethods } from "@vibestudio/service-schemas/browserPrivacyPresentation";
 import { isReviewedBrowserDataProvider } from "@vibestudio/shared/browserDataProviderAuthority";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { verifiedInitiator } from "@vibestudio/shared/serviceDispatcher";
+import { callerAccountUserId, verifiedInitiator } from "@vibestudio/shared/serviceDispatcher";
 
 interface PresentationShell {
   caller: { runtime: { id: string; kind: string } };
@@ -47,14 +47,8 @@ export function createBrowserPrivacyPresentationService(
         throw new Error("Browser privacy presentation must originate in a hosted panel or app");
       }
       const shell = deps.getAuthorizingShell(initiator.runtime.id);
-      const userId = initiator.subject?.userId;
-      if (
-        !shell ||
-        shell.caller.runtime.kind !== "shell" ||
-        !userId ||
-        userId === "system" ||
-        shell.userId !== userId
-      ) {
+      const userId = callerAccountUserId(initiator);
+      if (!shell || shell.caller.runtime.kind !== "shell" || !userId || shell.userId !== userId) {
         throw new Error("The initiating panel has no exact live authorizing shell");
       }
       const section = BrowserPrivacySectionSchema.parse(args[0] ?? "credentials");

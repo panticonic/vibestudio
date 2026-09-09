@@ -1,10 +1,11 @@
+import { isAccountUserId } from "@vibestudio/identity/types";
 import type { PendingApproval } from "./approvals.js";
 import { filterRuntimeApprovals } from "./bootstrapApprovals.js";
 
 export interface ApprovalScopeAccess {
   /** Whether this account is still admitted to the queue's owning scope. */
   isMember(userId: string): boolean;
-  /** Only workspace scopes admit unowned source reviews to administrators. */
+  /** Whether this account administers the scope, and so answers its decisions. */
   isAdmin(userId: string): boolean;
 }
 
@@ -15,7 +16,7 @@ export function isHostApprovalObserver(owner: {
   callerKind: string;
 }): boolean {
   return (
-    (!owner.userId || owner.userId === "system") &&
+    !isAccountUserId(owner.userId) &&
     ((owner.callerKind === "server" && owner.callerId === "server") ||
       (owner.callerKind === "shell" &&
         ["shell", "electron-main", "headless-host"].includes(owner.callerId)))
@@ -35,16 +36,30 @@ export function approvalVisibleToUser(
     : audience?.kind === "workspace-admin" && access.isAdmin(userId);
 }
 
+/**
+ * Who answers this approval. A decision an account initiated is private to that
+ * account. A decision no account initiated — source admitted into the
+ * workspace, a runtime asking to debug a privileged panel, a background worker
+ * needing a secret — is a decision about the workspace itself, and the
+ * workspace's administrators answer it. Only a self-contradictory request, one
+ * whose owner and requester disagree, has no audience.
+ */
 export function approvalAudience(
   approval: PendingApproval
 ): { kind: "user"; userId: string } | { kind: "workspace-admin" } | null {
-  const requester = approval.requestedByUserId;
-  const owner = approval.kind === "browser-permission" ? approval.ownerUserId : undefined;
+  // Only an account makes a decision private. A request stamped with the
+  // synthetic system principal was raised by infrastructure, exactly like one
+  // stamped with nobody.
+  const requester = accountOrUndefined(approval.requestedByUserId);
+  const owner =
+    approval.kind === "browser-permission" ? accountOrUndefined(approval.ownerUserId) : undefined;
   if (owner && requester && owner !== requester) return null;
   if (owner || requester) return { kind: "user", userId: (owner ?? requester)! };
-  // Unowned source admission is a workspace decision. An unowned credential,
-  // capability or protected input never becomes an administrator's private grant.
-  return approval.kind === "unit-install-review" ? { kind: "workspace-admin" } : null;
+  return { kind: "workspace-admin" };
+}
+
+function accountOrUndefined(userId: string | undefined): string | undefined {
+  return isAccountUserId(userId) ? userId : undefined;
 }
 
 /** Progress-only and bootstrap-owned reviews do not demand workspace attention. */

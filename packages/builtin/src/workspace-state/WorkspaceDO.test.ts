@@ -118,6 +118,22 @@ describe("workspace distribution panel initialization", () => {
     expect(restarted.instance.entityListPreparingByKind("panel")).toHaveLength(2);
   });
 
+  it("gives a private workspace's seeded panels their owner as a runtime principal", async () => {
+    // The seed is a panel principal, not just a slot: everything it launches
+    // inherits this stamp, and an ownerless principal attributes a person's
+    // effects to nobody.
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const seeded = instance.initializePanels([{ source: "panels/chat" }], "alice");
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0]?.entity.ownerUserId).toBe("alice");
+    expect(seeded[0]?.slot.owner_user_id).toBe("alice");
+
+    const { instance: shared } = await createTestDO(WorkspaceDOTestable);
+    const sharedSeed = shared.initializePanels([{ source: "panels/chat" }]);
+    expect(sharedSeed[0]?.entity.ownerUserId).toBeUndefined();
+  });
+
+
   it("seeds and migrates a private workspace into one durable owner tree", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     instance.slotCreate({ slotId: "seeded-root", parentSlotId: null });

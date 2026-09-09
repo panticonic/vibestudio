@@ -35,7 +35,7 @@ function requireProvider(ctx: ServiceContext): string {
     throw new Error("Phone native endpoint requires the exact approved Base phone provider");
   }
   const userId = verifiedInitiatingUserId(ctx);
-  if (!userId || userId === "system") {
+  if (!userId) {
     throw new Error("Phone native endpoint requires an authenticated user account");
   }
   return userId;

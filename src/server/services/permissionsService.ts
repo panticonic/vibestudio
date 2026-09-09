@@ -1,5 +1,5 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
+import { ServiceError, callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   permissionsMethods,
@@ -27,6 +27,16 @@ import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIden
 import type { BrowserPermissionGrantProjection } from "./browserPermissionsService.js";
 
 const SERVICE = "permissions";
+
+/**
+ * Who decided. `user:<id>` names the account; a decision reached without one is
+ * the host's own, and never claims the account namespace for the synthetic
+ * system principal.
+ */
+function decidedByAccount(ctx: Parameters<ServiceDefinition["handler"]>[0]): string {
+  const userId = callerAccountUserId(ctx.caller);
+  return userId ? `user:${userId}` : "host:approval";
+}
 
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
@@ -209,7 +219,7 @@ export function createPermissionsService(deps: {
           .sort((a, b) => a.requestedAt - b.requestedAt),
       updateAgentProfile: async (ctx, [request]) => {
         let changed = false;
-        const decidedBy = ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system";
+        const decidedBy = decidedByAccount(ctx);
         if (request.action === "revoke-grant") {
           changed = deps.capabilityGrants.revoke(request.id);
         } else if (request.action === "restore-grant") {
@@ -247,7 +257,7 @@ export function createPermissionsService(deps: {
         }
       },
       setWorkspaceAuthorityLock: async (ctx, [{ locked }]) => {
-        const decidedBy = ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system";
+        const decidedBy = decidedByAccount(ctx);
         deps.capabilityGrants.setWorkspaceAuthorityLocked(locked, decidedBy);
         if (locked) {
           deps.closeAllAcquisitions?.();

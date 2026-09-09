@@ -55,7 +55,7 @@ describe("approval audience", () => {
     }
   });
 
-  it("rejects private approvals with no eligible member before they enter the queue", () => {
+  it("rejects a private approval whose account cannot answer it, before it enters the queue", () => {
     const events = new EventService();
     const queue = createApprovalQueue({ eventService: events, scopeAccess: access });
     const capabilityAttempt = (requestedByUserId?: string) => () =>
@@ -70,8 +70,6 @@ describe("approval audience", () => {
         ...(requestedByUserId ? { requestedByUserId } : {}),
       });
     const attempts = [
-      capabilityAttempt(),
-      capabilityAttempt("system"),
       capabilityAttempt("not-a-member"),
       () =>
         queue.requestCredentialInput({
@@ -87,7 +85,7 @@ describe("approval audience", () => {
           accountIdentity: { providerUserId: "provider" },
           scopes: [],
           fields: [{ name: "token", label: "Token", type: "secret", required: true }],
-          requestedByUserId: "system",
+          requestedByUserId: "not-a-member",
         }),
     ];
 
@@ -225,7 +223,7 @@ describe("approval audience", () => {
     }
   });
 
-  it("classifies owned consent, workspace admission and non-actionable preparation once", () => {
+  it("classifies initiated consent, workspace decisions and non-actionable preparation once", () => {
     const base = {
       approvalId: "approval",
       callerId: "caller",
@@ -239,7 +237,8 @@ describe("approval audience", () => {
       kind: "capability",
       requestedByUserId: "alice",
     } as PendingApproval;
-    const unownedCredential = { ...base, kind: "credential" } as PendingApproval;
+    // Nobody initiated this one: a decision about the workspace, not a private one.
+    const uninitiatedCredential = { ...base, kind: "credential" } as PendingApproval;
     const admission = {
       ...base,
       kind: "unit-install-review",
@@ -253,7 +252,8 @@ describe("approval audience", () => {
       requestedByUserId: "bob",
     } as PendingApproval;
     expect(approvalVisibleToUser(privateApproval, "bob", access)).toBe(false);
-    expect(approvalVisibleToUser(unownedCredential, "bob", access)).toBe(false);
+    expect(approvalVisibleToUser(uninitiatedCredential, "alice", access)).toBe(false);
+    expect(approvalVisibleToUser(uninitiatedCredential, "bob", access)).toBe(true);
     expect(approvalVisibleToUser(admission, "alice", access)).toBe(false);
     expect(approvalVisibleToUser(admission, "bob", access)).toBe(true);
     expect(approvalVisibleToUser(conflicting, "alice", access)).toBe(false);
@@ -265,13 +265,13 @@ describe("approval audience", () => {
       pendingApprovalCounts([
         privateApproval,
         admission,
-        unownedCredential,
+        uninitiatedCredential,
         conflicting,
         { ...privateApproval, lifecycle: { state: "preparing" } },
       ])
     ).toEqual({
       pendingApprovals: [{ userId: "alice", count: 1 }],
-      workspaceApprovalCount: 1,
+      workspaceApprovalCount: 2,
     });
   });
 

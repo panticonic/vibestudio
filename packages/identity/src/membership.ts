@@ -94,7 +94,15 @@ export class MembershipStore {
     return this.db.isMember(userId, workspaceId);
   }
 
+  /**
+   * Who administers the workspace, and so answers decisions about it. A private
+   * workspace's owner is its whole authority by construction — the same fact
+   * `has` encodes — and holds no stored role to consult. Every ordinary
+   * workspace requires the stored admin role.
+   */
   isAdmin(userId: string, workspaceId: string): boolean {
-    return this.has(userId, workspaceId) && this.db.getMembership(userId, workspaceId)?.role === "admin";
+    if (!this.has(userId, workspaceId)) return false;
+    if (this.db.getPrivateWorkspaceOwner(workspaceId)) return true;
+    return this.db.getMembership(userId, workspaceId)?.role === "admin";
   }
 }

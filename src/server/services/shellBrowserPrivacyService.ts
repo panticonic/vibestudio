@@ -1,5 +1,6 @@
 import { shellBrowserPrivacyMethods } from "@vibestudio/service-schemas/shellBrowserPrivacy";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
+import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -17,8 +18,7 @@ export function createShellBrowserPrivacyService(deps: {
     if (
       ctx.caller.runtime.kind !== "shell" ||
       !ctx.caller.runtime.id.startsWith("shell:") ||
-      !ctx.caller.subject?.userId ||
-      ctx.caller.subject.userId === "system"
+      !callerAccountUserId(ctx.caller)
     ) {
       throw new Error("Browser privacy management requires an authenticated human shell");
     }

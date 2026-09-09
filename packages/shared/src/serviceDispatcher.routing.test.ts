@@ -4,6 +4,7 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   verifiedInitiatingUserId,
+  callerAccountUserId,
   verifiedInitiator,
 } from "./serviceDispatcher.js";
 import { testAuthority } from "./serviceDispatcherTestUtils.js";
@@ -343,10 +344,49 @@ describe("ServiceDispatcher ownership", () => {
     });
 
     expect(verifiedInitiator({ caller: deputy })).toBe(deputy);
-    expect(verifiedInitiatingUserId({ caller: deputy })).toBe("system");
+    // The synthetic system principal is not an account: an operation nobody
+    // initiated is unattributed, never attributed to the infrastructure.
+    expect(verifiedInitiatingUserId({ caller: deputy })).toBeUndefined();
     expect(verifiedInitiator({ caller: deputy, authorizingCaller: initiator })).toBe(initiator);
     expect(verifiedInitiatingUserId({ caller: deputy, authorizingCaller: initiator })).toBe(
       "usr_alice"
     );
+  });
+
+  it("attributes a relayed operation to the runtime's own account, not to the relay", () => {
+    // A chat channel, a scheduler, any server-owned singleton: it carries a
+    // person's request between two runtimes without becoming that person.
+    const relay = createVerifiedCaller("do:workers/pubsub-channel", "do", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+    const agent = createVerifiedCaller("do:workers/agent-worker", "do", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+
+    // The relay stays the authorizing principal — it really did carry the
+    // call — but the account behind the effect is the agent's own owner.
+    expect(verifiedInitiator({ caller: agent, authorizingCaller: relay })).toBe(relay);
+    expect(verifiedInitiatingUserId({ caller: agent, authorizingCaller: relay })).toBe("usr_alice");
+  });
+
+  it("reports no account behind a caller that belongs to none", () => {
+    const infrastructure = createVerifiedCaller("do:workers/model-settings", "do", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+    const anonymous = createVerifiedCaller("panel:seeded", "panel");
+
+    expect(callerAccountUserId(infrastructure)).toBeUndefined();
+    expect(callerAccountUserId(anonymous)).toBeUndefined();
+    expect(
+      callerAccountUserId(
+        createVerifiedCaller("shell:device", "shell", null, null, {
+          userId: "usr_alice",
+          handle: "alice",
+        })
+      )
+    ).toBe("usr_alice");
   });
 });

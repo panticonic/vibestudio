@@ -787,8 +787,13 @@ export function createApprovalQueue(deps: {
     if (audience?.kind === "user" && scopeAccess.isMember(audience.userId)) return;
     const reason =
       audience?.kind === "user"
-        ? "Approval requester is not admitted to this scope"
+        ? `Approval requester ${audience.userId} is not admitted to this scope`
         : "Approval has no eligible audience";
+    console.warn(
+      `[ApprovalQueue] ${approval.kind} approval refused: ${reason}` +
+        ` (caller=${approval.callerId} kind=${approval.callerKind}` +
+        ` requestedBy=${approval.requestedByUserId ?? "none"})`
+    );
     const authorityFailure = authorityFailureForDecision(
       {
         allowed: false,

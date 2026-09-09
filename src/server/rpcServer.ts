@@ -98,6 +98,7 @@ import {
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import { SYSTEM_USER_ID, isAccountUserId } from "@vibestudio/identity/types";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import { userlandReceiverResourceKey } from "@vibestudio/shared/authority/userlandResources";
@@ -250,7 +251,25 @@ const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
  * (WP8 §4, WP5 render) — but is stamped so every in-process `ServiceContext`
  * still carries a subject rather than a null one.
  */
-export const SYSTEM_SUBJECT: UserSubject = { userId: "system", handle: "system" };
+export const SYSTEM_SUBJECT: UserSubject = { userId: SYSTEM_USER_ID, handle: SYSTEM_USER_ID };
+
+/**
+ * A retained authority parent is a real principal — it carries the invocation's
+ * task authority, lineage, and test policy — but only an account can answer
+ * "on whose behalf does the nested effect run". Workspace infrastructure (a
+ * chat channel relaying a method call, a scheduler, any server-owned singleton)
+ * authenticates as the synthetic system principal, so it is kept as the
+ * authorizing principal with its claim to an account dropped. Retaining that
+ * claim would let it be read as the initiating human by anything downstream
+ * that stamps ownership, and would hide the account whose runtime is actually
+ * executing.
+ */
+function authorizedByAccount<T extends { authorizingCaller: VerifiedCaller | null }>(entry: T): T {
+  const caller = entry.authorizingCaller;
+  if (!caller || isAccountUserId(caller.subject?.userId)) return entry;
+  const { subject: _systemPrincipal, ...withoutAccount } = caller;
+  return { ...entry, authorizingCaller: withoutAccount };
+}
 
 /**
  * Caller kinds whose subject is derived from a runtime entity record rather
@@ -1219,9 +1238,10 @@ export class RpcServer {
   ): () => void {
     if (this.activeAuthorityParents.has(nonce))
       throw createRelayError("Invocation authority nonce is already active", "EACCES");
-    this.activeAuthorityParents.set(nonce, entry);
+    const retained = authorizedByAccount(entry);
+    this.activeAuthorityParents.set(nonce, retained);
     return () => {
-      if (this.activeAuthorityParents.get(nonce) === entry)
+      if (this.activeAuthorityParents.get(nonce) === retained)
         this.activeAuthorityParents.delete(nonce);
     };
   }

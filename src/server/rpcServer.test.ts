@@ -3862,6 +3862,70 @@ describe("RpcServer relay behavior", () => {
     expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
   });
 
+  it("attributes a relayed chat method call to the agent's own account, not to the relay", async () => {
+    // A chat channel is workspace infrastructure: it authenticates as the
+    // synthetic system principal and relays a person's method call to their
+    // agent. Its nested effects — a credential prompt, a private grant — belong
+    // to the human whose lineage owns the agent, and must never be attributed
+    // to "system", which owns nothing and can answer nothing.
+    const receiver = "do:workers/agent-worker:AiChatWorker:ai-chat-587d";
+    const subject = { userId: "usr_alice", handle: "alice" };
+    const { server, entityCache } = createServer({
+      userSubjectSource: { resolve: () => subject },
+    });
+    entityCache._onActivate(makeRecord(receiver, "do", { repoPath: "workers/agent-worker" }));
+    const contexts: ServiceContext[] = [];
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+      contexts.push(ctx);
+    });
+    const relay = createVerifiedCaller(
+      "do:workers/pubsub-channel:PubSubChannel:chat-de927b96",
+      "do",
+      null,
+      null,
+      { userId: "system", handle: "system" }
+    );
+    const nonce = "relayed-chat-method-call-nonce";
+    const release = testServer(server).beginAuthorityParent(
+      receiver,
+      {
+        nonce,
+        method: "onMethodCall",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      relay
+    );
+    try {
+      const request: InternalRpcRequest = {
+        type: "request",
+        requestId: "connect-model-credential",
+        fromId: receiver,
+        method: "credentials.connect",
+        args: [],
+        authorityParentNonce: nonce,
+      };
+      await testServer(server).handleEnvelopeRequest(
+        receiver,
+        "do",
+        undefined,
+        envelopeFromMessage({
+          selfId: receiver,
+          from: receiver,
+          target: "main",
+          callerKind: "do",
+          message: request,
+        }),
+        request,
+        new AbortController().signal
+      );
+    } finally {
+      release();
+    }
+    expect(contexts).toHaveLength(1);
+    expect(verifiedInitiatingUserId(contexts[0]!)).toBe("usr_alice");
+    expect(contexts[0]!.authorizingCaller?.subject).toBeUndefined();
+  });
+
   it("keeps nested task attribution scoped to the active DO invocation", async () => {
     const { server, entityCache } = createServer();
     const receiver = "do:workers/bookmarks:BookmarksDO:shared";

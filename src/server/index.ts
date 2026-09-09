@@ -30,6 +30,7 @@ import {
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
+  callerAccountUserId,
   createHostCaller,
   createVerifiedCaller,
   verifiedInitiator,
@@ -2887,8 +2888,8 @@ async function main() {
           callerKind,
           repoPath: candidate.caller.code?.repoPath ?? "vibestudio/session",
           effectiveVersion: candidate.caller.code?.effectiveVersion ?? candidate.stateHash,
-          ...(candidate.caller.subject
-            ? { requestedByUserId: candidate.caller.subject.userId }
+          ...(callerAccountUserId(candidate.caller)
+            ? { requestedByUserId: callerAccountUserId(candidate.caller)! }
             : {}),
           ...(candidate.signal ? { signal: candidate.signal } : {}),
           attention: "interrupt",
@@ -3892,13 +3893,12 @@ async function main() {
             if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "app") return null;
             const rpcServer = rpcServerForGateway;
             const shell = rpcServer?.getAuthorizingShell(initiator.runtime.id) ?? null;
-            const userId = initiator.subject?.userId;
+            const userId = callerAccountUserId(initiator);
             if (
               !shell ||
               shell.caller.runtime.kind !== "shell" ||
               (shell.clientPlatform !== "desktop" && shell.clientPlatform !== "mobile") ||
               !userId ||
-              userId === "system" ||
               shell.userId !== userId
             ) {
               return null;

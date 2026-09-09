@@ -78,11 +78,7 @@ export async function resolvePanelSlotForCredentialEntity(
   }
   let slotId = runtimeIndex.panelsByRuntimeEntityId.get(entityId)?.panelId ?? null;
   if (!slotId && runtimeInspector?.resolvePanelSlotByEntity) {
-    try {
-      slotId = await runtimeInspector.resolvePanelSlotByEntity(entityId);
-    } catch {
-      slotId = null;
-    }
+    slotId = await lookupPanelSlot(entityId, runtimeInspector);
   }
   runtimeIndex.slotByEntityId.set(entityId, slotId);
   return slotId;
@@ -101,9 +97,26 @@ export async function resolveDirectCredentialPanelSlot(
   runtimeInspector: CredentialRuntimeInspector | undefined
 ): Promise<string | null> {
   if (!runtimeInspector?.resolvePanelSlotByEntity) return null;
+  return await lookupPanelSlot(entityId, runtimeInspector);
+}
+
+/**
+ * "This entity has no slot" and "the slot lookup failed" are different facts,
+ * and only the first is a normal answer. Both end as a null here so one caller
+ * path stays simple, but a failure is reported rather than silently becoming a
+ * missing browser target that blames the user's panel.
+ */
+async function lookupPanelSlot(
+  entityId: string,
+  runtimeInspector: Pick<CredentialRuntimeInspector, "resolvePanelSlotByEntity">
+): Promise<string | null> {
   try {
-    return await runtimeInspector.resolvePanelSlotByEntity(entityId);
-  } catch {
+    return (await runtimeInspector.resolvePanelSlotByEntity?.(entityId)) ?? null;
+  } catch (error) {
+    console.warn(
+      `[Credentials] Panel slot lookup failed for ${entityId}: ` +
+        (error instanceof Error ? error.message : String(error))
+    );
     return null;
   }
 }

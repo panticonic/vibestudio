@@ -1,5 +1,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
+import { isAccountUserId } from "@vibestudio/identity/types";
 import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { authorityMethods } from "@vibestudio/service-schemas/authority";
 import type { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
@@ -392,16 +394,13 @@ function requireDependency<T>(value: T | undefined, operation: string): T {
 function attributedUser(ctx: Parameters<ServiceDefinition["handler"]>[0]): `user:${string}` {
   const authorizingUserId = ctx.authorizingCaller?.subject?.userId;
   const authorizingUser =
-    authorizingUserId && authorizingUserId !== "system"
+    authorizingUserId && isAccountUserId(authorizingUserId)
       ? (`user:${authorizingUserId}` as const)
       : undefined;
   const user = ctx.authorization?.actingUser ?? ctx.authorization?.ownerChain.at(-1);
-  const direct = ctx.caller.subject?.userId;
-  const resolved =
-    authorizingUser ??
-    user ??
-    (direct && direct !== "system" ? (`user:${direct}` as const) : undefined);
-  if (!resolved || resolved === "user:system") {
+  const direct = callerAccountUserId(ctx.caller);
+  const resolved = authorizingUser ?? user ?? (direct ? (`user:${direct}` as const) : undefined);
+  if (!resolved || !isAccountUserId(resolved.slice("user:".length))) {
     throw Object.assign(new Error("Target authority acquisition requires user-attributed intent"), {
       code: "EACCES",
     });

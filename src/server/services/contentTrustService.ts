@@ -1,5 +1,6 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import { contentTrustMethods } from "@vibestudio/service-schemas/contentTrust";
 import type { ContextIntegrityStore } from "./contextIntegrityStore.js";
 
@@ -32,8 +33,8 @@ export function createContentTrustService(deps: {
 }
 
 function humanUser(ctx: Parameters<ServiceDefinition["handler"]>[0]): string {
-  const userId = ctx.caller.subject?.userId;
-  if (!userId || userId === "system") {
+  const userId = callerAccountUserId(ctx.caller);
+  if (!userId) {
     throw Object.assign(new Error("Content trust decisions require a human user"), {
       code: "EACCES",
     });

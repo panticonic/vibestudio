@@ -82,6 +82,36 @@ describe("approvalQueue", () => {
     await expect(bounded).resolves.toBe("deny");
   });
 
+  it("gives a decision no account initiated to the workspace's administrators", async () => {
+    // Workspace infrastructure raises decisions on nobody's behalf — source
+    // admitted into the workspace, a runtime asking to debug a privileged
+    // panel, a background worker needing a secret. They are decisions about the
+    // workspace, so its administrators answer them; refusing them instead would
+    // stop the operation with a question nobody was ever shown.
+    const { queue } = createQueue({
+      scopeAccess: {
+        isMember: (userId: string) => userId === "usr_owner",
+        isAdmin: (userId: string) => userId === "usr_owner",
+      },
+    });
+    const decision = queue.request({
+      kind: "capability",
+      callerId: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
+      callerKind: "system",
+      repoPath: "workers/model-settings",
+      effectiveVersion: "hash-1",
+      capability: "panel.inspect",
+      title: "Let this agent debug a privileged panel",
+      description: "The agent will be able to screenshot and read this panel.",
+    });
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(1);
+    await queue.resolve(pending[0]!.approvalId, "once", {
+      subject: { userId: "usr_owner", handle: "owner" },
+    } as never);
+    await expect(decision).resolves.toBe("once");
+  });
+
   it("seals the executing server platform instead of accepting requester presentation", () => {
     const { queue } = createQueue({ executionPlatform: "darwin" });
     void queue.request({
