@@ -528,6 +528,13 @@ export async function openBridgeStream(
       rejectHead = reject;
     }
   );
+  // This promise is awaited far below, after the open round-trip and the body
+  // pump are set up. A host that reports the stream failed — a workspace server
+  // briefly away during a restart does exactly that — rejects it before then,
+  // while nothing is attached, and the runtime reports an unhandled rejection
+  // for a failure that is in fact handled a few lines later. Attach now; the
+  // awaited rejection below is unaffected.
+  headPromise.catch(() => {});
 
   let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let bodyClosed = false;

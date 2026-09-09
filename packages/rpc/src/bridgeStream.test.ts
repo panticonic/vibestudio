@@ -6,6 +6,7 @@ import { isRpcConnectionLost, RemoteRpcError } from "./errors.js";
 import {
   createBridgeBodyReassembler,
   createBridgeStreamRelay,
+  openBridgeStream,
   openBridgeUploadStream,
   type BridgeStreamMessage,
   type BridgeStreamShellSurface,
@@ -515,5 +516,56 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
     await expect(
       openBridgeUploadStream(surface, streamRequestEnvelope(), controller.signal, bodyStreamOf())
     ).rejects.toThrow(/aborted/);
+  });
+});
+
+describe("openBridgeStream head rejection ownership", () => {
+  /**
+   * The host reports a failed stream on the message channel rather than by
+   * rejecting the open call, so the failure arrives while the open round-trip is
+   * still in flight — before anything awaits the head. The open call is real
+   * IPC, so the head stays rejected and unattached across a full turn, which is
+   * when the runtime reports an unhandled rejection for a failure that is in
+   * fact awaited moments later.
+   */
+  it("does not raise an unhandled rejection when the host fails the stream mid-open", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => void unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let handler: ((message: BridgeStreamMessage) => void) | null = null;
+      const surface = {
+        streamChunkFormat: "binary",
+        streamOpen: async (message: { opId: string }) => {
+          handler?.({
+            kind: "error",
+            opId: message.opId,
+            message: "Workspace server is temporarily unavailable",
+            errorKind: "transport",
+            code: "CONNECTION_LOST",
+          } as BridgeStreamMessage);
+          // The open round-trip completes a turn later, as real IPC does.
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        },
+        streamBodyChunk: async () => undefined,
+        streamAbort: () => undefined,
+        streamAck: () => undefined,
+        onStreamMessage: (next: (message: BridgeStreamMessage) => void) => {
+          handler = next;
+          return () => {
+            handler = null;
+          };
+        },
+      } as unknown as BridgeStreamShellSurface;
+
+      await expect(
+        openBridgeStream(surface, { id: "1", method: "x" } as unknown as RpcEnvelope, null, null)
+      ).rejects.toThrow("Workspace server is temporarily unavailable");
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });
