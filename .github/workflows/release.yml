@@ -1,11 +1,15 @@
 name: Release
 
-# Publish the npm packages locally with `pnpm publish:npm`, then tag the validated
-# release with `v*` (e.g. v0.2.0). This workflow creates the GitHub release and
-# optionally attaches native installers:
-#   - vars.RELEASE_LINUX = 'true'  → build + attach AppImage/deb (needs build-resources icons)
-#   - vars.RELEASE_WINDOWS = 'true' → build + attach x64 NSIS installer
-#   - vars.RELEASE_MAC   = 'true'  → build + attach a signed/notarized DMG (needs the Apple secrets)
+# Tag a validated release with `v*` (e.g. v0.2.0) to create the GitHub release and
+# build the native installers. Nothing here publishes to npm; the npm packages are
+# a separate manual `pnpm publish:npm`, and only the server package is still
+# advertised, for hosts no native package covers.
+#   - vars.RELEASE_LINUX = 'true'  → AppImage/deb/rpm/pacman, plus the signed apt and
+#     dnf repositories on GitHub Pages (needs build-resources icons and LINUX_SIGNING_KEY)
+#   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
+#   - vars.RELEASE_MAC   = 'true'  → DMG, signed and notarized when all five Apple secrets
+#     are set and ad-hoc signed otherwise
+# The Homebrew cask is not built here: panticonic/homebrew-tap tracks releases itself.
 on:
   push:
     tags: ["v*"]
@@ -43,12 +47,49 @@ jobs:
           body: |
             ### Install
 
+            **Debian / Ubuntu** — updates arrive with `apt upgrade`.
+
             ```sh
-            npm install -g @panticonic/vibestudio          # desktop app + CLI
-            npm install -g @panticonic/vibestudio-server   # headless server + CLI
+            sudo install -d -m 0755 /etc/apt/keyrings
+            curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
+              | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
+            echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+              | sudo tee /etc/apt/sources.list.d/vibestudio.list
+            sudo apt update && sudo apt install vibestudio
             ```
 
-            Requires Node.js 22.19+. Native installers (DMG/AppImage/deb) are attached when available.
+            **Fedora / RHEL / openSUSE** — updates arrive with `dnf upgrade`.
+
+            ```sh
+            sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
+            sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+            sudo dnf install vibestudio
+            ```
+
+            **macOS** — updates arrive with `brew upgrade`.
+
+            ```sh
+            brew install --cask panticonic/tap/vibestudio
+            ```
+
+            The macOS build is ad-hoc signed rather than signed with an Apple Developer ID,
+            so macOS asks you to confirm it on first launch (System Settings → Privacy &
+            Security → Open Anyway). It cannot update itself; `brew upgrade` is the update path.
+
+            **Windows** — download the `.exe` installer below. It is not yet code signed,
+            so SmartScreen will warn on first run.
+
+            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm`, `.deb`
+            and `.AppImage` files below install directly. Every packaged format carries the
+            AppArmor profile that a workspace sandbox needs on Ubuntu 24.04+; the AppImage
+            cannot, so workspaces there need that profile installed by hand.
+
+            **A server on a host we do not package** — npm still carries the headless server
+            and CLI, and needs Node.js 22.19+.
+
+            ```sh
+            npm install -g @panticonic/vibestudio-server
+            ```
 
   linux-installers:
     name: Build Linux installers (AppImage/deb)
