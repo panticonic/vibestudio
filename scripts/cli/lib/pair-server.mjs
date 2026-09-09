@@ -6,6 +6,7 @@ import path from "node:path";
 import { printConnectBanner } from "./connect-banner.mjs";
 import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
+import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -261,7 +262,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   // loads internal Durable Objects from a compact bundle, and auto-spawns the
   // compiled headless host. Rebuild all three at one boundary so live server
   // source can never silently run against stale transport/runtime binaries.
-  let hostArtifactRoot = path.dirname(path.resolve(repoRoot, serverEntryArg()));
+  let hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
   if (serverEntryArg() === "src/server/index.ts") {
     if (hooks.prepareSourceServer) {
       hooks.prepareSourceServer({ repoRoot });
@@ -282,8 +283,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
         );
       }
     }
-    const { readCurrentHostBuildGeneration } = await import("../../host-build-generations.mjs");
-    hostArtifactRoot = readCurrentHostBuildGeneration(repoRoot, "source");
+    // The rebuild above publishes a new source generation; resolve it again.
+    hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
   }
 
   let serverArgs = hooks.buildServerArgs

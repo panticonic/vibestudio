@@ -301,6 +301,9 @@ async function runImportSmoke(smoke) {
   }
 }
 
+// host-launcher-contract: does not launch a host. Server entries are read and
+// inspected as build artifacts here; the only process started is a CLI asked
+// for its usage text.
 function runExecutableSmoke(smoke) {
   const result = spawnSync(process.execPath, [path.join(repoRoot, smoke.path), ...smoke.args], {
     cwd: repoRoot,

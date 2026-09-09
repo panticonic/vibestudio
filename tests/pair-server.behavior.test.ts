@@ -12,10 +12,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
-import { readCurrentHostBuildGeneration } from "../scripts/host-build-generations.mjs";
+import { hostArtifactRootForServerEntry } from "../scripts/host-build-generations.mjs";
 
 vi.mock("../scripts/host-build-generations.mjs", () => ({
   readCurrentHostBuildGeneration: vi.fn(() => "/isolated/host-generation"),
+  // Launchers share one derivation of the coordinate a host runs from, so the
+  // isolated generation has to answer through it too.
+  hostArtifactRootForServerEntry: vi.fn((_root: string, entry: string) =>
+    entry === "src/server/index.ts" ? "/isolated/host-generation" : "/repo/dist"
+  ),
 }));
 
 class FakeChild extends EventEmitter {
@@ -93,7 +98,12 @@ describe("pair-server runner", () => {
       developmentWorkspaceTemplateEnv: () => ({}),
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
         expect(prepareSourceServer).toHaveBeenCalledOnce();
-        expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(expect.any(String), "source");
+        // Resolved through the derivation every launcher shares, so a launcher
+        // that reimplements it cannot quietly diverge from this guarantee.
+        expect(hostArtifactRootForServerEntry).toHaveBeenCalledWith(
+          expect.any(String),
+          "src/server/index.ts"
+        );
         expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/isolated/host-generation");
         queueMicrotask(() => child.emit("exit", 0, null));
         return child;

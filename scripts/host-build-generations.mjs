@@ -91,3 +91,22 @@ export function readCurrentHostBuildGeneration(cwd = process.cwd(), kind) {
   }
   return fs.realpathSync(record.root);
 }
+
+/**
+ * The build generation a server entry runs from.
+ *
+ * A host refuses to start without this coordinate, so every launcher must
+ * supply it — and each one that derived it independently was a launcher that
+ * could forget. A compiled entry names its own directory; a live source entry
+ * names the current source generation, because compiled artifacts must come
+ * from exactly one of them.
+ *
+ * Packaged launchers are the exception and name their own root: an installed
+ * app resolves it from the archive it was installed as, not from a checkout.
+ */
+export function hostArtifactRootForServerEntry(repoRoot, serverEntry) {
+  if (serverEntry !== "src/server/index.ts") {
+    return path.dirname(path.resolve(repoRoot, serverEntry));
+  }
+  return readCurrentHostBuildGeneration(repoRoot, "source");
+}
