@@ -29,10 +29,9 @@ target 'Vibestudio' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  target 'VibestudioTests' do
-    inherit! :complete
-    # Pods for testing
-  end
+  # No `VibestudioTests` target: React Native's template ships one, this project
+  # has never had the target or any test sources, and CocoaPods refuses to
+  # resolve a target the Xcode project does not define.
 
   # Post-install hook for Hermes and build settings
   post_install do |installer|
