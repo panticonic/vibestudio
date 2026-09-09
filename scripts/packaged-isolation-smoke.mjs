@@ -299,13 +299,19 @@ export async function runPackagedIsolationSmoke(options) {
     await closeGui(gui);
     gui = undefined;
     const appRoot = identity.appRoot;
-    const electronEnv = { ...environment, ELECTRON_RUN_AS_NODE: "1", VIBESTUDIO_APP_ROOT: appRoot };
     const readyFile = path.join(fixture, "hub-ready.json");
-    const serverEntry = path.join(
-      appRoot.replace(/\.asar$/u, ".asar.unpacked"),
-      "dist",
-      "server-electron.cjs"
-    );
+    const unpackedDist = path.join(appRoot.replace(/\.asar$/u, ".asar.unpacked"), "dist");
+    const serverEntry = path.join(unpackedDist, "server-electron.cjs");
+    const electronEnv = {
+      ...environment,
+      ELECTRON_RUN_AS_NODE: "1",
+      VIBESTUDIO_APP_ROOT: appRoot,
+      // A host refuses to start without being told which build generation it is
+      // running from. For an installed app that is the unpacked dist this entry
+      // was just resolved out of, the same coordinate the packaged server shim
+      // supplies.
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: unpackedDist,
+    };
     server = launch(
       executable,
       [
