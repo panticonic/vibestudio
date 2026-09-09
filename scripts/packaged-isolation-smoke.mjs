@@ -156,6 +156,17 @@ export function spawnCaptured(child) {
   return {
     child,
     tail: () => readableTail([...recent, partial].filter(Boolean).join("\n")),
+    /** Everything retained, redacted but neither reordered nor abridged. */
+    transcript: () =>
+      [...recent, partial]
+        .filter(Boolean)
+        .map((line) =>
+          /(invite|pairurl|deeplink|token|secret|credential)/iu.test(line)
+            ? line.replace(/[A-Za-z0-9_-]{20,}/gu, "[redacted]")
+            : line
+        )
+        .join("\n")
+        .replace(/vibestudio:\/\/\S+/gu, "[redacted app link]"),
     /**
      * Wait for the child's output to finish arriving.
      *
@@ -292,6 +303,11 @@ export async function runPackagedIsolationSmoke(options) {
     while (Date.now() < deadline) {
       if (childExited(server.child)) {
         await server.drained();
+        // A processed message keeps losing the part that explains this crash.
+        // Write what actually arrived, once, beside the failure report.
+        await fs
+          .writeFile(path.join(outDir, "server-output.log"), server.transcript(), { mode: 0o600 })
+          .catch(() => undefined);
         // How it died distinguishes an uncaught error from a signal. Without
         // this the report is whatever the process managed to print, which for a
         // process killed mid-print is the source line and nothing after it.
