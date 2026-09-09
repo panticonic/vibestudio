@@ -41,6 +41,11 @@ export function preparePatchedSource(outputDirectory) {
   mkdirSync(output, { recursive: true });
   const source = join(output, "source");
   runIn("git", ["init", source], output);
+  // The pin is over exact bytes. A Windows checkout would otherwise rewrite
+  // line endings, changing Cargo.lock's digest and rejecting a correct source
+  // tree -- and leaving the LF patch unappliable.
+  runIn("git", ["config", "core.autocrlf", "false"], source);
+  runIn("git", ["config", "core.eol", "lf"], source);
   runIn("git", ["remote", "add", "origin", pinnedSource.repository], source);
   runIn("git", ["fetch", "--depth", "1", "origin", pinnedSource.commit], source);
   runIn("git", ["checkout", "--detach", "FETCH_HEAD"], source);
