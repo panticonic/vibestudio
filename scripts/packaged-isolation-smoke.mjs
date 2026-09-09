@@ -5,6 +5,7 @@
 // desktop pairing suites. No checkout build artifacts or provider credentials
 // are used here; the package's pinned public Base release must be reachable.
 import fs from "node:fs/promises";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -127,7 +128,7 @@ export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = 
  * character window is consumed entirely by it and evicts the message and stack
  * that follow — the only part worth reading.
  */
-export function spawnCaptured(child) {
+export function spawnCaptured(child, logPath) {
   const recent = [];
   let partial = "";
   const retain = (line) => {
@@ -147,19 +148,31 @@ export function spawnCaptured(child) {
     }
   };
   for (const stream of [child.stdout, child.stderr])
-    stream.on("data", (chunk) => absorb(String(chunk)));
+    stream?.on("data", (chunk) => absorb(String(chunk)));
   child.on("error", (error) => absorb(`${String(error)}\n`));
   let closed = false;
   child.on("close", () => {
     closed = true;
   });
+  // A log file holds everything the child wrote; the streamed buffer is the
+  // fallback for a child spawned onto pipes.
+  const captured = () => {
+    if (logPath) {
+      try {
+        return readFileSync(logPath, "utf8");
+      } catch {
+        /* not yet created */
+      }
+    }
+    return [...recent, partial].filter(Boolean).join("\n");
+  };
   return {
     child,
-    tail: () => readableTail([...recent, partial].filter(Boolean).join("\n")),
+    tail: () => readableTail(captured()),
     /** Everything retained, redacted but neither reordered nor abridged. */
     transcript: () =>
-      [...recent, partial]
-        .filter(Boolean)
+      captured()
+        .split("\n")
         .map((line) =>
           /(invite|pairurl|deeplink|token|secret|credential)/iu.test(line)
             ? line.replace(/[A-Za-z0-9_-]{20,}/gu, "[redacted]")
@@ -183,15 +196,27 @@ export function spawnCaptured(child) {
   };
 }
 
-function launch(command, args, environment, cwd) {
+/**
+ * Launch the packaged server, capturing its output where nothing can lose it.
+ *
+ * Node writes to a pipe asynchronously and drops whatever has not drained when
+ * the process exits. A crash that prints a minified bundle — tens of kilobytes
+ * — therefore loses the message printed after it, every time, which is why this
+ * failure reported a source fragment and nothing else however the report was
+ * composed. Writes to a regular file are synchronous, so the same crash arrives
+ * whole.
+ */
+function launch(command, args, environment, cwd, logPath) {
+  const log = logPath ? openSync(logPath, "a", 0o600) : "pipe";
   const child = spawn(command, args, {
     env: environment,
     cwd,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    stdio: ["ignore", log, log, "ipc"],
     detached: process.platform !== "win32",
     windowsHide: true,
   });
-  return spawnCaptured(child);
+  if (typeof log === "number") closeSync(log);
+  return spawnCaptured(child, logPath);
 }
 
 export async function runPackagedIsolationSmoke(options) {
@@ -296,18 +321,16 @@ export async function runPackagedIsolationSmoke(options) {
         readyFile,
       ],
       electronEnv,
-      fixture
+      fixture,
+      path.join(outDir, "server-output.log")
     );
     const deadline = Date.now() + options.timeoutMs;
     let ready;
     while (Date.now() < deadline) {
       if (childExited(server.child)) {
         await server.drained();
-        // A processed message keeps losing the part that explains this crash.
-        // Write what actually arrived, once, beside the failure report.
-        await fs
-          .writeFile(path.join(outDir, "server-output.log"), server.transcript(), { mode: 0o600 })
-          .catch(() => undefined);
+        // The child writes straight into server-output.log beside this report,
+        // so the transcript needs no separate copy.
         // How it died distinguishes an uncaught error from a signal. Without
         // this the report is whatever the process managed to print, which for a
         // process killed mid-print is the source line and nothing after it.
