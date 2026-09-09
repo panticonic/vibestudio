@@ -12,6 +12,65 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // Loopback host the co-located gateway binds. Remote reach is the Iroh endpoint.
 const LOOPBACK_HOST = "127.0.0.1";
 
+const BASE_TEMPLATE_RELEASE_ARTIFACT = "base-template-release.json";
+
+/** True when this host build already carries exact Base/Personal/System pins. */
+export function hostBuildHasWorkspaceTemplatePins(appRoot) {
+  for (const dir of ["resources", "build-resources"]) {
+    const candidate = path.join(appRoot, dir, BASE_TEMPLATE_RELEASE_ARTIFACT);
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      if (JSON.parse(fs.readFileSync(candidate, "utf8")).workspaceTemplates) return true;
+    } catch {
+      // A malformed artifact is the server's to report, not ours to swallow.
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Name the exact distributions a workspace is created from.
+ *
+ * A packaged app carries them in its release artifact. A source checkout does
+ * not, so pairing would succeed and then the first `hubControl.ensureUserWorkspaces`
+ * would fail with "This host build has no exact Base, Personal and System
+ * distribution pins" — after the one-time invite was already spent. Resolve the
+ * configured development Base instead, exactly as the desktop dev launcher does,
+ * so `remote serve` works the same way in both.
+ */
+function developmentWorkspaceTemplateEnv(appRoot, checkpointTarget) {
+  if (process.env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]) return {};
+  if (hostBuildHasWorkspaceTemplatePins(appRoot)) return {};
+  const resolver = path.join(repoRoot, "scripts", "resolve-development-base.ts");
+  if (!fs.existsSync(resolver)) return {};
+  const resolved = spawnSync(
+    process.execPath,
+    ["--import", "tsx", resolver, "--checkpoint-target", checkpointTarget],
+    { cwd: repoRoot, encoding: "utf8" }
+  );
+  if (resolved.error) throw resolved.error;
+  if (resolved.status !== 0) {
+    throw new Error(
+      `Could not resolve a development Base for pairing (exit ${resolved.status ?? "unknown"}).` +
+        `${resolved.stderr ? `\n${resolved.stderr}` : ""}`
+    );
+  }
+  const selection = JSON.parse(resolved.stdout.trim());
+  // No development Base is selected; the workspace runtime uses its pinned release.
+  if (!selection) return {};
+  return {
+    VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(selection.pins),
+    VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(selection.pins.system),
+    VIBESTUDIO_WORKSPACE_SOURCES: JSON.stringify(
+      Object.keys(selection.pins).map((name) => ({
+        pin: selection.pins[name],
+        checkout: selection.checkouts[name],
+      }))
+    ),
+  };
+}
+
 /**
  * Signal the complete server process tree. POSIX children are spawned as
  * process-group leaders, so targeting the negative pid reaches package-manager
@@ -231,6 +290,11 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     ? hooks.buildServerArgs(options, LOOPBACK_HOST)
     : buildServerArgs(options);
   let ownedReadyDir = null;
+  let ownedCheckpointRoot = null;
+  const ownedCheckpointDir = () => {
+    ownedCheckpointRoot ??= fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-base-"));
+    return ownedCheckpointRoot;
+  };
   let readyFile = readyFileFromServerArgs(serverArgs);
   if (!readyFile) {
     ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-"));
@@ -271,8 +335,15 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   let stderrBuffer = "";
   const stderrLines = [];
   let hasSpawned = false;
+  const workspaceTemplateEnv = hooks.developmentWorkspaceTemplateEnv
+    ? hooks.developmentWorkspaceTemplateEnv({ repoRoot, options })
+    : developmentWorkspaceTemplateEnv(
+        options.appRoot ?? repoRoot,
+        path.join(ownedCheckpointDir(), "base")
+      );
   const baseEnv = {
     ...process.env,
+    ...workspaceTemplateEnv,
     VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
     VIBESTUDIO_HOST: LOOPBACK_HOST,
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
@@ -319,6 +390,13 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     if (ownedReadyDir) {
       try {
         fs.rmSync(ownedReadyDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+    if (ownedCheckpointRoot) {
+      try {
+        fs.rmSync(ownedCheckpointRoot, { recursive: true, force: true });
       } catch {
         // Best-effort cleanup only.
       }

@@ -1,8 +1,15 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
-import { parsePairArgs, runPairServer } from "../scripts/cli/lib/pair-server.mjs";
+import {
+  hostBuildHasWorkspaceTemplatePins,
+  parsePairArgs,
+  runPairServer,
+} from "../scripts/cli/lib/pair-server.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import fs from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { readCurrentHostBuildGeneration } from "../scripts/host-build-generations.mjs";
@@ -83,6 +90,7 @@ describe("pair-server runner", () => {
     const prepareSourceServer = vi.fn();
     await runPairServer(config, [], {
       prepareSourceServer,
+      developmentWorkspaceTemplateEnv: () => ({}),
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
         expect(prepareSourceServer).toHaveBeenCalledOnce();
         expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(expect.any(String), "source");
@@ -120,6 +128,7 @@ describe("pair-server runner", () => {
       ["--relay-url", "https://one.example/", "--relay-url", "https://two.example/"],
       {
         prepareSourceServer: () => undefined,
+        developmentWorkspaceTemplateEnv: () => ({}),
         spawnServer({ env, serverArgs }: { env: NodeJS.ProcessEnv; serverArgs: string[] }) {
           expect(env.VIBESTUDIO_HOST).toBe("127.0.0.1");
           expect(env.VIBESTUDIO_IROH_RELAYS).toBe("https://one.example/,https://two.example/");
@@ -142,6 +151,7 @@ describe("pair-server runner", () => {
     let readyFile = "";
     const operation = runPairServer(config, [], {
       prepareSourceServer: () => undefined,
+      developmentWorkspaceTemplateEnv: () => ({}),
       spawnServer({ serverArgs }: { serverArgs: string[] }) {
         readyFile = serverArgs[serverArgs.indexOf("--ready-file") + 1]!;
         setTimeout(() => fs.writeFileSync(readyFile, JSON.stringify(ready(invite()))), 10);
@@ -156,5 +166,39 @@ describe("pair-server runner", () => {
     });
     child.emit("exit", 0, null);
     await operation;
+  });
+});
+
+describe("host build workspace template pins", () => {
+  // A packaged app names its distributions in the release artifact; a source
+  // checkout ships the same artifact WITHOUT them. That difference is the only
+  // signal `remote serve` has for whether it must resolve a development Base,
+  // and getting it wrong either overrides a real release or pairs a device into
+  // a server that cannot create a workspace.
+  function artifactRoot(contents: unknown): string {
+    const root = mkdtempSync(join(tmpdir(), "pair-pins-"));
+    mkdirSync(join(root, "build-resources"), { recursive: true });
+    writeFileSync(
+      join(root, "build-resources", "base-template-release.json"),
+      JSON.stringify(contents)
+    );
+    return root;
+  }
+
+  it("reports pins when the release artifact names the distributions", () => {
+    const root = artifactRoot({
+      format: 1,
+      workspaceTemplates: { base: {}, personal: {}, system: {} },
+    });
+    expect(hostBuildHasWorkspaceTemplatePins(root)).toBe(true);
+  });
+
+  it("reports none for a source checkout artifact that omits them", () => {
+    const root = artifactRoot({ format: 1, baseTemplate: {} });
+    expect(hostBuildHasWorkspaceTemplatePins(root)).toBe(false);
+  });
+
+  it("reports none when the host build ships no artifact at all", () => {
+    expect(hostBuildHasWorkspaceTemplatePins(mkdtempSync(join(tmpdir(), "pair-pins-")))).toBe(false);
   });
 });
