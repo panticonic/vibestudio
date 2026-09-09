@@ -1039,25 +1039,34 @@ async function waitForChromeResult(app, expression, label, timeoutMs) {
 
 async function selectWorkspace(app, name, timeoutMs) {
   const label = `Open ${name}`;
-  const clicked = await waitForChromeResult(
-    app,
-    `(() => {
+  const target = JSON.stringify(label);
+  const clickExpression = `(() => {
     const button = [...document.querySelectorAll('button')].find((entry) =>
-      entry.getAttribute('aria-label') === ${JSON.stringify(label)} && entry.getClientRects().length && !entry.closest('[hidden]'));
+      entry.getAttribute('aria-label') === ${target} && entry.getClientRects().length && !entry.closest('[hidden]'));
     if (!button || button.disabled) return false;
     button.click();
     return true;
-  })()`,
-    `selecting ${name}`,
-    timeoutMs
-  );
-  if (!clicked) throw new Error(`Could not select ${name}`);
-  await waitForChromeResult(
-    app,
-    `([...document.querySelectorAll('button')].some((entry) =>
-    entry.getAttribute('aria-label') === ${JSON.stringify(label)} && entry.getAttribute('aria-current') === 'location'))`,
-    `waiting for ${name} workspace focus`,
-    timeoutMs
+  })()`;
+  const focusExpression = `([...document.querySelectorAll('button')].some((entry) =>
+    entry.getAttribute('aria-label') === ${target} && entry.getAttribute('aria-current') === 'location'))`;
+  const deadline = Date.now() + timeoutMs;
+  let everClicked = false;
+  // A click issued while the workspace transport is mid-reconnect reaches a
+  // server that cannot serve it, and nothing replays it once the transport
+  // recovers. Keep asking — as a user would — instead of asserting forever on
+  // a focus change that a single dropped click can never produce.
+  while (Date.now() < deadline) {
+    if (await evaluateHostedChrome(app, focusExpression, `waiting for ${name} workspace focus`)) {
+      return;
+    }
+    everClicked =
+      (await evaluateHostedChrome(app, clickExpression, `selecting ${name}`)) || everClicked;
+    await sleep(250);
+  }
+  throw new Error(
+    everClicked
+      ? `Timed out waiting for ${name} workspace focus`
+      : `Could not select ${name}: its switcher button never became clickable`
   );
 }
 
