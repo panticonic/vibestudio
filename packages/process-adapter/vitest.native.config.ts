@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 // Requires the production host build, but no Base checkout or provider credentials.
@@ -23,5 +24,12 @@ export default defineConfig({
     ],
     fileParallelism: false,
     testTimeout: 30_000,
+    // These tests launch the real host the way a production install does, and a
+    // host now refuses to start without being told which build generation it is
+    // running from. Every other launcher supplies it; this suite spawned hosts
+    // with nothing set and they refused to start at all.
+    env: {
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: path.resolve(__dirname, "..", "..", "dist"),
+    },
   },
 });
