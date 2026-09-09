@@ -688,6 +688,7 @@ async function installDesktopDiagnostics(app) {
             message: String(event.message ?? ""),
             ...base(),
             sourceId: String(event.sourceId ?? ""),
+            lineNumber: Number(event.lineNumber ?? 0),
           });
         });
         contents.on(
@@ -2148,7 +2149,15 @@ async function main() {
     if (serverChild.exitCode == null && serverChild.signalCode == null) {
       throw new Error("Owned server did not stop for the reconnect scenario");
     }
-    await waitForConnectionStatus(electronApp, false, 30000);
+    // Windows cannot deliver SIGTERM: Node maps kill() onto TerminateProcess, so
+    // the server dies without closing its QUIC session and the desktop only
+    // learns the peer is gone when the idle timeout expires. Everywhere else the
+    // graceful close arrives at once. Budget for the timeout, not the close.
+    await waitForConnectionStatus(
+      electronApp,
+      false,
+      process.platform === "win32" ? 90_000 : 30_000
+    );
     await fsp.rm(options.readyFile, { force: true });
     const restoredServer = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,

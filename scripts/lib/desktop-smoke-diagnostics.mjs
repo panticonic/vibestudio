@@ -34,7 +34,15 @@ export function formatDesktopDiagnostics(diagnostics) {
     .map((diagnostic) => {
       const location = diagnostic.url || diagnostic.sourceId || "unknown renderer";
       const level = diagnostic.type === "console" ? `/${diagnostic.level}` : "";
-      return `${diagnostic.type}${level} in ${location}: ${diagnostic.message}`;
+      // The document URL names the renderer; the source names the code. For an
+      // uncaught rejection they differ, and only the second is actionable, so a
+      // reader is not left to guess which of a bundle's call sites is at fault.
+      const sourceId = diagnostic.sourceId ?? "";
+      const namesTheSameFile = !sourceId || location === sourceId || location.endsWith(sourceId);
+      const origin = namesTheSameFile
+        ? ""
+        : ` (${sourceId}${diagnostic.lineNumber ? `:${diagnostic.lineNumber}` : ""})`;
+      return `${diagnostic.type}${level} in ${location}${origin}: ${diagnostic.message}`;
     })
     .join("\n");
 }

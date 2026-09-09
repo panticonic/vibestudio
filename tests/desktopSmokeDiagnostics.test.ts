@@ -94,3 +94,40 @@ describe("desktop pairing smoke diagnostics", () => {
     );
   });
 });
+
+describe("diagnostic origin", () => {
+  // An uncaught rejection is reported against the document that hosts it, which
+  // for a bundled app names the same index.html for every call site in the
+  // application. Without the source the reader cannot tell which one failed.
+  it("names the source file and line when it differs from the document", () => {
+    expect(
+      formatDesktopDiagnostics([
+        {
+          type: "console",
+          level: "error",
+          url: "http://127.0.0.1/_a/hash/index.html",
+          sourceId: "http://127.0.0.1/_a/hash/assets/shell-4f2b.js",
+          lineNumber: 9182,
+          message: "Uncaught (in promise) RemoteRpcError",
+        },
+      ] as never)
+    ).toBe(
+      "console/error in http://127.0.0.1/_a/hash/index.html " +
+        "(http://127.0.0.1/_a/hash/assets/shell-4f2b.js:9182): Uncaught (in promise) RemoteRpcError"
+    );
+  });
+
+  it("stays quiet when the source adds nothing to the document", () => {
+    expect(
+      formatDesktopDiagnostics([
+        {
+          type: "console",
+          level: "error",
+          url: "http://127.0.0.1/panel.html",
+          sourceId: "http://127.0.0.1/panel.html",
+          message: "boom",
+        },
+      ] as never)
+    ).toBe("console/error in http://127.0.0.1/panel.html: boom");
+  });
+});
