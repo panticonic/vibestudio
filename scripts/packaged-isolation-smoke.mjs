@@ -101,6 +101,13 @@ const CAPTURED_LINE_BYTES = 262_144;
 export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = {}) {
   const lines = String(captured)
     .split("\n")
+    // Bound the line first. Secrets travel in log lines, not in minified source,
+    // and masking a 64,000-character bundle because one keyword appears
+    // somewhere in it rewrites ordinary identifiers — getOwnPropertyDescriptor
+    // became "[redacted]" — corrupting the little of it worth reading.
+    .map((line) =>
+      line.length > maxLineLength ? `${line.slice(0, maxLineLength)}… [${line.length} chars]` : line
+    )
     // Mask the material rather than dropping the line. Discarding every line
     // that mentions a secret also discards "Invalid base64url string at
     // reach.endpointSecret" — the one line that says what went wrong.
@@ -108,9 +115,6 @@ export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = 
       /(invite|pairurl|deeplink|token|secret|credential)/iu.test(line)
         ? line.replace(/[A-Za-z0-9_-]{20,}/gu, "[redacted]")
         : line
-    )
-    .map((line) =>
-      line.length > maxLineLength ? `${line.slice(0, maxLineLength)}… [${line.length} chars]` : line
     );
   const thrown = lines.findIndex((line) => /^\s*(?:[A-Za-z_$][\w$]*Error|Fatal)\b/.test(line));
   const selected = thrown >= 0 ? lines.slice(thrown) : lines.slice(-maxLines);
@@ -288,7 +292,14 @@ export async function runPackagedIsolationSmoke(options) {
     while (Date.now() < deadline) {
       if (childExited(server.child)) {
         await server.drained();
-        throw new Error(`Packaged workspace startup failed: ${server.tail()}`);
+        // How it died distinguishes an uncaught error from a signal. Without
+        // this the report is whatever the process managed to print, which for a
+        // process killed mid-print is the source line and nothing after it.
+        const { exitCode, signalCode } = server.child;
+        throw new Error(
+          `Packaged workspace startup failed (exit ${String(exitCode)}` +
+            `${signalCode ? `, signal ${signalCode}` : ""}): ${server.tail()}`
+        );
       }
       try {
         ready = parseHubReadyPayload(JSON.parse(await fs.readFile(readyFile, "utf8")));
