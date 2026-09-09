@@ -152,7 +152,7 @@ dependencies {
     implementation "androidx.webkit:webkit:1.14.0"
     // React Native framework
     implementation("com.facebook.react:react-android")
-    implementation("computer.iroh:iroh-android:1.1.0")
+    implementation("computer.iroh:iroh-android:1.1.0-cancel.1")
 
     // Hermes JS engine
     if (hermesEnabled.toBoolean()) {

@@ -30,6 +30,11 @@ apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
     repositories {
+        // computer.iroh carries a repaired native binding that upstream has not
+        // released: its stream mutex is held across network waits, so a pending
+        // read cannot be cancelled. Installed by
+        // `pnpm iroh:install-android` on every machine that builds this app.
+        mavenLocal()
         google()
         mavenCentral()
         maven { url("https://www.jitpack.io") }
