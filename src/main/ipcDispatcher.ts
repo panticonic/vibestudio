@@ -11,6 +11,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createBridgeStreamRelay,
   bytesToBase64,
+  isRpcConnectionLost,
   responseEnvelopeFor,
   stampEnvelopeCaller,
   rpcErrorDataOf,
@@ -282,6 +283,25 @@ export class IpcDispatcher {
               throw new Error("Desktop app document retired");
             this.hookUiTeardown(event.sender, owner);
             this.ensureUiStreamRelay(event.sender, owner).open(msg);
+          })
+          .catch((error: unknown) => {
+            // A workspace server that is briefly away is a transport condition
+            // of THIS stream, not a bad caller. invoke() reduces a rejection to
+            // its message, which strips the connection-loss identity every
+            // renderer recovery path keys on: the shell then logged unhandled
+            // rejections and "recovery failed" warnings while its own retry was
+            // working. Report it on the stream's typed error channel, which the
+            // renderer already rebuilds into a RemoteRpcError, and keep loud
+            // rejection for everything that is genuinely a caller fault.
+            if (!isRpcConnectionLost(error)) throw error;
+            if (event.sender.isDestroyed()) return;
+            event.sender.send("vibestudio:rpc:stream-message", {
+              kind: "error",
+              opId: msg.opId,
+              message: error instanceof Error ? error.message : String(error),
+              errorKind: "transport",
+              code: SESSION_CONNECTION_LOST_CODE,
+            });
           });
       }
       const caller = this.requirePanelCaller(event.sender.id, "stream-open");

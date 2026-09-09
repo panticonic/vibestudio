@@ -555,6 +555,55 @@ describe("IpcDispatcher", () => {
     await ipcDispatcher.shutdown();
   });
 
+  it("reports a briefly unavailable server on the opened stream, not as an invoke rejection", async () => {
+    const contents = makeWebContents(61);
+    const unavailable = Object.assign(new Error("Workspace server is temporarily unavailable"), {
+      code: "CONNECTION_LOST",
+      errorKind: "transport" as const,
+    });
+    const caller = {
+      callerId: "native:System:shell",
+      runtimeId: "shell-app",
+      workspaceId: "system",
+      callerKind: "app" as const,
+    };
+    const { ipcDispatcher } = makeDispatcher({
+      resolve: () => caller,
+      resolveUiRuntime: async () => {
+        throw unavailable;
+      },
+      getWebContentsForCaller: () => contents,
+    });
+
+    // invoke() would reduce a rejection to its message, stripping the identity
+    // the renderer's recovery keys on, so this resolves and reports instead.
+    await expect(
+      ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
+        // senderFrame and sender.mainFrame agree: this is the top-level document.
+        { sender: contents, senderFrame: undefined } as never,
+        {
+          opId: "op-unavailable",
+          envelope: rpcEnvelope("shell-app", "app", {
+            type: "stream-request",
+            requestId: "op-unavailable",
+            fromId: "shell-app",
+            method: "events.watch",
+            args: [],
+          }),
+        } as never
+      )
+    ).resolves.toBeUndefined();
+
+    expect(contents.send).toHaveBeenCalledWith("vibestudio:rpc:stream-message", {
+      kind: "error",
+      opId: "op-unavailable",
+      message: "Workspace server is temporarily unavailable",
+      errorKind: "transport",
+      code: "CONNECTION_LOST",
+    });
+    await ipcDispatcher.shutdown();
+  });
+
   it("dispatches admitted native services in the destination with host UI authority", async () => {
     const contents = makeWebContents(56);
     const destinationDispatcher = createTestServiceDispatcher();
