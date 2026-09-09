@@ -284,6 +284,19 @@ jobs:
 
       # Native, desktop and installed acceptance report independently. A failed
       # native assertion still fails this required job and cannot publish a release.
+      # A release names its distributions from publication receipts. This build
+      # has none, so without adopting the Base already checked out above, the
+      # packaged app carries no distributions and cannot create a workspace at
+      # all — the installed-application smoke would test a host that refuses to
+      # start. Never a release path: an artifact that already names its
+      # distributions is left untouched.
+      - name: Adopt development workspace distributions
+        if: ${{ !cancelled() && matrix.package && steps.desktop-base.outcome == 'success' }}
+        shell: bash
+        env:
+          VIBESTUDIO_USERLAND_ROOT: ${{ github.workspace }}/vibestudio-workspace-base
+        run: node scripts/adopt-development-workspace-templates.mjs "${RUNNER_TEMP}/packaging-base"
+
       - name: Assemble packaging input
         id: packaging-input
         if: ${{ !cancelled() && matrix.package && matrix.target != 'win32-x64' && steps.production-build.outcome == 'success' }}
