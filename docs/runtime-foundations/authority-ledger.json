@@ -6651,6 +6651,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:auth.getMobileAppBootstrap",
+      "rpcPlane": "host-service",
+      "owner": "auth",
+      "method": "getMobileAppBootstrap",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "auth.read",
+      "reviewRationale": "An authenticated mobile shell reads the approved app manifest for its own workspace.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:auth.getMobileAppBootstrap"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:auth.getMobileAppBootstrap),allOf(capability(user,service:auth.getMobileAppBootstrap),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:auth.getMobileAppBootstrap",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:auth.grantConnection",
       "rpcPlane": "host-service",
       "owner": "auth",

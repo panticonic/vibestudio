@@ -503,7 +503,6 @@ describe("auth service connection grants", () => {
       bootstrap: { buildKey: "build-mobile" },
     });
   });
-
 });
 async function postLocal<T>(
   port: number,

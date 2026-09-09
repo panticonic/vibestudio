@@ -166,7 +166,6 @@ function requestHeader(
   return found?.[1];
 }
 
-
 export function createGatewayFetchService(deps: {
   /** Resolved loopback gateway port (lazy — finalized only after gateway start). */
   getGatewayPort: () => number;

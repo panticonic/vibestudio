@@ -56,6 +56,7 @@ Authority principals: `host`, `user`
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
+| `auth.getMobileAppBootstrap` | Return the approved React Native app manifest to the authenticated mobile shell. |
 
 ## `authority`
 
