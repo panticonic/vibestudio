@@ -241,6 +241,35 @@ describe("Iroh Node transport fixture", () => {
     await bounded(fastServerTask, "fast stream completion");
   });
 
+  it("local receive cancellation settles a pending read without peer data", async () => {
+    const server = await bind();
+    const client = await bind();
+    const { serverConnection, clientConnection } = await connectPair(server, client);
+    connections.add(serverConnection);
+    connections.add(clientConnection);
+
+    const accepted = serverConnection.acceptBi();
+    const stream = await clientConnection.openBi();
+    await stream.send.writeAll([1]);
+    const peer = await bounded(accepted, "cancellation stream accept");
+    await peer.recv.readExact(1);
+
+    // The peer deliberately never sends response data or closes its send side.
+    // Cancellation must interrupt the read itself, rather than queue behind it.
+    const readOutcome = stream.recv.readExact(1).then(
+      () => ({ kind: "data" as const }),
+      (error: unknown) => ({ kind: "error" as const, error: String(error) })
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await bounded(stream.recv.stop(CANCEL_RECEIVE_CODE), "cancel pending receive");
+    expect(await bounded(readOutcome, "cancelled read settlement")).toMatchObject({
+      kind: "error",
+    });
+    expect(await bounded(peer.send.stopped(), "peer receives STOP_SENDING")).toBe(
+      Number(CANCEL_RECEIVE_CODE)
+    );
+  });
+
   it("exposes neither 0-RTT nor deterministic connection-attempt cancellation", () => {
     expect(Object.getOwnPropertyNames(Connecting.prototype).sort()).toEqual([
       "alpn",

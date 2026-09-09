@@ -1,0 +1,106 @@
+name: Build Iroh Native Repair
+
+# Builds replacement `@number0/iroh-<platform>` binaries carrying the reviewed
+# stream-cancellation repair. Upstream 1.1.0 holds each stream mutex across
+# network waits, so `RecvStream.stop()` cannot interrupt a pending read; the
+# RPC client's response-head cancellation therefore never reaches the peer.
+#
+# Matching this repository's npm convention, CI builds and uploads the artifacts
+# and a developer publishes them. See packages/iroh-transport/native/README.md
+# for the publish and cutover steps.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp on the platform packages (e.g. 1.1.0-cancel.1)"
+        required: true
+        type: string
+      scope:
+        description: "npm scope to publish under"
+        required: false
+        default: "@panticonic"
+        type: string
+  pull_request:
+    paths:
+      - "packages/iroh-transport/native/**"
+      - ".github/workflows/iroh-native-repair.yml"
+
+permissions: {}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every desktop platform the packaged client ships a binding for, as
+          # enumerated by scripts/check-electron-package-boundary.mjs. A target
+          # left out here keeps the unrepaired upstream binary.
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            runner: macos-14
+          - platform: linux-x64-gnu
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - platform: linux-arm64-gnu
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - platform: win32-x64-msvc
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - platform: win32-arm64-msvc
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install the pinned Rust target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+
+      # The build script verifies the upstream commit, both Cargo.lock digests,
+      # and the patch digest before compiling, so an unreviewed input fails here
+      # rather than producing a publishable artifact.
+      - name: Build the platform package
+        shell: bash
+        run: |
+          node packages/iroh-transport/native/build-platform-package.mjs \
+            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}" \
+            --target ${{ matrix.target }} \
+            --version "${{ inputs.version || '0.0.0-ci' }}" \
+            --scope "${{ inputs.scope || '@panticonic' }}"
+
+      # Only a natively-executable target can run the cancellation regression.
+      # Cross-built artifacts are validated when they reach a matching host.
+      - name: Verify stream cancellation
+        if: matrix.platform == 'linux-x64-gnu' || matrix.platform == 'darwin-arm64' || matrix.platform == 'win32-x64-msvc'
+        shell: bash
+        env:
+          NAPI_RS_NATIVE_LIBRARY_PATH: ${{ runner.temp }}/iroh-${{ matrix.platform }}/package/iroh.${{ matrix.platform }}.node
+        run: |
+          node --test \
+            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/endpoint.mjs" \
+            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/stream-cancellation.mjs"
+
+      - name: Upload the platform package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: iroh-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/iroh-${{ matrix.platform }}/package
+            ${{ runner.temp }}/iroh-${{ matrix.platform }}/receipt.json
+          if-no-files-found: error

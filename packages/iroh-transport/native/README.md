@@ -45,6 +45,38 @@ the official Node loader supports `NAPI_RS_NATIVE_LIBRARY_PATH` pointing at the
 receipt's artifact. This environment variable is a test input, not a shipping
 configuration.
 
+The Host retains the same critical receive-cancellation contract in its native
+transport fixture. Run it against the repaired artifact without changing any
+installed package:
+
+```sh
+NAPI_RS_NATIVE_LIBRARY_PATH=/tmp/iroh-cancellation-proof/iroh.node \
+  pnpm vitest run packages/iroh-transport/src/nodeFixture.test.ts
+```
+
+Omit the environment variable to test the installed production binding. The
+`local receive cancellation settles a pending read without peer data` case must
+pass there before the production repair is considered shipped. It asserts both
+local read settlement and the peer's STOP_SENDING code; fixture cleanup closes
+the owned endpoints even if the cancellation assertion fails.
+
+The defect is also observable one layer up, without any native fixture. In
+`packages/rpc`, a streaming request whose peer sends no response head must reset
+its own request-owned stream so the peer observes STOP_SENDING; the pending
+`readFrame` on that stream makes `RecvStream.stop()` block instead, the peer
+never advances, and a later sibling request starves until its default head
+timeout. Both cases were verified together against a locally built repair on
+linux-x64 (dev and release profiles):
+
+```sh
+NAPI_RS_NATIVE_LIBRARY_PATH=/tmp/iroh-cancellation-proof/iroh.node \
+  pnpm vitest run --config vitest.host.config.ts \
+  packages/iroh-transport/src/nodeFixture.test.ts \
+  packages/rpc/src/transports/irohClient.test.ts
+```
+
+Against the installed 1.1.0 binding both fail; against the repair both pass.
+
 ## Release requirement
 
 This directory is reproducible repair input, not a replacement release set.
@@ -75,3 +107,36 @@ addresses one mutex wait. It does not cancel pending reads or writes: both
 and [UniFFI](https://github.com/n0-computer/iroh-ffi/blob/3103bf5295be6d50c5272ff7a426e9b539f3f587/src/endpoint.rs)
 still hold their stream mutex across those waits. That upstream change is not
 a substitute for this repair or an available coherent dependency release.
+
+## Reviewed fork release
+
+`build-platform-package.mjs` builds one publishable replacement for an upstream
+`@number0/iroh-<platform>` package from the same reviewed inputs, and
+`.github/workflows/iroh-native-repair.yml` runs it across the five desktop
+targets `check-electron-package-boundary.mjs` enforces. Only the native artifact
+differs: `@number0/iroh` requires its platform package *by name* and returns
+whatever that package exports, so the JavaScript, types, and API surface stay
+upstream's. The emitted manifest reproduces upstream's shape exactly apart from
+name and version.
+
+```sh
+node packages/iroh-transport/native/build-platform-package.mjs OUT \
+  --target x86_64-unknown-linux-gnu --version 1.1.0-cancel.1 --scope @panticonic
+```
+
+Matching this repository's npm convention, CI builds and uploads; a developer
+publishes. After every platform package is published, the cutover is one
+coherent change: alias each upstream platform name under root `pnpm.overrides`
+(`"@number0/iroh-linux-x64-gnu": "npm:@panticonic/iroh-linux-x64-gnu@<version>"`,
+and so on), then regenerate `src/releaseSet.ts` integrities and
+`scripts/cli/lib/connect-grammar.generated.mjs`. Do not land the overrides
+before publication: an alias to an unpublished version breaks installation for
+everyone. The napi loader's version check is opt-in through
+`NAPI_RS_ENFORCE_VERSION_CHECK`, which this repository does not set, so a
+provenance-bearing version such as `1.1.0-cancel.1` is safe.
+
+This pipeline covers the desktop Node bindings only. The Android AAR, its
+Kotlin/JVM JAR, the Apple XCFramework, and the musl and ARMv7 Node targets are
+still governed by the release requirement above and by upstream's Android and
+Apple build tooling. Until those are built and pinned together, the fork is
+incomplete and `IROH_RELEASE_SET` must not be repointed.
