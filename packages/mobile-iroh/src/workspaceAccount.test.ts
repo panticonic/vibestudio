@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IrohConnection } from "./connect.js";
+import { IROH_REACH_VERSION } from "@vibestudio/iroh-transport";
 import { MobileWorkspaceAccount } from "./workspaceAccount.js";
 
 const reach = (digit: string) => ({
-  v: 4 as const,
+  v: IROH_REACH_VERSION,
   endpointId: digit.repeat(64),
   relays: ["https://relay.example/"],
 });

@@ -190,26 +190,13 @@ describe("complete native app artifact delivery", () => {
     ];
     const events: string[] = [];
     const rpc = {
+      // The manifest arrives over RPC; only the artifact bytes still stream
+      // through the gateway.
+      call: vi.fn(async () => ({
+        bootstrap: { buildKey: "build", rnHostAbi: RN_HOST_ABI, artifacts },
+      })),
       streamReadable: vi.fn(async (_target, _method, args) => {
-        const route = args[0].path;
-        if (route.includes("bootstrap"))
-          return {
-            status: 200,
-            headers: [],
-            body: new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    JSON.stringify({
-                      bootstrap: { buildKey: "build", rnHostAbi: RN_HOST_ABI, artifacts },
-                    })
-                  )
-                );
-                controller.close();
-              },
-            }),
-          };
-        events.push(route);
+        events.push(args[0].path);
         return response([new Uint8Array([1])], 0, 1);
       }),
     } as unknown as BundleDeliveryRpc;

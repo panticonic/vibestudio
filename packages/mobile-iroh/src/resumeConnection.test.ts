@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { IROH_REACH_VERSION } from "@vibestudio/iroh-transport";
 import { resumeMobileConnection } from "./resumeConnection.js";
 import { createPairedMobileConnection, createRoutedMobileConnection } from "./storedCredential.js";
 import type { IrohConnection } from "./connect.js";
 
-const reach = { endpointId: "aa".repeat(32), relays: ["https://relay.example/"], v: 4 as const };
+const reach = {
+  endpointId: "aa".repeat(32),
+  relays: ["https://relay.example/"],
+  v: IROH_REACH_VERSION,
+};
 const systemReach = { ...reach, endpointId: "bb".repeat(32) };
 const stored = createRoutedMobileConnection(
   createPairedMobileConnection(

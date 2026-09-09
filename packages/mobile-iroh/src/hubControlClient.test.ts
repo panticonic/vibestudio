@@ -27,8 +27,8 @@ function clientWith(result: unknown) {
 describe("mobile Iroh hub-control client", () => {
   it("calls the canonical list method and validates its exact result", async () => {
     const list = [
-      { workspaceId: "ws-a", name: "alpha", lastOpened: 1, running: true },
-      { workspaceId: "ws-b", name: "beta", lastOpened: 0, running: false },
+      { workspaceId: "ws-a", name: "alpha", lastOpened: 1, running: true, pendingApprovalCount: 2 },
+      { workspaceId: "ws-b", name: "beta", lastOpened: 0, running: false, pendingApprovalCount: 0 },
     ];
     const { client, call } = clientWith(list);
 
