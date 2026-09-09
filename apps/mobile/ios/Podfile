@@ -19,6 +19,13 @@ prepare_react_native_project!
 target 'Vibestudio' do
   config = use_native_modules!
 
+  # FirebaseCoreInternal is a Swift pod and depends on GoogleUtilities, which
+  # ships no module map, so CocoaPods cannot integrate the pair as static
+  # libraries. Generate one for that dependency alone rather than turning on
+  # `use_modular_headers!` globally, which would change header resolution for
+  # every pod including React Native's.
+  pod 'GoogleUtilities', :modular_headers => true
+
   use_react_native!(
     :path => config[:reactNativePath],
     # Hermes is the default JS engine for React Native 0.79+
