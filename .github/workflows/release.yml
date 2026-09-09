@@ -86,13 +86,22 @@ jobs:
           pattern: native-isolation-*
           path: native/isolation/artifacts
 
+      - name: Install Linux packaging tools
+        # electron-builder shells out to fpm, which needs rpmbuild for rpm and
+        # libarchive's bsdtar for pacman. AppImage and deb need neither.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y rpm libarchive-tools
+
       - name: Build Linux installers
         run: pnpm dist:linux
 
       - name: Generate installer checksums
         run: |
           cd release
-          find . -maxdepth 1 -type f \( -name "*.AppImage" -o -name "*.deb" \) -print0 \
+          find . -maxdepth 1 -type f \
+            \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
+            -print0 \
             | sort -z \
             | xargs -0 sha256sum \
             > SHA256SUMS-linux
@@ -105,6 +114,8 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
+            release/*.rpm
+            release/*.pkg.tar.zst
             release/SHA256SUMS-linux
           if-no-files-found: error
           retention-days: 7
@@ -133,7 +144,74 @@ jobs:
           files: |
             release/*.AppImage
             release/*.deb
+            release/*.rpm
+            release/*.pkg.tar.zst
             release/SHA256SUMS-linux
+
+  publish-linux-repos:
+    name: Publish signed apt and dnf repositories
+    needs: [github-release, linux-installers]
+    if: ${{ vars.RELEASE_LINUX == 'true' }}
+    runs-on: ubuntu-latest
+    # Pages deployment is its own authority; the repository contents token stays
+    # out of this job, which only reads a verified artifact and writes a site.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download immutable Linux release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-linux-${{ github.sha }}
+          path: release
+
+      # Publish only what the build job actually produced and signed off on.
+      - name: Verify Linux installer checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-linux
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            apt-utils dpkg-dev createrepo-c rpm
+
+      - name: Import the package signing key
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: |
+          test -n "$LINUX_SIGNING_KEY" || {
+            echo "LINUX_SIGNING_KEY is not configured; cannot sign the repositories" >&2
+            exit 1
+          }
+          printf '%s' "$LINUX_SIGNING_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format=long
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        id: pages
+
+      - name: Build signed apt and dnf repositories
+        env:
+          SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
+        run: ./scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}"
+
+      - name: Upload the repository site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   mac-dmg:
     name: Build, sign, and notarize macOS DMG

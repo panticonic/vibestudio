@@ -197,7 +197,7 @@ pacman:
 # Auto-update configuration
 publish:
   provider: github
-  owner: werg
+  owner: panticonic
   repo: vibestudio
   releaseType: release
 
