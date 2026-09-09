@@ -530,12 +530,14 @@ async function establishFreshPairSession(
   const paired: {
     current: {
       credential: { deviceId: string; refreshToken: string };
-      workspaceId: string;
+      /** Null for a root-bootstrap invite: no workspace exists to bind yet. */
+      workspaceId: string | null;
     } | null;
   } = {
     current: null,
   };
   let currentStored: StoredRemote | null = null;
+  let codeOffered = false;
   const phase = createStartupPhaseReporter(
     "fresh pairing",
     FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
@@ -553,16 +555,27 @@ async function establishFreshPairSession(
       callerId: "shell:pairing",
       getShellToken: () => {
         const credential = paired.current?.credential;
-        return credential
-          ? `refresh:${credential.deviceId}:${credential.refreshToken}`
-          : pairing.code;
+        if (credential) return `refresh:${credential.deviceId}:${credential.refreshToken}`;
+        // The invite is one-time. Replaying it after the server already
+        // redeemed it reports "link expired" and buries whatever actually
+        // failed, so refuse the replay and keep the real failure visible.
+        if (codeOffered) {
+          throw new Error(
+            "The server already redeemed this pairing link, but the issued device credential was lost before it could be saved. Request a fresh pairing link."
+          );
+        }
+        codeOffered = true;
+        return pairing.code;
       },
       // Persist the issued device credential against the pairing material (minus the
       // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
       onPaired: (credential, context) => {
         if (!paired.current) {
-          if (!context) throw new Error("Fresh pairing did not identify its target workspace");
-          paired.current = { credential, workspaceId: context.workspaceId };
+          // A root-bootstrap invite is bound to no workspace (none exists yet),
+          // so the server sends no pairing context. Throwing here would discard
+          // a credential the one-time code has already been spent on; the
+          // workspace is resolved through ensureUserWorkspaces() below.
+          paired.current = { credential, workspaceId: context?.workspaceId ?? null };
         } else {
           paired.current = { ...paired.current, credential };
         }
@@ -594,7 +607,9 @@ async function establishFreshPairSession(
       controlClient.call(svc, method, args)
     );
     const pair = await hub.ensureUserWorkspaces();
-    const requested = await hub.routeWorkspace({ workspaceId: issued.workspaceId });
+    const requested = await hub.routeWorkspace({
+      workspaceId: issued.workspaceId ?? pair.system.workspaceId,
+    });
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });
     const { code: _code, ...stableHubReach } = pairing;
     const controlPairing = storedReach(stableHubReach);
