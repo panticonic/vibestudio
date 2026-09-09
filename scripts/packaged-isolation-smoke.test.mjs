@@ -84,3 +84,23 @@ test("truncates a minified line instead of dropping the surrounding context", ()
   assert.match(reported, /\[server\] stopped/u);
   assert.match(reported, /… \[2000 chars\]/u);
 });
+
+test("keeps the error a minified line would otherwise evict", async () => {
+  // Reproduces the packaged crash: Node prints a minified source line larger
+  // than any sensible character window, then the message and stack. A rolling
+  // character buffer keeps the wrong end of that.
+  const { spawnCaptured } = await import("./packaged-isolation-smoke.mjs");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+
+  const captured = spawnCaptured(child);
+  child.stdout.emit("data", `/opt/app/dist/server.mjs:1\n${"m".repeat(200_000)}\n`);
+  child.stdout.emit("data", "           ^\n\nZodError: Invalid base64url string\n");
+  child.stdout.emit("data", "    at parseReach (/opt/app/dist/server.mjs:1:2)\nNode.js v24.18.0\n");
+
+  const reported = captured.tail();
+  assert.match(reported, /^ZodError: Invalid base64url string/u, reported.slice(0, 200));
+  assert.ok(!reported.includes("mmmm"), "the minified line must not dominate the report");
+});

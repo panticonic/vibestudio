@@ -83,6 +83,9 @@ async function closeGui(gui) {
     clearTimeout(timer);
   }
 }
+const CAPTURED_LINE_LIMIT = 400;
+const CAPTURED_LINE_BYTES = 262_144;
+
 /**
  * Reduce a crashed child's captured output to the part a reader can act on.
  *
@@ -114,6 +117,40 @@ export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = 
   return selected.join("\n").replace(/vibestudio:\/\/\S+/gu, "[redacted app link]").trim();
 }
 
+/**
+ * Capture a child's output for diagnosis, retaining lines rather than a rolling
+ * window of characters. A minified bundle prints as one enormous line; a
+ * character window is consumed entirely by it and evicts the message and stack
+ * that follow — the only part worth reading.
+ */
+export function spawnCaptured(child) {
+  const recent = [];
+  let partial = "";
+  const retain = (line) => {
+    recent.push(line);
+    if (recent.length > CAPTURED_LINE_LIMIT) recent.shift();
+  };
+  const absorb = (text) => {
+    partial += text;
+    for (let cut = partial.indexOf("\n"); cut >= 0; cut = partial.indexOf("\n")) {
+      retain(partial.slice(0, cut));
+      partial = partial.slice(cut + 1);
+    }
+    // One unterminated line must not grow without bound either.
+    if (partial.length > CAPTURED_LINE_BYTES) {
+      retain(partial);
+      partial = "";
+    }
+  };
+  for (const stream of [child.stdout, child.stderr])
+    stream.on("data", (chunk) => absorb(String(chunk)));
+  child.on("error", (error) => absorb(`${String(error)}\n`));
+  return {
+    child,
+    tail: () => readableTail([...recent, partial].filter(Boolean).join("\n")),
+  };
+}
+
 function launch(command, args, environment, cwd) {
   const child = spawn(command, args, {
     env: environment,
@@ -122,19 +159,9 @@ function launch(command, args, environment, cwd) {
     detached: process.platform !== "win32",
     windowsHide: true,
   });
-  let tail = "";
-  for (const stream of [child.stdout, child.stderr])
-    stream.on("data", (chunk) => {
-      tail = (tail + String(chunk)).slice(-32768);
-    });
-  child.on("error", (error) => {
-    tail += String(error);
-  });
-  return {
-    child,
-    tail: () => readableTail(tail),
-  };
+  return spawnCaptured(child);
 }
+
 export async function runPackagedIsolationSmoke(options) {
   const executable = await resolvePackagedExecutable(options.app);
   const fixture = await fs.realpath(
