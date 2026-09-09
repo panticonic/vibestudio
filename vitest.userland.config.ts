@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import fs from "node:fs";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
 import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
@@ -6,6 +7,22 @@ import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { exactPairTests } from "./vitest.exactPairTests";
 import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
+
+/** The compiler options `scripts/config/userland/tsconfig.json` states are the
+ * userland contract; the typecheck projects that exact file. Vitest transforms
+ * the same sources in place, where esbuild's tsconfig lookup cannot find it. */
+function userlandJsxTransform(appRoot: string): { jsx: "automatic" | "transform" } {
+  const config = JSON.parse(
+    fs.readFileSync(path.join(appRoot, "scripts/config/userland/tsconfig.json"), "utf8")
+  ) as { compilerOptions?: { jsx?: string } };
+  const jsx = config.compilerOptions?.jsx;
+  if (jsx !== "react-jsx") {
+    throw new Error(
+      `userland tsconfig selects jsx "${jsx}"; teach vitest.userland.config.ts that transform`
+    );
+  }
+  return { jsx: "automatic" };
+}
 
 export default defineConfig(async () => {
   const workspaceRoot = requireDevelopmentBaseCheckout(__dirname);
@@ -30,6 +47,14 @@ export default defineConfig(async () => {
     // Keep Vite's derived cache in the host checkout so running focused Base
     // tests can never add undeclared node_modules artifacts to a root template.
     cacheDir: path.resolve(__dirname, ".cache/vite/userland"),
+    // esbuild derives the JSX transform from the tsconfig nearest each file.
+    // Base carries no root tsconfig -- `scripts/config/userland` owns it and
+    // the typecheck projects a copy per run -- so units without their own
+    // config (apps/shell, panels, about, most of packages/) fell back to the
+    // classic transform and every render threw "React is not defined". Read
+    // the transform from the same authoritative config the typecheck compiles
+    // with, so the runner and the compiler cannot disagree about it.
+    esbuild: userlandJsxTransform(__dirname),
     server: {
       ...vitestSharedConfig.server,
       fs: {
