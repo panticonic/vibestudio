@@ -1,11 +1,15 @@
 name: Release
 
-# Publish the npm packages locally with `pnpm publish:npm`, then tag the validated
-# release with `v*` (e.g. v0.2.0). This workflow creates the GitHub release and
-# optionally attaches native installers:
-#   - vars.RELEASE_LINUX = 'true'  → build + attach AppImage/deb (needs build-resources icons)
-#   - vars.RELEASE_WINDOWS = 'true' → build + attach x64 NSIS installer
-#   - vars.RELEASE_MAC   = 'true'  → build + attach a signed/notarized DMG (needs the Apple secrets)
+# Tag a validated release with `v*` (e.g. v0.2.0) to create the GitHub release and
+# build the native installers. Nothing here publishes to npm; the npm packages are
+# a separate manual `pnpm publish:npm`, and only the server package is still
+# advertised, for hosts no native package covers.
+#   - vars.RELEASE_LINUX = 'true'  → AppImage/deb/rpm/pacman, plus the signed apt and
+#     dnf repositories on GitHub Pages (needs build-resources icons and LINUX_SIGNING_KEY)
+#   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
+#   - vars.RELEASE_MAC   = 'true'  → DMG, signed and notarized when all five Apple secrets
+#     are set and ad-hoc signed otherwise
+# The Homebrew cask is not built here: panticonic/homebrew-tap tracks releases itself.
 on:
   push:
     tags: ["v*"]
@@ -43,12 +47,49 @@ jobs:
           body: |
             ### Install
 
+            **Debian / Ubuntu** — updates arrive with `apt upgrade`.
+
             ```sh
-            npm install -g @panticonic/vibestudio          # desktop app + CLI
-            npm install -g @panticonic/vibestudio-server   # headless server + CLI
+            sudo install -d -m 0755 /etc/apt/keyrings
+            curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
+              | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
+            echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+              | sudo tee /etc/apt/sources.list.d/vibestudio.list
+            sudo apt update && sudo apt install vibestudio
             ```
 
-            Requires Node.js 22.19+. Native installers (DMG/AppImage/deb) are attached when available.
+            **Fedora / RHEL / openSUSE** — updates arrive with `dnf upgrade`.
+
+            ```sh
+            sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
+            sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+            sudo dnf install vibestudio
+            ```
+
+            **macOS** — updates arrive with `brew upgrade`.
+
+            ```sh
+            brew install --cask panticonic/tap/vibestudio
+            ```
+
+            The macOS build is ad-hoc signed rather than signed with an Apple Developer ID,
+            so macOS asks you to confirm it on first launch (System Settings → Privacy &
+            Security → Open Anyway). It cannot update itself; `brew upgrade` is the update path.
+
+            **Windows** — download the `.exe` installer below. It is not yet code signed,
+            so SmartScreen will warn on first run.
+
+            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm`, `.deb`
+            and `.AppImage` files below install directly. Every packaged format carries the
+            AppArmor profile that a workspace sandbox needs on Ubuntu 24.04+; the AppImage
+            cannot, so workspaces there need that profile installed by hand.
+
+            **A server on a host we do not package** — npm still carries the headless server
+            and CLI, and needs Node.js 22.19+.
+
+            ```sh
+            npm install -g @panticonic/vibestudio-server
+            ```
 
   linux-installers:
     name: Build Linux installers (AppImage/deb)
@@ -86,13 +127,22 @@ jobs:
           pattern: native-isolation-*
           path: native/isolation/artifacts
 
+      - name: Install Linux packaging tools
+        # electron-builder shells out to fpm, which needs rpmbuild for rpm and
+        # libarchive's bsdtar for pacman. AppImage and deb need neither.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y rpm libarchive-tools
+
       - name: Build Linux installers
         run: pnpm dist:linux
 
       - name: Generate installer checksums
         run: |
           cd release
-          find . -maxdepth 1 -type f \( -name "*.AppImage" -o -name "*.deb" \) -print0 \
+          find . -maxdepth 1 -type f \
+            \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
+            -print0 \
             | sort -z \
             | xargs -0 sha256sum \
             > SHA256SUMS-linux
@@ -105,6 +155,8 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
+            release/*.rpm
+            release/*.pkg.tar.zst
             release/SHA256SUMS-linux
           if-no-files-found: error
           retention-days: 7
@@ -133,7 +185,74 @@ jobs:
           files: |
             release/*.AppImage
             release/*.deb
+            release/*.rpm
+            release/*.pkg.tar.zst
             release/SHA256SUMS-linux
+
+  publish-linux-repos:
+    name: Publish signed apt and dnf repositories
+    needs: [github-release, linux-installers]
+    if: ${{ vars.RELEASE_LINUX == 'true' }}
+    runs-on: ubuntu-latest
+    # Pages deployment is its own authority; the repository contents token stays
+    # out of this job, which only reads a verified artifact and writes a site.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download immutable Linux release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-linux-${{ github.sha }}
+          path: release
+
+      # Publish only what the build job actually produced and signed off on.
+      - name: Verify Linux installer checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-linux
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            apt-utils dpkg-dev createrepo-c rpm
+
+      - name: Import the package signing key
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: |
+          test -n "$LINUX_SIGNING_KEY" || {
+            echo "LINUX_SIGNING_KEY is not configured; cannot sign the repositories" >&2
+            exit 1
+          }
+          printf '%s' "$LINUX_SIGNING_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format=long
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        id: pages
+
+      - name: Build signed apt and dnf repositories
+        env:
+          SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
+        run: ./scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}"
+
+      - name: Upload the repository site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   mac-dmg:
     name: Build, sign, and notarize macOS DMG
@@ -177,6 +296,11 @@ jobs:
           pattern: native-isolation-*
           path: native/isolation/artifacts
 
+      # Signing is all-or-nothing: a half-configured Apple identity produces a
+      # build that looks signed and fails notarization later, so either every
+      # credential is present or the build is deliberately unsigned. An unsigned
+      # build is still ad-hoc signed by the afterPack hook, because Apple Silicon
+      # refuses to run a bundle carrying no signature at all.
       - name: Package, sign, and notarize macOS installers
         env:
           CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
@@ -185,12 +309,25 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          test -n "$CSC_LINK"
-          test -n "$CSC_KEY_PASSWORD"
-          test -n "$APPLE_ID"
-          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-          pnpm exec electron-builder --mac
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name}"
+            if [ -z "$value" ]; then missing=$((missing + 1)); fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "Signing and notarizing with the configured Apple identity."
+            pnpm exec electron-builder --mac
+          elif [ "$missing" -eq 5 ]; then
+            echo "::warning::No Apple identity configured; publishing an ad-hoc signed, unnotarized macOS build. Gatekeeper will warn on first launch and it cannot auto-update."
+            # Keep electron-builder from adopting a stray keychain identity on the
+            # runner, so an unsigned build is unsigned deliberately rather than by
+            # accident.
+            CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
+          else
+            echo "Apple signing is partially configured: $missing of 5 credentials are missing." >&2
+            echo "Set all five secrets to sign, or none to publish an unsigned build." >&2
+            exit 1
+          fi
 
       - name: Generate DMG checksums
         run: |

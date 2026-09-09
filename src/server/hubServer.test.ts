@@ -1151,7 +1151,13 @@ describe("hub RPC pairing surfacing (§5)", () => {
   it("registers only an instance-owned inspected source and reuses its exact coordinate", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
-    const instanceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-source-owner-"));
+    // Registration canonicalizes the checkout before its containment check and
+    // stores the canonical path, so the expectation has to be canonical too.
+    // On macOS the system temporary directory is reached through a symlink
+    // (/var/folders -> /private/var/folders) and the raw path never matches.
+    const instanceRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-source-owner-"))
+    );
     const checkout = path.join(instanceRoot, "workspace-source-inspections", "request", "0");
     fs.mkdirSync(checkout, { recursive: true });
     const source = {

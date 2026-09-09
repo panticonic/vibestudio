@@ -60,7 +60,9 @@ export {
   rpcErrorKindOf,
   isAuthorityDecisionDenied,
   isTerminalAuthorityFailure,
+  isRpcAborted,
   isRpcConnectionLost,
+  RPC_ABORTED_CODE,
 } from "./errors.js";
 export type {
   AuthorizationContext,

@@ -78,12 +78,20 @@ or authenticates a workspace child directly.
 
 ## Install
 
-For a stable command on your PATH, install from npm:
+For a stable command on your PATH, install a package for your platform —
+[downloads and package repositories](https://panticonic.github.io/vibestudio/),
+or the [latest release](https://github.com/panticonic/vibestudio/releases/latest).
+A packaged install puts `vibestudio` on your PATH and updates through the platform
+package manager; the [README](../README.md#installation) has the per-platform commands.
+
+npm remains available, and is still the right choice for a headless server on a
+host no native package covers:
 
 ```sh
-npm install -g @panticonic/vibestudio        # GUI + the `vibestudio` CLI dispatcher
 # headless server box (CLI + daemon, no Electron):
 npm install -g @panticonic/vibestudio-server
+# desktop GUI + the `vibestudio` CLI dispatcher, where no native package exists:
+npm install -g @panticonic/vibestudio
 ```
 
 `@panticonic/vibestudio` provides `vibestudio` (bare invocation launches the GUI;

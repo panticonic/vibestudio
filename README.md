@@ -31,23 +31,79 @@ The agentic harness currently requires a [Codex](https://chatgpt.com/codex) subs
 
 ## Installation
 
-Requires **Node.js 22.19.0+**.
+**[Downloads and package repositories →](https://panticonic.github.io/vibestudio/)** ·
+**[Latest release →](https://github.com/panticonic/vibestudio/releases/latest)**
 
-### Desktop app (macOS, Linux)
+### Desktop app
 
-Installs the GUI and the bundled server:
+Each platform's package manager delivers updates, so prefer it over a direct download.
+
+**macOS** — updates with `brew upgrade`:
 
 ```bash
-npm install -g @panticonic/vibestudio
+brew install --cask panticonic/tap/vibestudio
+```
+
+The build is ad-hoc signed rather than signed with an Apple Developer ID, so macOS
+asks you to confirm it on first launch (System Settings → Privacy & Security →
+Open Anyway). It cannot update itself; `brew upgrade` is the update path.
+
+**Debian / Ubuntu** — updates with `apt upgrade`:
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
+  | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/vibestudio.list
+sudo apt update && sudo apt install vibestudio
+```
+
+**Fedora / RHEL / openSUSE** — updates with `dnf upgrade`:
+
+```bash
+sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
+sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+sudo dnf install vibestudio
+```
+
+**Windows** — the `.exe` installer on the
+[releases page](https://github.com/panticonic/vibestudio/releases/latest). It is not
+yet code signed, so SmartScreen warns on first run.
+
+**Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm`, `.deb` and
+`.AppImage` files on the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
+install directly. Every packaged format carries the AppArmor profile a workspace
+sandbox needs on Ubuntu 24.04+; the AppImage cannot, so workspaces there need that
+profile installed by hand — `vibestudio remote doctor` reports whether this host
+permits the sandbox.
+
+Then:
+
+```bash
 vibestudio             # launch the desktop app
 vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
+
+<details>
+<summary>Installing the desktop app from npm instead (requires Node.js 22.19.0+)</summary>
+
+npm predates the packaged builds and remains available, but it cannot install the
+AppArmor profile a workspace sandbox needs, so prefer a native package where one
+exists.
+
+```bash
+npm install -g @panticonic/vibestudio
+```
+
+</details>
 
 On the first launch, choose or create a workspace. Its configured onboarding
 prompt is added to the new chat's history and starts the onboarding agent
 automatically.
 
-A verified global npm desktop install checks the npm `latest` release
+Packaged installs update through their package manager, as above. A verified
+global **npm** desktop install instead checks the npm `latest` release
 periodically. When an update is available, **Update and restart** confirms any
 interruption of the desktop-owned local hub, stops its complete process tree,
 installs the exact offered version, and relaunches the app. Vibestudio never
@@ -63,10 +119,16 @@ Local, linked, `npx`, pnpm, and development launches do not self-update.
 
 ### Headless server (remote/home server; clients connect to it)
 
+Requires **Node.js 22.19.0+**.
+
 ```bash
 npm install -g @panticonic/vibestudio-server
 vibestudio remote deploy local
 ```
+
+A workspace runtime is sandboxed, which on Ubuntu 24.04+ needs an AppArmor
+profile that npm cannot install. `vibestudio remote doctor` reports whether this
+host permits the sandbox and what to do when it does not.
 
 On Linux with systemd, `deploy local` installs an always-on user service on this
 computer, enables it at login/boot, runs end-to-end diagnostics, and prints the

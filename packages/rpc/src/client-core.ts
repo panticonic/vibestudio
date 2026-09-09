@@ -36,7 +36,13 @@ import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
-import { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
+import {
+  RemoteRpcError,
+  RPC_ABORTED_CODE,
+  RpcBoundaryError,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+} from "./errors.js";
 import {
   bindExecutionSession,
   bindInvocationParent,
@@ -48,6 +54,11 @@ import {
   type InternalRpcStreamRequest,
 } from "./internal-types.js";
 import { secureRandomUuid } from "./randomId.js";
+
+/** A caller-owned cancellation, carrying the identity callers key on. */
+function callerAbortedError(): Error & { code: typeof RPC_ABORTED_CODE } {
+  return Object.assign(new Error("RPC call aborted by caller"), { code: RPC_ABORTED_CODE });
+}
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
@@ -905,7 +916,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     options?: RpcCallOptions
   ): Promise<T> {
     if (retired) return Promise.reject(retiredError());
-    if (options?.signal?.aborted) return Promise.reject(new Error("RPC call aborted by caller"));
+    if (options?.signal?.aborted) return Promise.reject(callerAbortedError());
     const requestId = generateRequestId();
     const request: RpcRequest = {
       type: "request",
@@ -948,7 +959,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
             options?.destination ? { destination: options.destination } : undefined,
             provenance
           ).catch(() => {});
-          rejectPending(new Error("RPC call aborted by caller"));
+          rejectPending(callerAbortedError());
         };
         options.signal.addEventListener("abort", onAbort, { once: true });
         abortCleanup = () => options.signal?.removeEventListener("abort", onAbort);

@@ -83,6 +83,37 @@ async function closeGui(gui) {
     clearTimeout(timer);
   }
 }
+/**
+ * Reduce a crashed child's captured output to the part a reader can act on.
+ *
+ * Node prints an uncaught error as the offending source line, a caret, and only
+ * then the message and stack. When the throw comes from a bundled dependency
+ * that source line is minified — thousands of characters of one expression — and
+ * it is what a naive tail reports as the failure, burying the message entirely.
+ *
+ * Start from the first line that looks like a thrown error when there is one,
+ * and truncate any single line long enough to be minified source rather than a
+ * log line. The complete output still reaches the failure report.
+ */
+export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = {}) {
+  const lines = String(captured)
+    .split("\n")
+    // Mask the material rather than dropping the line. Discarding every line
+    // that mentions a secret also discards "Invalid base64url string at
+    // reach.endpointSecret" — the one line that says what went wrong.
+    .map((line) =>
+      /(invite|pairurl|deeplink|token|secret|credential)/iu.test(line)
+        ? line.replace(/[A-Za-z0-9_-]{20,}/gu, "[redacted]")
+        : line
+    )
+    .map((line) =>
+      line.length > maxLineLength ? `${line.slice(0, maxLineLength)}… [${line.length} chars]` : line
+    );
+  const thrown = lines.findIndex((line) => /^\s*(?:[A-Za-z_$][\w$]*Error|Fatal)\b/.test(line));
+  const selected = thrown >= 0 ? lines.slice(thrown) : lines.slice(-maxLines);
+  return selected.join("\n").replace(/vibestudio:\/\/\S+/gu, "[redacted app link]").trim();
+}
+
 function launch(command, args, environment, cwd) {
   const child = spawn(command, args, {
     env: environment,
@@ -101,12 +132,7 @@ function launch(command, args, environment, cwd) {
   });
   return {
     child,
-    tail: () =>
-      tail
-        .split("\n")
-        .filter((line) => !/(invite|pairurl|deeplink|token|secret|credential)/iu.test(line))
-        .join("\n")
-        .replace(/vibestudio:\/\/\S+/gu, "[redacted app link]"),
+    tail: () => readableTail(tail),
   };
 }
 export async function runPackagedIsolationSmoke(options) {

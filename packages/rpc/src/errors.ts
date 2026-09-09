@@ -39,6 +39,24 @@ export function isRpcConnectionLost(error: unknown): boolean {
   );
 }
 
+/** A caller cancelled its own call; nothing failed and nothing needs recovery. */
+export const RPC_ABORTED_CODE = "RPC_ABORTED" as const;
+
+/**
+ * True when a call ended because its caller abandoned it — an unmounted view, a
+ * superseded request, an aborted signal. Distinguishing this from a failure
+ * matters at every logging boundary: a cancellation reported as an error reads
+ * as a defect and, in the desktop smoke, fails a run that did nothing wrong.
+ */
+export function isRpcAborted(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === RPC_ABORTED_CODE
+  );
+}
+
 /** Locally categorized failure ready to cross an RPC boundary. */
 export class RpcBoundaryError extends Error {
   constructor(

@@ -91,15 +91,24 @@ export function inspectWorkspaceIsolation(deps = {}) {
   const diagnostic = (probe.stderr ?? "").trim();
   const restricted =
     (deps.readUserNamespaceRestriction ?? readApparmorUserNamespaceRestriction)()?.trim() === "1";
+  if (restricted) {
+    // The probe binary carries no AppArmor profile, but the workspace launcher
+    // may well carry one — every packaged format installs it. Whether it does
+    // cannot be read without root, so reporting a failure here would condemn
+    // exactly the hosts that installed the profile correctly. Say what was
+    // observed and leave the verdict to a workspace actually starting.
+    return skip(
+      "workspace-isolation",
+      "this host grants sandbox user namespaces only to binaries carrying an AppArmor profile " +
+        "(kernel.apparmor_restrict_unprivileged_userns=1); packaged installs ship one, and a " +
+        "source checkout or AppImage needs one installed for its launcher"
+    );
+  }
   return check(
     false,
     "workspace-isolation",
     "",
-    `host refused the sandbox user namespace, so no workspace can start: ${diagnostic}` +
-      (restricted
-        ? " — kernel.apparmor_restrict_unprivileged_userns=1 denies them to binaries shipping no AppArmor profile. " +
-          "Install a profile granting this host's workspace launcher `userns create`."
-        : "")
+    `host refused the sandbox user namespace, so no workspace can start: ${diagnostic}`
   );
 }
 
