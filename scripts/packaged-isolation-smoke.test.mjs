@@ -104,3 +104,28 @@ test("keeps the error a minified line would otherwise evict", async () => {
   assert.match(reported, /^ZodError: Invalid base64url string/u, reported.slice(0, 200));
   assert.ok(!reported.includes("mmmm"), "the minified line must not dominate the report");
 });
+
+test("waits for output that arrives after the process exits", async () => {
+  // 'exit' fires while stdout may still hold buffered data. A report composed
+  // then keeps the minified source line Node printed first and loses the error
+  // message that followed it — which is the entire explanation.
+  const { spawnCaptured } = await import("./packaged-isolation-smoke.mjs");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+
+  const captured = spawnCaptured(child);
+  child.stdout.emit("data", `/opt/app/dist/server-electron.cjs:1\n${"z".repeat(64_000)}\n`);
+  child.exitCode = 1;
+
+  // The message Node prints as it dies lands after exit, before close.
+  setTimeout(() => {
+    child.stdout.emit("data", "ZodError: Invalid base64url string\n");
+    child.emit("close", 1);
+  }, 30);
+
+  assert.ok(!captured.tail().includes("ZodError"), "precondition: not yet delivered");
+  await captured.drained();
+  assert.match(captured.tail(), /^ZodError: Invalid base64url string/u);
+});

@@ -145,9 +145,26 @@ export function spawnCaptured(child) {
   for (const stream of [child.stdout, child.stderr])
     stream.on("data", (chunk) => absorb(String(chunk)));
   child.on("error", (error) => absorb(`${String(error)}\n`));
+  let closed = false;
+  child.on("close", () => {
+    closed = true;
+  });
   return {
     child,
     tail: () => readableTail([...recent, partial].filter(Boolean).join("\n")),
+    /**
+     * Wait for the child's output to finish arriving.
+     *
+     * `exit` fires while stdout and stderr may still hold buffered data; only
+     * `close` means everything has been delivered. A crash report composed on
+     * exit routinely loses the very message the process printed as it died,
+     * leaving the source line before it as the whole explanation.
+     */
+    drained: async (timeoutMs = 2_000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (!closed && Date.now() < deadline) await delay(25);
+      return closed;
+    },
   };
 }
 
@@ -269,8 +286,10 @@ export async function runPackagedIsolationSmoke(options) {
     const deadline = Date.now() + options.timeoutMs;
     let ready;
     while (Date.now() < deadline) {
-      if (childExited(server.child))
+      if (childExited(server.child)) {
+        await server.drained();
         throw new Error(`Packaged workspace startup failed: ${server.tail()}`);
+      }
       try {
         ready = parseHubReadyPayload(JSON.parse(await fs.readFile(readyFile, "utf8")));
         break;
