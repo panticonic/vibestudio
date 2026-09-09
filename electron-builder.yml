@@ -149,6 +149,9 @@ linux:
       to: "app.asar.unpacked/dist/node"
       filter:
         - "linux-${arch}/**/*"
+    # The deb maintainer scripts install this into /etc/apparmor.d.
+    - from: "build-resources/apparmor"
+      to: "apparmor"
   synopsis: Stacked panel workspace for agentic workflows
   description: Vibestudio is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
   target:
@@ -162,6 +165,15 @@ linux:
         - arm64
   category: Development
   icon: build-resources/icons
+
+deb:
+  # Ubuntu 24.04+ denies unprivileged user namespaces to binaries shipping no
+  # AppArmor profile, and a workspace runtime cannot sandbox without one. The
+  # package installs that profile so a fresh install just works, rather than
+  # asking the reader to weaken kernel.apparmor_restrict_unprivileged_userns
+  # for their whole machine.
+  afterInstall: build-resources/deb/after-install.sh
+  afterRemove: build-resources/deb/after-remove.sh
 
 # Auto-update configuration
 publish:

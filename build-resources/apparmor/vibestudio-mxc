@@ -1,0 +1,21 @@
+# Workspace runtimes are sandboxed with bubblewrap, which needs an unprivileged
+# user namespace. Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1
+# and denies them to any binary shipping no AppArmor profile, so without this the
+# first workspace fails with "bwrap: setting up uid map: Permission denied".
+#
+# This grants that one permission and nothing else: `flags=(unconfined)` keeps the
+# launcher's confinement exactly as it is today rather than trading a working
+# sandbox for a weaker system-wide policy.
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile vibestudio-mxc "/opt/Vibestudio/resources/app.asar.unpacked/dist/mxc/*/lxc-exec" flags=(unconfined) {
+  userns,
+
+  # bubblewrap creates the namespace on the launcher's behalf, so it has to be
+  # covered by the same permission rather than falling back to unconfined.
+  /usr/bin/bwrap ix,
+
+  include if exists <local/vibestudio-mxc>
+}
