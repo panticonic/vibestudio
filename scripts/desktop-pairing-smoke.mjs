@@ -765,7 +765,7 @@ async function waitForDesktopShell(app, timeoutMs) {
     const errorText = snapshots
       .map((snapshot) => snapshot.text)
       .find((text) =>
-        /\b(Connection error|Launch gate could not|Failed to initialize|Remote server disconnected|Cannot continue|Cannot start|Recovery failed|Vibestudio could not start|Workspace startup is taking longer than expected)\b/i.test(
+        /\b(Connection error|Launch gate could not|Failed to initialize|Remote server disconnected|Cannot continue|Cannot start|Recovery failed|Vibestudio could not start|Workspace startup stopped making progress|Workspace startup stopped responding)\b/i.test(
           text
         )
       );
