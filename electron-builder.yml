@@ -203,4 +203,4 @@ publish:
 
 # Reject an Electron app bundle if the deleted in-tree workspace or an
 # external-Base source projection is ever reintroduced by packaging changes.
-afterPack: ./scripts/check-electron-package-boundary.mjs
+afterPack: ./scripts/electron-after-pack.mjs
