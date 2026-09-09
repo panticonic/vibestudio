@@ -169,15 +169,17 @@ describe("workspace isolation preflight", () => {
     ).toMatchObject({ name: "workspace-isolation", ok: true });
   });
 
-  it("names the AppArmor restriction when that is why the namespace was refused", () => {
+  it("does not condemn a host whose launcher may carry the profile it requires", () => {
+    // The probe binary is unprofiled, but every packaged install profiles the
+    // launcher, and whether it did cannot be read without root. Failing here
+    // would report a problem on exactly the hosts that installed it correctly.
     const result = inspectWorkspaceIsolation({
       platform: "linux",
       spawnSync: probe(1, "bwrap: setting up uid map: Permission denied"),
       readUserNamespaceRestriction: () => "1\n",
     });
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: true, skipped: true });
     expect(result.message).toContain("apparmor_restrict_unprivileged_userns=1");
-    expect(result.message).toContain("userns create");
   });
 
   it("reports the refusal verbatim when AppArmor is not the reason", () => {
