@@ -85,16 +85,31 @@ it.each([
     /runtime-admission/,
   ],
   ["bwrap: Creating new namespace failed: Operation not permitted", /security policy/],
+  // What an AppArmor-restricted host actually prints. It names no namespace,
+  // so it used to reach the reader with no remedy at all.
+  ["bwrap: setting up uid map: Permission denied", /security policy/],
 ])("retains the native diagnostic and identifies its remedy", (stderr, remedy) => {
   const error = formatNativeStartupError({
     ...input,
     error: new Error("Exited before readiness"),
     stderr,
     code: 1,
+    readUserNamespaceRestriction: () => null,
   });
   expect(error.message).toContain(stderr);
   expect(error.message).toContain("exit 1");
   expect(error.message).toMatch(remedy);
+});
+it("names the AppArmor restriction when this host is the reason namespaces failed", () => {
+  const error = formatNativeStartupError({
+    ...input,
+    error: new Error("Exited before readiness"),
+    stderr: "bwrap: setting up uid map: Permission denied",
+    code: 1,
+    readUserNamespaceRestriction: () => "1\n",
+  });
+  expect(error.message).toContain("apparmor_restrict_unprivileged_userns=1");
+  expect(error.message).toContain("userns create");
 });
 it("bounds retained stderr", () => {
   const error = formatNativeStartupError({

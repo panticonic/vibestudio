@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -64,21 +64,49 @@ export async function assertNativePrerequisites(input: {
 /** Keep the native failure verbatim; hints explain categories, never weaken the
  * requested policy or substitute a host process. Do not include serialized
  * config/guest environment, which can contain provisioned credentials. */
+/**
+ * Ubuntu 24.04+ refuses unprivileged user namespaces to unconfined binaries.
+ * Read only to explain a namespace failure that already happened — never to
+ * predict whether isolation is available.
+ */
+const APPARMOR_USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
+
+function readApparmorUserNamespaceRestriction(): string | null {
+  try {
+    return readFileSync(APPARMOR_USERNS_RESTRICTION, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 export function formatNativeStartupError(input: {
   installation: NativeInstallation;
   error: Error;
   stderr: string;
   code?: number | null;
   signal?: string | null;
+  /** Injectable for tests; defaults to the host's AppArmor restriction knob. */
+  readUserNamespaceRestriction?: () => string | null;
 }): IsolationError {
   const { installation } = input;
   const diagnostic = input.stderr.slice(-16_384).trim();
   const evidence = `${input.error.message}\n${diagnostic}`;
   let remedy = "";
   if (installation.platform === "linux") {
-    if (/namespace|unshare|operation not permitted/i.test(evidence)) {
+    // A refused uid/gid map is a namespace refusal too, and it is what an
+    // AppArmor-restricted host actually prints, so it must not fall through
+    // to the filesystem branch or to no remedy at all.
+    if (/namespace|unshare|uid map|gid map|setgroups|operation not permitted/i.test(evidence)) {
+      const restriction = (
+        input.readUserNamespaceRestriction ?? readApparmorUserNamespaceRestriction
+      )();
       remedy =
-        "The host refused sandbox namespace creation. Check the host's user-namespace and security policy for bubblewrap.";
+        restriction?.trim() === "1"
+          ? "This host restricts unprivileged user namespaces through AppArmor " +
+            "(kernel.apparmor_restrict_unprivileged_userns=1), which bubblewrap requires. " +
+            "Permit them for this host, or ship an AppArmor profile granting the MXC launcher " +
+            "`userns create`."
+          : "The host refused sandbox namespace creation. Check the host's user-namespace and security policy for bubblewrap.";
     } else if (
       /mkdir parents|mount|bind.*(?:failed|error)|No such file or directory/i.test(evidence)
     ) {
