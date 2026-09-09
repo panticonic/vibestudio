@@ -9,6 +9,7 @@ import {
 } from "./lib/userland-dependency-projection.js";
 import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
 import { buildNativeIsolation } from "./build-native-isolation.mjs";
+import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,11 @@ const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 // build exists. Prepare the same installed toolchain used by runtime installs.
 buildNativeIsolation(appRoot);
 await stageNodeRuntime(appRoot);
+// Packages built with the `tsc-output` profile publish their types from dist/,
+// so a workspace importing one cannot be type-checked until they are compiled.
+// The build is cached and reuses verified output, so a checkout that is already
+// built pays nothing for this.
+buildInfrastructurePackages({ cwd: appRoot });
 const projection = await prepareUserlandDependencyProjection({
   appRoot,
   workspaceRoot,
