@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -49,6 +50,57 @@ export function check(condition, name, ok, fail, meta = {}) {
 }
 export function skip(name, message, meta = {}) {
   return { name, ok: true, skipped: true, message, ...meta };
+}
+
+const APPARMOR_USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
+
+function readApparmorUserNamespaceRestriction() {
+  try {
+    return fs.readFileSync(APPARMOR_USERNS_RESTRICTION, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask the host to create a sandbox user namespace rather than inferring support
+ * from sysctl values: the launch is the authoritative test, and a refusal here
+ * is exactly why pairing can succeed and the first workspace still fail — after
+ * the one-time invite is already spent.
+ */
+export function inspectWorkspaceIsolation(deps = {}) {
+  if ((deps.platform ?? process.platform) !== "linux") {
+    return skip("workspace-isolation", "sandbox user namespaces are a Linux prerequisite");
+  }
+  const probe = (deps.spawnSync ?? spawnSync)(
+    "bwrap",
+    ["--unshare-user", "--ro-bind", "/", "/", "true"],
+    { encoding: "utf8", timeout: 5_000 }
+  );
+  if (probe.error) {
+    return check(
+      false,
+      "workspace-isolation",
+      "",
+      `bubblewrap is unavailable, so no workspace can start: ${probe.error.message}`
+    );
+  }
+  if (probe.status === 0) {
+    return check(true, "workspace-isolation", "host grants the sandbox user namespace", "");
+  }
+  const diagnostic = (probe.stderr ?? "").trim();
+  const restricted =
+    (deps.readUserNamespaceRestriction ?? readApparmorUserNamespaceRestriction)()?.trim() === "1";
+  return check(
+    false,
+    "workspace-isolation",
+    "",
+    `host refused the sandbox user namespace, so no workspace can start: ${diagnostic}` +
+      (restricted
+        ? " — kernel.apparmor_restrict_unprivileged_userns=1 denies them to binaries shipping no AppArmor profile. " +
+          "Install a profile granting this host's workspace launcher `userns create`."
+        : "")
+  );
 }
 
 function loadBinding(loader = require) {
@@ -257,6 +309,7 @@ export async function runDoctor(options, deps = {}) {
   } catch (error) {
     checks.push(check(false, "native-binding", "", `Iroh native binding failed: ${error.message}`));
   }
+  checks.push(deps.workspaceIsolation ?? inspectWorkspaceIsolation());
   const unitPath = deps.unitPath ?? unitFilePath();
   const serverHost = fs.existsSync(unitPath);
   checks.push(

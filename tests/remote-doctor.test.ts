@@ -3,6 +3,7 @@ import {
   inspectCredentialEndpoint,
   inspectIdentity,
   inspectRetiredTransportDependencies,
+  inspectWorkspaceIsolation,
   parseArgs,
   runDoctor,
 } from "../scripts/cli/remote-doctor.mjs";
@@ -38,6 +39,13 @@ afterEach(() => {
   }
   ownedTempDirs.clear();
 });
+
+// This host's real sandbox policy is not what these relay cases are about.
+const isolationGranted = {
+  name: "workspace-isolation",
+  ok: true,
+  message: "host grants the sandbox user namespace",
+};
 
 describe("remote-doctor", () => {
   it("selects durable hub and workspace endpoint-key paths", () => {
@@ -100,7 +108,12 @@ describe("remote-doctor", () => {
   it("accepts an explicit canonical HTTPS relay set", async () => {
     const result = await runDoctor(
       { ...parseArgs([]), relayUrls: ["https://relay.example/"] },
-      { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }
+      {
+        require: () => fakeBinding,
+        unitPath: "/nonexistent/unit.service",
+        credential: null,
+        workspaceIsolation: isolationGranted,
+      }
     );
     expect(
       result.checks.find((entry: { name: string }) => entry.name === "native-binding")
@@ -119,6 +132,7 @@ describe("remote-doctor", () => {
       require: () => fakeBinding,
       unitPath: "/nonexistent/unit.service",
       credential: null,
+      workspaceIsolation: isolationGranted,
     });
     expect(defaults.ok).toBe(true);
     expect(
@@ -132,8 +146,64 @@ describe("remote-doctor", () => {
   it("fails a noncanonical relay override", async () => {
     const malformed = await runDoctor(
       { ...parseArgs([]), relayUrls: ["http://relay.example/"] },
-      { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }
+      {
+        require: () => fakeBinding,
+        unitPath: "/nonexistent/unit.service",
+        credential: null,
+        workspaceIsolation: isolationGranted,
+      }
     );
     expect(malformed.ok).toBe(false);
+  });
+});
+
+describe("workspace isolation preflight", () => {
+  // A workspace runtime sandboxes with bubblewrap. When the host refuses, a
+  // device can pair successfully and the first workspace still fail — with the
+  // one-time invite already spent — so the doctor must say so beforehand.
+  const probe = (status: number, stderr = "") => () => ({ status, stderr }) as never;
+
+  it("passes when the host grants a sandbox user namespace", () => {
+    expect(
+      inspectWorkspaceIsolation({ platform: "linux", spawnSync: probe(0) })
+    ).toMatchObject({ name: "workspace-isolation", ok: true });
+  });
+
+  it("names the AppArmor restriction when that is why the namespace was refused", () => {
+    const result = inspectWorkspaceIsolation({
+      platform: "linux",
+      spawnSync: probe(1, "bwrap: setting up uid map: Permission denied"),
+      readUserNamespaceRestriction: () => "1\n",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("apparmor_restrict_unprivileged_userns=1");
+    expect(result.message).toContain("userns create");
+  });
+
+  it("reports the refusal verbatim when AppArmor is not the reason", () => {
+    const result = inspectWorkspaceIsolation({
+      platform: "linux",
+      spawnSync: probe(1, "bwrap: Creating new namespace failed"),
+      readUserNamespaceRestriction: () => "0\n",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Creating new namespace failed");
+    expect(result.message).not.toContain("apparmor");
+  });
+
+  it("reports a missing bubblewrap rather than a refused namespace", () => {
+    const result = inspectWorkspaceIsolation({
+      platform: "linux",
+      spawnSync: (() => ({ error: new Error("spawn bwrap ENOENT") })) as never,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("bubblewrap is unavailable");
+  });
+
+  it("skips where sandbox user namespaces are not the mechanism", () => {
+    expect(inspectWorkspaceIsolation({ platform: "darwin" })).toMatchObject({
+      skipped: true,
+      ok: true,
+    });
   });
 });
