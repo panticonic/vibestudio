@@ -61,11 +61,27 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     ["ready", "failed", false],
     ["ready", "stopped", true],
   ] as const)("accepts %s → %s iff monotonic (%s)", (from, to, accepted) => {
-    const { coordinator, attempt } = resident();
+    const { coordinator, attempt, onError } = resident();
     if (from !== "pending") {
       expect(coordinator.reportAttemptPhase(attempt.attemptId, reportFor(from))).toBe(true);
     }
     expect(coordinator.reportAttemptPhase(attempt.attemptId, reportFor(to))).toBe(accepted);
+    // `pending` is coordinator-owned and therefore rejected at the authority
+    // boundary; every authorized delayed/duplicate report is quietly stale.
+    expect(onError).toHaveBeenCalledTimes(to === "pending" ? 1 : 0);
+  });
+
+  it("treats delayed cross-reporter evidence as stale rather than an operator error", () => {
+    const { coordinator, attempt, onError } = resident();
+    expect(coordinator.reportAttemptPhase(attempt.attemptId, reportFor("ready"))).toBe(true);
+    expect(
+      coordinator.reportAttemptPhase(attempt.attemptId, {
+        phase: "booting",
+        reporter: "renderer",
+      })
+    ).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+    expect(coordinator.currentAttemptForSlot(attempt.slotId)?.phase).toBe("ready");
   });
 
   it.each([

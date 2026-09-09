@@ -10,12 +10,7 @@ export function isRetryableBundleTransferError(error: unknown): boolean {
     error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code
       : "";
-  if (RETRYABLE_TRANSFER_CODES.has(code)) return true;
-
-  const message = error instanceof Error ? error.message : String(error);
-  return /connection lost|not connected to server|pipe down|ice failed|corrupt gzip|gzip trailer|zipexception|bundle integrity mismatch|artifact stream was empty/iu.test(
-    message
-  );
+  return RETRYABLE_TRANSFER_CODES.has(code);
 }
 
 export async function retryBundleTransfer<T>(

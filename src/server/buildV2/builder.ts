@@ -96,6 +96,10 @@ import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
+import {
+  discoverHostWorkspacePackageManifests,
+  resolveHostWorkspacePackageManifest,
+} from "./hostWorkspacePackages.js";
 export { generatePanelEntry } from "./panelEntryProtocol.js";
 
 /**
@@ -117,6 +121,7 @@ export { generatePanelEntry } from "./panelEntryProtocol.js";
 let _appNodeModules: string[] = [];
 let _appRoot = "";
 let _runNativeJob: RunNativeWorkspaceJob;
+let _hostWorkspacePackageManifests = new Map<string, string>();
 let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
 let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
@@ -152,6 +157,7 @@ export function initBuilder(
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
   _runNativeJob = runNativeJob;
+  _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
   void _libraryLoweringWorker?.close();
   _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
   void _workspaceRpcCatalogWorker?.close();
@@ -3929,11 +3935,11 @@ function collectBuildProviderModules(
     const packageName = externalWorkspacePackages.shift()!;
     if (visitedExternal.has(packageName)) continue;
     visitedExternal.add(packageName);
-    const packageJsonPath = _appNodeModules
-      .map((nodeModulesPath) =>
-        path.join(nodeModulesPath, ...packageName.split("/"), "package.json")
-      )
-      .find((candidate) => fs.existsSync(candidate));
+    const packageJsonPath = resolveHostWorkspacePackageManifest(
+      packageName,
+      _hostWorkspacePackageManifests,
+      _appNodeModules
+    );
     if (!packageJsonPath) {
       throw new Error(`Build dependency projection cannot locate workspace package ${packageName}`);
     }

@@ -69,12 +69,12 @@ function writeCredentials(tmpDir: string, url = `iroh://${"bb".repeat(32)}/_work
       controlPairing: {
         endpointId: "aa".repeat(32),
         relays: ["https://relay.example/"],
-        v: 4,
+        v: 5,
       },
       workspacePairing: {
         endpointId: "bb".repeat(32),
         relays: ["https://relay.example/"],
-        v: 4,
+        v: 5,
       },
       pairedAt: 1,
     })

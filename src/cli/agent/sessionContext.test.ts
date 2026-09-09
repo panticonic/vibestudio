@@ -59,12 +59,12 @@ const deviceCreds = {
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4 as const,
+    v: 5 as const,
   },
   workspacePairing: {
     endpointId: "bb".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4 as const,
+    v: 5 as const,
   },
   pairedAt: 1,
 };

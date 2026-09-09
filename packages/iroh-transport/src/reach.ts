@@ -1,6 +1,10 @@
-export const IROH_REACH_VERSION = 4 as const;
+export const IROH_REACH_VERSION = 5 as const;
 export const MAX_RELAY_URLS = 8;
 export const MAX_RELAY_URL_BYTES = 512;
+export const DEFAULT_IROH_RELAYS = Object.freeze([
+  "https://use1-1.relay.n0.iroh.link/",
+  "https://euc1-1.relay.n0.iroh.link/",
+] as const);
 const CANONICAL_ENDPOINT_ID = /^[0-9a-f]{64}$/;
 
 export interface IrohReach {

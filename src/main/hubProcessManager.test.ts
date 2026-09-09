@@ -92,9 +92,8 @@ function readyInvite() {
   const pairing = {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
-    code: "D".repeat(32),
-    exp: 2_000_000_000_000,
-    v: 4 as const,
+    code: "D".repeat(21) + "A",
+    v: 5 as const,
   };
   return {
     ...pairing,
@@ -191,7 +190,7 @@ function workspaceRoute(workspace: string, workspaceId: string) {
     workspaceReach: {
       endpointId: "bb".repeat(32),
       relays: ["https://relay.example/"],
-      v: 4 as const,
+      v: 5 as const,
     },
     serverId: CHILD_SERVER_ID,
     serverBootId: CHILD_SERVER_BOOT_ID,
@@ -618,7 +617,7 @@ describe("HubProcessManager", () => {
     ).ensureDeviceCredential.bind(processManager);
     const freshTarget = {
       record: RECORD,
-      rootInviteCode: "D".repeat(32),
+      rootInviteCode: "D".repeat(21) + "A",
       rootInviteExpiresAt: Date.now() + 60_000,
       attached: false,
     };
@@ -631,7 +630,7 @@ describe("HubProcessManager", () => {
     });
     expect(posted).toEqual([
       {
-        code: "D".repeat(32),
+        code: "D".repeat(21) + "A",
         label: expect.stringMatching(/ desktop$/),
         platform: "desktop",
       },

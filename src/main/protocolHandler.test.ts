@@ -22,9 +22,8 @@ function pair(code: string) {
   return {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
-    code,
-    exp: 2_000_000_000_000,
-    v: 4 as const,
+    code: `${code.slice(0, 21)}A`,
+    v: 5 as const,
   };
 }
 function expectedPairing(code: string) {
@@ -32,7 +31,7 @@ function expectedPairing(code: string) {
 }
 
 describe("protocolHandler", () => {
-  const link = createConnectDeepLink(pair("A".repeat(32)));
+  const link = createConnectDeepLink(pair("A".repeat(21)));
 
   beforeEach(() => {
     vi.resetModules();
@@ -46,7 +45,7 @@ describe("protocolHandler", () => {
     const mod = await import("./protocolHandler.js");
     mod.enqueueConnectLink(link);
 
-    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("A".repeat(32)));
+    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("A".repeat(21)));
     expect(mod.getPendingConnectLink()).toBeNull();
   });
 
@@ -54,7 +53,7 @@ describe("protocolHandler", () => {
     const mod = await import("./protocolHandler.js");
     mod.enqueueConnectLink(link);
 
-    const expected = expectedPairing("A".repeat(32));
+    const expected = expectedPairing("A".repeat(21));
     expect(mod.peekPendingConnectLink()).toEqual(expected);
     expect(mod.peekPendingConnectLink()).toEqual(expected);
     expect(mod.getPendingConnectLink()).toEqual(expected);
@@ -68,10 +67,10 @@ describe("protocolHandler", () => {
 
     mod.enqueueConnectLink(link);
     off();
-    mod.enqueueConnectLink(createConnectDeepLink(pair("B".repeat(32))));
+    mod.enqueueConnectLink(createConnectDeepLink(pair("B".repeat(21))));
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith(expectedPairing("A".repeat(32)));
+    expect(listener).toHaveBeenCalledWith(expectedPairing("A".repeat(21)));
   });
 
   it("captures macOS open-url and argv-borne second-instance links", async () => {
@@ -83,9 +82,9 @@ describe("protocolHandler", () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(mod.getPendingConnectLink()?.endpointId).toBe("aa".repeat(32));
 
-    const secondLink = createConnectDeepLink(pair("C".repeat(32)));
+    const secondLink = createConnectDeepLink(pair("C".repeat(21)));
     mocks.handlers.get("second-instance")?.({}, ["--flag", secondLink]);
-    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("C".repeat(32)));
+    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("C".repeat(21)));
   });
 
   it("buffers and dispatches canonical panel locations through the same OS protocol", async () => {
@@ -144,20 +143,6 @@ describe("protocolHandler", () => {
     mod.enqueueConnectLink(link);
     expect(mod.getPendingConnectLinkError()).toBeNull();
     expect(mod.getPendingConnectLink()?.endpointId).toBe("aa".repeat(32));
-  });
-
-  it("keeps an expired launch invite available to the bootstrap recovery UI", async () => {
-    const mod = await import("./protocolHandler.js");
-    const expiredLink = createConnectDeepLink({
-      ...pair("D".repeat(32)),
-      exp: Date.now() - 1,
-    });
-
-    mod.enqueueConnectLink(expiredLink);
-
-    expect(mod.getPendingConnectLink()).toBeNull();
-    expect(mod.peekPendingConnectLinkError()).toMatch(/expired/i);
-    expect(mod.peekPendingConnectLinkError()).toMatch(/expired/i);
   });
 
   it("registers packaged and development protocol handlers", async () => {

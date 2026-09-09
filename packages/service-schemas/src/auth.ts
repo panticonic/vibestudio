@@ -81,6 +81,15 @@ export const ConnectionInfoResponseSchema = z
   })
   .strict();
 
+export const MobileAppBootstrapResponseSchema = z
+  .object({
+    serverId: z.string().min(1),
+    serverBootId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    bootstrap: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 export const authMethods = defineServiceMethods({
   grantConnection: {
     website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
@@ -124,6 +133,22 @@ export const authMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: ConnectionInfoResponseSchema,
     authority: AUTH_CONNECTION_INFO_POLICY,
+    access: AUTH_READ_ACCESS,
+  },
+  getMobileAppBootstrap: {
+    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "auth.read",
+      rationale:
+        "An authenticated mobile shell reads the approved app manifest for its own workspace.",
+    },
+    description: "Return the approved React Native app manifest to the authenticated mobile shell.",
+    args: z.tuple([z.string().min(1).max(256).nullable()]),
+    returns: MobileAppBootstrapResponseSchema,
+    authority: { principals: ["host", "user"] },
     access: AUTH_READ_ACCESS,
   },
   mintAgentCredential: {

@@ -22,6 +22,10 @@ const facade = readFileSync(
   join(exactUserlandRoot, "apps/mobile/src/services/panelAssetFacade.ts"),
   "utf8"
 );
+const store = readFileSync(
+  join(exactUserlandRoot, "apps/mobile/src/services/mobileAssetStore.ts"),
+  "utf8"
+);
 
 describe("native mobile asset store contract", () => {
   it.each([
@@ -40,9 +44,17 @@ describe("native mobile asset store contract", () => {
       expect(source).toContain(method);
     }
     expect(source).toContain("serverEndpointId");
+    expect(source).not.toContain("serverIdentity");
     expect(source).toContain("workspaceIdentity");
     expect(source).toContain("vibestudio-panel-assets");
     expect(source).toContain("vibestudio-asset-v1:");
+  });
+
+  it("uses the same Iroh Endpoint ID namespace field in JavaScript and both native stores", () => {
+    for (const implementation of [store, android, ios]) {
+      expect(implementation).toContain("serverEndpointId");
+      expect(implementation).not.toContain("serverIdentity");
+    }
   });
 
   it("keeps Android indexes backed up while excluding reconstructable payloads", () => {

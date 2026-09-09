@@ -38,16 +38,17 @@ function invite() {
   const pairing = {
     endpointId: "ab".repeat(32),
     relays: ["https://relay.example/"],
-    v: 4 as const,
-    code: "C".repeat(32),
-    exp: 4_000_000_000_000,
+    v: 5 as const,
+    code: `${"C".repeat(21)}A`,
   };
   return {
     ...pairing,
     deepLink: createConnectDeepLink(pairing),
     pairUrl: createConnectPairUrl(pairing),
     expiresInMs: 60_000,
-    expiresAt: pairing.exp,
+    // Expiry is authoritative server state carried alongside the invite, not
+    // link material encoded into the compact carrier.
+    expiresAt: 4_000_000_000_000,
     serverId: `srv_${"S".repeat(24)}`,
     serverBootId: `boot_${"B".repeat(24)}`,
   };

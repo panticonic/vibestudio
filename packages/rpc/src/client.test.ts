@@ -1009,9 +1009,17 @@ describe("createRpcClient", () => {
     await expect(Promise.all(observed)).resolves.toEqual(["pong", "pong"]);
   });
 
-  it("generates request ids when crypto.randomUUID is unavailable", async () => {
+  it("generates request ids from secure bytes when crypto.randomUUID is unavailable", async () => {
     const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
-    Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {
+        getRandomValues(bytes: Uint8Array) {
+          for (let index = 0; index < bytes.length; index += 1) bytes[index] = index;
+          return bytes;
+        },
+      },
+    });
     try {
       const network = createInProcessNetwork();
       const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });

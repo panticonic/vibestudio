@@ -3,6 +3,7 @@ import type { DecodedFramedStream } from "../protocol/streamCodec.js";
 import type { IrohClientPipe, IrohClientSession, IrohClientSessionOptions } from "./irohClient.js";
 import type { IrohConnectionDiagnostics } from "@vibestudio/iroh-transport";
 import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
+import { secureRandomUuid } from "../randomId.js";
 
 export interface ReconnectingIrohPipeOptions {
   peerEndpointId: string;
@@ -41,13 +42,6 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function randomLogicalId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return `iroh-session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
 function workspaceServerUnavailableError(): Error & { code: string; errorKind: "transport" } {
   return Object.assign(new Error("Workspace server is temporarily unavailable"), {
     code: SESSION_CONNECTION_LOST_CODE,
@@ -56,11 +50,7 @@ function workspaceServerUnavailableError(): Error & { code: string; errorKind: "
 }
 
 class ReconnectingSession implements IrohClientSession {
-  // Hermes only gains getRandomValues from react-native-get-random-values; it
-  // does not implement randomUUID. This ID is local diagnostic identity, not a
-  // credential, so use the same collision-resistant compatibility fallback as
-  // the other RPC client transports.
-  private readonly logicalId = randomLogicalId();
+  private readonly logicalId = secureRandomUuid();
   private inner: IrohClientSession | null = null;
   private activation: Promise<IrohClientSession> | null = null;
   private generation = 0;

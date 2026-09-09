@@ -795,10 +795,10 @@ class VibestudioMobileHostModule(
 
     private fun validateAssetNamespace(namespace: ReadableMap): String {
         val server = namespace.getString("serverEndpointId")?.lowercase()
-            ?: throw IllegalArgumentException("Asset namespace is missing server identity")
+            ?: throw IllegalArgumentException("Asset namespace is missing server Endpoint ID")
         val workspace = namespace.getString("workspaceIdentity")
             ?: throw IllegalArgumentException("Asset namespace is missing workspace identity")
-        require(ASSET_DIGEST.matches(server)) { "Asset namespace has invalid server identity" }
+        require(ASSET_DIGEST.matches(server)) { "Asset namespace has invalid server Endpoint ID" }
         require(workspace.isNotBlank() && workspace.length <= 512 && !workspace.contains('\u0000')) {
             "Asset namespace has invalid workspace identity"
         }

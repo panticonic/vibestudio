@@ -10,14 +10,13 @@ const credential = {
 const controlPairing = {
   endpointId: "aa".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
-  code: "c".repeat(32),
-  exp: 2_000_000_000_000,
+  v: 5 as const,
+  code: "c".repeat(21) + "A",
 };
 const workspaceReach = {
   endpointId: "bb".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 };
 const pairingContext = { workspaceId: "ws-b" };
 const route = {

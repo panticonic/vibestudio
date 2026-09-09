@@ -112,7 +112,7 @@ export class DeviceAuthStore {
     ttlMs = DEFAULT_PAIRING_CODE_TTL_MS,
     opts: { workspaceId: string | null; userId?: string; intent?: PairingCodeIntent }
   ): PairingInvite {
-    const code = randomBase64Url(24);
+    const code = randomBase64Url(16);
     const codeHash = hashSecret(code);
     const createdAt = this.now();
     const expiresAt = createdAt + ttlMs;

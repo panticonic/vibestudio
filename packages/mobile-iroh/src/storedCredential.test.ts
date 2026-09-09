@@ -10,14 +10,13 @@ const credential = { deviceId: `dev_${"D".repeat(24)}`, refreshToken: "R".repeat
 const control = {
   endpointId: "aa".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
-  code: "C".repeat(32),
-  exp: Date.now() + 60_000,
+  v: 5 as const,
+  code: "C".repeat(21) + "A",
 };
 const workspace = {
   endpointId: "bb".repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 };
 
 describe("stored mobile Iroh connection", () => {

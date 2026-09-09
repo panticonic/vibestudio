@@ -244,6 +244,41 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
   });
 }
 
+function waitForChildOutput(child, pattern, timeoutMs, description) {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.stderr?.off("data", onData);
+      child.off("exit", onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onData = (chunk) => {
+      output = `${output}${chunk.toString()}`.slice(-32_768);
+      if (pattern.test(output)) finish();
+    };
+    const onExit = (code, signal) =>
+      finish(
+        new Error(
+          `${description} did not occur before the process exited ` +
+            `(code=${String(code)}, signal=${String(signal)})`
+        )
+      );
+    const timer = setTimeout(
+      () => finish(new Error(`Timed out waiting for ${description}`)),
+      timeoutMs
+    );
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.once("exit", onExit);
+  });
+}
+
 function waitForChildExit(child, timeoutMs = 8_000) {
   if (!child || child.exitCode != null) return Promise.resolve();
   return new Promise((resolve) => {
@@ -918,15 +953,11 @@ function buildConnectLinkFromLog(loggedLink) {
   if (parsed.kind !== "ok") {
     throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
   }
-  // Carry every field the grammar defines. Listing them by hand is why the
-  // expiry went missing when pairing links gained one: the rebuilt link got
-  // `exp=undefined`, and the next parse rejected the smoke's own link.
   return createConnectDeepLink({
     endpointId: parsed.endpointId,
     code: parsed.code,
     relays: parsed.relays,
     v: parsed.v,
-    exp: parsed.exp,
   });
 }
 
@@ -985,6 +1016,9 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   let lastApprovalTap = 0;
   while (Date.now() < deadlineMs) {
     if (logcat.hasPhase(phase)) return;
+    if (logcat.hasPhase("embedded-pairing-failed")) {
+      await logcat.waitForPhase(phase, deadlineMs);
+    }
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
       const xml = await dumpWindowXml(device);
@@ -2338,6 +2372,19 @@ async function main() {
       label: "server-restart",
     });
     await waitForSpawn(serverChild, process.execPath, serverArgs);
+    // A server restart must recover the existing shell and panel transports; it
+    // must not recreate the still-live WebView. The load/ready phases are
+    // document lifecycle signals and correctly do not recur here.
+    // A healthy transport recovery preserves the existing WebView; it does not
+    // reload panel code merely because the server process restarted. Observe
+    // the authoritative authenticated panel-session admission on the new
+    // server, then validate the still-mounted DOM below.
+    const panelSessionRecovered = waitForChildOutput(
+      serverChild,
+      /\[RpcServer\] panel connected/u,
+      options.pairingTimeoutMs,
+      "the panel Iroh session to reconnect after server restart"
+    );
     children.push(serverChild);
     const restartedReady = await waitForServerReady(
       readyFilePath,
@@ -2356,9 +2403,9 @@ async function main() {
     );
     // A server restart must recover the existing shell and panel transports;
     // it must not recreate the still-live WebView. The load/ready phases are
-    // document lifecycle signals and correctly do not recur here. Assert the
-    // shell recovery signal, the still-rendered chat below, and the absence of
-    // cacheable pipe misses instead.
+    // document lifecycle signals and correctly do not recur here. Await the
+    // explicit shell recovery signal, then assert the still-rendered chat.
+    await panelSessionRecovered;
     await waitForOnboardingChatRendered(
       options.device,
       options.packageName,

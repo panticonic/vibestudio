@@ -186,7 +186,7 @@ function pairing(byte: string) {
   return {
     endpointId: byte.repeat(32),
     relays: ["https://relay.example/"],
-    v: 4 as const,
+    v: 5 as const,
   };
 }
 

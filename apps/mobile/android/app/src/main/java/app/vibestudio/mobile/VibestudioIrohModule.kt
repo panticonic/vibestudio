@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -39,6 +40,7 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
 
     @ReactMethod
     fun createIdentity(promise: Promise) = launch(promise) {
+        Log.i(TAG, "Creating encrypted endpoint identity")
         val identityId = UUID.randomUUID().toString()
         val secret = SecretKey.generate()
         preferences.edit().putString(identityId, encrypt(secret.toBytes())).commit().also {
@@ -48,6 +50,7 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
             putString("identityId", identityId)
             putString("endpointId", secret.`public`().toString())
         }
+            .also { Log.i(TAG, "Encrypted endpoint identity ready") }
     }
 
     @ReactMethod
@@ -64,6 +67,7 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     @ReactMethod
     fun bind(identityId: String, relays: ReadableArray, alpnBase64: String, promise: Promise) =
         launch(promise) {
+            Log.i(TAG, "Binding endpoint with ${relays.size()} configured relay(s)")
             val secretBytes = decrypt(preferences.getString(identityId, null)
                 ?: throw IllegalStateException("Iroh endpoint identity is missing"))
             val relayUrls = (0 until relays.size()).map { relays.getString(it)
@@ -82,6 +86,7 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
                 putString("endpointHandle", handle)
                 putString("endpointId", endpoint.id().toString())
             }
+                .also { Log.i(TAG, "Endpoint bound") }
         }
 
     @ReactMethod
@@ -97,9 +102,11 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     @ReactMethod
     fun dial(handle: String, endpointId: String, relayUrl: String, alpnBase64: String, promise: Promise) =
         launch(promise) {
+            Log.i(TAG, "Dialing expected peer endpoint through relay")
             val endpoint = requireEndpoint(handle)
             val address = EndpointAddr(EndpointId.fromString(endpointId), relayUrl, emptyList())
             connectionResult(endpoint.connect(address, Base64.decode(alpnBase64, Base64.NO_WRAP)))
+                .also { Log.i(TAG, "Peer endpoint connected") }
         }
 
     @ReactMethod
@@ -209,7 +216,10 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     private fun launch(promise: Promise, block: suspend () -> Any?) {
         scope.launch {
             try { promise.resolve(block()) }
-            catch (error: Throwable) { promise.reject("IROH_NATIVE", error.message, error) }
+            catch (error: Throwable) {
+                Log.e(TAG, "Native Iroh operation failed", error)
+                promise.reject("IROH_NATIVE", error.message, error)
+            }
         }
     }
 
@@ -241,5 +251,8 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
         return cipher.doFinal(value.copyOfRange(12, value.size))
     }
 
-    companion object { private const val KEY_ALIAS = "vibestudio-iroh-endpoint-secrets-v1" }
+    companion object {
+        private const val TAG = "VibestudioIroh"
+        private const val KEY_ALIAS = "vibestudio-iroh-endpoint-secrets-v1"
+    }
 }

@@ -75,7 +75,7 @@ function parseConnectDeepLink(rawUrl) {
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
   // Iroh pairing carries the server Endpoint ID, its ordered relay set, and a
-  // one-time pairing code plus expiry. Project it rather than retyping fields —
+  // one-time pairing code. Project it rather than retyping fields —
   // omitting one field here fails validation only after the server has issued a
   // credential, which reads as pairing hanging.
   return connectPairingFromLink(parsed);
@@ -107,6 +107,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 async function pairViaIroh(pairing) {
   smokePhase("embedded-pairing-start");
   const identity = await createMobileIrohIdentity();
+  smokePhase("embedded-identity-ready");
   const tokenProvider = makeFreshShellTokenProvider(pairing);
   let pairedCredential = null;
   let pairingContext = null;
@@ -456,6 +457,8 @@ function VibestudioMobileHostBootstrap() {
         return true;
       } catch (error) {
         const failure = await closeBootstrapConnectionAfterFailure(connection, error);
+        smokePhase("embedded-pairing-failed");
+        console.error("[mobile-iroh] pairing failed", failure);
         setLaunchGrant(null);
         setLaunchSession(null);
         setApprovals([]);

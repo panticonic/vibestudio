@@ -43,7 +43,7 @@ describe("DeviceAuthStore", () => {
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
 
     const invite = store.createPairingInvite(undefined, { workspaceId, userId });
-    expect(invite.code).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(invite.code).toMatch(/^[A-Za-z0-9_-]{21}[AQgw]$/);
     const credential = store.completePairing({
       transport: { kind: "local" },
       code: invite.code,

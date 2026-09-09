@@ -1,5 +1,6 @@
 import {
   assertIrohReach,
+  DEFAULT_IROH_RELAYS,
   IROH_REACH_VERSION,
   MAX_RELAY_URL_BYTES,
   MAX_RELAY_URLS,
@@ -9,15 +10,17 @@ import {
 export const CONNECT_DEEP_LINK_SCHEME = "vibestudio:";
 export const PAIR_LINK_ORIGIN = "https://vibestudio.app";
 export const PAIR_LINK_PATH = "/p";
-export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{21}[AQgw]$/;
 
-const HEADER = IROH_REACH_VERSION << 4;
-const FIXED_BYTES = 1 + 32 + 24 + 6 + 1;
+const VERSION_HEADER = IROH_REACH_VERSION << 4;
+const VERSION_MASK = 0xf0;
+const RELAY_PROFILE_MASK = 0x0f;
+const FIXED_BYTES = 1 + 32 + 16;
+const DEFAULT_RELAY_PROFILE = 0;
 const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 export interface ConnectPairing extends IrohReach {
   code: string;
-  exp: number;
 }
 
 export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
@@ -73,25 +76,21 @@ function bytesHex(value: Uint8Array): string {
 export function encodeConnectPairing(pairing: ConnectPairing): string {
   assertIrohReach(pairing);
   if (!PAIRING_CODE_PATTERN.test(pairing.code)) {
-    throw new Error("Pairing code must be canonical 24-byte base64url");
+    throw new Error("Pairing code must be canonical 16-byte base64url");
   }
   const code = decodeBase64Url(pairing.code);
-  if (!code || code.byteLength !== 24) throw new Error("Pairing code is not canonical base64url");
-  if (!Number.isSafeInteger(pairing.exp) || pairing.exp <= 0 || pairing.exp > 0xffffffffffff) {
-    throw new Error("Pairing expiry has an unexpected format");
-  }
-  const relayBytes = pairing.relays.map((relay) => new TextEncoder().encode(relay));
+  if (!code || code.byteLength !== 16) throw new Error("Pairing code is not canonical base64url");
+  const usesDefaultRelays =
+    pairing.relays.length === DEFAULT_IROH_RELAYS.length &&
+    pairing.relays.every((relay, index) => relay === DEFAULT_IROH_RELAYS[index]);
+  const relayBytes = usesDefaultRelays
+    ? []
+    : pairing.relays.map((relay) => new TextEncoder().encode(relay));
   const total = FIXED_BYTES + relayBytes.reduce((sum, relay) => sum + 2 + relay.byteLength, 0);
   const output = new Uint8Array(total);
-  output[0] = HEADER;
+  output[0] = VERSION_HEADER | (usesDefaultRelays ? DEFAULT_RELAY_PROFILE : relayBytes.length);
   output.set(hexBytes(pairing.endpointId), 1);
   output.set(code, 33);
-  let expiry = pairing.exp;
-  for (let index = 62; index >= 57; index -= 1) {
-    output[index] = expiry % 256;
-    expiry = Math.floor(expiry / 256);
-  }
-  output[63] = relayBytes.length;
   let offset = FIXED_BYTES;
   for (const relay of relayBytes) {
     output[offset] = relay.byteLength >>> 8;
@@ -102,31 +101,26 @@ export function encodeConnectPairing(pairing: ConnectPairing): string {
   return encodeBase64Url(output);
 }
 
-export function decodeConnectPairing(payload: string, now = Date.now()): ConnectLink {
+export function decodeConnectPairing(payload: string): ConnectLink {
   const bytes = decodeBase64Url(payload);
   if (!bytes || bytes.byteLength < FIXED_BYTES) {
     return { kind: "error", reason: "Pairing link has malformed compact material" };
   }
-  if (bytes[0] !== HEADER) {
+  if ((bytes[0]! & VERSION_MASK) !== VERSION_HEADER) {
     return {
       kind: "error",
       reason: `Old or unsupported pairing protocol version (expected v=${IROH_REACH_VERSION})`,
     };
   }
-  let exp = 0;
-  for (let index = 57; index <= 62; index += 1) exp = exp * 256 + bytes[index]!;
-  if (!Number.isSafeInteger(exp) || exp <= now) {
-    return { kind: "error", reason: "This pairing link has expired" };
-  }
-  const relayCount = bytes[63]!;
-  if (relayCount < 1 || relayCount > MAX_RELAY_URLS) {
+  const relayProfile = bytes[0]! & RELAY_PROFILE_MASK;
+  if (relayProfile > MAX_RELAY_URLS) {
     return { kind: "error", reason: "Pairing link has an invalid relay count" };
   }
-  const relays: string[] = [];
+  const relays: string[] = relayProfile === DEFAULT_RELAY_PROFILE ? [...DEFAULT_IROH_RELAYS] : [];
   let offset = FIXED_BYTES;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   try {
-    for (let index = 0; index < relayCount; index += 1) {
+    for (let index = 0; index < relayProfile; index += 1) {
       if (offset + 2 > bytes.byteLength) throw new Error("truncated relay length");
       const length = bytes[offset]! * 256 + bytes[offset + 1]!;
       offset += 2;
@@ -144,8 +138,7 @@ export function decodeConnectPairing(payload: string, now = Date.now()): Connect
   }
   const pairing: ConnectPairing = {
     endpointId: bytesHex(bytes.slice(1, 33)),
-    code: encodeBase64Url(bytes.slice(33, 57)),
-    exp,
+    code: encodeBase64Url(bytes.slice(33, 49)),
     relays,
     v: IROH_REACH_VERSION,
   };
@@ -175,7 +168,7 @@ export function createConnectPairUrl(pairing: ConnectPairing): string {
   return createConnectLink(pairing, "https");
 }
 
-export function parseConnectLink(raw: string, now = Date.now()): ConnectLink {
+export function parseConnectLink(raw: string): ConnectLink {
   const schemePrefix = `${CONNECT_DEEP_LINK_SCHEME}//connect/`;
   let payload: string;
   if (raw.startsWith(schemePrefix)) {
@@ -200,5 +193,5 @@ export function parseConnectLink(raw: string, now = Date.now()): ConnectLink {
     }
     payload = url.hash.slice(1);
   }
-  return decodeConnectPairing(payload, now);
+  return decodeConnectPairing(payload);
 }

@@ -1,4 +1,9 @@
-import { assertIrohReach, type ConnectPairing, type IrohReach } from "@vibestudio/iroh-transport";
+import {
+  assertIrohReach,
+  IROH_REACH_VERSION,
+  type ConnectPairing,
+  type IrohReach,
+} from "@vibestudio/iroh-transport";
 import { isDeviceId, isDeviceRefreshToken } from "@vibestudio/shared/deviceCredentials";
 
 export type FreshShellPairing = ConnectPairing;
@@ -42,7 +47,7 @@ function reach(value: unknown): IrohReach | null {
   try {
     assertIrohReach(value as IrohReach);
     const current = value as IrohReach;
-    return { v: 4, endpointId: current.endpointId, relays: [...current.relays] };
+    return { v: IROH_REACH_VERSION, endpointId: current.endpointId, relays: [...current.relays] };
   } catch {
     return null;
   }

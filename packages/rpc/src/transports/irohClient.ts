@@ -52,6 +52,7 @@ import type {
   OAuthCallbackMode,
   PairingContext,
 } from "../protocol/wsProtocol.js";
+import { secureRandomUuid } from "../randomId.js";
 
 const IROH_PROTOCOL_CLOSE_CODE = 0x200n;
 const IROH_SESSION_CLOSE_CODE = 0x201n;
@@ -73,10 +74,7 @@ export class IrohResponseHeadTimeoutError extends Error {
 }
 
 function randomId(): string {
-  return (
-    globalThis.crypto?.randomUUID?.() ??
-    `iroh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  );
+  return secureRandomUuid();
 }
 
 function asError(error: unknown): Error {

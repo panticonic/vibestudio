@@ -11,7 +11,7 @@ const roots: string[] = [];
 const reach = (byte: string) => ({
   endpointId: byte.repeat(32),
   relays: ["https://relay.example/"],
-  v: 4 as const,
+  v: 5 as const,
 });
 
 afterEach(() => {
@@ -154,15 +154,14 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
       ...reach("aa"),
-      code: "D".repeat(32),
-      exp: 2_000_000_000_000,
+      code: "D".repeat(21) + "A",
     };
     const invite = {
       ...pairing,
       deepLink: createConnectDeepLink(pairing),
       pairUrl: createConnectPairUrl(pairing),
-      expiresInMs: pairing.exp - Date.now(),
-      expiresAt: pairing.exp,
+      expiresInMs: 2_000_000_000_000 - Date.now(),
+      expiresAt: 2_000_000_000_000,
       serverId,
       serverBootId,
     };
@@ -241,15 +240,14 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
       ...reach("aa"),
-      code: "D".repeat(32),
-      exp: 2_000_000_000_000,
+      code: "D".repeat(21) + "A",
     };
     const invite = {
       ...pairing,
       deepLink: createConnectDeepLink(pairing),
       pairUrl: createConnectPairUrl(pairing),
-      expiresInMs: pairing.exp - Date.now(),
-      expiresAt: pairing.exp,
+      expiresInMs: 2_000_000_000_000 - Date.now(),
+      expiresAt: 2_000_000_000_000,
       serverId,
       serverBootId,
     };

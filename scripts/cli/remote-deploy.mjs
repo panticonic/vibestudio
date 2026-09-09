@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { printConnectBanner } from "./lib/connect-banner.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
-import { DEFAULT_IROH_RELAYS } from "./lib/iroh-relays.mjs";
+import { DEFAULT_IROH_RELAYS } from "./lib/connect-grammar.generated.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));

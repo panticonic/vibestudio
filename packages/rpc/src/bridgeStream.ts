@@ -40,6 +40,7 @@ import type { RpcEnvelope, RpcErrorData, RpcErrorKind } from "./types.js";
 import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
+import { secureRandomUuid } from "./randomId.js";
 
 /** Max bytes per bridge chunk — mirrors the Iroh transport's MAX_CHUNK_SIZE. */
 export const BRIDGE_STREAM_CHUNK_BYTES = 256 * 1024;
@@ -102,8 +103,7 @@ function encodeBridgeChunk(bytes: Uint8Array, encoding: BridgeChunkEncoding): Br
 }
 
 function generateOpId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
-  return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `op-${secureRandomUuid()}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -49,14 +49,12 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { gatewayMethods, type GatewayFetchDescriptor } from "@vibestudio/service-schemas/gateway";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
-import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 import {
   GZIP_MARKER_HEADER,
   RESUMABLE_GZIP_HEADER,
   hasRangeRequestHeader,
 } from "@vibestudio/shared/panel/assetHeaders";
 
-const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
 const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -168,15 +166,6 @@ function requestHeader(
   return found?.[1];
 }
 
-function trustedMobileBootstrapTarget(
-  ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],
-  descriptor: GatewayFetchDescriptor
-): string | null {
-  const callerKind = ctx.caller.runtime.kind;
-  if (callerKind !== "shell" && callerKind !== "app") return null;
-  if ((descriptor.method ?? "GET").toUpperCase() !== "POST") return null;
-  return descriptor.path === MOBILE_APP_BOOTSTRAP_PATH ? MOBILE_APP_BOOTSTRAP_PATH : null;
-}
 
 export function createGatewayFetchService(deps: {
   /** Resolved loopback gateway port (lazy — finalized only after gateway start). */
@@ -199,15 +188,11 @@ export function createGatewayFetchService(deps: {
     // allowlist (assetPathPolicy — panel assets, /_r/w/ worker routes, /_a/ app
     // artifacts; NEVER /_r/s/ management routes or /rpc), and appended to the
     // loopback gateway (no external origin), so this grants nothing beyond the
-    // same gateway-relative assets. The only management-route exception is the
-    // exact mobile native bootstrap POST, and only for trusted shell/app callers.
+    // same gateway-relative assets.
     authority: { principals: ["user", "code", "website"] },
     methods: gatewayMethods,
     handler: defineServiceHandler(serviceName, gatewayMethods, {
       fetch: async (ctx, [descriptor]) => {
-        const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
-        let forwardedDescriptor = descriptor;
-
         // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
         // assetPathPolicy). This service is reachable from the panel/loopback
         // origin, and the gateway namespace it proxies into includes management
@@ -219,52 +204,16 @@ export function createGatewayFetchService(deps: {
         // path exactly like `fetch()` will (dot segments, backslash host escapes
         // like "/\evil.example"), and the normalized `decision.target` — not the
         // raw input — is what gets fetched, so check and fetch cannot diverge.
-        // Native mobile shell/app bootstrap is intentionally not a panel-origin
-        // asset fetch: it redeems the already paired device credential for the
-        // approved React Native app manifest. Keep that hole exact, method-bound,
-        // and principal-bound; every other path still uses the panel policy.
-        let target = trustedTarget;
-        if (!target) {
-          const decision = checkPanelGatewayPath(descriptor.path);
-          if (!decision.allowed) {
-            throw new ServiceError(
-              serviceName,
-              "fetch",
-              `gateway.fetch rejected: ${decision.reason}`,
-              decision.denied === "policy" ? "EACCES" : "EINVAL"
-            );
-          }
-          target = decision.target;
+        const decision = checkPanelGatewayPath(descriptor.path);
+        if (!decision.allowed) {
+          throw new ServiceError(
+            serviceName,
+            "fetch",
+            `gateway.fetch rejected: ${decision.reason}`,
+            decision.denied === "policy" ? "EACCES" : "EINVAL"
+          );
         }
-
-        if (trustedTarget) {
-          // Authorization may project an invocation caller, but the concrete
-          // authenticated session remains the authoritative transport owner.
-          const remoteEndpointId = ctx.wsClient?.authenticated
-            ? ctx.wsClient.caller.remoteEndpointId
-            : undefined;
-          const adminToken = deps.getAdminToken?.();
-          if (!remoteEndpointId || !adminToken) {
-            throw new ServiceError(
-              serviceName,
-              "fetch",
-              "mobile bootstrap requires an authenticated Iroh transport",
-              "EACCES"
-            );
-          }
-          // The refresh credential remains endpoint-bound even though this RPC
-          // service crosses an internal loopback HTTP boundary. The management
-          // bearer makes this endpoint assertion host-attested; neither header
-          // value is accepted from or returned to the remote caller.
-          forwardedDescriptor = {
-            ...descriptor,
-            headers: {
-              ...descriptor.headers,
-              authorization: `Bearer ${adminToken}`,
-              [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: remoteEndpointId,
-            },
-          };
-        }
+        const target = decision.target;
 
         if (!target) {
           throw new ServiceError(
@@ -293,16 +242,16 @@ export function createGatewayFetchService(deps: {
         // size limit, and the request body (`ctx.body`) streams in on the same
         // bidirectional request. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
-        const requestHasRange = hasRangeRequestHeader(forwardedDescriptor.headers);
+        const requestHasRange = hasRangeRequestHeader(descriptor.headers);
         const resumableGzip =
-          forwardedDescriptor.gzip === true &&
-          requestHeader(forwardedDescriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
+          descriptor.gzip === true &&
+          requestHeader(descriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
         const response =
-          forwardedDescriptor.gzip && (!requestHasRange || resumableGzip)
-            ? await rawLoopbackFetch(port, target, forwardedDescriptor, ctx.body)
+          descriptor.gzip && (!requestHasRange || resumableGzip)
+            ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
             : await fetch(url, {
-                method: forwardedDescriptor.method ?? "GET",
-                headers: forwardedDescriptor.headers,
+                method: descriptor.method ?? "GET",
+                headers: descriptor.headers,
                 ...(ctx.body
                   ? // undici requires half-duplex to be declared for stream bodies.
                     { body: ctx.body, duplex: "half" }
@@ -315,7 +264,7 @@ export function createGatewayFetchService(deps: {
         const hasRangeSemantics =
           requestHasRange || response.status === 206 || response.headers.has("content-range");
         if (
-          forwardedDescriptor.gzip &&
+          descriptor.gzip &&
           response.ok &&
           response.body &&
           (!hasRangeSemantics || resumableGzip)

@@ -38,11 +38,11 @@ import { refreshPrincipalGrantResponse } from "../hostCore/auth/principalGrants.
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
+import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import {
   bindingForLiveAgentEntity,
   ownerForLiveAgentEntity,
 } from "../hostCore/auth/agentEntity.js";
-import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 
 export const RefreshShellBodySchema = z
   .object({
@@ -55,10 +55,6 @@ export const RefreshPrincipalGrantBodySchema = RefreshShellBodySchema.extend({
   principal: z.string().min(1).max(128).optional(),
   source: z.string().min(1).max(256).optional(),
 }).strict();
-export const MobileAppBootstrapBodySchema = RefreshShellBodySchema.extend({
-  source: z.string().min(1).max(256).optional(),
-}).strict();
-
 export const RefreshAgentBodySchema = z
   .object({
     // The full presentable credential: `agent:<agentId>:<secret>`.
@@ -79,29 +75,6 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-function mobileBootstrapTransport(
-  req: IncomingMessage,
-  tokenManager: TokenManager
-): DeviceTransportBinding {
-  const endpointHeader = req.headers[MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER];
-  if (endpointHeader === undefined) return { kind: "local" };
-  const endpointId = Array.isArray(endpointHeader) ? endpointHeader[0] : endpointHeader;
-  const authorization = req.headers.authorization;
-  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
-  if (
-    !endpointId ||
-    !/^[0-9a-f]{64}$/u.test(endpointId) ||
-    !tokenManager.validateAdminToken(bearer)
-  ) {
-    throw authError(
-      "INVALID_BOOTSTRAP_TRANSPORT_ATTESTATION",
-      "Invalid mobile bootstrap transport attestation",
-      401
-    );
-  }
-  return { kind: "iroh", endpointId };
 }
 
 function sendJson(
@@ -455,6 +428,74 @@ export function createAuthService(deps: {
         callerKind: ctx.caller.runtime.kind,
         ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
       }),
+      getMobileAppBootstrap: async (ctx, [source]) => {
+        const callerId = ctx.caller.runtime.id;
+        if (ctx.caller.runtime.kind !== "shell" || !callerId.startsWith("shell:")) {
+          throw new ServiceError(
+            "auth",
+            "getMobileAppBootstrap",
+            "Mobile app bootstrap requires an authenticated device shell",
+            "EACCES",
+            undefined,
+            "access"
+          );
+        }
+        const deviceId = callerId.slice("shell:".length);
+        if (
+          !ctx.caller.subject ||
+          deps.deviceAuthStore.userFor(deviceId) !== ctx.caller.subject.userId
+        ) {
+          throw new ServiceError(
+            "auth",
+            "getMobileAppBootstrap",
+            "Authenticated shell is not bound to a live device account",
+            "EACCES",
+            undefined,
+            "access"
+          );
+        }
+        if (!deps.getMobileAppBootstrap) {
+          throw new ServiceError(
+            "auth",
+            "getMobileAppBootstrap",
+            "Mobile app bootstrap is not configured",
+            "MOBILE_BOOTSTRAP_UNAVAILABLE"
+          );
+        }
+        const readiness = await deps.ensureMobileAppReady?.(source);
+        if (readiness && !readiness.ready) {
+          const code = readiness.approvalRequired
+            ? "MOBILE_APP_APPROVAL_REQUIRED"
+            : "MOBILE_APP_UNAVAILABLE";
+          throw new ServiceError(
+            "auth",
+            "getMobileAppBootstrap",
+            [
+              readiness.reason ?? "No approved React Native workspace app is available",
+              ...(readiness.details ?? []),
+            ].join(": "),
+            code,
+            undefined,
+            "service",
+            readiness.approvalRequired ? { approvals: readiness.approvals ?? [] } : undefined
+          );
+        }
+        const bootstrap = await deps.getMobileAppBootstrap(source);
+        if (!bootstrap || typeof bootstrap !== "object" || Array.isArray(bootstrap)) {
+          throw new ServiceError(
+            "auth",
+            "getMobileAppBootstrap",
+            "No approved React Native workspace app is available",
+            "MOBILE_APP_UNAVAILABLE"
+          );
+        }
+        return {
+          serverId: deps.deviceAuthStore.getServerId(),
+          serverBootId: deps.getServerBootId(),
+          workspaceId: deps.getWorkspaceId(),
+          bootstrap: bootstrap as Record<string, unknown>,
+        };
+      },
       mintAgentCredential: async (ctx, [input]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
         const record = await resolveAgentCredentialTarget("mintAgentCredential", input.entityId);
@@ -580,73 +621,6 @@ export function createAuthService(deps: {
           sendJson(res, 200, await refreshPrincipalGrantResponse(deps, body));
         } catch (error) {
           sendAuthError(res, error, 400);
-        }
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/mobile-app-bootstrap",
-      methods: ["POST"],
-      auth: "public",
-      handler: async (req, res) => {
-        const startedAt = Date.now();
-        try {
-          if (!deps.getMobileAppBootstrap) {
-            sendJson(res, 503, {
-              error: "Mobile app bootstrap is not configured",
-              code: "MOBILE_BOOTSTRAP_UNAVAILABLE",
-            });
-            return;
-          }
-          const body = MobileAppBootstrapBodySchema.parse(await readJson(req));
-          deps.deviceAuthStore.validateRefresh(
-            body.deviceId,
-            body.refreshToken,
-            mobileBootstrapTransport(req, deps.tokenManager)
-          );
-          const readiness = await deps.ensureMobileAppReady?.(body.source ?? null);
-          if (readiness && !readiness.ready) {
-            const approvalRequired = readiness.approvalRequired === true;
-            console.info(
-              `[mobile-bootstrap] not ready elapsedMs=${Date.now() - startedAt} reason=${JSON.stringify(readiness.reason ?? "unavailable")}`
-            );
-            sendJson(res, approvalRequired ? 409 : 503, {
-              error: [
-                readiness.reason ?? "No approved React Native workspace app is available",
-                ...(readiness.details?.length ? readiness.details : []),
-              ].join(": "),
-              code: approvalRequired ? "MOBILE_APP_APPROVAL_REQUIRED" : "MOBILE_APP_UNAVAILABLE",
-              ...(approvalRequired ? { approvals: readiness.approvals ?? [] } : {}),
-            });
-            return;
-          }
-          const bootstrap = await deps.getMobileAppBootstrap(body.source ?? null);
-          if (!bootstrap) {
-            console.info(`[mobile-bootstrap] no bootstrap elapsedMs=${Date.now() - startedAt}`);
-            sendJson(res, 404, {
-              error: "No approved React Native workspace app is available",
-              code: "MOBILE_APP_UNAVAILABLE",
-            });
-            return;
-          }
-          const bootstrapBuildKey =
-            typeof bootstrap === "object" && "buildKey" in bootstrap
-              ? String(bootstrap.buildKey)
-              : "unknown";
-          console.info(
-            `[mobile-bootstrap] ready elapsedMs=${Date.now() - startedAt} build=${bootstrapBuildKey}`
-          );
-          sendJson(res, 200, {
-            serverId: deps.deviceAuthStore.getServerId(),
-            serverBootId: deps.getServerBootId(),
-            workspaceId: deps.getWorkspaceId(),
-            bootstrap,
-          });
-        } catch (error) {
-          console.error(
-            `[mobile-bootstrap] failed elapsedMs=${Date.now() - startedAt}: ${error instanceof Error ? error.message : String(error)}`
-          );
-          sendAuthError(res, error, 401);
         }
       },
     },

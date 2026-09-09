@@ -12,7 +12,6 @@ import {
   createAuthService,
   createHubCredentialRedeemer,
   createWorkspaceCredentialRedeemer,
-  MobileAppBootstrapBodySchema,
   RefreshAgentBodySchema,
   RefreshPrincipalGrantBodySchema,
   RefreshShellBodySchema,
@@ -25,7 +24,6 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
-import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -144,8 +142,8 @@ describe("workspace child auth clean cutover", () => {
       "/refresh-shell",
       "/refresh-agent",
       "/refresh-principal-grant",
-      "/mobile-app-bootstrap",
     ]);
+    expect(service.definition.methods).toHaveProperty("getMobileAppBootstrap");
     expect(service.definition.methods).not.toHaveProperty("createPairingInvite");
     expect(service.definition.methods).not.toHaveProperty("listDevices");
     expect(service.definition.methods).not.toHaveProperty("revokeDevice");
@@ -165,13 +163,6 @@ describe("workspace child auth clean cutover", () => {
         ...deviceCredential,
         principal: "app:mobile",
         callerId: "legacy-caller",
-      }).success
-    ).toBe(false);
-    expect(
-      MobileAppBootstrapBodySchema.safeParse({
-        ...deviceCredential,
-        source: "app/mobile",
-        workspace: "legacy-workspace",
       }).success
     ).toBe(false);
     expect(
@@ -388,9 +379,14 @@ describe("auth service connection grants", () => {
 
   it("returns mobile app approval requirements without blocking bootstrap", async () => {
     const tokenManager = new TokenManager();
-    const routeRegistry = new RouteRegistry();
     const identity = makeIdentity({ withRoot: true });
     const authStore = identity.deviceAuthStore;
+    const issued = identity.deviceAuthStore.issueDevice({
+      transport: { kind: "iroh", endpointId: "a".repeat(64) },
+      userId: identity.rootId!,
+      label: "Phone",
+      platform: "mobile",
+    });
     const approvals = [
       {
         approvalId: "approval-mobile",
@@ -457,107 +453,57 @@ describe("auth service connection grants", () => {
       }),
       getMobileAppBootstrap: () => null,
     });
-    routeRegistry.registerHttpServiceRoutes(authService.routes ?? []);
-    const gateway = new Gateway({
-      externalHost: "127.0.0.1",
-      bindHost: "127.0.0.1",
-      workerdPort: 9,
-      routeRegistry,
-      adminToken: "admin-secret",
-      tokenManager,
+    const caller = createVerifiedCaller(`shell:${issued.deviceId}`, "shell", null, null, {
+      userId: identity.rootId!,
+      handle: "root",
     });
-    try {
-      const port = await gateway.start(0);
-      const issued = identity.deviceAuthStore.issueDevice({
-        transport: { kind: "local" },
-        userId: identity.rootId!,
-        label: "Phone",
-        platform: "mobile",
-      });
-      const response = await postLocal<{
-        code: string;
-        approvals: PendingUnitInstallReviewApproval[];
-      }>(port, "/_r/s/auth/mobile-app-bootstrap", {
-        deviceId: issued.deviceId,
-        refreshToken: issued.refreshToken,
-      });
-
-      expect(response.status).toBe(409);
-      expect(response.body.code).toBe("MOBILE_APP_APPROVAL_REQUIRED");
-      expect(response.body.approvals).toEqual([
-        expect.objectContaining({
-          approvalId: "approval-mobile",
-          parts: [expect.objectContaining({ target: "react-native" })],
-        }),
-      ]);
-    } finally {
-      await gateway.stop();
-    }
+    await expect(
+      authService.definition.handler({ caller }, "getMobileAppBootstrap", [null])
+    ).rejects.toMatchObject({
+      code: "MOBILE_APP_APPROVAL_REQUIRED",
+      errorData: {
+        approvals: [
+          expect.objectContaining({
+            approvalId: "approval-mobile",
+            parts: [expect.objectContaining({ target: "react-native" })],
+          }),
+        ],
+      },
+    });
   });
 
-  it("validates Iroh-bound mobile bootstrap refreshes against host-attested transport", async () => {
-    const tokenManager = new TokenManager();
-    tokenManager.setAdminToken("admin-secret");
-    const routeRegistry = new RouteRegistry();
+  it("returns mobile bootstrap through the authenticated device session without a refresh secret", async () => {
     const identity = makeIdentity({ withRoot: true });
-    const endpointId = "ab".repeat(32);
     const issued = identity.deviceAuthStore.issueDevice({
-      transport: { kind: "iroh", endpointId },
+      transport: { kind: "iroh", endpointId: "b".repeat(64) },
       userId: identity.rootId!,
       label: "Phone",
       platform: "mobile",
     });
     const authService = createAuthService({
       resolveUser: testResolveUser,
-      tokenManager,
+      tokenManager: new TokenManager(),
       deviceAuthStore: identity.deviceAuthStore,
-      roleOf: (userId) => identity.userStore.getUser(userId)?.role ?? null,
-      getServerBootId: () => "boot_mobile_iroh",
-      getWorkspaceId: () => "workspace_mobile_iroh",
+      getServerBootId: () => "boot_mobile",
+      getWorkspaceId: () => "workspace_mobile",
       getConnectionInfo,
-      getMobileAppBootstrap: () => null,
+      ensureMobileAppReady: async () => ({ ready: true }),
+      getMobileAppBootstrap: async () => ({ buildKey: "build-mobile", artifacts: [] }),
     });
-    routeRegistry.registerHttpServiceRoutes(authService.routes ?? []);
-    const gateway = new Gateway({
-      externalHost: "127.0.0.1",
-      bindHost: "127.0.0.1",
-      workerdPort: 9,
-      routeRegistry,
-      adminToken: "admin-secret",
-      tokenManager,
+    const caller = createVerifiedCaller(`shell:${issued.deviceId}`, "shell", null, null, {
+      userId: identity.rootId!,
+      handle: "root",
     });
-    try {
-      const port = await gateway.start(0);
-      const body = { deviceId: issued.deviceId, refreshToken: issued.refreshToken };
-      const valid = await postLocal<{ code: string }>(
-        port,
-        "/_r/s/auth/mobile-app-bootstrap",
-        body,
-        "admin-secret",
-        { [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: endpointId }
-      );
-      expect(valid.status).toBe(404);
-      expect(valid.body.code).toBe("MOBILE_APP_UNAVAILABLE");
 
-      for (const [bearer, attestedEndpoint] of [
-        [undefined, endpointId],
-        ["wrong-admin-token", endpointId],
-        ["admin-secret", "malformed"],
-        ["admin-secret", "cd".repeat(32)],
-      ] as const) {
-        const rejected = await postLocal<{ code: string }>(
-          port,
-          "/_r/s/auth/mobile-app-bootstrap",
-          body,
-          bearer,
-          { [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: attestedEndpoint }
-        );
-        expect(rejected.status).toBe(401);
-      }
-    } finally {
-      await gateway.stop();
-    }
+    await expect(
+      authService.definition.handler({ caller }, "getMobileAppBootstrap", ["apps/mobile"])
+    ).resolves.toMatchObject({
+      serverBootId: "boot_mobile",
+      workspaceId: "workspace_mobile",
+      bootstrap: { buildKey: "build-mobile" },
+    });
   });
+
 });
 async function postLocal<T>(
   port: number,

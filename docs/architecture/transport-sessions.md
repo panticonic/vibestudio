@@ -15,9 +15,12 @@ A paired device keeps two logical reaches:
   `hubControl.routeWorkspace({ workspaceId })` and replaced when selection
   changes.
 
-Each reach contains only the server Endpoint ID, an ordered explicit HTTPS relay
-set, and the protocol version. Direct addresses are learned by Iroh and are not
-persisted. The pairing code and expiry exist only in the one-time invite.
+Each reach contains only the server Endpoint ID, an ordered HTTPS relay set, and
+the protocol version. Direct addresses are learned by Iroh and are not
+persisted. Pairing URLs encode the public relay profile as one compact marker;
+only custom relay sets carry URLs inline. The one-time code is link material,
+while expiry is authoritative server state and presentation metadata rather
+than a client-asserted coordinate.
 
 ## Physical connection and logical sessions
 
