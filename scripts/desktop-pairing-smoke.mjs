@@ -301,7 +301,13 @@ function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EV
 
 function parseArgs(argv) {
   const options = {
-    timeoutMs: 600_000,
+    // A hang guard, not a performance bar. The slowest supported runner
+    // (windows-2025) spends ~3.3 minutes in a single cold dependency install
+    // and reached its last one 16 seconds after the old ten-minute budget
+    // expired, while macOS finishes the whole smoke in about six. CI's own
+    // timeout-minutes is the outer bound; this only has to be past the point
+    // where nothing is progressing any more.
+    timeoutMs: 1_200_000,
     launchTimeoutMs: 180_000,
     readyFile: null,
     productionBase: false,
