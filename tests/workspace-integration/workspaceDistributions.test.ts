@@ -7,19 +7,27 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 const sourceRoot = process.env["VIBESTUDIO_USERLAND_ROOT"];
 if (!sourceRoot)
   throw new Error("Workspace distribution acceptance requires the exact Base checkout");
-const distributions = Object.fromEntries(
-  (["base", "personal", "system"] as const).map((role) => [
-    role,
-    prepareWorkspaceDistribution({
-      sourceRoot,
-      manifestContent: readFileSync(
-        path.join(sourceRoot, "meta/distributions", `${role}.yml`),
-        "utf8"
-      ),
-      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-    }),
-  ])
-);
+function prepare(role: string, provided?: ReadonlySet<string>) {
+  return prepareWorkspaceDistribution({
+    sourceRoot,
+    manifestContent: readFileSync(
+      path.join(sourceRoot, "meta/distributions", `${role}.yml`),
+      "utf8"
+    ),
+    expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    ...(provided ? { providedRepositories: provided } : {}),
+  });
+}
+
+// Personal and System are built on Base, so Base is prepared first and its
+// repositories are what they are allowed to leave out.
+const base = prepare("base");
+const provided = new Set(base.repositories.filter((repoPath) => repoPath !== "meta"));
+const distributions = {
+  base,
+  personal: prepare("personal", provided),
+  system: prepare("system", provided),
+};
 
 describe("the shipped workspace source boundaries", () => {
   it("keeps generic Base independent of personal data and native app implementations", () => {
@@ -64,20 +72,39 @@ describe("the shipped workspace source boundaries", () => {
     expect(system.manifest.top.hostTargets?.["react-native"]?.app).toBe("apps/mobile");
   });
 
-  it.each(["base", "personal", "system"])(
-    "%s carries local startup and upstream tools without composed layers",
+  it("carries local startup and upstream tools once, in Base", () => {
+    const files = new Set(distributions.base.files.map((file) => file.path));
+    expect(files.has("about/new/index.tsx")).toBe(true);
+    expect(files.has("about/help/index.tsx")).toBe(true);
+    expect(files.has("skills/templates/SKILL.md")).toBe(true);
+    // Built on Base rather than carrying a copy of it.
+    for (const role of ["personal", "system"] as const) {
+      const carried = new Set(distributions[role].files.map((file) => file.path));
+      expect(carried.has("about/help/index.tsx")).toBe(false);
+      expect(carried.has("skills/templates/SKILL.md")).toBe(false);
+      expect(distributions[role].repositories).not.toContain("panels/chat");
+    }
+  });
+
+  it.each(["base", "personal", "system"] as const)(
+    "%s declares its own manifest, its dependencies, and no composed layers",
     (role) => {
-      const prepared = distributions[role]!;
+      const prepared = distributions[role];
       const files = new Set(prepared.files.map((file) => file.path));
       expect(files.has("meta/vibestudio.yml")).toBe(true);
-      expect(files.has("about/new/index.tsx")).toBe(true);
-      expect(files.has("about/help/index.tsx")).toBe(true);
-      expect(files.has("skills/templates/SKILL.md")).toBe(true);
       expect(prepared.repositories).not.toContain("extensions/template-composer");
       expect(prepared.repositories).not.toContain("packages/template-composer");
       expect(prepared.manifest.top).not.toHaveProperty("templates");
+      // Base stands alone; the other two say what they are built on, so an
+      // installation acquires it rather than expecting to find it copied in.
+      expect(prepared.manifest.dependencies.map((dependency) => dependency.url)).toEqual(
+        role === "base" ? [] : ["git+https://github.com/panticonic/vibestudio-base.git"]
+      );
+      // An initial panel must resolve in the composed workspace, which is this
+      // distribution's own repositories plus whatever its dependency supplies.
+      const composed = new Set([...prepared.repositories, ...(role === "base" ? [] : provided)]);
       for (const panel of prepared.manifest.top.initPanels ?? []) {
-        expect(prepared.repositories).toContain(panel.source);
+        expect(composed.has(panel.source)).toBe(true);
       }
     }
   );

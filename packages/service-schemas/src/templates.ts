@@ -6,6 +6,7 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import {
   WorkspaceGitCommitSchema,
+  WorkspaceTemplateDependencySchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -40,6 +41,14 @@ const authoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
     description: z.string().trim().min(1),
+    /**
+     * Templates this one is built on.
+     *
+     * Their repositories are excluded from the snapshot rather than copied
+     * into it, and the published manifest declares them so an installation
+     * acquires them itself.
+     */
+    dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
     parts: z.array(z.string()).min(1),
   })
   .strict();

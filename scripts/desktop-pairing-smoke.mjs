@@ -308,7 +308,12 @@ function parseArgs(argv) {
     // timeout-minutes is the outer bound; this only has to be past the point
     // where nothing is progressing any more.
     timeoutMs: 1_200_000,
-    launchTimeoutMs: 180_000,
+    // Also a hang guard rather than a performance bar. A first startup
+    // acquires every layer the workspace is composed from and builds it, and
+    // on windows-2025 that reached reconciliation at 101 seconds and had the
+    // shell seven seconds later — just past the old three-minute budget once
+    // System stopped carrying a copy of Base and started acquiring it.
+    launchTimeoutMs: 420_000,
     readyFile: null,
     productionBase: false,
     sharedMemberRevocation: false,
