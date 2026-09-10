@@ -1503,7 +1503,9 @@ async function readPanelTreeThroughReconnect(app, timeoutMs) {
       return await getPanelTree(app);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const transportGap = /temporarily unavailable|CONNECTION_LOST|connection lost/iu.test(message);
+      const transportGap = /temporarily unavailable|CONNECTION_LOST|connection lost/iu.test(
+        message
+      );
       if (!transportGap || Date.now() >= deadline) throw error;
       await sleep(250);
     }
@@ -2185,10 +2187,19 @@ async function main() {
     if (!personalWorkspace)
       throw new Error("Personal workspace is missing from the paired catalog");
     const systemIdsBefore = (await getPanelTree(electronApp)).map((panel) => panel.id).sort();
-    await selectWorkspace(electronApp, "Personal", 30000);
-    const personalIdsBefore = await workspaceTreeIds(electronApp, "Personal", 30000);
-    await selectWorkspace(electronApp, "System", 30000);
-    await waitForConnectionStatus(electronApp, true, 30000);
+    // Share the smoke's own deadline rather than a fixed half minute. These
+    // run while a restarted server is bringing its workspaces back, which on
+    // the slowest runner reports "temporarily unavailable" for longer than
+    // that — a switch that is still waiting on a workspace is not a wedge, and
+    // the outer budget plus CI's timeout-minutes already bound it.
+    await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
+    const personalIdsBefore = await workspaceTreeIds(
+      electronApp,
+      "Personal",
+      Math.max(1000, deadlineMs - Date.now())
+    );
+    await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
+    await waitForConnectionStatus(electronApp, true, Math.max(1000, deadlineMs - Date.now()));
     console.log(
       "[desktop-smoke] Restarting the owned server with the desktop and device credential retained"
     );
@@ -2230,7 +2241,7 @@ async function main() {
     if (!workspaceIdentityBefore.id || workspaceIdentityBefore.id !== workspaceIdentityAfter.id) {
       throw new Error("Reconnect changed the owning System workspace");
     }
-    await selectWorkspace(electronApp, "Personal", 30000);
+    await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
     const restoredChrome = await chromePage(electronApp, deadlineMs);
     await nativeRpc(
       restoredChrome,
@@ -2254,7 +2265,7 @@ async function main() {
     console.log(
       `[desktop-smoke] Recovered Personal onboarding: ${JSON.stringify(recoveredOnboarding)}`
     );
-    await selectWorkspace(electronApp, "System", 30000);
+    await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
     const systemIdsAfter = (await readPanelTreeThroughReconnect(electronApp, 30_000))
       .map((panel) => panel.id)
       .sort();
