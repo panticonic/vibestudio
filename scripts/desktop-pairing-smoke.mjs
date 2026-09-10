@@ -299,6 +299,36 @@ function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EV
   });
 }
 
+/**
+ * Whether a failed observation only means "the desktop cannot answer yet".
+ *
+ * The scenario restarts the workspace server on purpose, so every read taken
+ * around that restart can land in the gap it opens. Three shapes come back from
+ * that one cause: the main process refuses an RPC because the workspace session
+ * is not back ("temporarily unavailable"), an in-flight call dies with the
+ * socket, or the answer simply does not arrive inside one evaluation budget.
+ *
+ * A polling loop has to treat all three the same, because which one it sees is
+ * a matter of where in the gap it happened to ask. Each loop deciding that for
+ * itself is what let one of them tolerate the slow shape and fail the run on
+ * the unavailable shape — the same condition, told apart by nothing that
+ * matters. Anything not listed here is a real failure and still ends the run.
+ *
+ * Matching on text, unlike the host's own typed classification, is what is left
+ * once a failure has crossed the Playwright boundary: it arrives here as a
+ * message, with the code and the class it was thrown with already gone.
+ */
+function isTransientDesktopObservation(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /temporarily unavailable/iu.test(message) ||
+    /CONNECTION_LOST/u.test(message) ||
+    /connection lost/iu.test(message) ||
+    /evaluation timed out/iu.test(message) ||
+    /Hosted desktop chrome is unavailable/iu.test(message)
+  );
+}
+
 function parseArgs(argv) {
   const options = {
     // A hang guard, not a performance bar. The slowest supported runner
@@ -1071,8 +1101,10 @@ async function selectWorkspace(app, name, timeoutMs) {
   // Asking can itself fail for the same reason: a restarted server reports
   // "temporarily unavailable" until its workspaces are back, and letting that
   // escape would fail the run for the very condition this loop exists to wait
-  // out. The last failure is kept and reported only if the deadline passes, so
-  // nothing is hidden — just deferred until it means something.
+  // out. This one defers every failure rather than only the transient ones
+  // `isTransientDesktopObservation` names, because a click that has to land is
+  // worth re-attempting whatever went wrong with the last one. Nothing is
+  // hidden either way: the last failure is reported if the deadline passes.
   while (Date.now() < deadline) {
     try {
       if (await evaluateHostedChrome(app, focusExpression, `waiting for ${name} workspace focus`)) {
@@ -1515,11 +1547,7 @@ async function readPanelTreeThroughReconnect(app, timeoutMs) {
     try {
       return await getPanelTree(app);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const transportGap = /temporarily unavailable|CONNECTION_LOST|connection lost/iu.test(
-        message
-      );
-      if (!transportGap || Date.now() >= deadline) throw error;
+      if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
       await sleep(250);
     }
   }
@@ -1571,7 +1599,7 @@ async function waitForSystemNewPanel(app, timeoutMs) {
         Math.min(30_000, Math.max(1_000, deadline - Date.now()))
       );
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("evaluation timed out")) throw error;
+      if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
       await sleep(250);
       continue;
     }
