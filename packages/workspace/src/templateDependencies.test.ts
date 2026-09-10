@@ -10,15 +10,20 @@ const shared = "git+https://example.test/shared.git";
 const commitA = "a".repeat(40);
 const commitB = "b".repeat(40);
 
+/** A track glob resolves to a concrete tag, the way the real selector does. */
+function selectedRef(track: string): string {
+  return track.replace("*", "1.0.0");
+}
+
 function resolver(
   heads: Record<string, string>,
   graph: Record<string, readonly WorkspaceTemplateDependency[]> = {}
 ) {
   return {
-    resolveRef: vi.fn(async ({ url, ref }: { url: string; ref: string }) => {
-      const head = heads[`${url}#${ref}`] ?? heads[url];
-      if (!head) throw new Error(`no such ref ${url}#${ref}`);
-      return head;
+    resolveTrack: vi.fn(async ({ url, track }: { url: string; track: string }) => {
+      const commit = heads[`${url}#${track}`] ?? heads[url];
+      if (!commit) throw new Error(`no such track ${url}#${track}`);
+      return { ref: selectedRef(track), commit };
     }),
     readDependencies: vi.fn(async (layer: ResolvedTemplateDependency) => graph[layer.url] ?? []),
   };
@@ -31,10 +36,12 @@ describe("resolveTemplateDependencies", () => {
       root: { label: "workspace", dependencies: [{ url: base }] },
       ...io,
     });
+    // Nothing said which version, so it followed the release track.
     expect(layers).toEqual([
       {
         url: base,
-        ref: "refs/heads/main",
+        track: "refs/tags/v*",
+        ref: "refs/tags/v1.0.0",
         commit: commitA,
         pinned: false,
         requestedBy: ["workspace"],
@@ -51,7 +58,7 @@ describe("resolveTemplateDependencies", () => {
       ...io,
     });
     expect(layers.map((layer) => layer.url)).toEqual([base, shared]);
-    expect(io.resolveRef).toHaveBeenCalledTimes(2);
+    expect(io.resolveTrack).toHaveBeenCalledTimes(2);
   });
 
   it("orders a dependency ahead of everything built on it", async () => {
@@ -90,7 +97,7 @@ describe("resolveTemplateDependencies", () => {
     const resolvedBase = layers.find((layer) => layer.url === base);
     expect(resolvedBase).toMatchObject({ commit: commitB, pinned: true });
     // Nothing asked the remote what `main` points at, because a pin already said.
-    expect(io.resolveRef).not.toHaveBeenCalledWith(expect.objectContaining({ url: base }));
+    expect(io.resolveTrack).not.toHaveBeenCalledWith(expect.objectContaining({ url: base }));
   });
 
   it("refuses a pin that contradicts a float already resolved", async () => {
@@ -106,20 +113,20 @@ describe("resolveTemplateDependencies", () => {
     ).rejects.toThrow(/pin it once at the root/u);
   });
 
-  it("refuses one shared dependency followed at two different refs", async () => {
+  it("refuses one shared dependency followed on two different tracks", async () => {
     const io = resolver(
       { [base]: commitA, [shared]: commitB },
-      { [shared]: [{ url: base, ref: "refs/heads/release" }] }
+      { [shared]: [{ url: base, track: "refs/tags/next-v*" }] }
     );
     await expect(
       resolveTemplateDependencies({
         root: {
           label: "workspace",
-          dependencies: [{ url: base, ref: "refs/heads/main" }, { url: shared }],
+          dependencies: [{ url: base, track: "refs/tags/v*" }, { url: shared }],
         },
         ...io,
       })
-    ).rejects.toThrow(/may follow only one ref/u);
+    ).rejects.toThrow(/may follow only one track/u);
   });
 
   it("stops on a dependency cycle instead of laying layers down forever", async () => {

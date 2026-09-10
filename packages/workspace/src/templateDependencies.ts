@@ -14,16 +14,25 @@ import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
  * ask for.
  */
 
-/** The ref a dependency follows when it names none. */
-export const DEFAULT_TEMPLATE_DEPENDENCY_REF = "refs/heads/main";
+/**
+ * What a dependency follows when it names nothing: the source's releases.
+ *
+ * A branch tip would float too, but it floats over whatever was last pushed. A
+ * release track floats over what was deliberately published, and two templates
+ * that both follow it agree without either having to pin.
+ */
+export const DEFAULT_TEMPLATE_DEPENDENCY_TRACK = "refs/tags/v*";
 
 export interface ResolvedTemplateDependency {
   /** Canonical credential-free source URL. */
   url: string;
+  /** What was followed to get here — the declared track, or its default. */
+  track: string;
+  /** The canonical ref the track selected. */
   ref: string;
   commit: string;
   credential?: string;
-  /** True when an exact `commit` decided this, rather than resolving the ref. */
+  /** True when an exact `commit` decided this, rather than following the track. */
   pinned: boolean;
   /** Labels of the templates that asked for this, for diagnostics. */
   requestedBy: readonly string[];
@@ -38,7 +47,7 @@ export interface TemplateDependencyGraph {
 }
 
 interface Constraint {
-  refs: Set<string>;
+  tracks: Set<string>;
   commits: Set<string>;
   requestedBy: string[];
   credential?: string;
@@ -51,8 +60,15 @@ export interface ResolveTemplateDependenciesInput {
   readDependencies: (
     layer: ResolvedTemplateDependency
   ) => Promise<readonly WorkspaceTemplateDependency[]>;
-  /** Resolve a moving address to the commit it names right now. */
-  resolveRef: (address: { url: string; ref: string; credential?: string }) => Promise<string>;
+  /**
+   * Resolve one track to what it selects right now. A `refs/tags/*` glob picks
+   * the highest version-sorted tag; a canonical ref resolves directly.
+   */
+  resolveTrack: (address: {
+    url: string;
+    track: string;
+    credential?: string;
+  }) => Promise<{ ref: string; commit: string }>;
 }
 
 /** Resolve one template's transitive dependencies into ordered exact layers. */
@@ -71,14 +87,14 @@ export async function resolveTemplateDependencies(
     }
     let constraint = constraints.get(url);
     if (!constraint) {
-      constraint = { refs: new Set(), commits: new Set(), requestedBy: [] };
+      constraint = { tracks: new Set(), commits: new Set(), requestedBy: [] };
       constraints.set(url, constraint);
       queue.push(url);
     }
     constraint.requestedBy.push(from);
     if (dependency.credential) constraint.credential = dependency.credential;
     if (dependency.commit) constraint.commits.add(dependency.commit.toLowerCase());
-    else constraint.refs.add(dependency.ref ?? DEFAULT_TEMPLATE_DEPENDENCY_REF);
+    else constraint.tracks.add(dependency.track ?? DEFAULT_TEMPLATE_DEPENDENCY_TRACK);
     const existing = resolved.get(url);
     if (existing) {
       // This address was already answered, so a declaration arriving now can
@@ -96,12 +112,12 @@ export async function resolveTemplateDependencies(
       } else if (!existing.pinned) {
         // An exact pin already decided this, so a float simply yields to it;
         // two floats naming different refs are a genuine disagreement.
-        const ref = dependency.ref ?? DEFAULT_TEMPLATE_DEPENDENCY_REF;
-        if (ref !== existing.ref) {
+        const track = dependency.track ?? DEFAULT_TEMPLATE_DEPENDENCY_TRACK;
+        if (track !== existing.track) {
           throw new Error(
-            `Template dependency ${url} is followed at ${existing.ref} and ${ref} by ` +
+            `Template dependency ${url} is followed at ${existing.track} and ${track} by ` +
               `${existing.requestedBy.join(", ")} and ${from}; a shared dependency may ` +
-              `follow only one ref`
+              `follow only one track`
           );
         }
       }
@@ -125,28 +141,25 @@ export async function resolveTemplateDependencies(
       );
     }
     const [pinned] = constraint.commits;
-    if (!pinned && constraint.refs.size > 1) {
+    if (!pinned && constraint.tracks.size > 1) {
       throw new Error(
-        `Template dependency ${url} is followed at ${[...constraint.refs].sort().join(" and ")} ` +
-          `by ${constraint.requestedBy.join(", ")}; a shared dependency may follow only one ref`
+        `Template dependency ${url} follows ${[...constraint.tracks].sort().join(" and ")} ` +
+          `by ${constraint.requestedBy.join(", ")}; a shared dependency may follow only one track`
       );
     }
-    const ref = pinned
-      ? ([...constraint.refs][0] ?? DEFAULT_TEMPLATE_DEPENDENCY_REF)
-      : [...constraint.refs][0]!;
+    const track = [...constraint.tracks][0] ?? DEFAULT_TEMPLATE_DEPENDENCY_TRACK;
+    const credential = constraint.credential ? { credential: constraint.credential } : {};
+    // A pin already names the commit, so nothing asks the remote what the track
+    // selects today — that is the whole point of pinning one.
+    const selected = pinned
+      ? { ref: track, commit: pinned }
+      : await input.resolveTrack({ url, track, ...credential });
     const layer: ResolvedTemplateDependency = {
       url,
-      ref,
-      commit:
-        pinned ??
-        (
-          await input.resolveRef({
-            url,
-            ref,
-            ...(constraint.credential ? { credential: constraint.credential } : {}),
-          })
-        ).toLowerCase(),
-      ...(constraint.credential ? { credential: constraint.credential } : {}),
+      track,
+      ref: selected.ref,
+      commit: selected.commit.toLowerCase(),
+      ...credential,
       pinned: Boolean(pinned),
       requestedBy: [...constraint.requestedBy],
     };

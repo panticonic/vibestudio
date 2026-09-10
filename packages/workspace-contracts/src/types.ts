@@ -133,8 +133,13 @@ export interface WorkspaceTemplateDeclaration {
  * that can make a shared dependency fail to resolve.
  */
 export interface WorkspaceTemplateDependency extends WorkspaceTemplateDeclaration {
-  /** Ref this dependency follows. The source's default branch when absent. */
-  ref?: string;
+  /**
+   * What this dependency follows: a canonical ref, or a `refs/tags/*` glob that
+   * selects the highest version-sorted tag. Defaults to the source's releases,
+   * so an ordinary dependency tracks published versions rather than whatever
+   * someone last pushed to a branch.
+   */
+  track?: string;
   /** Set only when this dependency is deliberately frozen to one commit. */
   commit?: string;
 }
