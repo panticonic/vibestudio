@@ -1367,6 +1367,85 @@ describe("PanelOrchestrator.focusPanel", () => {
     expect(registry.getPanel(panel.id)?.artifacts.viewFailure).toBeUndefined();
   });
 
+  it("presents a wanted slot once the transport comes back, with nobody asking again", async () => {
+    // The half that made the difference in the field: nothing tells this host
+    // when a dropped transport returns, and nothing was calling ensureLoaded a
+    // second time, so a slot that failed while focused stayed failed.
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({
+        workspaceId: "workspace-test",
+        onTreeUpdated: vi.fn(),
+      });
+      const panel = makePanel("panel:tree/converge", [], { artifacts: { buildState: "ready" } });
+      registry.addPanel(panel, null, { addAsRoot: true });
+      const { orchestrator, panelView } = createOrchestrator(registry);
+      const loaded = new Set<string>();
+      panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+      let transportDown = true;
+      panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+        if (transportDown) {
+          throw Object.assign(new Error("Workspace server is temporarily unavailable"), {
+            code: SESSION_CONNECTION_LOST_CODE,
+            errorKind: "transport",
+          });
+        }
+        loaded.add(panelId);
+      });
+
+      await orchestrator.ensureLoaded(panel.id);
+      expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+        state: "failed",
+        retryable: true,
+      });
+
+      const attemptsWhileDown = panelView.createViewForPanel.mock.calls.length;
+      transportDown = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // Re-driven without a second ensureLoaded, and no longer failed. Reaching
+      // "ready" needs the renderer's boot and slot handshake, which this
+      // harness does not simulate; what matters here is that the slot stopped
+      // being abandoned.
+      expect(panelView.createViewForPanel.mock.calls.length).toBeGreaterThan(attemptsWhileDown);
+      expect(orchestrator.getLocalPresentation(panel.id).presentation.state).not.toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops re-driving a slot that keeps failing the same way", async () => {
+    // Retryable says another attempt could succeed, not that it will. Without a
+    // bound, a cause that looks transient every time is retried for the life of
+    // the process.
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({
+        workspaceId: "workspace-test",
+        onTreeUpdated: vi.fn(),
+      });
+      const panel = makePanel("panel:tree/bounded", [], { artifacts: { buildState: "ready" } });
+      registry.addPanel(panel, null, { addAsRoot: true });
+      const { orchestrator, panelView } = createOrchestrator(registry);
+      panelView.hasView.mockReturnValue(false);
+      panelView.createViewForPanel.mockRejectedValue(
+        Object.assign(new Error("Workspace server is temporarily unavailable"), {
+          code: SESSION_CONNECTION_LOST_CODE,
+          errorKind: "transport",
+        })
+      );
+
+      await orchestrator.ensureLoaded(panel.id);
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      // One ask plus a bounded number of convergence passes, not one per second
+      // for as long as the process lives.
+      expect(panelView.createViewForPanel.mock.calls.length).toBeLessThanOrEqual(13);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives a slot another go after a transport drop, and stops after a broken renderer", async () => {
     // The two halves of the same rule. A retryable failure is the record of a
     // condition expected to pass, so asking again must actually try again; a
