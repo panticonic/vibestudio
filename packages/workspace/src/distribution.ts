@@ -213,7 +213,16 @@ function workspaceDependencies(repoPath: string, manifest: PackageManifest | nul
 /** Resolve the complete local package closure of an explicit repository selection. */
 export function resolveDistributionInventory(
   sourceRootInput: string,
-  roots: readonly string[]
+  roots: readonly string[],
+  /**
+   * Repositories a declared dependency already supplies.
+   *
+   * A distribution built on another declares only what it adds, so its closure
+   * must stop at the dependency's edge. Without that, the closure walks back
+   * into everything the dependency provides and the composed workspace ends up
+   * with two layers declaring the same repository.
+   */
+  provided: ReadonlySet<string> = new Set()
 ): string[] {
   const sourceRoot = fs.realpathSync(path.resolve(sourceRootInput));
   const selected = new Set<string>();
@@ -223,6 +232,11 @@ export function resolveDistributionInventory(
     const sourcePath = path.join(sourceRoot, ...repoPath.split("/"));
     if (!fs.existsSync(sourcePath) || !fs.lstatSync(sourcePath).isDirectory()) {
       throw new Error(`Distribution repository is missing: ${repoPath}`);
+    }
+    if (provided.has(repoPath)) {
+      throw new Error(
+        `Distribution repository ${repoPath} is already provided by a declared dependency`
+      );
     }
     if (!selected.has(repoPath)) {
       selected.add(repoPath);
@@ -236,7 +250,7 @@ export function resolveDistributionInventory(
     if (!repoPath) break;
     const manifest = readPackageManifest(sourceRoot, repoPath);
     const template = panelTemplateDependency(sourceRoot, repoPath, manifest);
-    if (template && !selected.has(template)) {
+    if (template && !provided.has(template) && !selected.has(template)) {
       selected.add(template);
       pending.push(template);
     }
@@ -254,7 +268,7 @@ export function resolveDistributionInventory(
       }
       const owner = matches[0];
       if (!owner) throw new Error(`Distribution local dependency ${dependency} has no owner`);
-      if (selected.has(owner)) continue;
+      if (provided.has(owner) || selected.has(owner)) continue;
       selected.add(owner);
       pending.push(owner);
     }
@@ -313,23 +327,38 @@ export function prepareWorkspaceDistribution(input: {
   sourceRoot: string;
   manifestContent: string;
   expectedSystemEpoch: number;
+  /** Repositories the manifest's declared dependencies already supply. */
+  providedRepositories?: ReadonlySet<string>;
 }): PreparedWorkspaceDistribution {
   const sourceRoot = fs.realpathSync(path.resolve(input.sourceRoot));
   const authored = parseTemplateManifestContent(input.manifestContent, input.expectedSystemEpoch);
-  const repositories = resolveDistributionInventory(sourceRoot, authored.inventory.repositories);
+  const provided = input.providedRepositories ?? new Set<string>();
+  if (authored.dependencies.length === 0 && provided.size > 0) {
+    throw new Error("Distribution declares no dependencies, so nothing can be provided for it");
+  }
+  const repositories = resolveDistributionInventory(
+    sourceRoot,
+    authored.inventory.repositories,
+    provided
+  );
   const sourceManifest = canonicalTemplateYaml({
     ...authored.top,
     template: {
       ...(authored.presentation ?? {}),
+      // Carried through, because the workspace this becomes has to know what it
+      // is built on in order to acquire it.
+      ...(authored.dependencies.length > 0 ? { dependencies: authored.dependencies } : {}),
       repositories,
       files: authored.inventory.files,
     },
   });
   const manifest = parseTemplateManifestContent(sourceManifest, input.expectedSystemEpoch);
+  // A runtime reference into a dependency's repository is legitimate: that
+  // repository is present in the composed workspace, just not in this layer.
   validateRuntimeInventory(
     sourceRoot,
     rootRuntimeFromTemplateManifest(manifest),
-    new Set(repositories)
+    new Set([...repositories, ...provided])
   );
   const files = new Map<string, WorkspaceDistributionFile>([
     [

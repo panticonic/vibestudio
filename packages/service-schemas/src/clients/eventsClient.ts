@@ -6,7 +6,12 @@
  * Direct-address events are delivered by the authenticated RPC transport and
  * broadcast events are delivered by the owned watch response.
  */
-import { isRpcConnectionLost, type RpcCaller, type RpcClient } from "@vibestudio/rpc";
+import {
+  isPanelRuntimeLeaseConflict,
+  isRpcConnectionLost,
+  type RpcCaller,
+  type RpcClient,
+} from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
@@ -239,7 +244,12 @@ export class EventsClient {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.queueRefresh().catch((error: unknown) => {
-        if (!isRpcConnectionLost(error))
+        // Recovery is a retry loop, so a refusal that the next attempt resolves
+        // is not news. A lost connection and a panel runtime lease moving to
+        // another connection are both transitions of that kind; warning about
+        // them reads as a broken panel, and the desktop smoke fails a run whose
+        // panel recovered moments later.
+        if (!isRpcConnectionLost(error) && !isPanelRuntimeLeaseConflict(error))
           console.warn("[EventsClient] event watch recovery failed:", error);
       });
     }, delayMs);

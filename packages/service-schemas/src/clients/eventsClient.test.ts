@@ -259,6 +259,30 @@ describe("EventsClient", () => {
     }
   );
 
+  it("recovers quietly while a panel runtime lease moves between connections", async () => {
+    // A reconnect re-leases the panel, and the holder's next attempt succeeds.
+    // Warning here reported a broken panel for a transition that healed itself.
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failure = new RemoteRpcError(
+      "Panel runtime is leased by Desktop",
+      "transport",
+      "panel_runtime_leased"
+    );
+    fixture.stream.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+    try {
+      await expect(client.subscribe("panel-tree-invalidated")).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(warning).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fixture.stream).toHaveBeenCalledTimes(3);
+    } finally {
+      await client.unsubscribeAll();
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("reopens desired topics after an unexpected terminal close", async () => {
     await client.subscribe("panel-tree-invalidated");
     fixture.close(0);

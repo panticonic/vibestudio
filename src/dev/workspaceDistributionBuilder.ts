@@ -82,6 +82,8 @@ export async function buildWorkspaceDistribution(input: {
    * longest paths in it past what Windows Git will create.
    */
   sourceSealed?: boolean;
+  /** Repositories this distribution's declared dependencies already supply. */
+  providedRepositories?: ReadonlySet<string>;
 }): Promise<BuiltWorkspaceDistribution> {
   const sourceRoot = fs.realpathSync(path.resolve(input.sourceRoot));
   const outputRoot = path.resolve(input.outputRoot);
@@ -116,6 +118,7 @@ export async function buildWorkspaceDistribution(input: {
       sourceRoot: sealed,
       manifestContent: readManifest(sealed, input.manifestPath),
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      ...(input.providedRepositories ? { providedRepositories: input.providedRepositories } : {}),
     });
     fs.mkdirSync(stagedCheckout);
     writeDistribution(stagedCheckout, prepared);
@@ -191,9 +194,25 @@ export async function prepareDevelopmentWorkspaceDistributions(input: {
     });
     fs.mkdirSync(stagedOutput);
     const built = {} as Record<DevelopmentWorkspaceDistribution, BuiltWorkspaceDistribution>;
+    // Base is first because the other two are built on it: a distribution that
+    // declares a dependency gets Base's repositories as already provided, so
+    // its own closure stops where Base's begins. Development resolves every
+    // declared dependency to the Base it just built from this same checkout,
+    // which is the point of building all three from one sealed state.
     for (const name of DEVELOPMENT_WORKSPACE_DISTRIBUTIONS) {
+      const declaresDependency = /^\s*(-\s*)?dependencies:/mu.test(
+        fs.readFileSync(
+          path.join(checkpoint.checkout, "meta", "distributions", `${name}.yml`),
+          "utf8"
+        )
+      );
+      const provided =
+        declaresDependency && built.base
+          ? new Set(built.base.repositories.filter((repoPath) => repoPath !== "meta"))
+          : undefined;
       built[name] = await buildWorkspaceDistribution({
         sourceRoot: checkpoint.checkout,
+        ...(provided ? { providedRepositories: provided } : {}),
         // One sealed state for all three, which is the invariant this function
         // exists to hold; re-sealing it per role would copy it three more times.
         sourceSealed: true,
