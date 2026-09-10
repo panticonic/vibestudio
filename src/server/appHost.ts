@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
+import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzip } from "node:zlib";
@@ -423,6 +423,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.trustResolver = new UnitTrustResolver<AppRegistryEntry>({
       entryIdentity: (entry) => this.registryEntryIdentity(entry),
     });
+    const isHostBuildUnit = createHostBuildUnitGate({
+      statePath: deps.statePath,
+      workspacePath: deps.workspacePath,
+    });
     this.unitHost = new UnitHost({
       descriptor: APP_UNIT_DESCRIPTOR,
       registry: this.registry,
@@ -440,20 +444,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               deps.isAdmitted!(identity.source.repo, identity.effectiveVersion),
           }
         : {}),
-      // The desktop, mobile, and terminal apps that ARE Vibestudio ship with a
-      // signed record over their own source. The user decided about them by
-      // installing Vibestudio; asking again on a surface one of them renders
-      // would be a question that cannot be answered (§7.6).
+      // The desktop, mobile, and terminal apps that ARE Vibestudio arrived
+      // unmodified in the template this build designates. The user decided
+      // about them by installing Vibestudio; asking again on a surface one of
+      // them renders would be a question that cannot be answered (§7.6).
       isSeedTrusted: (node, identity) =>
-        isProductSeedTrusted({
-          unitDir: path.join(deps.workspacePath, node.relativePath),
-          identity: {
-            unitKind: "app",
-            name: identity.name,
-            source: identity.source,
-            effectiveVersion: identity.effectiveVersion,
-          },
-        }),
+        identity.effectiveVersion !== null && isHostBuildUnit(node.relativePath),
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       removeUndeclared: async (entry) => {

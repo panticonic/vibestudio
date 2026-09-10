@@ -8,7 +8,10 @@ import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
-import { writeProductSeedSourceRecord } from "@vibestudio/shared/productSeedTrust";
+import {
+  buildHostBuildUnitInventory,
+  hostBuildUnitInventoryPath,
+} from "@vibestudio/shared/hostBuildUnits";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
@@ -153,12 +156,22 @@ function makeHarness(
   );
   fs.writeFileSync(path.join(appPath, "index.tsx"), "export default null;\n");
   if (opts.seeded) {
-    writeProductSeedSourceRecord({
-      unitDir: appPath,
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      sourceRepo: "apps/shell",
-    });
+    // The host records what a designated template shipped, in host state. Only
+    // apps/shell is recorded here, matching the one unit this harness lays down
+    // as shipped source.
+    const inventoryPath = hostBuildUnitInventoryPath(path.join(root, "state"));
+    fs.mkdirSync(path.dirname(inventoryPath), { recursive: true });
+    fs.writeFileSync(
+      inventoryPath,
+      JSON.stringify(
+        buildHostBuildUnitInventory({
+          root: workspacePath,
+          unitRepoPaths: ["apps/shell"],
+          templateUrl: "git+https://example.test/base.git",
+          commit: "a".repeat(40),
+        })
+      )
+    );
   }
   const defaultBuildDir = path.join(root, "state", "builds", "app-key");
   const artifact = storedArtifact(defaultBuildDir, "index.html", "<!doctype html><div>app</div>", {
@@ -1992,6 +2005,26 @@ describe("AppHost", () => {
         ]),
       })
     );
+  });
+
+  it("takes a unit the designated template shipped as a host-build unit", async () => {
+    // Skipping the workspace admission review is what lets the shell render a
+    // review at all; without it the shell waits on a decision only it can show.
+    const { host } = makeHarness({ seeded: true });
+    const declared = [{ source: "apps/shell", ref: "main" }];
+
+    expect(host.seedTrustedDeclared(declared).map((unit) => unit.source.repo)).toEqual([
+      "apps/shell",
+    ]);
+  });
+
+  it("stops taking it as a host-build unit once its source is edited", async () => {
+    const { host, workspacePath } = makeHarness({ seeded: true });
+    const declared = [{ source: "apps/shell", ref: "main" }];
+
+    fs.writeFileSync(path.join(workspacePath, "apps/shell/index.tsx"), "export default 1;\n");
+
+    expect(host.seedTrustedDeclared(declared)).toEqual([]);
   });
 
   it("still prompts for exact product-seeded app source", async () => {

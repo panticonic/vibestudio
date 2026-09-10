@@ -172,3 +172,29 @@ function listUnitSourceFiles(root: string): string[] {
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
 }
+
+/**
+ * The host-build gate both unit hosts share.
+ *
+ * The inventory is read once. It is written while the root template is
+ * materialized, before any unit host starts, and it lives in host state rather
+ * than workspace source, so nothing a workspace does can change the answer
+ * mid-run.
+ */
+export function createHostBuildUnitGate(input: {
+  statePath: string;
+  workspacePath: string;
+}): (repoPath: string) => boolean {
+  let inventory: HostBuildUnitInventory | null | undefined;
+  return (repoPath) => {
+    if (inventory === undefined) {
+      inventory = readHostBuildUnitInventory(hostBuildUnitInventoryPath(input.statePath));
+    }
+    const normalized = normalizeUnitRepoPath(repoPath);
+    return isHostBuildUnitSource({
+      inventory,
+      repoPath: normalized,
+      unitDir: path.join(input.workspacePath, ...normalized.split("/")),
+    });
+  };
+}

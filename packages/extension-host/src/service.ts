@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
+import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -469,6 +469,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
     });
+    const isHostBuildUnit = createHostBuildUnitGate({
+      statePath: deps.statePath,
+      workspacePath: deps.workspacePath,
+    });
     this.unitHost = new UnitHost({
       descriptor: EXTENSION_UNIT_DESCRIPTOR,
       registry: this.registry,
@@ -487,19 +491,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           }
         : {}),
       // Extensions that ship in the host build (the React Native provider and
-      // its kin) carry a signed record over their own source. Native code from
-      // a third party still faces the launch gate; ours is the build the user
-      // already chose to run (§7.6).
+      // its kin) arrived unmodified in the template this build designates.
+      // Native code from a third party still faces the launch gate; ours is
+      // the build the user already chose to run (§7.6).
       isSeedTrusted: (node, identity) =>
-        isProductSeedTrusted({
-          unitDir: path.join(deps.workspacePath, node.relativePath),
-          identity: {
-            unitKind: "extension",
-            name: identity.name,
-            source: identity.source,
-            effectiveVersion: identity.effectiveVersion,
-          },
-        }),
+        identity.effectiveVersion !== null && isHostBuildUnit(node.relativePath),
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
