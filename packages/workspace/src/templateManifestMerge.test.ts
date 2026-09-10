@@ -120,4 +120,61 @@ describe("mergeTemplateManifests", () => {
       mergeTemplateManifests([other, layer("personal", { repositories: ["meta"] })])
     ).toThrow(/disagree about the workspace system epoch/u);
   });
+
+  it("merges a record setting per slot so a layer can name only what it changes", () => {
+    const merged = mergeTemplateManifests([
+      layer(
+        "base",
+        { repositories: ["meta"] },
+        {
+          extensions: [{ source: "extensions/git-bridge" }],
+          providers: {
+            evalEngine: { source: "@workspace/eval" },
+            gitInterop: { extension: "extensions/git-bridge" },
+          },
+        }
+      ),
+      layer(
+        "personal",
+        { repositories: ["meta"] },
+        {
+          extensions: [{ source: "extensions/browser-data" }],
+          providers: { browserData: { extension: "extensions/browser-data" } },
+        }
+      ),
+    ]);
+
+    // Personal named one slot and kept the two Base supplied, instead of having
+    // to restate them to avoid losing them.
+    expect(merged.document["providers"]).toEqual({
+      evalEngine: { source: "@workspace/eval" },
+      gitInterop: { extension: "extensions/git-bridge" },
+      browserData: { extension: "extensions/browser-data" },
+    });
+  });
+
+  it("lets the top layer replace one slot without disturbing the others", () => {
+    const merged = mergeTemplateManifests([
+      layer(
+        "base",
+        { repositories: ["meta"] },
+        { defaultAgentConfig: { model: "base-model", thinkingLevel: "high" } }
+      ),
+      layer("system", { repositories: ["meta"] }, { defaultAgentConfig: { model: "own-model" } }),
+    ]);
+    expect(merged.document["defaultAgentConfig"]).toEqual({
+      model: "own-model",
+      thinkingLevel: "high",
+    });
+  });
+
+  it("replaces a list inside a slot rather than letting a dependency join it", () => {
+    // trust.chromeApps decides which apps may render host chrome, so the layer
+    // that states it states all of it; a dependency cannot add itself.
+    const merged = mergeTemplateManifests([
+      layer("base", { repositories: ["meta"] }, { trust: { chromeApps: ["apps/base-shell"] } }),
+      layer("system", { repositories: ["meta"] }, { trust: { chromeApps: ["apps/shell"] } }),
+    ]);
+    expect(merged.document["trust"]).toEqual({ chromeApps: ["apps/shell"] });
+  });
 });

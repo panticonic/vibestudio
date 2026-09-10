@@ -58,10 +58,11 @@ const composedRuntime = canonicalTemplateYaml(
 );
 
 describe("shipped Personal first-run workspace", () => {
-  it("is valid against the canonical workspace configuration contract once composed", () => {
-    // Personal is a layer, not a workspace: it restates the providers it wants
-    // while leaving the extensions behind them to Base, so it is the composed
-    // manifest — what a host actually materializes — that has to validate.
+  it("is valid against the canonical workspace configuration contract, layer and composition alike", () => {
+    // Personal names only the provider slots it adds, so its own manifest no
+    // longer refers to extensions it does not declare — a layer stands on its
+    // own now, and so does what a host actually materializes from it.
+    expect(() => parseWorkspaceConfigContentWithId(personalRuntime, "shipped-layer")).not.toThrow();
     expect(() =>
       parseWorkspaceConfigContentWithId(composedRuntime, "shipped-template")
     ).not.toThrow();

@@ -21,6 +21,28 @@ const UNIQUE_SOURCE_LISTS = ["extensions", "apps"] as const;
 /** Declarations that accumulate, where repeating a source is legitimate. */
 const ACCUMULATING_LISTS = ["services", "routes", "singletonObjects"] as const;
 
+/**
+ * Settings that are records of independent named slots, merged one level deep.
+ *
+ * Replacing one of these wholesale punishes a dependent for naming a single
+ * slot, and it did: Personal had to restate every provider Base declared,
+ * which left its own manifest pointing at extensions it no longer listed.
+ * Merging per slot lets a layer say only what it changes.
+ *
+ * One level only, and a slot's value is replaced rather than merged — a list
+ * inside a slot stays the statement of the layer that made it, so a dependency
+ * cannot quietly add itself to something like `trust.chromeApps`. `git` is
+ * deliberately absent: its records nest further, and half-merging them would
+ * be harder to predict than replacing them.
+ */
+const MERGED_RECORD_SETTINGS = ["providers", "trust", "hostTargets", "defaultAgentConfig"] as const;
+
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 export interface TemplateManifestLayer {
   /** Which template this manifest came from, for diagnostics. */
   label: string;
@@ -98,6 +120,13 @@ export function mergeTemplateManifests(
       if (key === "template" || key === "dependencies") continue;
       if ((UNIQUE_SOURCE_LISTS as readonly string[]).includes(key)) continue;
       if ((ACCUMULATING_LISTS as readonly string[]).includes(key)) continue;
+      const slots = (MERGED_RECORD_SETTINGS as readonly string[]).includes(key)
+        ? plainRecord(value)
+        : null;
+      if (slots) {
+        document[key] = { ...(plainRecord(document[key]) ?? {}), ...slots };
+        continue;
+      }
       document[key] = value;
     }
   }
