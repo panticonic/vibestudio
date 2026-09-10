@@ -26,7 +26,7 @@ import {
   createRuntimeClient,
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
-import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
+import { isPanelRuntimeLeaseConflict } from "@vibestudio/rpc";
 import type {
   PanelHost,
   PanelHostRegistration,
@@ -888,13 +888,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         // resolves, and neither is a broken panel.
         const isLeaseFailure =
           isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-        const isTransient = isRpcConnectionLost(error);
-        // A dropped connection leaves no failed panel behind, for the same
-        // reason a moved lease does not: the workspace server is coming back,
-        // and a recorded viewFailure would outlive the condition that caused
-        // it and have to be cleared by something noticing.
-        if (!isLeaseFailure && !isTransient)
-          this.runtime.recordPanelViewFailure(targetPanelId, message);
+        // Recorded even for a dropped connection: the recorded failure is what
+        // marks this slot as needing another attempt, so suppressing it removes
+        // the recovery it looks like it is protecting.
+        if (!isLeaseFailure) this.runtime.recordPanelViewFailure(targetPanelId, message);
         return {
           panelId: targetPanelId,
           status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -1029,8 +1026,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       const lease = this.registry.getRuntimeLease(panelId);
       const isLeaseFailure =
         isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-      const isTransient = isRpcConnectionLost(error);
-      if (!isLeaseFailure && !isTransient) this.runtime.recordPanelViewFailure(panelId, message);
+      if (!isLeaseFailure) this.runtime.recordPanelViewFailure(panelId, message);
       return {
         panelId,
         status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
