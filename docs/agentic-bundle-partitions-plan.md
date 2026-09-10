@@ -278,8 +278,14 @@ declare New Panel. The four optional templates' earlier checks contain
 76/66/64/63 repositories. All include local template instructions and the Base
 testing companion. Packaged startup now needs exact publication receipts for
 the three runtime distributions; the old single-Base release artifact does not
-supply those coordinates. No publication has been performed and no updater or
-release-recovery subsystem is being added.
+supply those coordinates. The three distributions have now been published from
+Base `81ac4b2` as immutable tags `refs/tags/distributions/<role>/v0.3.47` on the
+canonical workspace repository, and `build-resources/base-template-release.json`
+carries their adopted pins. Their receipts were assembled from a local build of
+the same distribution manifests rather than issued by `templates.publishAuthoring`,
+which needs a live workspace holding a connected publication credential; the pins
+are exact either way, because a consumer verifies the snapshot digest itself. No
+updater or release-recovery subsystem is being added.
 
 Approval visibility is an account boundary inside shared workspaces: a request
 attributed to a user is visible and actionable only by that current member. Browser
