@@ -1170,11 +1170,40 @@ describe("PanelOrchestrator.focusPanel", () => {
     const result = await orchestrator.focusPanel(panel.id);
 
     expect(panelView.setViewVisible).not.toHaveBeenCalled();
+    // Executable, with no presentation in flight: the repair ended the attempt
+    // and produced no view, so this is a failure that owes another attempt —
+    // not a panel still on its way. Focus used to report "preparing" here and
+    // record nothing, which left the slot with nothing to drive its recovery.
+    expect(result).toMatchObject({
+      status: "view_creation_failed",
+      focused: true,
+      loaded: false,
+    });
+    expect(registry.getPanel(panel.id)?.artifacts.viewFailure).toMatchObject({
+      code: "navigation_failed",
+    });
+  });
+
+  it("calls a discarded view preparing while the panel is not executable yet", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    // Without a complete execution identity there is nothing to run, so an
+    // absent view is the expected state of a slot that has not arrived rather
+    // than the outcome of an attempt that failed.
+    const panel = makePanel("panel:tree/panel-unarrived", [], { executionDigest: undefined });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const result = await orchestrator.focusPanel(panel.id);
+
+    expect(panelView.setViewVisible).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       status: "preparing",
       focused: true,
       loaded: false,
     });
+    expect(registry.getPanel(panel.id)?.artifacts.viewFailure).toBeUndefined();
   });
 
   it("keeps ordinary focus separate from creation placement", async () => {

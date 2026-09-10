@@ -739,30 +739,141 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
    * Authoritative panel creation calls this after panelTree.create has already
    * published its panel-created fact.
    */
-  private async focusPanelLocally(
+  private focusPanelLocally(
     targetPanelId: string,
     opts: { loadIfNeeded?: boolean } = {}
   ): Promise<PanelFocusResult> {
-    let panel = this.registry.getPanel(targetPanelId);
+    return this.bringSlotIntoView(targetPanelId, {
+      focus: true,
+      loadIfNeeded: opts.loadIfNeeded ?? false,
+    });
+  }
+
+  /**
+   * Bring a durable slot to a live native view, optionally focusing it.
+   *
+   * Focusing a panel and merely loading one are the same procedure: resolve the
+   * slot, repair or acquire its runtime lease, and report what the native view
+   * actually became. Focus adds selection bookkeeping before that and a
+   * visibility command after it — it does not change what any of the outcomes
+   * mean.
+   *
+   * They were two implementations of it, and had drifted where it mattered
+   * most: on the path where lease repair discards a renderer retained from a
+   * previous server incarnation, the focus copy reported "preparing"
+   * unconditionally and recorded nothing, so a slot that would never
+   * materialize was described as one still on its way and nothing marked it as
+   * owed another attempt. Whether the caller wanted focus cannot decide that,
+   * so the ladder that decides it now exists once.
+   */
+  private async bringSlotIntoView(
+    panelId: string,
+    opts: { focus: boolean; loadIfNeeded: boolean }
+  ): Promise<PanelFocusResult> {
+    const focused = opts.focus;
+    let panel = this.registry.getPanel(panelId);
     if (!panel) {
       // Query-first tree browsers can present a durable slot before this
       // host's bounded runtime projection contains it. The native-load
       // boundary hydrates that exact slot on demand; lease delivery order must
       // not decide whether a visible panel can be focused.
-      await this.shellCore.getPanel(asPanelSlotId(targetPanelId));
-      panel = this.registry.getPanel(targetPanelId);
+      await this.shellCore.getPanel(asPanelSlotId(panelId));
+      panel = this.registry.getPanel(panelId);
     }
     if (!panel) {
-      log.warn(`Cannot focus panel - not found: ${targetPanelId}`);
+      if (focused) log.warn(`Cannot focus panel - not found: ${panelId}`);
       return {
-        panelId: targetPanelId,
+        panelId,
         status: "missing",
         focused: false,
         loaded: false,
-        message: `Panel not found: ${targetPanelId}`,
+        message: `Panel not found: ${panelId}`,
       };
     }
 
+    if (focused) this.recordFocusMove(panelId);
+
+    const view = this.getPanelView();
+    if (view?.hasView(panelId)) {
+      try {
+        await this.runtime.ensureLeaseForExistingView(panelId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const lease = this.registry.getRuntimeLease(panelId);
+        // Classified by code, never by message text: a lease that moved and a
+        // connection that dropped are both transitions the next attempt
+        // resolves, and neither is a broken panel.
+        const isLeaseFailure =
+          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
+        // A view that exists locally while its lease moved away holds a
+        // renderer this host may no longer drive, so that one is released
+        // here. Nothing is recorded as a view failure: the panel is running,
+        // just not here.
+        if (isLeaseFailure) this.runtime.releaseLocalPanelRuntime(panelId, "lease-transfer");
+        return {
+          panelId,
+          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
+          focused,
+          loaded: false,
+          message,
+          holderLabel: lease?.holderLabel,
+        };
+      }
+      // Lease repair may deliberately discard a renderer retained from a
+      // previous server incarnation when durable refresh proves its principal
+      // is not executable. Re-read native state rather than reporting the view
+      // that existed before repair, so a stale operation cannot address a
+      // destroyed panel view.
+      if (!view.hasView(panelId)) return this.unmaterializedSlotResult(panelId, focused);
+      if (focused) this.showFocusedView(panelId);
+      return { panelId, status: "loaded", focused, loaded: true };
+    }
+
+    if (panel.artifacts.buildState === "error") {
+      return {
+        panelId,
+        status: "build_failed",
+        focused,
+        loaded: false,
+        message: panel.artifacts.error ?? panel.artifacts.buildProgress ?? "Panel build failed",
+      };
+    }
+
+    if (!opts.loadIfNeeded) {
+      return { panelId, status: "focused", focused, loaded: false };
+    }
+
+    try {
+      await this.runtime.loadPanelIntoView(panelId);
+      const nextView = this.getPanelView();
+      if (!nextView?.hasView(panelId)) return this.unmaterializedSlotResult(panelId, focused);
+      if (focused) this.showFocusedView(panelId);
+      return { panelId, status: "loaded", focused, loaded: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const lease = this.registry.getRuntimeLease(panelId);
+      const isLeaseFailure =
+        isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
+      // Recorded even for a dropped connection: the recorded failure is what
+      // marks this slot as needing another attempt. What the cause decides is
+      // whether that attempt is worth making, not whether to record it.
+      if (!isLeaseFailure)
+        this.runtime.recordPanelViewFailure(panelId, message, {
+          retryable: isRpcConnectionLost(error),
+        });
+      return {
+        panelId,
+        status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
+        focused,
+        loaded: false,
+        message,
+        holderLabel: lease?.holderLabel,
+      };
+    }
+  }
+
+  /** Selection, idle accounting, and durable focus bookkeeping for a focus move. */
+  private recordFocusMove(targetPanelId: string): void {
     // Capture the outgoing panel before focus moves. "Inactive" means "1h since
     // you last *viewed* it", so the panel we're leaving restarts its idle
     // countdown now. The newly focused panel needs no bump — while focused it's
@@ -785,263 +896,57 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       .catch((error: unknown) =>
         console.warn(`[PanelOrchestrator] Failed to persist focus for ${targetPanelId}:`, error)
       );
+  }
 
+  /** Show a view that is known to exist at this commit point, and announce it. */
+  private showFocusedView(panelId: string): void {
     const view = this.getPanelView();
-    if (view?.hasView(targetPanelId)) {
-      try {
-        await this.runtime.ensureLeaseForExistingView(targetPanelId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const lease = this.registry.getRuntimeLease(targetPanelId);
-        // Classified by code, never by message text: a lease that moved and a
-        // connection that dropped are both transitions the next attempt
-        // resolves, and neither is a broken panel.
-        const isLeaseFailure =
-          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-        if (isLeaseFailure) this.runtime.releaseLocalPanelRuntime(targetPanelId, "lease-transfer");
-        return {
-          panelId: targetPanelId,
-          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
-          focused: true,
-          loaded: false,
-          message,
-          holderLabel: lease?.holderLabel,
-        };
-      }
-      // Lease repair can discard a retained renderer when the durable runtime
-      // identity is no longer executable. The view existed before the async
-      // repair, but may not exist at this commit point; re-read it before
-      // issuing the visibility command so a stale focus operation cannot
-      // address a destroyed panel view.
-      if (!view.hasView(targetPanelId)) {
-        return {
-          panelId: targetPanelId,
-          status: "preparing",
-          focused: true,
-          loaded: false,
-          message: "Panel runtime is preparing",
-        };
-      }
-      view.setViewVisible?.(targetPanelId, true);
-      view.focusView?.(targetPanelId);
-      this.runtime.recordViewMutation();
-      this.sendPanelEvent(targetPanelId, { type: "focus" });
-      return {
-        panelId: targetPanelId,
-        status: "loaded",
-        focused: true,
-        loaded: true,
-      };
-    }
+    view?.setViewVisible?.(panelId, true);
+    view?.focusView?.(panelId);
+    this.runtime.recordViewMutation();
+    this.sendPanelEvent(panelId, { type: "focus" });
+  }
 
-    if (panel.artifacts.buildState === "error") {
+  /**
+   * Report a slot whose native view is absent after we tried to get one.
+   *
+   * Absence alone does not say which: a presentation still in flight, or a
+   * runtime that cannot execute this panel yet, both legitimately have no view
+   * to show, and describing those as failures would fail a panel that is
+   * merely early. Anything else means the attempt is over and produced
+   * nothing, and recording that is what marks the slot as owed another one.
+   */
+  private unmaterializedSlotResult(panelId: string, focused: boolean): PanelFocusResult {
+    if (
+      this.runtime.isPresentationInProgress(panelId) ||
+      !this.runtime.hasExecutablePanel(panelId)
+    ) {
       return {
-        panelId: targetPanelId,
-        status: "build_failed",
-        focused: true,
+        panelId,
+        status: "preparing",
+        focused,
         loaded: false,
-        message: panel.artifacts.error ?? panel.artifacts.buildProgress ?? "Panel build failed",
+        message: "Panel runtime is preparing",
       };
     }
-
-    if (opts.loadIfNeeded) {
-      try {
-        await this.runtime.loadPanelIntoView(targetPanelId);
-        const nextView = this.getPanelView();
-        if (nextView?.hasView(targetPanelId)) {
-          nextView.setViewVisible?.(targetPanelId, true);
-          nextView.focusView?.(targetPanelId);
-          this.runtime.recordViewMutation();
-          this.sendPanelEvent(targetPanelId, { type: "focus" });
-          return {
-            panelId: targetPanelId,
-            status: "loaded",
-            focused: true,
-            loaded: true,
-          };
-        }
-        const preparing =
-          this.runtime.isPresentationInProgress(targetPanelId) ||
-          !this.runtime.hasExecutablePanel(targetPanelId);
-        if (preparing) {
-          return {
-            panelId: targetPanelId,
-            status: "preparing",
-            focused: true,
-            loaded: false,
-            message: "Panel runtime is preparing",
-          };
-        }
-        this.runtime.recordPanelViewFailure(targetPanelId, "Panel view was not created");
-        return {
-          panelId: targetPanelId,
-          status: "view_creation_failed",
-          focused: true,
-          loaded: false,
-          message: "Panel view was not created",
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const lease = this.registry.getRuntimeLease(targetPanelId);
-        // Classified by code, never by message text: a lease that moved and a
-        // connection that dropped are both transitions the next attempt
-        // resolves, and neither is a broken panel.
-        const isLeaseFailure =
-          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-        // Recorded even for a dropped connection: the recorded failure is what
-        // marks this slot as needing another attempt. What the cause decides is
-        // whether that attempt is worth making, not whether to record it.
-        if (!isLeaseFailure)
-          this.runtime.recordPanelViewFailure(targetPanelId, message, {
-            retryable: isRpcConnectionLost(error),
-          });
-        return {
-          panelId: targetPanelId,
-          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
-          focused: true,
-          loaded: false,
-          message,
-          holderLabel: lease?.holderLabel,
-        };
-      }
-    }
-
+    this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
     return {
-      panelId: targetPanelId,
-      status: "focused",
-      focused: true,
+      panelId,
+      status: "view_creation_failed",
+      focused,
       loaded: false,
+      message: "Panel view was not created",
     };
   }
 
-  async ensureLoaded(panelId: string): Promise<PanelFocusResult> {
-    let panel = this.registry.getPanel(panelId);
-    if (!panel) {
-      // The query-first shell is authoritative for discovery, while the local
-      // registry is only a bounded native-runtime projection. Materialize the
-      // requested slot at the point where a native view is actually needed.
-      await this.shellCore.getPanel(asPanelSlotId(panelId));
-      panel = this.registry.getPanel(panelId);
-    }
-    if (!panel) {
-      return {
-        panelId,
-        status: "missing",
-        focused: false,
-        loaded: false,
-        message: `Panel not found: ${panelId}`,
-      };
-    }
-
-    const view = this.getPanelView();
-    if (view?.hasView(panelId)) {
-      try {
-        await this.runtime.ensureLeaseForExistingView(panelId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const lease = this.registry.getRuntimeLease(panelId);
-        // Classified by code, never by message text: a lease that moved and a
-        // connection that dropped are both transitions the next attempt
-        // resolves, and neither is a broken panel.
-        const isLeaseFailure =
-          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-        if (isLeaseFailure) this.runtime.releaseLocalPanelRuntime(panelId, "lease-transfer");
-        return {
-          panelId,
-          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
-          focused: false,
-          loaded: false,
-          message,
-          holderLabel: lease?.holderLabel,
-        };
-      }
-      // Lease repair may deliberately discard a renderer retained from a
-      // previous server incarnation when durable refresh proves its principal
-      // is not executable. Re-read native state instead of reporting the view
-      // that existed before repair as still loaded.
-      if (view.hasView(panelId)) {
-        return {
-          panelId,
-          status: "loaded",
-          focused: false,
-          loaded: true,
-        };
-      }
-      if (
-        this.runtime.isPresentationInProgress(panelId) ||
-        !this.runtime.hasExecutablePanel(panelId)
-      ) {
-        return {
-          panelId,
-          status: "preparing",
-          focused: false,
-          loaded: false,
-          message: "Panel runtime is preparing",
-        };
-      }
-      this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
-      return {
-        panelId,
-        status: "view_creation_failed",
-        focused: false,
-        loaded: false,
-        message: "Panel view was not created",
-      };
-    }
-
-    if (panel.artifacts.buildState === "error") {
-      return {
-        panelId,
-        status: "build_failed",
-        focused: false,
-        loaded: false,
-        message: panel.artifacts.error ?? panel.artifacts.buildProgress ?? "Panel build failed",
-      };
-    }
-
-    try {
-      await this.runtime.loadPanelIntoView(panelId);
-      const nextView = this.getPanelView();
-      const loaded = Boolean(nextView?.hasView(panelId));
-      if (
-        !loaded &&
-        (this.runtime.isPresentationInProgress(panelId) ||
-          !this.runtime.hasExecutablePanel(panelId))
-      ) {
-        return {
-          panelId,
-          status: "preparing",
-          focused: false,
-          loaded: false,
-          message: "Panel runtime is preparing",
-        };
-      }
-      if (!loaded) this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
-      return {
-        panelId,
-        status: loaded ? "loaded" : "view_creation_failed",
-        focused: false,
-        loaded,
-        ...(loaded ? {} : { message: "Panel view was not created" }),
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const lease = this.registry.getRuntimeLease(panelId);
-      const isLeaseFailure =
-        isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-      if (!isLeaseFailure)
-        this.runtime.recordPanelViewFailure(panelId, message, {
-          retryable: isRpcConnectionLost(error),
-        });
-      return {
-        panelId,
-        status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
-        focused: false,
-        loaded: false,
-        message,
-        holderLabel: lease?.holderLabel,
-      };
-    }
+  /**
+   * Bring a durable slot to a live native view without moving focus.
+   *
+   * A panel-hosting app uses this to warm a slot it is about to show; the host
+   * converges presentation on its own, so this only decides when that starts.
+   */
+  ensureLoaded(panelId: string): Promise<PanelFocusResult> {
+    return this.bringSlotIntoView(panelId, { focus: false, loadIfNeeded: true });
   }
 
   // =========================================================================
