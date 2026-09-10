@@ -26,6 +26,7 @@ import {
   createRuntimeClient,
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
+import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
 import type {
   PanelHost,
   PanelHostRegistration,
@@ -792,7 +793,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const lease = this.registry.getRuntimeLease(targetPanelId);
-        const isLeaseFailure = /running on|leased by/i.test(message);
+        // Classified by code, never by message text: a lease that moved and a
+        // connection that dropped are both transitions the next attempt
+        // resolves, and neither is a broken panel.
+        const isLeaseFailure =
+          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
         if (isLeaseFailure) this.runtime.releaseLocalPanelRuntime(targetPanelId, "lease-transfer");
         return {
           panelId: targetPanelId,
@@ -878,8 +883,18 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const lease = this.registry.getRuntimeLease(targetPanelId);
-        const isLeaseFailure = /running on|leased by/i.test(message);
-        if (!isLeaseFailure) this.runtime.recordPanelViewFailure(targetPanelId, message);
+        // Classified by code, never by message text: a lease that moved and a
+        // connection that dropped are both transitions the next attempt
+        // resolves, and neither is a broken panel.
+        const isLeaseFailure =
+          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
+        const isTransient = isRpcConnectionLost(error);
+        // A dropped connection leaves no failed panel behind, for the same
+        // reason a moved lease does not: the workspace server is coming back,
+        // and a recorded viewFailure would outlive the condition that caused
+        // it and have to be cleared by something noticing.
+        if (!isLeaseFailure && !isTransient)
+          this.runtime.recordPanelViewFailure(targetPanelId, message);
         return {
           panelId: targetPanelId,
           status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -925,7 +940,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const lease = this.registry.getRuntimeLease(panelId);
-        const isLeaseFailure = /running on|leased by/i.test(message);
+        // Classified by code, never by message text: a lease that moved and a
+        // connection that dropped are both transitions the next attempt
+        // resolves, and neither is a broken panel.
+        const isLeaseFailure =
+          isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
         if (isLeaseFailure) this.runtime.releaseLocalPanelRuntime(panelId, "lease-transfer");
         return {
           panelId,
@@ -1008,8 +1027,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const lease = this.registry.getRuntimeLease(panelId);
-      const isLeaseFailure = /running on|leased by/i.test(message);
-      if (!isLeaseFailure) this.runtime.recordPanelViewFailure(panelId, message);
+      const isLeaseFailure =
+        isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
+      const isTransient = isRpcConnectionLost(error);
+      if (!isLeaseFailure && !isTransient) this.runtime.recordPanelViewFailure(panelId, message);
       return {
         panelId,
         status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
