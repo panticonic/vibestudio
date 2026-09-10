@@ -196,6 +196,23 @@ describe("hub workspace creation template selection", () => {
     );
   });
 
+  it("bootstraps from System when no development override is set", () => {
+    // A packaged host has no override, and a bootstrap workspace is the one the
+    // host serves its own clients from. Base declares no chrome app, so falling
+    // back to it produced a workspace that provisioned fine and then could not
+    // render itself.
+    expect(
+      selectWorkspaceCreationRootTemplate({
+        appRoot: process.cwd(),
+        initial: true,
+        environment: {
+          NODE_ENV: "production",
+          VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
+        },
+      })
+    ).toEqual(defaultTemplates.system);
+  });
+
   it("does not constrain an explicit template to one development pin", () => {
     expect(
       selectWorkspaceCreationRootTemplate({

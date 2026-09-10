@@ -23,6 +23,7 @@
     "sql.js": "^1.14.1"
   },
   "devDependencies": {
+    "@vibestudio/workspace-contracts": "workspace:*",
     "zod": "^3.25.76"
   }
 }
