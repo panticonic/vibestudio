@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 
 import { GitClient } from "@vibestudio/git";
@@ -51,7 +51,20 @@ function fixture(): { checkout: string; checkpointRoot: string } {
   return { checkout, checkpointRoot: path.join(root, "checkpoints") };
 }
 
+let previousSharedCache: string | undefined;
+
+// Template checkouts are profile-level derived data, so a test has to say
+// where that profile is or it writes into the developer's own.
+beforeEach(() => {
+  previousSharedCache = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  const derived = fs.mkdtempSync(path.join(os.tmpdir(), "template-selection-derived-"));
+  roots.push(derived);
+  process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = derived;
+});
+
 afterEach(() => {
+  if (previousSharedCache === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedCache;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -96,7 +109,6 @@ describe("development template selection", () => {
     });
     fs.writeFileSync(source, "export const v = 'later edit';\n");
     const snapshot = await seedRootTemplateSnapshotFromCheckout({
-      statePath: path.join(fx.checkpointRoot, "new-workspace-state"),
       checkout: selection!.checkout,
       pin: selection!.pin,
       git: new GitClient(),

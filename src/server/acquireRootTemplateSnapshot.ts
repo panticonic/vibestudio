@@ -15,6 +15,26 @@ import {
   TEMPLATE_RESERVED_PATH_POLICY,
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+
+/**
+ * Where an exact template checkout is cached.
+ *
+ * Profile-level derived data rather than workspace state, which is what this
+ * content is: keyed by URL and commit, and every hit validated by reading that
+ * exact commit's tree. Two workspaces built on one template — the ordinary
+ * case now that a distribution declares its dependencies instead of copying
+ * them — clone it once between them rather than once each. Supervisors and
+ * tests point VIBESTUDIO_SHARED_DERIVED_CACHE_DIR somewhere private to stay
+ * hermetic.
+ */
+function rootTemplateCheckoutTarget(pin: { url: string; commit: string }): string {
+  return path.join(
+    getSharedDerivedDataPath(),
+    "root-templates",
+    canonicalTemplateNodeId(pin.url, pin.commit)
+  );
+}
 
 /**
  * Acquire the one immutable root snapshot through an atomic checkout cache.
@@ -22,7 +42,6 @@ import {
  * attempt, never a half-cloned checkout at the coordinate used by retries.
  */
 export function acquireRootTemplateSnapshot(input: {
-  statePath: string;
   pin: WorkspaceTemplatePin;
   git: GitClient;
   sink: SnapshotContentSink;
@@ -30,12 +49,7 @@ export function acquireRootTemplateSnapshot(input: {
 }): Promise<ExactGitSnapshot> {
   const fs = input.fs ?? fsp;
   const label = `workspace root template ${input.pin.url}`;
-  const target = path.join(
-    input.statePath,
-    "git-checkouts",
-    "_root-template",
-    canonicalTemplateNodeId(input.pin.url, input.pin.commit)
-  );
+  const target = rootTemplateCheckoutTarget(input.pin);
   const read = (dir: string) =>
     readExactGitSnapshot({
       git: input.git,
@@ -70,7 +84,6 @@ export function acquireRootTemplateSnapshot(input: {
  * admitted and the commit need not be reachable from a remote.
  */
 export function seedRootTemplateSnapshotFromCheckout(input: {
-  statePath: string;
   checkout: string;
   pin: WorkspaceTemplatePin;
   git: GitClient;
@@ -79,12 +92,7 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
 }): Promise<ExactGitSnapshot> {
   const fs = input.fs ?? fsp;
   const label = `local workspace root template ${input.pin.url}`;
-  const target = path.join(
-    input.statePath,
-    "git-checkouts",
-    "_root-template",
-    canonicalTemplateNodeId(input.pin.url, input.pin.commit)
-  );
+  const target = rootTemplateCheckoutTarget(input.pin);
   return readThroughImmutableGitCheckout({
     fs,
     target,
@@ -135,7 +143,6 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
  * worktree. Untracked paths are reported but excluded from the immutable tree.
  */
 export async function discoverAndSeedRootTemplateSnapshotFromCheckout(input: {
-  statePath: string;
   checkout: string;
   url: string;
   git: GitClient;
@@ -148,7 +155,6 @@ export async function discoverAndSeedRootTemplateSnapshotFromCheckout(input: {
 }> {
   const discovered = await inspectRootTemplateCheckout(input);
   const snapshot = await seedRootTemplateSnapshotFromCheckout({
-    statePath: input.statePath,
     checkout: input.checkout,
     pin: discovered.pin,
     git: input.git,

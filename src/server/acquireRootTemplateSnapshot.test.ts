@@ -1,7 +1,7 @@
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import type { GitClient } from "@vibestudio/git";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -12,13 +12,26 @@ import {
 } from "./acquireRootTemplateSnapshot.js";
 
 const roots: string[] = [];
+let previousSharedCache: string | undefined;
+
+// Template checkouts are profile-level derived data, shared so two workspaces
+// built on one template clone it once. A test must therefore say where that
+// profile is, or it writes into the developer's own.
+beforeEach(async () => {
+  previousSharedCache = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  const derived = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-derived-"));
+  roots.push(derived);
+  process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = derived;
+});
 
 afterEach(async () => {
+  if (previousSharedCache === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedCache;
   await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
 });
 
 describe("acquireRootTemplateSnapshot", () => {
-  it("reuses an atomically published exact checkout after restart", async () => {
+  it("clones one template once for every workspace built on it", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-cache-"));
     roots.push(statePath);
     const bytes = new TextEncoder().encode("systemEpoch: 59\n");
@@ -53,12 +66,20 @@ describe("acquireRootTemplateSnapshot", () => {
       })),
     };
 
-    const first = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
-    const afterRestart = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
+    const first = await acquireRootTemplateSnapshot({ pin, git, sink });
+    const afterRestart = await acquireRootTemplateSnapshot({ pin, git, sink });
 
     expect(first).toMatchObject({ commit });
     expect(afterRestart).toMatchObject({ commit });
+    // The checkout is keyed by URL and commit under profile-level derived data,
+    // not under any workspace's state, so a second workspace built on the same
+    // template — the ordinary case for a distribution with dependencies — reads
+    // the published copy instead of cloning it again.
     expect(clone).toHaveBeenCalledTimes(1);
+    const cached = await fsp.readdir(
+      path.join(process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!, "root-templates")
+    );
+    expect(cached).toHaveLength(1);
   });
 
   it("seeds an unpushed committed tree into the ordinary immutable acquisition coordinate", async () => {
@@ -106,13 +127,12 @@ describe("acquireRootTemplateSnapshot", () => {
     };
 
     await seedRootTemplateSnapshotFromCheckout({
-      statePath,
       checkout,
       pin,
       git,
       sink,
     });
-    const acquired = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
+    const acquired = await acquireRootTemplateSnapshot({ pin, git, sink });
 
     expect(acquired).toMatchObject({ commit, snapshot });
     expect(clone).not.toHaveBeenCalled();
@@ -152,7 +172,6 @@ describe("acquireRootTemplateSnapshot", () => {
     };
 
     const discovered = await discoverAndSeedRootTemplateSnapshotFromCheckout({
-      statePath,
       checkout,
       url: "git+https://example.test/workspace-base.git",
       git,
@@ -173,7 +192,6 @@ describe("acquireRootTemplateSnapshot", () => {
     });
     await expect(
       discoverAndSeedRootTemplateSnapshotFromCheckout({
-        statePath: path.join(statePath, "other-state"),
         checkout,
         url: "git+https://example.test/workspace-base.git",
         git,

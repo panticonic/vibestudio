@@ -1529,7 +1529,6 @@ async function main() {
       sources: workspaceSources,
       fromCheckout: (source) =>
         seedRootTemplateSnapshotFromCheckout({
-          statePath,
           checkout: source.checkout,
           pin,
           git: createRootTemplateGitClient(pin),
@@ -1539,7 +1538,6 @@ async function main() {
         }),
       fromRemote: () =>
         acquireRootTemplateSnapshot({
-          statePath,
           pin,
           git: createRootTemplateGitClient(pin),
           sink: {
