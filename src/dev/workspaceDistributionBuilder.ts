@@ -73,6 +73,15 @@ export async function buildWorkspaceDistribution(input: {
   outputRoot: string;
   url: string;
   ref?: string;
+  /**
+   * Read `sourceRoot` directly because the caller already sealed it.
+   *
+   * Every distribution built from one sealed state reads the same bytes, so
+   * re-sealing per role copies the whole workspace again for nothing — and
+   * nests that copy a directory deeper each time, which is what pushed the
+   * longest paths in it past what Windows Git will create.
+   */
+  sourceSealed?: boolean;
 }): Promise<BuiltWorkspaceDistribution> {
   const sourceRoot = fs.realpathSync(path.resolve(input.sourceRoot));
   const outputRoot = path.resolve(input.outputRoot);
@@ -95,13 +104,17 @@ export async function buildWorkspaceDistribution(input: {
   const sourceCheckpoint = path.join(temporaryRoot, "source-checkpoint");
   const git = new GitClient();
   try {
-    const checkpoint = await checkpointWorkspaceSource({
-      checkout: sourceRoot,
-      target: sourceCheckpoint,
-    });
+    const sealed = input.sourceSealed
+      ? sourceRoot
+      : (
+          await checkpointWorkspaceSource({
+            checkout: sourceRoot,
+            target: sourceCheckpoint,
+          })
+        ).checkout;
     const prepared = prepareWorkspaceDistribution({
-      sourceRoot: checkpoint.checkout,
-      manifestContent: readManifest(checkpoint.checkout, input.manifestPath),
+      sourceRoot: sealed,
+      manifestContent: readManifest(sealed, input.manifestPath),
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     });
     fs.mkdirSync(stagedCheckout);
@@ -181,6 +194,9 @@ export async function prepareDevelopmentWorkspaceDistributions(input: {
     for (const name of DEVELOPMENT_WORKSPACE_DISTRIBUTIONS) {
       built[name] = await buildWorkspaceDistribution({
         sourceRoot: checkpoint.checkout,
+        // One sealed state for all three, which is the invariant this function
+        // exists to hold; re-sealing it per role would copy it three more times.
+        sourceSealed: true,
         manifestPath: `meta/distributions/${name}.yml`,
         outputRoot: path.join(stagedOutput, name),
         url: input.url,

@@ -5918,6 +5918,14 @@ async function main() {
         workspacePath,
         workspaceId,
         isSystemWorkspace: () => {
+          // Native app units are hosted only in a System workspace. Ordinarily
+          // that is an account-scoped designation, but a host launched to serve
+          // its desktop shell from this workspace has been told the same thing
+          // by its operator, and the hub passes that flag down for the
+          // bootstrap workspace alone. Without this a hermetic launch — one
+          // with no account to own a designation — provisions the System
+          // distribution and then refuses to host the shell it just installed.
+          if (requireElectronReady) return true;
           const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
           return owner?.role === "system" && membershipStore.has(owner.userId, workspaceId);
         },

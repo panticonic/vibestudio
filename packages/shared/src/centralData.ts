@@ -194,37 +194,6 @@ export class CentralDataManager {
    * when their child is stopped or creation is incomplete; never replace state
    * in response to a startup failure. SQLite serializes competing clients.
    */
-  /**
-   * Designate a workspace that already exists as one of a user's private
-   * workspaces.
-   *
-   * `ensurePrivateWorkspaces` reserves the ordinary pair. This is for the
-   * workspace a host was explicitly told to bootstrap and then serve its own
-   * clients from: native app units, the desktop shell among them, are admitted
-   * and hosted only in a designated System workspace, so a bootstrap workspace
-   * that has to render the app is that instance's System workspace rather than
-   * a third thing beside it. Private ownership is that workspace's whole
-   * membership by construction, so no ordinary membership is added.
-   *
-   * An existing designation for the same role is left alone, matching
-   * `ensurePrivateWorkspaces`: startup never replaces a designation.
-   */
-  designatePrivateWorkspace(
-    userId: string,
-    role: "personal" | "system",
-    workspaceId: string
-  ): void {
-    this.transaction(() => {
-      const user = this.stmt("SELECT revoked_at FROM users WHERE id = ?").get(userId);
-      if (!user || user["revoked_at"] !== null)
-        throw new Error("Private workspace owner is not a live user");
-      this.stmt(
-        `INSERT INTO user_workspaces (user_id, role, workspace_id) VALUES (?, ?, ?)
-         ON CONFLICT DO NOTHING`
-      ).run(userId, role, workspaceId);
-    });
-  }
-
   ensurePrivateWorkspaces(
     userId: string,
     templates: Record<"personal" | "system", WorkspaceTemplatePin>

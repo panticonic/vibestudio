@@ -3,7 +3,12 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 
 function git(directory: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
-  return execFileSync("git", ["-C", directory, ...args], {
+  // A checkpoint lands the whole workspace inside a private temporary tree, so
+  // its deepest paths are the developer's plus wherever the checkpoint sits.
+  // Windows refuses those past 260 characters unless Git is told otherwise, and
+  // the failure is per-file — a checkout that mostly worked, missing exactly
+  // the files with the longest names.
+  return execFileSync("git", ["-c", "core.longpaths=true", "-C", directory, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...(env ? { env } : {}),

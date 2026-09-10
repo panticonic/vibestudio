@@ -3379,13 +3379,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   }
   if (bootstrap && bootstrap.lifecycle !== "existing" && bootstrapWorkspaceId) {
     const creator = userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
-    // A host told to bootstrap one workspace and serve its own clients from it
-    // is describing that instance's System workspace, and is already given the
-    // System distribution to build it from. Designating it says so, which is
-    // what lets the desktop shell be hosted at all: native app units live only
-    // in a designated System workspace. Private ownership is that workspace's
-    // whole membership, so no ordinary membership is added beside it.
-    if (creator) centralData.designatePrivateWorkspace(creator.id, "system", bootstrapWorkspaceId);
+    if (creator) membershipStore.add(creator.id, bootstrapWorkspaceId, creator.id);
   }
   bindDevelopmentWritebackWorkspace({ centralData, identityDb, userStore });
   // Membership-governance records land in the host governance log (WP5 §5.1),
