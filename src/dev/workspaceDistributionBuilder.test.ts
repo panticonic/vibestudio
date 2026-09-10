@@ -155,25 +155,34 @@ describe("buildWorkspaceDistribution", () => {
     expect(fs.existsSync(fixture.output)).toBe(false);
   });
 
-  it("builds all development distributions at distinct exact coordinates of one URL", async () => {
+  it("builds each development distribution at its own published address", async () => {
     const fixture = sourceFixture();
-    const url = "git+https://example.test/workspaces.git";
+    const urls = {
+      base: "git+https://example.test/base.git",
+      personal: "git+https://example.test/personal.git",
+      system: "git+https://example.test/system.git",
+    };
     const prepared = await prepareDevelopmentWorkspaceDistributions({
       sourceRoot: fixture.root,
       outputRoot: fixture.output,
-      url,
+      urls,
     });
 
     expect(Object.keys(prepared.pins)).toEqual(["base", "personal", "system"]);
-    expect(new Set(Object.values(prepared.pins).map((pin) => pin.url))).toEqual(new Set([url]));
+    // One repository each, so a distribution's URL identifies it outright.
+    expect(Object.values(prepared.pins).map((pin) => pin.url)).toEqual([
+      urls.base,
+      urls.personal,
+      urls.system,
+    ]);
     expect(new Set(Object.values(prepared.pins).map((pin) => pin.commit)).size).toBe(3);
     for (const name of ["base", "personal", "system"] as const) {
       expect(prepared.checkouts[name]).toBe(path.join(fixture.output, name));
-      expect(git(prepared.checkouts[name], "branch", "--show-current")).toBe(
-        `distributions/${name}`
-      );
+      // Each build stands in for a published template, and publication puts a
+      // template on `main` of its own repository.
+      expect(git(prepared.checkouts[name], "branch", "--show-current")).toBe("main");
       expect(git(prepared.checkouts[name], "remote", "get-url", "origin")).toBe(
-        "https://example.test/workspaces.git"
+        `https://example.test/${name}.git`
       );
     }
   });
@@ -193,7 +202,11 @@ describe("buildWorkspaceDistribution", () => {
       prepareDevelopmentWorkspaceDistributions({
         sourceRoot: fixture.root,
         outputRoot: fixture.output,
-        url: "git+https://example.test/workspaces.git",
+        urls: {
+          base: "git+https://example.test/base.git",
+          personal: "git+https://example.test/personal.git",
+          system: "git+https://example.test/system.git",
+        },
       })
     ).rejects.toThrow(/Distribution repository is missing/u);
     expect(fs.existsSync(fixture.output)).toBe(false);

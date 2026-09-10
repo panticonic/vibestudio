@@ -38,6 +38,18 @@ function fixture(systemEpoch: number): { host: string; base: string; checkpoint:
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
       },
+      // A development build stands in for each distribution's published
+      // address, one repository per distribution, so it reads them from here.
+      workspaceTemplates: Object.fromEntries(
+        ["base", "personal", "system"].map((role) => [
+          role,
+          {
+            url: `git+https://example.test/vibestudio-${role}.git`,
+            ref: "refs/tags/v1",
+            commit: "a".repeat(40),
+          },
+        ])
+      ),
     })
   );
   fs.mkdirSync(path.join(base, "meta"), { recursive: true });
@@ -83,9 +95,9 @@ describe("resolveDevelopmentBaseSelection", () => {
       sourceCheckout: base,
       writebackRepositories: ["meta", "packages/base"],
       pins: {
-        base: { ref: "refs/heads/distributions/base" },
-        personal: { ref: "refs/heads/distributions/personal" },
-        system: { ref: "refs/heads/distributions/system" },
+        base: { ref: "refs/heads/main" },
+        personal: { ref: "refs/heads/main" },
+        system: { ref: "refs/heads/main" },
       },
     });
   });

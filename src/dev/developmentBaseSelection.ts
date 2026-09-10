@@ -4,7 +4,7 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
-  readBaseTemplateRelease,
+  readDefaultWorkspaceTemplates,
 } from "@vibestudio/workspace/baseTemplateRelease";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
@@ -54,10 +54,15 @@ export async function resolveDevelopmentBaseSelection(input: {
     fs.readFileSync(path.join(sourceCheckout, "meta/vibestudio.yml"), "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
+  // Each distribution stands in for the address the release pins it at, so a
+  // dependency between them resolves to the local build rather than the remote.
+  const released = readDefaultWorkspaceTemplates(input.repoRoot, {});
   const distributions = await prepareDevelopmentWorkspaceDistributions({
     sourceRoot: sourceCheckout,
     outputRoot: input.checkpointTarget,
-    url: readBaseTemplateRelease(input.repoRoot).baseTemplate.url,
+    urls: Object.fromEntries(
+      DEVELOPMENT_WORKSPACE_DISTRIBUTIONS.map((name) => [name, released[name].url])
+    ) as Record<DevelopmentWorkspaceDistribution, string>,
   });
   return {
     ...distributions,

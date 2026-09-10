@@ -1563,17 +1563,10 @@ async function main() {
     track: string;
     credential?: string;
   }): Promise<{ ref: string; commit: string }> => {
+    // One repository per distribution, so its URL identifies it outright.
     const canonical = normalizeTemplateGitUrl(address.url);
-    // Development distributions share one URL and differ by ref, so a URL alone
-    // does not say which of them stands in for this track. Compare what the
-    // track names beneath refs/: `refs/tags/distributions/base/v*` is satisfied
-    // by the local `refs/heads/distributions/base`, and by nothing else.
-    const named = (ref: string): string => ref.replace(/^refs\/(heads|tags)\//u, "");
-    const wanted = named(address.track).replace(/\/?[^/]*\*.*$/u, "");
     const local = workspaceSources.find(
-      (source) =>
-        normalizeTemplateGitUrl(source.pin.url) === canonical &&
-        (wanted === "" || named(source.pin.ref) === wanted)
+      (source) => normalizeTemplateGitUrl(source.pin.url) === canonical
     );
     if (local) return { ref: local.pin.ref, commit: local.pin.commit };
     const { discoverTrackedGitSnapshot } = await import("@vibestudio/git");

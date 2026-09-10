@@ -169,7 +169,15 @@ export async function buildWorkspaceDistribution(input: {
 export async function prepareDevelopmentWorkspaceDistributions(input: {
   sourceRoot: string;
   outputRoot: string;
-  url: string;
+  /**
+   * Where each distribution is published, one repository each.
+   *
+   * That is what publication produces: a template is committed to `main` and
+   * the version tagged, so two distributions cannot share a repository without
+   * fighting over it. A development build stands in for the published address,
+   * so it has to use the same one.
+   */
+  urls: Record<DevelopmentWorkspaceDistribution, string>;
 }): Promise<PreparedDevelopmentWorkspaceDistributions> {
   const sourceRoot = fs.realpathSync(path.resolve(input.sourceRoot));
   const outputRoot = path.resolve(input.outputRoot);
@@ -218,8 +226,8 @@ export async function prepareDevelopmentWorkspaceDistributions(input: {
         sourceSealed: true,
         manifestPath: `meta/distributions/${name}.yml`,
         outputRoot: path.join(stagedOutput, name),
-        url: input.url,
-        ref: `refs/heads/distributions/${name}`,
+        url: input.urls[name],
+        ref: "refs/heads/main",
       });
     }
     fs.renameSync(stagedOutput, outputRoot);
