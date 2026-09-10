@@ -99,7 +99,14 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
           env: launch.environment,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
-          timeout: 10_000,
+          // A hang guard, not a performance bar. This deletes a whole
+          // workspace tree — now the composition of every template it was
+          // built from — inside a confined executor, so its duration scales
+          // with the workspace rather than with anything fixed. Ten seconds
+          // was under that on windows-2025, and the cost of being under it is
+          // a committed deletion whose files stay on disk: the caller logs
+          // "queued for retry" and nothing in this shutdown retries.
+          timeout: 60_000,
           killSignal: "SIGKILL",
           maxBuffer: 64 * 1024,
         });

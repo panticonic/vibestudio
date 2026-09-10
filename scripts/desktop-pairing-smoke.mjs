@@ -1062,22 +1062,35 @@ async function selectWorkspace(app, name, timeoutMs) {
     entry.getAttribute('aria-label') === ${target} && entry.getAttribute('aria-current') === 'location'))`;
   const deadline = Date.now() + timeoutMs;
   let everClicked = false;
+  let lastFailure = null;
   // A click issued while the workspace transport is mid-reconnect reaches a
   // server that cannot serve it, and nothing replays it once the transport
   // recovers. Keep asking — as a user would — instead of asserting forever on
   // a focus change that a single dropped click can never produce.
+  //
+  // Asking can itself fail for the same reason: a restarted server reports
+  // "temporarily unavailable" until its workspaces are back, and letting that
+  // escape would fail the run for the very condition this loop exists to wait
+  // out. The last failure is kept and reported only if the deadline passes, so
+  // nothing is hidden — just deferred until it means something.
   while (Date.now() < deadline) {
-    if (await evaluateHostedChrome(app, focusExpression, `waiting for ${name} workspace focus`)) {
-      return;
+    try {
+      if (await evaluateHostedChrome(app, focusExpression, `waiting for ${name} workspace focus`)) {
+        return;
+      }
+      everClicked =
+        (await evaluateHostedChrome(app, clickExpression, `selecting ${name}`)) || everClicked;
+      lastFailure = null;
+    } catch (error) {
+      lastFailure = error;
     }
-    everClicked =
-      (await evaluateHostedChrome(app, clickExpression, `selecting ${name}`)) || everClicked;
     await sleep(250);
   }
+  const detail = lastFailure ? `; last attempt failed: ${summarizeText(String(lastFailure))}` : "";
   throw new Error(
     everClicked
-      ? `Timed out waiting for ${name} workspace focus`
-      : `Could not select ${name}: its switcher button never became clickable`
+      ? `Timed out waiting for ${name} workspace focus${detail}`
+      : `Could not select ${name}: its switcher button never became clickable${detail}`
   );
 }
 
