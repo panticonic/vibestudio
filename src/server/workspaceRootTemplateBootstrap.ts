@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
   canonicalSnapshotDigest,
   compareUtf16CodeUnits,
+  sha256Hex,
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import { encodeWorktreeTree, treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
@@ -10,6 +11,18 @@ import type { ExactGitSnapshot, ExactSnapshotFile } from "@vibestudio/git";
 import type { SnapshotContentSink } from "@vibestudio/git";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
+import {
+  canonicalTemplateYaml,
+  readTemplateManifest,
+  type ParsedTemplateManifest,
+} from "@vibestudio/workspace/templateManifest";
+import { TEMPLATE_SOURCE_MANIFEST_PATH } from "@vibestudio/workspace/templateCoordinates";
+import { composeTemplateLayers } from "@vibestudio/workspace/templateComposition";
+import { mergeTemplateManifests } from "@vibestudio/workspace/templateManifestMerge";
+import {
+  resolveTemplateDependencies,
+  type ResolvedTemplateDependency,
+} from "@vibestudio/workspace/templateDependencies";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceCreationDescriptor,
@@ -21,12 +34,42 @@ import {
 } from "@vibestudio/shared/hostBuildUnits";
 import { discoverRepos } from "./vcsHost/repoDiscovery.js";
 
+function recordedLayers(receipt: unknown): MaterializedLayer[] {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return [];
+  const layers = (receipt as { layers?: unknown }).layers;
+  if (!Array.isArray(layers)) return [];
+  return layers.filter(
+    (layer): layer is MaterializedLayer =>
+      Boolean(layer) &&
+      typeof layer === "object" &&
+      typeof (layer as MaterializedLayer).url === "string" &&
+      typeof (layer as MaterializedLayer).ref === "string" &&
+      typeof (layer as MaterializedLayer).commit === "string"
+  );
+}
+
+/** One layer of a materialized workspace, in the order it was laid down. */
+interface MaterializedLayer {
+  url: string;
+  ref: string;
+  commit: string;
+}
+
 /**
- * The commit is the receipt. A Git commit id already commits to its tree, so
- * the digest that used to sit beside it here named the same bytes twice.
+ * What a workspace is made of.
+ *
+ * A composed workspace has no single commit to name it: its content is the
+ * layers that went into it, and the dependencies among them normally float, so
+ * the root's commit alone does not determine what was built. Recording the
+ * resolved layers is therefore the identity, and it is recorded once — a
+ * restart deliberately does not re-resolve, because re-resolving could pick up
+ * a newer dependency and quietly replace a source the user has been editing.
  */
-function materializationReceipt(commit: string): { version: number; commit: string } {
-  return { version: 1, commit };
+function materializationReceipt(layers: readonly MaterializedLayer[]): {
+  version: number;
+  layers: readonly MaterializedLayer[];
+} {
+  return { version: 2, layers };
 }
 
 const CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
@@ -60,6 +103,15 @@ export interface WorkspaceRootTemplateBootstrapDeps {
    * any of its units ship with Vibestudio.
    */
   designation?(pin: WorkspaceTemplatePin): { vouchesWholeTree: boolean } | null;
+  /**
+   * Resolve what a dependency's track selects right now. Required only once a
+   * template declares dependencies; a standalone template never asks.
+   */
+  resolveTrack?(address: {
+    url: string;
+    track: string;
+    credential?: string;
+  }): Promise<{ ref: string; commit: string }>;
 }
 
 function repositorySnapshot(files: readonly ExactSnapshotFile[]): CanonicalSnapshotDigest {
@@ -152,6 +204,7 @@ export class WorkspaceRootTemplateBootstrap {
   private readonly descriptorPath: string;
   private preparedInitialization: PreparedRootTemplateInitialization | null = null;
   private acquiredSnapshot: ExactGitSnapshot | null = null;
+  private acquiredLayers: MaterializedLayer[] = [];
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
@@ -197,15 +250,127 @@ export class WorkspaceRootTemplateBootstrap {
     return this.preparedInitialization;
   }
 
+  /**
+   * Lay any templates this one is built on underneath it, and merge what they
+   * declare into the one manifest the composed workspace runs on.
+   *
+   * A standalone template — every template today — takes none of this: its
+   * acquired snapshot is already the tree, and round-tripping its manifest
+   * through a merge would only risk changing it.
+   */
+  private async composeDeclaredLayers(
+    pin: WorkspaceTemplatePin,
+    root: ExactGitSnapshot
+  ): Promise<ExactGitSnapshot> {
+    const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest =>
+      readTemplateManifest({
+        readFile: (filePath) => snapshot.readFile(filePath),
+        expectedSystemEpoch: this.deps.expectedSystemEpoch,
+      });
+    const rootManifest = readManifestOf(root);
+    if (rootManifest.dependencies.length === 0) {
+      this.acquiredLayers = [{ url: pin.url, ref: pin.ref, commit: pin.commit }];
+      return root;
+    }
+    const resolveTrack = this.deps.resolveTrack;
+    if (!resolveTrack) {
+      throw new Error(
+        `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
+      );
+    }
+    const acquired = new Map<
+      string,
+      { pin: WorkspaceTemplatePin; snapshot: ExactGitSnapshot; manifest: ParsedTemplateManifest }
+    >();
+    const acquireLayer = async (
+      layer: ResolvedTemplateDependency
+    ): Promise<{
+      pin: WorkspaceTemplatePin;
+      snapshot: ExactGitSnapshot;
+      manifest: ParsedTemplateManifest;
+    }> => {
+      const existing = acquired.get(layer.url);
+      if (existing) return existing;
+      const layerPin = {
+        url: layer.url,
+        ref: layer.ref,
+        commit: layer.commit,
+        ...(layer.credential ? { credential: layer.credential } : {}),
+      } as WorkspaceTemplatePin;
+      const snapshot = await this.deps.acquire(layerPin);
+      if (snapshot.commit !== layer.commit) {
+        throw new Error(`Template dependency ${layer.url} acquired a different commit`);
+      }
+      const entry = { pin: layerPin, snapshot, manifest: readManifestOf(snapshot) };
+      acquired.set(layer.url, entry);
+      return entry;
+    };
+    const { layers } = await resolveTemplateDependencies({
+      root: { label: pin.url, dependencies: rootManifest.dependencies },
+      resolveTrack,
+      readDependencies: async (layer) => (await acquireLayer(layer)).manifest.dependencies,
+    });
+    // Dependency-first, with this template last: it is the one being installed.
+    const stack = [
+      ...layers.map((layer) => acquired.get(layer.url)!),
+      { pin, snapshot: root, manifest: rootManifest },
+    ];
+    const merged = mergeTemplateManifests(
+      stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }))
+    );
+    const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(merged.document));
+    const composed = composeTemplateLayers({
+      layers: stack.map((entry) => ({
+        label: entry.pin.url,
+        files: entry.snapshot.files,
+        readFile: (filePath) => entry.snapshot.readFile(filePath),
+      })),
+      composedPaths: [TEMPLATE_SOURCE_MANIFEST_PATH],
+    });
+    const files = [
+      ...composed.files,
+      {
+        path: TEMPLATE_SOURCE_MANIFEST_PATH,
+        contentHash: sha256Hex(manifestBytes),
+        size: manifestBytes.byteLength,
+        mode: 0o644 as const,
+      },
+    ].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    this.acquiredLayers = stack.map((entry) => ({
+      url: entry.pin.url,
+      ref: entry.pin.ref,
+      commit: entry.pin.commit,
+    }));
+    return {
+      // The root's commit, which keys this materialization's staging paths. What
+      // the workspace is made of is the recorded layers, not this one commit.
+      commit: pin.commit,
+      snapshot: canonicalSnapshotDigest(
+        files.map((file) => ({
+          path: file.path,
+          mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+          size: file.size,
+          contentHash: file.contentHash,
+        }))
+      ),
+      files,
+      readFile: (filePath) =>
+        filePath === TEMPLATE_SOURCE_MANIFEST_PATH
+          ? new Uint8Array(manifestBytes)
+          : composed.readFile(filePath),
+    };
+  }
+
   private async acquireInitialization(
     pin: WorkspaceTemplatePin
   ): Promise<PreparedRootTemplateInitialization> {
-    const snapshot = await this.deps.acquire(pin);
-    if (snapshot.commit !== pin.commit) {
+    const acquired = await this.deps.acquire(pin);
+    if (acquired.commit !== pin.commit) {
       throw new Error(
         `Root template acquisition returned coordinates different from the creation descriptor`
       );
     }
+    const snapshot = await this.composeDeclaredLayers(pin, acquired);
     const repositories = enumerateRootTemplateRepositories(snapshot);
     if (!repositories.some((repository) => repository.repoPath === "meta")) {
       throw new Error(`Root template has no importable meta repository`);
@@ -238,9 +403,16 @@ export class WorkspaceRootTemplateBootstrap {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
     if (!fs.existsSync(receiptPath)) return false;
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
-    if (canonicalJsonValue(receipt) !== canonicalJsonValue(materializationReceipt(pin.commit))) {
+    const recorded = recordedLayers(receipt);
+    // The template being installed is the last layer, and it is the only one
+    // the creation descriptor names. Its dependencies were resolved once and
+    // recorded here; taking them from the receipt rather than resolving again
+    // is what keeps a restart from picking up a newer dependency and replacing
+    // a source the user has been editing.
+    if (recorded.at(-1)?.commit !== pin.commit) {
       throw new Error("Workspace root materialization receipt does not match its exact pin");
     }
+    this.acquiredLayers = [...recorded];
     const manifestPath = path.join(this.deps.sourcePath, WORKSPACE_MANIFEST_PATH);
     if (!fs.existsSync(manifestPath)) {
       throw new Error("Workspace root materialization receipt exists but its source is missing");
@@ -286,16 +458,17 @@ export class WorkspaceRootTemplateBootstrap {
       throw error;
     }
     fs.rmSync(backup, { recursive: true, force: true });
-    this.writeMaterializationReceipt(receiptPath, snapshot.commit);
+    this.writeMaterializationReceipt(receiptPath);
   }
 
-  private writeMaterializationReceipt(receiptPath: string, commit: string): void {
+  private writeMaterializationReceipt(receiptPath: string): void {
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
     const temporary = `${receiptPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify(materializationReceipt(commit), null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    fs.writeFileSync(
+      temporary,
+      `${JSON.stringify(materializationReceipt(this.acquiredLayers), null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 }
+    );
     fs.renameSync(temporary, receiptPath);
   }
 
@@ -383,15 +556,4 @@ function safeSnapshotDestination(root: string, relativePath: string): string {
     throw new Error(`Root snapshot path escapes its materialization root: ${relativePath}`);
   }
   return destination;
-}
-
-function canonicalJsonValue(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJsonValue).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonValue(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

@@ -1548,6 +1548,40 @@ async function main() {
         }),
     });
   };
+  /**
+   * Resolve what a dependency's track selects, preferring a designated local
+   * source.
+   *
+   * A development instance builds its distributions from the developer's
+   * checkout and hands them over as workspace sources. If a dependency on one
+   * of those addresses went to the network instead, the whole point of that
+   * arrangement would be lost: the loop would compose against a released
+   * upstream while the checkout it is meant to be testing sat unused.
+   */
+  const resolveTemplateTrack = async (address: {
+    url: string;
+    track: string;
+    credential?: string;
+  }): Promise<{ ref: string; commit: string }> => {
+    const canonical = normalizeTemplateGitUrl(address.url);
+    const local = workspaceSources.find(
+      (source) => normalizeTemplateGitUrl(source.pin.url) === canonical
+    );
+    if (local) return { ref: local.pin.ref, commit: local.pin.commit };
+    const { discoverTrackedGitSnapshot } = await import("@vibestudio/git");
+    const dir = path.join(statePath, "git-checkouts", "_template-tracks", sha256Canonical(address));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const discovered = await discoverTrackedGitSnapshot({
+      git: createRootTemplateGitClient(address),
+      dir,
+      url: templateGitTransportUrl(canonical),
+      track: address.track,
+      label: `workspace template dependency ${canonical}`,
+      sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
+    });
+    return { ref: discovered.ref, commit: discovered.commit };
+  };
   const designatedTemplateUrls = hostDesignatedTemplateUrls(appRoot);
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     workspaceId,
@@ -1556,6 +1590,7 @@ async function main() {
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
     acquire: acquireWorkspaceTemplate,
+    resolveTrack: resolveTemplateTrack,
     // Only a template this build designates as its own can contribute
     // host-build units. A checkout the host designated is vouched for whole,
     // because there the developer is the vendor and the files change all day.

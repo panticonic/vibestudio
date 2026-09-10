@@ -10,7 +10,6 @@
     "./baseTemplateRelease": "./src/baseTemplateRelease.ts",
     "./configParser": "./src/configParser.ts",
     "./contextProjections": "./src/contextProjections.ts",
-    "./workspaceSources": "./src/workspaceSources.ts",
     "./distribution": "./src/distribution.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./hostLaunchRecord": "./src/hostLaunchRecord.ts",
@@ -22,9 +21,13 @@
     "./rootTemplate": "./src/rootTemplate.ts",
     "./singletonRegistry": "./src/singletonRegistry.ts",
     "./startup": "./src/startup.ts",
+    "./templateComposition": "./src/templateComposition.ts",
     "./templateCoordinates": "./src/templateCoordinates.ts",
+    "./templateDependencies": "./src/templateDependencies.ts",
     "./templateManifest": "./src/templateManifest.ts",
-    "./templateRepositoryExchange": "./src/templateRepositoryExchange.ts"
+    "./templateManifestMerge": "./src/templateManifestMerge.ts",
+    "./templateRepositoryExchange": "./src/templateRepositoryExchange.ts",
+    "./workspaceSources": "./src/workspaceSources.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace/src"
