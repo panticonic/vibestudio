@@ -5,7 +5,6 @@ const pin = (name: string) => ({
   url: `git+https://example.test/${name}.git`,
   ref: `refs/heads/distributions/${name}`,
   commit: name[0]!.repeat(40),
-  snapshot: `v1-sha256:${name[0]!.repeat(64)}` as const,
 });
 const base = {
   pins: { base: pin("base"), personal: pin("personal"), system: pin("system") },

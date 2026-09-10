@@ -35,7 +35,6 @@ export const prepareWorkspaceCreationAuthority: AuthorityPreparationResolver = (
           { label: "Template source", value: template.url },
           { label: "Template ref", value: template.ref },
           { label: "Template commit", value: template.commit },
-          { label: "Template snapshot", value: template.snapshot },
         ]
       : [{ label: "Template", value: "Host-selected default template" }]),
   ];

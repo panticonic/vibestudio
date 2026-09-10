@@ -1148,8 +1148,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         if (
           initialization.receipt.pin.url !== rootPin.url ||
           initialization.receipt.pin.ref !== rootPin.ref ||
-          initialization.receipt.pin.commit !== rootPin.commit ||
-          initialization.receipt.pin.snapshot !== rootPin.snapshot
+          initialization.receipt.pin.commit !== rootPin.commit
         ) {
           throw new Error(
             "Workspace source initialization receipt does not match the exact root template"
@@ -1306,12 +1305,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }> = [];
       const provider = this.workspaceSourceProvider();
       const request = {
-        commandId: `workspace-source:${prepared.pin.commit}:${prepared.pin.snapshot}`,
+        commandId: `workspace-source:${prepared.pin.commit}`,
         pin: {
           url: prepared.pin.url,
           ref: prepared.pin.ref,
           commit: prepared.pin.commit,
-          snapshot: prepared.pin.snapshot,
         },
         repositories: [...prepared.repositories]
           .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))

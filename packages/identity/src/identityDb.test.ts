@@ -310,7 +310,6 @@ describe("identity package schema cut", () => {
       url: "git+https://example.test/workspace.git",
       ref: "refs/tags/v1",
       commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
     };
     const pair = afterCutover.ensurePrivateWorkspaces("usr_member", { personal: pin, system: pin });
     afterCutover.close();

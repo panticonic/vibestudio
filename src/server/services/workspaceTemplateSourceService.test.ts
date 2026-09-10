@@ -38,12 +38,10 @@ describe("workspaceTemplateSource", () => {
     const first = {
       ...shared,
       commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
     };
     const dirty = {
       ...shared,
       commit: "c".repeat(40),
-      snapshot: `v1-sha256:${"d".repeat(64)}` as const,
     };
     const fromCheckout = vi.fn(async (source: { checkout: string }) => source.checkout);
     const fromRemote = vi.fn(async () => "remote");
@@ -71,12 +69,10 @@ describe("workspaceTemplateSource", () => {
       url: "https://example.invalid/source.git",
       ref: "refs/heads/main",
       commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
     };
     const second = {
       ...first,
       commit: "c".repeat(40),
-      snapshot: `v1-sha256:${"d".repeat(64)}` as const,
     };
     const acquire = vi.fn(async (_pin: WorkspaceTemplatePin) => snapshot());
     const service = createWorkspaceTemplateSourceService({

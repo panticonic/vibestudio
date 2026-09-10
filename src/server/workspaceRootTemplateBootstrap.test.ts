@@ -2,11 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  canonicalSnapshotDigest,
-  sha256Hex,
-  type CanonicalSnapshotDigest,
-} from "@vibestudio/content-addressing";
+import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import type { ExactGitSnapshot } from "@vibestudio/git";
 import {
   hostBuildUnitInventoryPath,
@@ -69,7 +65,6 @@ function fixture(
     url: "git+https://example.test/base.git",
     ref: "refs/tags/v1",
     commit: rootSnapshot.commit,
-    snapshot: rootSnapshot.snapshot as CanonicalSnapshotDigest,
   };
   fs.writeFileSync(
     path.join(statePath, "workspace-creation/v1.json"),

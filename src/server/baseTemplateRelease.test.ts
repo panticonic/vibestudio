@@ -13,7 +13,6 @@ const releasePin = {
   url: "git+https://example.test/base.git",
   ref: "refs/heads/main",
   commit: "c".repeat(40),
-  snapshot: `v1-sha256:${"d".repeat(64)}` as const,
 };
 
 describe("host Base release pointer", () => {

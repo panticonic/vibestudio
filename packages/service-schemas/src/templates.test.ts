@@ -21,7 +21,6 @@ describe("templates contract", () => {
           url: "https://example.com/base.git",
           ref: "refs/heads/main",
           commit: "a".repeat(40),
-          snapshot: `v1-sha256:${"b".repeat(64)}`,
         },
       })
     ).toHaveProperty("pin.commit", "a".repeat(40));
@@ -33,7 +32,6 @@ describe("templates contract", () => {
           url: "https://example.com/base.git",
           ref: "refs/tags/v1",
           commit: "a".repeat(40),
-          snapshot: `v1-sha256:${"b".repeat(64)}`,
         },
         presentation: { name: "Base", description: "Common source" },
         repositories: ["workers/agent"],

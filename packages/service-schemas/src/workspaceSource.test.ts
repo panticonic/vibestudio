@@ -169,7 +169,6 @@ describe("GAD runtime schema", () => {
         url: "https://example.invalid/workspace.git",
         ref: "refs/heads/main",
         commit: "commit-1",
-        snapshot: `v1-sha256:${digest}`,
       },
       repositories: [
         {

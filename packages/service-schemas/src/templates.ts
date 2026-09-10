@@ -6,7 +6,6 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import {
   WorkspaceGitCommitSchema,
-  WorkspaceGitSnapshotSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -74,7 +73,6 @@ export const templatePublicationSchema = z
     templateUrl: z.string(),
     ref: z.string().startsWith("refs/tags/"),
     commit: WorkspaceGitCommitSchema,
-    snapshot: WorkspaceGitSnapshotSchema,
     parts: z.array(z.string()).min(1),
   })
   .strict();

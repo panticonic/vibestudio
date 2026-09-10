@@ -129,7 +129,6 @@ export async function buildWorkspaceDistribution(input: {
       url,
       ref,
       commit: snapshot.commit,
-      snapshot: snapshot.snapshot,
     }) as WorkspaceTemplatePin;
     validateRootTemplateSource({
       workspaceId: "distribution-validation",

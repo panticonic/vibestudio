@@ -144,14 +144,21 @@ export interface WorkspaceTemplateDependency extends WorkspaceTemplateDeclaratio
   commit?: string;
 }
 
-/** One exact, reproducible template source coordinate. */
+/**
+ * One exact, reproducible template source coordinate.
+ *
+ * The commit is the whole coordinate. A Git commit id already commits to its
+ * tree recursively, so a second digest beside it was only ever a derived name
+ * for the same bytes — and for a tree composed from several templates it could
+ * say nothing useful at all, since what a workspace is made of is the layers
+ * that went into it, not a hash of the result. Content still gets digested
+ * where content is *stored*; that is addressing, not provenance.
+ */
 export interface WorkspaceTemplatePin extends WorkspaceTemplateDeclaration {
   /** Human-readable source ref used to resolve the exact commit. */
   ref: string;
   /** Full 40-character lowercase Git SHA-1 object id. */
   commit: string;
-  /** Canonical digest of the complete admitted template tree. */
-  snapshot: `v1-sha256:${string}`;
 }
 
 export function sameWorkspaceTemplatePin(
@@ -162,7 +169,6 @@ export function sameWorkspaceTemplatePin(
     left.url === right.url &&
     left.ref === right.ref &&
     left.commit === right.commit &&
-    left.snapshot === right.snapshot &&
     left.credential === right.credential
   );
 }

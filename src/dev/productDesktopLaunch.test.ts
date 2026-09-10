@@ -8,7 +8,6 @@ const systemPin = {
   url: "git+https://example.test/base.git",
   ref: "refs/heads/distributions/system",
   commit: "a".repeat(40),
-  snapshot: `v1-sha256:${"b".repeat(64)}` as const,
 };
 const base = {
   pins: {

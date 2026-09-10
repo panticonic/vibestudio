@@ -88,7 +88,6 @@ export async function inspectWorkspaceSources(input: {
       url,
       ref: `refs/heads/${status.branch}`,
       commit: snapshot.commit,
-      snapshot: snapshot.snapshot,
     }) as WorkspaceTemplatePin;
     selections.push({
       ...checkpoint,

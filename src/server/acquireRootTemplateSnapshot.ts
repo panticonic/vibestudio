@@ -41,7 +41,6 @@ export function acquireRootTemplateSnapshot(input: {
       git: input.git,
       dir,
       commit: input.pin.commit,
-      expectedSnapshot: input.pin.snapshot,
       label,
       sink: input.sink,
       reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
@@ -58,7 +57,6 @@ export function acquireRootTemplateSnapshot(input: {
         url: templateGitTransportUrl(input.pin.url),
         ref: input.pin.ref,
         expectedCommit: input.pin.commit,
-        expectedSnapshot: input.pin.snapshot,
         label,
         sink: input.sink,
         reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
@@ -96,7 +94,6 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
         git: input.git,
         dir,
         commit: input.pin.commit,
-        expectedSnapshot: input.pin.snapshot,
         label,
         sink: input.sink,
         reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
@@ -114,7 +111,6 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
         git: input.git,
         dir,
         commit: input.pin.commit,
-        expectedSnapshot: input.pin.snapshot,
         label,
         sink: input.sink,
         reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
@@ -204,7 +200,6 @@ export async function inspectRootTemplateCheckout(input: {
     url: input.url,
     ref: `refs/heads/${status.branch}`,
     commit: observed.commit,
-    snapshot: observed.snapshot,
   }) as WorkspaceTemplatePin;
   return { pin, untrackedPaths };
 }

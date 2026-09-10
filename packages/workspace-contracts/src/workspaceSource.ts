@@ -13,7 +13,6 @@ export interface WorkspaceSourceExactPin {
   url: string;
   ref: string;
   commit: string;
-  snapshot: `v1-sha256:${string}`;
 }
 
 /** Host-private acquisition transport for one reviewed exact workspace source. */

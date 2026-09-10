@@ -36,7 +36,6 @@ describe("shell surface targets", () => {
           url: "git+https://example.test/app.git",
           ref: "refs/heads/main",
           commit: "a".repeat(40),
-          snapshot: `v1-sha256:${"b".repeat(64)}`,
         },
       },
       {

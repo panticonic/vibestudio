@@ -20,7 +20,6 @@ function pinFromReceipt(receipt) {
     url: publication.templateUrl,
     ref: publication.ref,
     commit: publication.commit,
-    snapshot: publication.snapshot,
   };
 }
 

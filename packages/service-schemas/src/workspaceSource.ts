@@ -1413,7 +1413,6 @@ const workspacePinSchema = z
     url: nonemptyText,
     ref: nonemptyText,
     commit: nonemptyText,
-    snapshot: z.string().regex(/^v1-sha256:[a-f0-9]{64}$/u),
   })
   .strict();
 const workspaceSnapshotRepositorySchema = z

@@ -111,7 +111,6 @@ export const gitTemplatePublishResultSchema = z
     templateUrl: z.string(),
     ref: z.string().startsWith("refs/tags/"),
     commit: z.string().regex(/^[0-9a-f]{40}$/u),
-    snapshot: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
     parts: z.array(z.string()).min(1),
   })
   .strict();

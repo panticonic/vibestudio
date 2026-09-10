@@ -84,7 +84,6 @@ describe("hub bootstrap workspace selection", () => {
       url: "git+https://example.test/base.git",
       ref: "refs/heads/main",
       commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
     };
     const templates = { personal: pin, system: pin };
     try {
@@ -147,7 +146,6 @@ describe("hub workspace creation template selection", () => {
     url: "git+https://example.test/development-base.git",
     ref: "refs/heads/main",
     commit: "a".repeat(40),
-    snapshot: `v1-sha256:${"b".repeat(64)}` as const,
   };
   const defaultTemplates = {
     base: developmentPin,
@@ -217,11 +215,7 @@ describe("hub workspace creation template selection", () => {
     expect(
       selectWorkspaceCreationRootTemplate({
         appRoot: "/unused",
-        requested: {
-          ...developmentPin,
-          commit: "c".repeat(40),
-          snapshot: `v1-sha256:${"d".repeat(64)}` as const,
-        },
+        requested: { ...developmentPin, commit: "c".repeat(40) },
         environment: {
           VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
         },
@@ -783,7 +777,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         url: "git+https://example.test/base.git",
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
       },
     };
     const env = buildWorkspaceChildEnv({
@@ -800,7 +793,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         url: "git+https://example.test/local.git",
         ref: "refs/heads/main",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
       },
       checkout: "/instance/workspace-source-inspections/one/0",
       review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },
@@ -1127,7 +1119,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
         url: "git+https://example.test/root.git",
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}`,
       },
     };
     try {
@@ -1182,7 +1173,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
         url: "git+https://example.test/local.git",
         ref: "refs/heads/local",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
       },
       checkout,
       review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },

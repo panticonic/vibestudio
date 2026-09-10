@@ -7,7 +7,6 @@ const pin = (name: string): WorkspaceTemplatePin => ({
   url: `https://example.com/${name}.git`,
   ref: "refs/heads/main",
   commit: name.charCodeAt(0).toString(16).repeat(20),
-  snapshot: `v1-sha256:${name.charCodeAt(0).toString(16).repeat(32)}`,
 });
 const defaults = { base: pin("base"), personal: pin("personal"), system: pin("system") };
 
@@ -15,10 +14,7 @@ describe("trusted distribution conduit seeds", () => {
   it("never trusts app content or a mutable revision at a first-party URL", () => {
     expect(trustedConduitTemplate(pin("app"), defaults)).toEqual(defaults.base);
     expect(
-      trustedConduitTemplate(
-        { ...defaults.system, commit: "f".repeat(40), snapshot: `v1-sha256:${"f".repeat(64)}` },
-        defaults
-      )
+      trustedConduitTemplate({ ...defaults.system, commit: "f".repeat(40) }, defaults)
     ).toEqual(defaults.base);
     expect(trustedConduitTemplate(defaults.system, defaults)).toEqual(defaults.system);
     expect(trustedConduitTemplate(defaults.personal, defaults)).toEqual(defaults.personal);

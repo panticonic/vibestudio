@@ -1649,11 +1649,9 @@ export async function executeHubControl(
       throw new Error("Local workspace source is outside the host-owned inspection root");
     }
     if (!source.review) throw new Error("Local workspace source has no validated review facts");
-    const coordinate = JSON.stringify([source.pin.url, source.pin.commit, source.pin.snapshot]);
+    const coordinate = JSON.stringify([source.pin.url, source.pin.commit]);
     const existing = state.workspaceSources.find(
-      (candidate) =>
-        JSON.stringify([candidate.pin.url, candidate.pin.commit, candidate.pin.snapshot]) ===
-        coordinate
+      (candidate) => JSON.stringify([candidate.pin.url, candidate.pin.commit]) === coordinate
     );
     if (existing && JSON.stringify(existing) !== JSON.stringify({ ...source, checkout })) {
       throw new Error("Local workspace source coordinate is already registered differently");

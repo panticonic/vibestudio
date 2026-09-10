@@ -28,7 +28,6 @@ function setup() {
         url: "git+https://example.test/base.git",
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}`,
       },
     })
   );
@@ -44,7 +43,6 @@ describe("resolveLocalWorkspaceStartup current lifecycle", () => {
       url: "git+https://example.test/base.git",
       ref: "refs/heads/candidate",
       commit: "c".repeat(40),
-      snapshot: `v1-sha256:${"d".repeat(64)}` as const,
     };
 
     resolveLocalWorkspaceStartup({

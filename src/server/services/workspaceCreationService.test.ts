@@ -21,7 +21,6 @@ describe("workspace creation runtime entry", () => {
       url: "https://github.com/example/template.git",
       ref: "refs/heads/main",
       commit: "0123456789abcdef0123456789abcdef01234567",
-      snapshot: "v1-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     };
     const prepared = await f.service.authorityPreparation![WORKSPACE_CREATION_AUTHORITY_RESOLVER]!(
       context("panel", "panel:one"),
@@ -39,7 +38,6 @@ describe("workspace creation runtime entry", () => {
             { label: "Template source", value: rootTemplate.url },
             { label: "Template ref", value: rootTemplate.ref },
             { label: "Template commit", value: rootTemplate.commit },
-            { label: "Template snapshot", value: rootTemplate.snapshot },
             { label: "Request ID", value: input.operationId, format: "code" },
           ],
           substance: expect.objectContaining({

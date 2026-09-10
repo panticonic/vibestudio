@@ -458,7 +458,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       url: "https://example.test/news.git",
       ref: "refs/tags/v1",
       commit: "1".repeat(40),
-      snapshot: `v1-sha256:${"c".repeat(64)}` as const,
     };
     const templateBytes = encoder.encode("export const news = true;\n");
     const templateHash = sha256Hex(templateBytes);
@@ -517,9 +516,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
     const initializeExactSnapshot = vi.fn(async () => ({
       state: "ready" as const,
-      commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+      commandId: `workspace-source:${pin.commit}`,
       receipt: {
-        commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+        commandId: `workspace-source:${pin.commit}`,
         pin,
         initializedEventId: "event:template",
         initializedStateHash: EMPTY_STATE_HASH,
@@ -538,7 +537,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
 
     expect(initializeExactSnapshot).toHaveBeenCalledWith({
-      commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+      commandId: `workspace-source:${pin.commit}`,
       pin,
       repositories: [
         expect.objectContaining({
@@ -556,7 +555,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       url: "https://example.test/root.git",
       ref: "refs/tags/v1",
       commit: "1".repeat(40),
-      snapshot: `v1-sha256:${"2".repeat(64)}` as const,
     };
     const prepared = { pin, repositories: [] };
     const prepareInitialization = vi.fn(async () => prepared);

@@ -21,6 +21,14 @@ import {
 } from "@vibestudio/shared/hostBuildUnits";
 import { discoverRepos } from "./vcsHost/repoDiscovery.js";
 
+/**
+ * The commit is the receipt. A Git commit id already commits to its tree, so
+ * the digest that used to sit beside it here named the same bytes twice.
+ */
+function materializationReceipt(commit: string): { version: number; commit: string } {
+  return { version: 1, commit };
+}
+
 const CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
 const MATERIALIZATION_RECEIPT_PATH = "workspace-creation/materialization-v1.json";
 const WORKSPACE_MANIFEST_PATH = "meta/vibestudio.yml";
@@ -193,7 +201,7 @@ export class WorkspaceRootTemplateBootstrap {
     pin: WorkspaceTemplatePin
   ): Promise<PreparedRootTemplateInitialization> {
     const snapshot = await this.deps.acquire(pin);
-    if (snapshot.commit !== pin.commit || snapshot.snapshot !== pin.snapshot) {
+    if (snapshot.commit !== pin.commit) {
       throw new Error(
         `Root template acquisition returned coordinates different from the creation descriptor`
       );
@@ -228,15 +236,22 @@ export class WorkspaceRootTemplateBootstrap {
 
   private validateMaterializedSource(pin: WorkspaceTemplatePin): boolean {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
-    const expectedReceipt = {
-      version: 1,
-      commit: pin.commit,
-      snapshot: pin.snapshot,
-    };
     if (!fs.existsSync(receiptPath)) return false;
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
-    if (canonicalJsonValue(receipt) !== canonicalJsonValue(expectedReceipt)) {
+    const recorded =
+      receipt && typeof receipt === "object" && !Array.isArray(receipt)
+        ? (receipt as Record<string, unknown>)
+        : null;
+    if (!recorded || recorded["commit"] !== pin.commit) {
       throw new Error("Workspace root materialization receipt does not match its exact pin");
+    }
+    // A receipt written before the tree digest was dropped named the same
+    // commit, so it describes the same content and nothing needs
+    // re-materializing — which matters, because re-materializing would replace
+    // a source the user may have edited. Rewrite it in the current shape
+    // instead of failing an already-correct workspace.
+    if (canonicalJsonValue(recorded) !== canonicalJsonValue(materializationReceipt(pin.commit))) {
+      this.writeMaterializationReceipt(receiptPath, pin.commit);
     }
     const manifestPath = path.join(this.deps.sourcePath, WORKSPACE_MANIFEST_PATH);
     if (!fs.existsSync(manifestPath)) {
@@ -248,11 +263,6 @@ export class WorkspaceRootTemplateBootstrap {
 
   private materializeExactSource(snapshot: ExactGitSnapshot): void {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
-    const expectedReceipt = {
-      version: 1,
-      commit: snapshot.commit,
-      snapshot: snapshot.snapshot,
-    };
     const parent = path.dirname(this.deps.sourcePath);
     const basename = path.basename(this.deps.sourcePath);
     const operationKey = snapshot.commit.slice(0, 16);
@@ -288,14 +298,17 @@ export class WorkspaceRootTemplateBootstrap {
       throw error;
     }
     fs.rmSync(backup, { recursive: true, force: true });
+    this.writeMaterializationReceipt(receiptPath, snapshot.commit);
+  }
+
+  private writeMaterializationReceipt(receiptPath: string, commit: string): void {
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-    const temporaryReceipt = `${receiptPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporaryReceipt, `${JSON.stringify(expectedReceipt, null, 2)}\n`, {
+    const temporary = `${receiptPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(materializationReceipt(commit), null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
-      flag: "wx",
     });
-    fs.renameSync(temporaryReceipt, receiptPath);
+    fs.renameSync(temporary, receiptPath);
   }
 
   /**

@@ -374,19 +374,15 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
       typeof inv.flags["template-commit"] === "string"
         ? inv.flags["template-commit"].trim()
         : undefined;
-    const templateSnapshot =
-      typeof inv.flags["template-snapshot"] === "string"
-        ? inv.flags["template-snapshot"].trim()
-        : undefined;
     const templateCredential =
       typeof inv.flags["template-credential"] === "string"
         ? inv.flags["template-credential"].trim()
         : undefined;
-    const templateValues = [templateUrl, templateRef, templateCommit, templateSnapshot];
+    const templateValues = [templateUrl, templateRef, templateCommit];
     const hasTemplateInput = templateValues.some(Boolean) || Boolean(templateCredential);
     if (hasTemplateInput && templateValues.some((value) => !value)) {
       throw new UsageError(
-        "an external root requires --template, --template-ref, --template-commit, and --template-snapshot"
+        "an external root requires --template, --template-ref, and --template-commit"
       );
     }
     const rootTemplate = hasTemplateInput
@@ -394,7 +390,6 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
           url: normalizeTemplateGitUrl(templateUrl!),
           ref: templateRef,
           commit: templateCommit,
-          snapshot: templateSnapshot,
           ...(templateCredential ? { credential: templateCredential } : {}),
         })
       : undefined;
@@ -819,7 +814,7 @@ const remoteCommands: CliCommand[] = [
     name: "create-workspace",
     summary: "Create a workspace from the standard setup or one exact external root",
     usage:
-      "vibestudio remote create-workspace NAME --operation-id ID [--template URL --template-ref REF --template-commit SHA --template-snapshot DIGEST]",
+      "vibestudio remote create-workspace NAME --operation-id ID [--template URL --template-ref REF --template-commit SHA]",
     flags: [
       {
         name: "operation-id",
@@ -836,11 +831,6 @@ const remoteCommands: CliCommand[] = [
         name: "template-commit",
         takesValue: true,
         description: "Full lowercase commit id of the exact root snapshot",
-      },
-      {
-        name: "template-snapshot",
-        takesValue: true,
-        description: "Canonical v1-sha256 digest of the admitted root tree",
       },
       {
         name: "template-credential",

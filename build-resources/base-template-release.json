@@ -3,27 +3,23 @@
   "baseTemplate": {
     "url": "git+https://github.com/panticonic/vibestudio-workspace-base.git",
     "ref": "refs/tags/v0.3.46",
-    "commit": "7b29d8d9c1058e5c0a9551bb7b7d92ee9a7fadcf",
-    "snapshot": "v1-sha256:1bd18e5dce572748d0169b4a8edc17696d301791b24a872d9c6fe8e94f6ab7be"
+    "commit": "7b29d8d9c1058e5c0a9551bb7b7d92ee9a7fadcf"
   },
   "workspaceTemplates": {
     "base": {
       "url": "git+https://github.com/panticonic/vibestudio-workspace-base.git",
       "ref": "refs/tags/distributions/base/v0.3.47",
-      "commit": "78a7da538bf3bebde927b86ad057c79e2ccc8ea3",
-      "snapshot": "v1-sha256:7a2ff07e2b2aa1e1da1a9526e7dc24f4ae156a9964b14162e2e194a402922696"
+      "commit": "78a7da538bf3bebde927b86ad057c79e2ccc8ea3"
     },
     "personal": {
       "url": "git+https://github.com/panticonic/vibestudio-workspace-base.git",
       "ref": "refs/tags/distributions/personal/v0.3.47",
-      "commit": "7ba0ca366794aaad7eadab6bd37d073eeeccb919",
-      "snapshot": "v1-sha256:377788a5e1d537e81e6bc40d7348d6683f36ee7f82482a7380b10ffa25286fc8"
+      "commit": "7ba0ca366794aaad7eadab6bd37d073eeeccb919"
     },
     "system": {
       "url": "git+https://github.com/panticonic/vibestudio-workspace-base.git",
       "ref": "refs/tags/distributions/system/v0.3.47",
-      "commit": "bddc1d495488e613bc1be70c4955ba16c62bea79",
-      "snapshot": "v1-sha256:32a924141d4d975418b5ad57144b9dbdac34a6f10a7996afb77df624227043eb"
+      "commit": "bddc1d495488e613bc1be70c4955ba16c62bea79"
     }
   }
 }

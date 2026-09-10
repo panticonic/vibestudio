@@ -106,7 +106,7 @@ describe("development template selection", () => {
         },
       },
     });
-    expect(snapshot.snapshot).toBe(selection!.pin.snapshot);
+    expect(snapshot.commit).toBe(selection!.pin.commit);
     expect(new TextDecoder().decode(snapshot.readFile("panels/example/index.ts")!)).toContain(
       "reviewed local state"
     );

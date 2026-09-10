@@ -45,7 +45,6 @@ function writeBaseRelease(appRoot: string): void {
         url: "git+https://example.test/base.git",
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}`,
       },
     })
   );
@@ -55,7 +54,6 @@ const exactRoot = {
   url: "git+https://example.test/base.git",
   ref: "refs/tags/v1",
   commit: "a".repeat(40),
-  snapshot: `v1-sha256:${"b".repeat(64)}` as const,
 };
 
 function exactCreation(workspaceId: string) {
@@ -314,7 +312,6 @@ describe("initWorkspace", () => {
       url: "https://example.com/news-template.git",
       ref: "refs/tags/v1",
       commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
       credential: "github-main",
     };
 

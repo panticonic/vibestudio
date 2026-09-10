@@ -24,7 +24,6 @@ it("runs the production disk receiver under its platform execution contract", as
     url: "git+https://example.test/examples.git",
     ref: "refs/heads/main",
     commit: "a".repeat(40),
-    snapshot: `v1-sha256:${"b".repeat(64)}`,
   };
   vi.stubEnv("VIBESTUDIO_WORKSPACE_SOURCES", JSON.stringify([{ pin, checkout }]));
   const probe = path.join(sourceRoot, "template-probe.cjs");

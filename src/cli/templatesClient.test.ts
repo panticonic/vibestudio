@@ -8,7 +8,6 @@ describe("templates client", () => {
         url: "https://example.test/template.git",
         ref: "refs/heads/main",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}`,
       },
       repositories: [],
       files: [],

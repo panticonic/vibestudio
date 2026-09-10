@@ -184,17 +184,29 @@ function toPosixPath(value: string): string {
 export function createHostBuildUnitGate(input: {
   statePath: string;
   workspacePath: string;
+  warn?: (message: string) => void;
 }): (repoPath: string) => boolean {
   let inventory: HostBuildUnitInventory | null | undefined;
+  const reported = new Set<string>();
   return (repoPath) => {
     if (inventory === undefined) {
       inventory = readHostBuildUnitInventory(hostBuildUnitInventoryPath(input.statePath));
     }
     const normalized = normalizeUnitRepoPath(repoPath);
-    return isHostBuildUnitSource({
-      inventory,
-      repoPath: normalized,
-      unitDir: path.join(input.workspacePath, ...normalized.split("/")),
-    });
+    const unitDir = path.join(input.workspacePath, ...normalized.split("/"));
+    if (isHostBuildUnitSource({ inventory, repoPath: normalized, unitDir })) return true;
+    // Quiet about a unit the template never shipped — most units are a
+    // workspace's own source and that is the ordinary case. Loud, once, about
+    // one it did ship whose bytes have since changed, because the consequence
+    // is otherwise invisible: the unit stops being admitted, so anything gated
+    // on its admission never starts, and for the shell that means no window.
+    if (inventory?.units[normalized] && !reported.has(normalized)) {
+      reported.add(normalized);
+      (input.warn ?? ((message: string) => console.warn(message)))(
+        `[HostBuildUnits] ${normalized} no longer matches the source its template shipped, ` +
+          `so it is not admitted as a host-build unit.`
+      );
+    }
+    return false;
   };
 }

@@ -133,7 +133,6 @@ function renderPlan(plan: TemplateAuthoringInspection): void {
 function renderPublication(value: TemplatePublication): void {
   console.log(`${value.templateUrl} @ ${value.ref}`);
   console.log(`  commit: ${value.commit}`);
-  console.log(`  snapshot: ${value.snapshot}`);
 }
 
 export const templatesCommands: CliCommand[] = [

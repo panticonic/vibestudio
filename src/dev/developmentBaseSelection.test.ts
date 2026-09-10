@@ -37,7 +37,6 @@ function fixture(systemEpoch: number): { host: string; base: string; checkpoint:
         url: "git+https://example.test/vibestudio-workspace-base.git",
         ref: "refs/tags/v1",
         commit: "a".repeat(40),
-        snapshot: `v1-sha256:${"b".repeat(64)}`,
       },
     })
   );

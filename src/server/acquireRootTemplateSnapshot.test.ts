@@ -22,20 +22,11 @@ describe("acquireRootTemplateSnapshot", () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-cache-"));
     roots.push(statePath);
     const bytes = new TextEncoder().encode("systemEpoch: 59\n");
-    const contentHash = sha256Hex(bytes);
     const commit = "a".repeat(40);
     const pin: WorkspaceTemplatePin = {
       url: "git+https://example.test/workspace-base.git",
       ref: "refs/tags/v1",
       commit,
-      snapshot: canonicalSnapshotDigest([
-        {
-          path: "meta/vibestudio.yml",
-          mode: 0o100644,
-          size: bytes.byteLength,
-          contentHash,
-        },
-      ]),
     };
     const clone = vi.fn(async () => undefined);
     const git = {
@@ -65,8 +56,8 @@ describe("acquireRootTemplateSnapshot", () => {
     const first = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
     const afterRestart = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
 
-    expect(first).toMatchObject({ commit, snapshot: pin.snapshot });
-    expect(afterRestart).toMatchObject({ commit, snapshot: pin.snapshot });
+    expect(first).toMatchObject({ commit });
+    expect(afterRestart).toMatchObject({ commit });
     expect(clone).toHaveBeenCalledTimes(1);
   });
 
@@ -89,7 +80,6 @@ describe("acquireRootTemplateSnapshot", () => {
       url: "git+https://example.test/workspace-base.git",
       ref: "refs/heads/candidate",
       commit,
-      snapshot,
     };
     const clone = vi.fn(async () => undefined);
     const git = {
@@ -174,7 +164,6 @@ describe("acquireRootTemplateSnapshot", () => {
       commit,
     });
     expect(discovered.untrackedPaths).toEqual(["notes.txt"]);
-    expect(discovered.snapshot.snapshot).toBe(discovered.pin.snapshot);
 
     status.mockResolvedValueOnce({
       branch: "candidate",

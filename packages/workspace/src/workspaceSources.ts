@@ -28,7 +28,7 @@ export function readWorkspaceSources(
   const sources = WorkspaceSourcesSchema.parse(JSON.parse(raw));
   const exactCoordinates = new Set<string>();
   for (const source of sources) {
-    const coordinate = JSON.stringify([source.pin.url, source.pin.commit, source.pin.snapshot]);
+    const coordinate = JSON.stringify([source.pin.url, source.pin.commit]);
     if (exactCoordinates.has(coordinate)) {
       throw new Error(
         `Workspace source is selected more than once: ${source.pin.url} at ${source.pin.commit}`

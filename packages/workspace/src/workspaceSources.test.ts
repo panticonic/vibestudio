@@ -6,7 +6,6 @@ const source = {
     url: "git+https://example.test/template.git",
     ref: "refs/heads/main",
     commit: "a".repeat(40),
-    snapshot: `v1-sha256:${"b".repeat(64)}`,
   },
   checkout: "/private/template",
 };
@@ -28,7 +27,6 @@ describe("host-selected workspace sources", () => {
         ...source.pin,
         ref: "refs/heads/distributions/personal",
         commit: "c".repeat(40),
-        snapshot: `v1-sha256:${"d".repeat(64)}`,
       },
       checkout: "/private/personal",
     };
