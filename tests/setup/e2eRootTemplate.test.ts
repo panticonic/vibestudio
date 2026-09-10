@@ -2,14 +2,27 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import YAML from "yaml";
 import { buildWorkspaceDistribution } from "../../src/dev/workspaceDistributionBuilder.js";
 import { deriveE2eRootTemplate } from "./e2eRootTemplate.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const roots: string[] = [];
+let previousSharedCache: string | undefined;
+
+// Deriving a root template caches its checkout as profile-level derived data,
+// so a test has to say where that profile is or it writes into the developer's.
+beforeEach(() => {
+  previousSharedCache = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  const derived = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-root-template-derived-"));
+  roots.push(derived);
+  process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = derived;
+});
+
 afterEach(() => {
+  if (previousSharedCache === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+  else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedCache;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
