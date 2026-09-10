@@ -29,7 +29,13 @@ export function panelReadinessSnapshot(input: {
   presentation: PanelPresentationSnapshot;
   observation: PanelSlotObservation;
 }): PanelReadinessSnapshot {
-  const ready = input.presentation.presentation.state === "ready";
+  const presentation = input.presentation.presentation;
+  const ready = presentation.state === "ready";
+  // Settled, not succeeded. A failure nothing will retry is as final as
+  // readiness; a retryable one is still in flight, and reporting it as
+  // terminal is what let a waiter conclude a panel was broken when its cause
+  // had already cleared.
+  const settled = ready || (presentation.state === "failed" && !presentation.retryable);
   const runtimeEntityId =
     input.presentation.presentation.state === "ready"
       ? input.presentation.presentation.runtimeEntityId
@@ -39,7 +45,7 @@ export function panelReadinessSnapshot(input: {
     source: input.source,
     runtimeEntityId,
     contentReady: ready,
-    terminal: ready,
+    terminal: settled,
     nativeSlotBound: input.nativeSlotBound,
     presentation: input.presentation.presentation,
     presentationRevision: input.presentation.revision,

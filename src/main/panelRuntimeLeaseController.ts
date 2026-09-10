@@ -15,6 +15,7 @@ import {
   formatPanelRuntimeLeaseDeniedMessage,
 } from "@vibestudio/shared/panel/panelLease";
 import type { PanelHttpServerLike, PanelViewLike } from "@vibestudio/shared/panelInterfaces";
+import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
@@ -414,6 +415,8 @@ export class PanelPresentationController {
         stage: "booting",
         code: "renderer_boot_failed",
         message: observation.message ?? "Panel renderer failed during boot.",
+        // The panel's own code said it failed; another attempt runs the same code.
+        retryable: false,
         enteredAt: Date.now(),
       });
     } else {
@@ -577,7 +580,18 @@ export class PanelPresentationController {
     );
   }
 
-  recordPanelViewFailure(panelId: string, message: string): void {
+  /**
+   * Record that this slot has no live view, and why.
+   *
+   * The recorded failure is also what marks the slot as wanting another
+   * attempt, so `retryable` decides whether that attempt is worth making. The
+   * caller supplies it because only the caller holds the typed cause.
+   */
+  recordPanelViewFailure(
+    panelId: string,
+    message: string,
+    options: { retryable?: boolean } = {}
+  ): void {
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
     this.deps.registry.updateArtifacts(panelId, {
@@ -601,12 +615,17 @@ export class PanelPresentationController {
         stage: current.stage,
         code: "view_failure",
         message,
+        retryable: options.retryable ?? false,
         enteredAt: Date.now(),
       });
     }
   }
 
-  recordPanelPreparationFailure(panelId: string, message: string): void {
+  recordPanelPreparationFailure(
+    panelId: string,
+    message: string,
+    options: { retryable?: boolean } = {}
+  ): void {
     const current = this.attemptBySlot.get(panelId);
     if (!current || current.status !== "active") return;
     this.settleAttempt(current, {
@@ -616,6 +635,7 @@ export class PanelPresentationController {
       stage: current.stage,
       code: "preparation_failed",
       message,
+      retryable: options.retryable ?? false,
       enteredAt: Date.now(),
     });
   }
@@ -708,12 +728,17 @@ export class PanelPresentationController {
     if (!force && currentAttempt?.status === "active" && currentAttempt.targetKey === targetKey) {
       return currentAttempt.completion;
     }
+    // A settled outcome for the same target is the answer, and returning it
+    // saves repeating work. A retryable failure is not a settled outcome: it
+    // is the record of a condition that was expected to pass, so memoising it
+    // turns every later ask into the same stale answer and nothing ever gets
+    // another go at the slot.
     if (
       !force &&
       currentAttempt?.targetKey === targetKey &&
       (currentSnapshot.state === "ready" ||
         currentSnapshot.state === "unavailable" ||
-        currentSnapshot.state === "failed")
+        (currentSnapshot.state === "failed" && !currentSnapshot.retryable))
     ) {
       return currentSnapshot;
     }
@@ -847,7 +872,10 @@ export class PanelPresentationController {
             );
           });
       }
-      this.recordPanelViewFailure(attempt.slotId, message);
+      // Classified from the typed cause, never from the message: a transport
+      // that dropped mid-attempt is the case this whole distinction exists for.
+      const retryable = isRpcConnectionLost(error) || isPanelRuntimeLeaseConflict(error);
+      this.recordPanelViewFailure(attempt.slotId, message, { retryable });
       if (!this.isCurrent(attempt.slotId, attempt)) return;
       this.settleAttempt(attempt, {
         state: "failed",
@@ -856,6 +884,7 @@ export class PanelPresentationController {
         stage: attempt.stage,
         code: "presentation_failed",
         message,
+        retryable,
         enteredAt: Date.now(),
       });
     }
@@ -1001,6 +1030,8 @@ export class PanelPresentationController {
         attemptId: attempt.attemptId,
         stage: "recovering",
         code: "renderer_crash_loop",
+        // The loop detector exists because repeated attempts were not working.
+        retryable: false,
         message: `Panel renderer crashed repeatedly (last reason: ${reason}).`,
         enteredAt: now,
       });
@@ -1031,6 +1062,7 @@ export class PanelPresentationController {
           attemptId: attempt.attemptId,
           stage: "recovering",
           code: "renderer_crashed",
+          retryable: true,
           message: `Panel renderer crashed (${reason}): ${error instanceof Error ? error.message : String(error)}`,
           enteredAt: Date.now(),
         });

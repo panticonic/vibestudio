@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SESSION_CONNECTION_LOST_CODE } from "@vibestudio/rpc/protocol/remoteSession";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { Panel } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
@@ -1364,6 +1365,42 @@ describe("PanelOrchestrator.focusPanel", () => {
       htmlPath: "https://example.com",
     });
     expect(registry.getPanel(panel.id)?.artifacts.viewFailure).toBeUndefined();
+  });
+
+  it("gives a slot another go after a transport drop, and stops after a broken renderer", async () => {
+    // The two halves of the same rule. A retryable failure is the record of a
+    // condition expected to pass, so asking again must actually try again; a
+    // failure nothing will retry is the answer, and repeating it is waste.
+    for (const [label, failure, expectedAttempts] of [
+      [
+        "transport drop",
+        Object.assign(new Error("Connection lost before the response arrived"), {
+          code: SESSION_CONNECTION_LOST_CODE,
+          errorKind: "transport",
+        }),
+        2,
+      ],
+      ["broken renderer", new Error("panel entry threw during module evaluation"), 1],
+    ] as const) {
+      const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+      const panel = makePanel(`panel:tree/${label.replace(/\s/g, "-")}`, [], {
+        artifacts: { buildState: "ready" },
+      });
+      registry.addPanel(panel, null, { addAsRoot: true });
+      const { orchestrator, panelView } = createOrchestrator(registry);
+      const loaded = new Set<string>();
+      panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+      panelView.createViewForPanel
+        .mockRejectedValueOnce(failure)
+        .mockImplementation(async (panelId: string) => {
+          loaded.add(panelId);
+        });
+
+      await orchestrator.ensureLoaded(panel.id);
+      await orchestrator.ensureLoaded(panel.id);
+
+      expect(panelView.createViewForPanel, label).toHaveBeenCalledTimes(expectedAttempts);
+    }
   });
 
   it("retries a workspace panel after host navigation fails without rebuilding it", async () => {

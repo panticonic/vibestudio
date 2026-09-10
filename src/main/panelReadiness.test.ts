@@ -76,3 +76,43 @@ describe("panel canonical readiness projection", () => {
     });
   });
 });
+
+const failedPresentation = (retryable: boolean): PanelPresentationSnapshot => ({
+  revision: 5,
+  presentation: {
+    state: "failed",
+    slotId: "panel:tree/root",
+    attemptId: "local-attempt",
+    stage: "creating-view",
+    code: "presentation_failed",
+    message: "Connection lost before the response arrived",
+    retryable,
+    enteredAt: 1,
+  },
+});
+
+describe("a settled panel versus a panel still in flight", () => {
+  it("reports a failure nothing will retry as terminal", () => {
+    const snapshot = panelReadinessSnapshot({
+      panelId: "panel:tree/root",
+      source: "panels/chat",
+      nativeSlotBound: false,
+      presentation: failedPresentation(false),
+      observation: observation("failed"),
+    });
+    expect(snapshot).toMatchObject({ contentReady: false, terminal: true });
+  });
+
+  it("reports a retryable failure as still in flight", () => {
+    // The distinction a waiter needs: this panel's cause was expected to pass,
+    // so calling it terminal is what turns a passing condition into a verdict.
+    const snapshot = panelReadinessSnapshot({
+      panelId: "panel:tree/root",
+      source: "panels/chat",
+      nativeSlotBound: false,
+      presentation: failedPresentation(true),
+      observation: observation("failed"),
+    });
+    expect(snapshot).toMatchObject({ contentReady: false, terminal: false });
+  });
+});

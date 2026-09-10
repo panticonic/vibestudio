@@ -54,6 +54,19 @@ export type PanelPresentation =
       stage: PanelPresentationStage;
       code: string;
       message: string;
+      /**
+       * Whether another attempt could plausibly succeed without anything
+       * changing about the panel itself.
+       *
+       * The distinction the model was missing. A dropped transport and a
+       * single renderer crash clear on their own; a renderer that fails to
+       * boot, or one already crash-looping, will fail again the same way.
+       * Without saying which, a failure can only be memoised — and a
+       * memoised transient failure is indistinguishable from a broken panel,
+       * which is how a slot ends up waiting on a condition that has already
+       * passed.
+       */
+      retryable: boolean;
       enteredAt: number;
     };
 

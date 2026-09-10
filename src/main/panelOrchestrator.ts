@@ -26,7 +26,7 @@ import {
   createRuntimeClient,
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
-import { isPanelRuntimeLeaseConflict } from "@vibestudio/rpc";
+import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
 import type {
   PanelHost,
   PanelHostRegistration,
@@ -889,9 +889,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         const isLeaseFailure =
           isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
         // Recorded even for a dropped connection: the recorded failure is what
-        // marks this slot as needing another attempt, so suppressing it removes
-        // the recovery it looks like it is protecting.
-        if (!isLeaseFailure) this.runtime.recordPanelViewFailure(targetPanelId, message);
+        // marks this slot as needing another attempt. What the cause decides is
+        // whether that attempt is worth making, not whether to record it.
+        if (!isLeaseFailure)
+          this.runtime.recordPanelViewFailure(targetPanelId, message, {
+            retryable: isRpcConnectionLost(error),
+          });
         return {
           panelId: targetPanelId,
           status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -1026,7 +1029,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       const lease = this.registry.getRuntimeLease(panelId);
       const isLeaseFailure =
         isPanelRuntimeLeaseConflict(error) || /running on|leased by/i.test(message);
-      if (!isLeaseFailure) this.runtime.recordPanelViewFailure(panelId, message);
+      if (!isLeaseFailure)
+        this.runtime.recordPanelViewFailure(panelId, message, {
+          retryable: isRpcConnectionLost(error),
+        });
       return {
         panelId,
         status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
