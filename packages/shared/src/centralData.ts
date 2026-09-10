@@ -194,6 +194,37 @@ export class CentralDataManager {
    * when their child is stopped or creation is incomplete; never replace state
    * in response to a startup failure. SQLite serializes competing clients.
    */
+  /**
+   * Designate a workspace that already exists as one of a user's private
+   * workspaces.
+   *
+   * `ensurePrivateWorkspaces` reserves the ordinary pair. This is for the
+   * workspace a host was explicitly told to bootstrap and then serve its own
+   * clients from: native app units, the desktop shell among them, are admitted
+   * and hosted only in a designated System workspace, so a bootstrap workspace
+   * that has to render the app is that instance's System workspace rather than
+   * a third thing beside it. Private ownership is that workspace's whole
+   * membership by construction, so no ordinary membership is added.
+   *
+   * An existing designation for the same role is left alone, matching
+   * `ensurePrivateWorkspaces`: startup never replaces a designation.
+   */
+  designatePrivateWorkspace(
+    userId: string,
+    role: "personal" | "system",
+    workspaceId: string
+  ): void {
+    this.transaction(() => {
+      const user = this.stmt("SELECT revoked_at FROM users WHERE id = ?").get(userId);
+      if (!user || user["revoked_at"] !== null)
+        throw new Error("Private workspace owner is not a live user");
+      this.stmt(
+        `INSERT INTO user_workspaces (user_id, role, workspace_id) VALUES (?, ?, ?)
+         ON CONFLICT DO NOTHING`
+      ).run(userId, role, workspaceId);
+    });
+  }
+
   ensurePrivateWorkspaces(
     userId: string,
     templates: Record<"personal" | "system", WorkspaceTemplatePin>
@@ -282,31 +313,54 @@ export class CentralDataManager {
     assertLive: () => void
   ): WorkspaceCreationReceipt {
     const ownerKey = this.creationOwnerKey(owner);
-    if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.operationId)) throw new Error("Invalid workspace creation operation ID");
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.operationId))
+      throw new Error("Invalid workspace creation operation ID");
     const name = input.workspace.trim();
     if (!name) throw new Error("Workspace name is required");
     const request = canonicalJson({ workspace: name, rootTemplate: input.rootTemplate ?? null });
     return this.transaction(() => {
       assertLive();
       const user = this.assertCreationOwnerActive(owner);
-      const existing = this.stmt("SELECT * FROM workspace_creation_operations WHERE owner_key = ? AND operation_id = ?")
-        .get(ownerKey, input.operationId);
+      const existing = this.stmt(
+        "SELECT * FROM workspace_creation_operations WHERE owner_key = ? AND operation_id = ?"
+      ).get(ownerKey, input.operationId);
       if (existing) {
-        if (existing["request_json"] !== request) throw new Error("Workspace creation operation ID was already used with different inputs");
+        if (existing["request_json"] !== request)
+          throw new Error("Workspace creation operation ID was already used with different inputs");
         return this.creationReceipt(existing);
       }
       const entry = this.addWorkspaceCreation(name, selectRoot());
       const at = this.now();
-      const operationId = "workspace-creation:" + createHash("sha256").update(canonicalJson([ownerKey, input.operationId])).digest("hex");
-      const audit: MembershipGovernanceRecord = { kind: "membership", operationId, op: "add-member",
-        actor: { userId: owner.userId, handle: user.handle }, target: { userId: owner.userId, handle: user.handle },
-        workspaceId: entry.workspaceId, at };
-      this.stmt("INSERT INTO membership (user_id, workspace_id, added_by, added_at, role) VALUES (?, ?, ?, ?, 'admin')")
-        .run(owner.userId, entry.workspaceId, owner.userId, at);
-      const row = this.stmt(`INSERT INTO workspace_creation_operations
+      const operationId =
+        "workspace-creation:" +
+        createHash("sha256")
+          .update(canonicalJson([ownerKey, input.operationId]))
+          .digest("hex");
+      const audit: MembershipGovernanceRecord = {
+        kind: "membership",
+        operationId,
+        op: "add-member",
+        actor: { userId: owner.userId, handle: user.handle },
+        target: { userId: owner.userId, handle: user.handle },
+        workspaceId: entry.workspaceId,
+        at,
+      };
+      this.stmt(
+        "INSERT INTO membership (user_id, workspace_id, added_by, added_at, role) VALUES (?, ?, ?, ?, 'admin')"
+      ).run(owner.userId, entry.workspaceId, owner.userId, at);
+      const row = this.stmt(
+        `INSERT INTO workspace_creation_operations
         (owner_key, operation_id, request_json, workspace_id, workspace_name, state, audit_json, created_at)
-        VALUES (?, ?, ?, ?, ?, 'registered', ?, ?) RETURNING *`)
-        .get(ownerKey, input.operationId, request, entry.workspaceId, name, JSON.stringify(audit), at);
+        VALUES (?, ?, ?, ?, ?, 'registered', ?, ?) RETURNING *`
+      ).get(
+        ownerKey,
+        input.operationId,
+        request,
+        entry.workspaceId,
+        name,
+        JSON.stringify(audit),
+        at
+      );
       if (!row) throw new Error("Workspace creation did not return its durable receipt");
       assertLive();
       return this.creationReceipt(row);
@@ -314,21 +368,29 @@ export class CentralDataManager {
   }
 
   /** Read-only reconciliation never reserves, initializes, or recreates a workspace. */
-  workspaceCreationReceipt(owner: WorkspaceCreationOwner, operationId: string): WorkspaceCreationReceipt | null {
+  workspaceCreationReceipt(
+    owner: WorkspaceCreationOwner,
+    operationId: string
+  ): WorkspaceCreationReceipt | null {
     this.assertCreationOwnerActive(owner);
-    const row = this.stmt("SELECT * FROM workspace_creation_operations WHERE owner_key = ? AND operation_id = ?")
-      .get(this.creationOwnerKey(owner), operationId);
+    const row = this.stmt(
+      "SELECT * FROM workspace_creation_operations WHERE owner_key = ? AND operation_id = ?"
+    ).get(this.creationOwnerKey(owner), operationId);
     return row ? this.creationReceipt(row) : null;
   }
 
   pendingWorkspaceCreationAudits(): MembershipGovernanceRecord[] {
-    return this.stmt("SELECT audit_json FROM workspace_creation_operations WHERE audit_delivered = 0 ORDER BY created_at")
-      .all().map(row => JSON.parse(String(row["audit_json"])) as MembershipGovernanceRecord);
+    return this.stmt(
+      "SELECT audit_json FROM workspace_creation_operations WHERE audit_delivered = 0 ORDER BY created_at"
+    )
+      .all()
+      .map((row) => JSON.parse(String(row["audit_json"])) as MembershipGovernanceRecord);
   }
 
   acknowledgeWorkspaceCreationAudit(operationId: string): void {
-    this.stmt("UPDATE workspace_creation_operations SET audit_delivered = 1 WHERE json_extract(audit_json, '$.operationId') = ?")
-      .run(operationId);
+    this.stmt(
+      "UPDATE workspace_creation_operations SET audit_delivered = 1 WHERE json_extract(audit_json, '$.operationId') = ?"
+    ).run(operationId);
   }
 
   private creationOwnerKey(owner: WorkspaceCreationOwner): string {
@@ -338,21 +400,28 @@ export class CentralDataManager {
   }
 
   private assertCreationOwnerActive(owner: WorkspaceCreationOwner): { handle: string } {
-    const user = this.stmt("SELECT handle FROM users WHERE id = ? AND revoked_at IS NULL").get(owner.userId);
+    const user = this.stmt("SELECT handle FROM users WHERE id = ? AND revoked_at IS NULL").get(
+      owner.userId
+    );
     if (!user) throw new Error("Workspace creation owner is unavailable");
     if (owner.source) {
-      const membership = this.stmt(`SELECT 1 FROM workspaces w JOIN membership m ON m.workspace_id = w.workspace_id
+      const membership = this.stmt(
+        `SELECT 1 FROM workspaces w JOIN membership m ON m.workspace_id = w.workspace_id
         LEFT JOIN user_workspaces p ON p.workspace_id = w.workspace_id
-        WHERE w.workspace_id = ? AND m.user_id = ? AND (p.user_id IS NULL OR p.user_id = ?)`)
-        .get(owner.source.workspaceId, owner.userId, owner.userId);
+        WHERE w.workspace_id = ? AND m.user_id = ? AND (p.user_id IS NULL OR p.user_id = ?)`
+      ).get(owner.source.workspaceId, owner.userId, owner.userId);
       if (!membership) throw new Error("Workspace creation source membership is unavailable");
     }
     return { handle: String(user["handle"]) };
   }
 
   private creationReceipt(row: Record<string, SQLOutputValue>): WorkspaceCreationReceipt {
-    return { operationId: String(row["operation_id"]), state: row["state"] as WorkspaceCreationReceipt["state"],
-      workspaceId: String(row["workspace_id"]), name: String(row["workspace_name"]) };
+    return {
+      operationId: String(row["operation_id"]),
+      state: row["state"] as WorkspaceCreationReceipt["state"],
+      workspaceId: String(row["workspace_id"]),
+      name: String(row["workspace_name"]),
+    };
   }
 
   getWorkspaceCreationIntent(name: string): WorkspaceCreationDescriptor | null {
@@ -363,13 +432,15 @@ export class CentralDataManager {
 
   completeWorkspaceCreation(workspaceId: string): boolean {
     return this.transaction(() => {
-      const completed = (
-      this.stmt(
-        `UPDATE workspaces SET creation_intent_json = NULL
+      const completed =
+        this.stmt(
+          `UPDATE workspaces SET creation_intent_json = NULL
          WHERE workspace_id = ? AND creation_intent_json IS NOT NULL`
-      ).run(workspaceId).changes === 1
-      );
-      if (completed) this.stmt("UPDATE workspace_creation_operations SET state = 'ready' WHERE workspace_id = ? AND state = 'registered'").run(workspaceId);
+        ).run(workspaceId).changes === 1;
+      if (completed)
+        this.stmt(
+          "UPDATE workspace_creation_operations SET state = 'ready' WHERE workspace_id = ? AND state = 'registered'"
+        ).run(workspaceId);
       return completed;
     });
   }
@@ -636,7 +707,9 @@ export class CentralDataManager {
       const row = this.stmt("SELECT workspace_id FROM workspaces WHERE name = ?").get(name);
       if (!row) return null;
       const workspaceId = row["workspace_id"] as string;
-      this.stmt("UPDATE workspace_creation_operations SET state = 'deleted' WHERE workspace_id = ?").run(workspaceId);
+      this.stmt(
+        "UPDATE workspace_creation_operations SET state = 'deleted' WHERE workspace_id = ?"
+      ).run(workspaceId);
       this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(workspaceId);
       this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(workspaceId);
       this.stmt("DELETE FROM workspaces WHERE name = ?").run(name);

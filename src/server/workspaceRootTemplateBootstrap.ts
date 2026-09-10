@@ -238,20 +238,8 @@ export class WorkspaceRootTemplateBootstrap {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
     if (!fs.existsSync(receiptPath)) return false;
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
-    const recorded =
-      receipt && typeof receipt === "object" && !Array.isArray(receipt)
-        ? (receipt as Record<string, unknown>)
-        : null;
-    if (!recorded || recorded["commit"] !== pin.commit) {
+    if (canonicalJsonValue(receipt) !== canonicalJsonValue(materializationReceipt(pin.commit))) {
       throw new Error("Workspace root materialization receipt does not match its exact pin");
-    }
-    // A receipt written before the tree digest was dropped named the same
-    // commit, so it describes the same content and nothing needs
-    // re-materializing — which matters, because re-materializing would replace
-    // a source the user may have edited. Rewrite it in the current shape
-    // instead of failing an already-correct workspace.
-    if (canonicalJsonValue(recorded) !== canonicalJsonValue(materializationReceipt(pin.commit))) {
-      this.writeMaterializationReceipt(receiptPath, pin.commit);
     }
     const manifestPath = path.join(this.deps.sourcePath, WORKSPACE_MANIFEST_PATH);
     if (!fs.existsSync(manifestPath)) {
