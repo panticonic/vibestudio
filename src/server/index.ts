@@ -71,8 +71,15 @@ import { WorkspaceRpcMethodUndeclaredError } from "./workspaceRpcCatalogMismatch
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
-import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
-import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/baseTemplateRelease";
+import {
+  normalizeTemplateGitUrl,
+  templateGitTransportUrl,
+} from "@vibestudio/workspace/templateCoordinates";
+import {
+  hostDesignatedTemplateUrls,
+  readDefaultWorkspaceTemplates,
+} from "@vibestudio/workspace/baseTemplateRelease";
+import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
@@ -1541,6 +1548,7 @@ async function main() {
         }),
     });
   };
+  const designatedTemplateUrls = hostDesignatedTemplateUrls(appRoot);
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     workspaceId,
     statePath,
@@ -1548,6 +1556,17 @@ async function main() {
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
     acquire: acquireWorkspaceTemplate,
+    // Only a template this build designates as its own can contribute
+    // host-build units. A checkout the host designated is vouched for whole,
+    // because there the developer is the vendor and the files change all day.
+    designation: (pin) => {
+      if (!designatedTemplateUrls.has(normalizeTemplateGitUrl(pin.url))) return null;
+      return {
+        vouchesWholeTree: workspaceSources.some((source) =>
+          sameWorkspaceTemplatePin(source.pin, pin)
+        ),
+      };
+    },
   });
   const workspaceRootPin = await rootTemplateBootstrap.prepareSource();
   console.log(

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRuntimeLayout } from "@vibestudio/shared/runtimePaths";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import {
   sameWorkspaceTemplatePin,
   type WorkspaceTemplatePin,
@@ -72,6 +73,42 @@ export function readDefaultWorkspaceTemplates(
     throw new Error("This host build has no exact Base, Personal and System distribution pins");
   }
   return templates;
+}
+
+/**
+ * The template sources this host build designates as its own.
+ *
+ * A unit that arrives unmodified from one of these is the code Vibestudio
+ * ships; anything else is a workspace's own source, whatever it calls itself.
+ * Matching is by URL rather than commit, so a distribution published after
+ * this host still counts: the host and its userland release on separate
+ * cadences, and the canonical source is already the authority for the code
+ * this host runs.
+ */
+export function hostDesignatedTemplateUrls(
+  appRoot: string,
+  environment: NodeJS.ProcessEnv = process.env
+): ReadonlySet<string> {
+  const urls = new Set<string>();
+  const add = (url: string): void => {
+    urls.add(normalizeTemplateGitUrl(url));
+  };
+  // A host with no release pointer, or none of the three distribution pins,
+  // designates nothing rather than failing: that is a build that cannot claim
+  // any unit ships with it, which is exactly the safe answer.
+  try {
+    add(readBaseTemplateRelease(appRoot).baseTemplate.url);
+  } catch {
+    /* no release pointer in reach */
+  }
+  try {
+    for (const pin of Object.values(readDefaultWorkspaceTemplates(appRoot, environment))) {
+      add(pin.url);
+    }
+  } catch {
+    /* no distribution pins in reach */
+  }
+  return urls;
 }
 
 /**

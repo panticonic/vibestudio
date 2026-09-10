@@ -15,6 +15,10 @@ import type {
   WorkspaceCreationDescriptor,
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
+import {
+  buildHostBuildUnitInventory,
+  hostBuildUnitInventoryPath,
+} from "@vibestudio/shared/hostBuildUnits";
 import { discoverRepos } from "./vcsHost/repoDiscovery.js";
 
 const CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
@@ -41,6 +45,13 @@ export interface WorkspaceRootTemplateBootstrapDeps {
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   sink: SnapshotContentSink;
   expectedSystemEpoch: number;
+  /**
+   * Whether the host build designates this template as its own, and whether it
+   * designated a local checkout rather than a fetched pin. Only a designated
+   * template records host-build units, so a third-party template cannot claim
+   * any of its units ship with Vibestudio.
+   */
+  designation?(pin: WorkspaceTemplatePin): { vouchesWholeTree: boolean } | null;
 }
 
 function repositorySnapshot(files: readonly ExactSnapshotFile[]): CanonicalSnapshotDigest {
@@ -155,6 +166,7 @@ export class WorkspaceRootTemplateBootstrap {
     const snapshot = this.acquiredSnapshot;
     if (!snapshot) throw new Error("Root template acquisition produced no source snapshot");
     this.materializeExactSource(snapshot);
+    this.recordHostBuildUnits(this.preparedInitialization);
     const materializedAt = performance.now();
     if (materializedAt - startedAt >= 100) {
       console.log("[Perf] root template preparation", {
@@ -284,6 +296,38 @@ export class WorkspaceRootTemplateBootstrap {
       flag: "wx",
     });
     fs.renameSync(temporaryReceipt, receiptPath);
+  }
+
+  /**
+   * Record which units this template shipped, from the tree just laid down.
+   *
+   * Written once beside the creation descriptor rather than recomputed, because
+   * a restart deliberately does not reacquire the template — the materialized
+   * source is the receipt, and the original remote need not still be reachable.
+   */
+  private recordHostBuildUnits(initialization: PreparedRootTemplateInitialization): void {
+    const inventoryPath = hostBuildUnitInventoryPath(this.deps.statePath);
+    const designation = this.deps.designation?.(initialization.pin);
+    if (!designation) {
+      // Nothing here ships with Vibestudio, so leave nothing behind that a
+      // later read could mistake for an answer.
+      fs.rmSync(inventoryPath, { force: true });
+      return;
+    }
+    const inventory = buildHostBuildUnitInventory({
+      root: this.deps.sourcePath,
+      unitRepoPaths: initialization.repositories.map((repository) => repository.repoPath),
+      templateUrl: initialization.pin.url,
+      commit: initialization.pin.commit,
+      ...(designation.vouchesWholeTree ? { vouchesWholeTree: true } : {}),
+    });
+    fs.mkdirSync(path.dirname(inventoryPath), { recursive: true });
+    const temporary = `${inventoryPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(inventory, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, inventoryPath);
   }
 
   private recoverMaterializationPaths(staging: string, backup: string): void {

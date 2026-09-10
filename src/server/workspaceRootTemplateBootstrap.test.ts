@@ -8,6 +8,11 @@ import {
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import type { ExactGitSnapshot } from "@vibestudio/git";
+import {
+  hostBuildUnitInventoryPath,
+  isHostBuildUnitSource,
+  readHostBuildUnitInventory,
+} from "@vibestudio/shared/hostBuildUnits";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { canonicalTemplateYaml } from "@vibestudio/workspace/templateManifest";
 import {
@@ -50,7 +55,10 @@ function snapshot(
   };
 }
 
-function fixture(rootSnapshot: ExactGitSnapshot) {
+function fixture(
+  rootSnapshot: ExactGitSnapshot,
+  options: { designation?: (pin: { url: string }) => { vouchesWholeTree: boolean } | null } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "root-template-bootstrap-"));
   roots.push(root);
   const statePath = path.join(root, "state");
@@ -82,11 +90,58 @@ function fixture(rootSnapshot: ExactGitSnapshot) {
       sink: {
         put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
       },
+      ...(options.designation ? { designation: options.designation } : {}),
     }),
   };
 }
 
 describe("WorkspaceRootTemplateBootstrap", () => {
+  const seededSnapshot = () =>
+    snapshot([
+      {
+        path: "meta/vibestudio.yml",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: {
+            name: "Base",
+            repositories: ["extensions/templates"],
+            files: ["README.md"],
+          },
+          extensions: [{ source: "extensions/templates" }],
+        }),
+      },
+      { path: "extensions/templates/package.json", text: "{}" },
+      { path: "extensions/templates/index.ts", text: "export {};" },
+      { path: "README.md", text: "repository tooling" },
+    ]);
+
+  it("records what a designated template shipped, so units need no signature", async () => {
+    const fx = fixture(seededSnapshot(), { designation: () => ({ vouchesWholeTree: false }) });
+
+    await fx.bootstrap.prepareSource();
+
+    const inventory = readHostBuildUnitInventory(hostBuildUnitInventoryPath(fx.statePath));
+    expect(inventory).toMatchObject({ templateUrl: fx.pin.url, commit: fx.pin.commit });
+    expect(Object.keys(inventory!.units)).toContain("extensions/templates");
+    expect(
+      isHostBuildUnitSource({
+        inventory,
+        repoPath: "extensions/templates",
+        unitDir: path.join(fx.sourcePath, "extensions/templates"),
+      })
+    ).toBe(true);
+  });
+
+  it("records nothing for a template the host does not designate", async () => {
+    // A third-party template must not be able to claim any of its units ship
+    // with Vibestudio, however its files are arranged.
+    const fx = fixture(seededSnapshot(), { designation: () => null });
+
+    await fx.bootstrap.prepareSource();
+
+    expect(readHostBuildUnitInventory(hostBuildUnitInventoryPath(fx.statePath))).toBeNull();
+  });
+
   it("rejects a descriptorless workspace before userland startup", async () => {
     const rootSnapshot = snapshot([]);
     const fx = fixture(rootSnapshot);

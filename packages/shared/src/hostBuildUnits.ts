@@ -32,6 +32,18 @@ const DIGEST_VERSION = "vibestudio-host-build-unit-source-v1";
 /** Build outputs and checkouts are not source, and differ between machines. */
 const EXCLUDED_ENTRIES = new Set([".git", "node_modules", ".cache"]);
 
+/**
+ * Where the inventory lives, relative to a workspace's state directory.
+ *
+ * Host state, not workspace source: a workspace cannot write its own answer to
+ * whether it ships with Vibestudio.
+ */
+export const HOST_BUILD_UNIT_INVENTORY_FILE = "workspace-creation/host-build-units-v1.json";
+
+export function hostBuildUnitInventoryPath(statePath: string): string {
+  return path.join(statePath, ...HOST_BUILD_UNIT_INVENTORY_FILE.split("/"));
+}
+
 export interface HostBuildUnitInventory {
   version: typeof INVENTORY_VERSION;
   /** The designated template this tree came from, for diagnostics. */
