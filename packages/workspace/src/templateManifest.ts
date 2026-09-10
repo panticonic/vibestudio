@@ -6,6 +6,7 @@ import {
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceConfig,
+  WorkspaceTemplateDependency,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
 import { TEMPLATE_SOURCE_MANIFEST_PATH } from "./templateCoordinates.js";
@@ -21,6 +22,8 @@ export interface TemplateRepositoryInventory {
 export interface ParsedTemplateManifest {
   top: ParsedTopLayer;
   inventory: TemplateRepositoryInventory;
+  /** Templates this one is built on, in declaration order. Empty when it stands alone. */
+  dependencies: WorkspaceTemplateDependency[];
   presentation?: WorkspaceTemplatePresentation;
 }
 
@@ -155,6 +158,7 @@ export function parseTemplateManifestContent(
   return {
     top,
     inventory: { repositories, files },
+    dependencies: authoring.dependencies ?? [],
     ...(top.template === undefined ? {} : { presentation: top.template }),
   };
 }

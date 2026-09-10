@@ -4,6 +4,7 @@ import {
   type WorkspaceConfig,
   type WorkspaceCreationDescriptor,
   type WorkspaceTemplateDeclaration,
+  type WorkspaceTemplateDependency,
   type WorkspaceTemplatePin,
   type WorkspaceTemplatePresentation,
 } from "./types.js";
@@ -125,6 +126,21 @@ export const WorkspaceTemplatePinSchema: z.ZodType<WorkspaceTemplatePin> =
     snapshot: WorkspaceGitSnapshotSchema,
   }).strict();
 
+/**
+ * One template this template is built on.
+ *
+ * Neither `track` nor `commit` is required, and that is the point: a dependency
+ * normally follows its source's releases, so two templates built on the same
+ * upstream agree without either of them naming a version. `commit` freezes one
+ * deliberately, and is the only thing that can make a shared dependency fail
+ * to resolve.
+ */
+export const WorkspaceTemplateDependencySchema: z.ZodType<WorkspaceTemplateDependency> =
+  WorkspaceTemplateDeclarationObjectSchema.extend({
+    track: z.string().trim().min(1).optional(),
+    commit: WorkspaceGitCommitSchema.optional(),
+  }).strict();
+
 // A template's name and one-sentence description, as the template says them.
 //
 // These two strings are the only self-asserted text this system carries about a
@@ -224,6 +240,13 @@ export const WorkspaceTemplateAuthoringMetadataSchema = z
   .object({
     name: z.unknown().optional(),
     description: z.unknown().optional(),
+    /**
+     * Templates this one is built on, laid down before its own source.
+     *
+     * Absent for a template that stands alone. Declaring one is how a template
+     * shares an upstream's repositories instead of carrying a copy of them.
+     */
+    dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
     repositories: z.array(CanonicalWorkspaceInventoryPathSchema),
     files: z.array(CanonicalWorkspaceInventoryPathSchema),
   })

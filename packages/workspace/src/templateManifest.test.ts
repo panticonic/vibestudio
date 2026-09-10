@@ -94,4 +94,66 @@ disable: [routes/example]
       )
     ).toThrow(/unrecognized key.*disable/iu);
   });
+
+  it("reads the templates a manifest is built on, and defaults to standing alone", () => {
+    const base = "git+https://example.test/base.git";
+    const withDependency = parseTemplateManifestContent(
+      canonicalTemplateYaml({
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        template: {
+          name: "Personal",
+          description: "Built on Base",
+          dependencies: [{ url: base }],
+          repositories: ["panels/news"],
+          files: [],
+        },
+      }),
+      WORKSPACE_SYSTEM_EPOCH
+    );
+    // Neither a track nor a commit: the dependency follows Base's releases, so
+    // two templates built on it agree without either naming a version.
+    expect(withDependency.dependencies).toEqual([{ url: base }]);
+    expect(withDependency.inventory.repositories).toEqual(["panels/news"]);
+
+    const standalone = parseTemplateManifestContent(
+      canonicalTemplateYaml({
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        template: { repositories: [], files: [] },
+      }),
+      WORKSPACE_SYSTEM_EPOCH
+    );
+    expect(standalone.dependencies).toEqual([]);
+  });
+
+  it("keeps a deliberately frozen dependency, and refuses an unknown key beside it", () => {
+    const base = "git+https://example.test/base.git";
+    const frozen = parseTemplateManifestContent(
+      canonicalTemplateYaml({
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        template: {
+          dependencies: [{ url: base, track: "refs/tags/v*", commit: "a".repeat(40) }],
+          repositories: [],
+          files: [],
+        },
+      }),
+      WORKSPACE_SYSTEM_EPOCH
+    );
+    expect(frozen.dependencies).toEqual([
+      { url: base, track: "refs/tags/v*", commit: "a".repeat(40) },
+    ]);
+
+    expect(() =>
+      parseTemplateManifestContent(
+        canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: {
+            dependencies: [{ url: base, version: "2" }],
+            repositories: [],
+            files: [],
+          },
+        }),
+        WORKSPACE_SYSTEM_EPOCH
+      )
+    ).toThrow(/unrecognized key.*version/iu);
+  });
 });
