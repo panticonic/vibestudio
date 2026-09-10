@@ -43,6 +43,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@vibestudio/git": "workspace:*",
     "vitest": "^3.2.7"
   }
 }
