@@ -21,6 +21,7 @@
     "./rootTemplate": "./src/rootTemplate.ts",
     "./singletonRegistry": "./src/singletonRegistry.ts",
     "./startup": "./src/startup.ts",
+    "./templateClosure": "./src/templateClosure.ts",
     "./templateComposition": "./src/templateComposition.ts",
     "./templateCoordinates": "./src/templateCoordinates.ts",
     "./templateDependencies": "./src/templateDependencies.ts",

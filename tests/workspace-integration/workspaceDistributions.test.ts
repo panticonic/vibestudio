@@ -77,12 +77,19 @@ describe("the shipped workspace source boundaries", () => {
     expect(files.has("about/new/index.tsx")).toBe(true);
     expect(files.has("about/help/index.tsx")).toBe(true);
     expect(files.has("skills/templates/SKILL.md")).toBe(true);
-    // Built on Base rather than carrying a copy of it.
+    // Built on Base rather than carrying a copy of it. The interesting case is
+    // a repository the closure would otherwise pull back in: these two depend
+    // on packages Base owns, so only stopping at the dependency's edge keeps
+    // them out. A panel would prove nothing, since nothing depends on one.
     for (const role of ["personal", "system"] as const) {
       const carried = new Set(distributions[role].files.map((file) => file.path));
       expect(carried.has("about/help/index.tsx")).toBe(false);
       expect(carried.has("skills/templates/SKILL.md")).toBe(false);
-      expect(distributions[role].repositories).not.toContain("panels/chat");
+      expect(distributions[role].repositories).not.toContain("packages/agentic-chat");
+      expect(distributions[role].repositories).not.toContain("packages/runtime");
+      expect(base.repositories).toEqual(
+        expect.arrayContaining(["packages/agentic-chat", "packages/runtime"])
+      );
     }
   });
 

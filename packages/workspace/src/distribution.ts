@@ -14,6 +14,7 @@ import {
   validateTemplateSnapshotInventory,
   type ParsedTemplateManifest,
 } from "./templateManifest.js";
+import { resolveTemplateClosure } from "./templateClosure.js";
 
 const INTERNAL_DEPENDENCY_SECTIONS = [
   "dependencies",
@@ -225,9 +226,7 @@ export function resolveDistributionInventory(
   provided: ReadonlySet<string> = new Set()
 ): string[] {
   const sourceRoot = fs.realpathSync(path.resolve(sourceRootInput));
-  const selected = new Set<string>();
-  const pending: string[] = [];
-  for (const value of roots) {
+  const declared = roots.map((value) => {
     const repoPath = canonicalRelativePath(value, "Distribution repository");
     const sourcePath = path.join(sourceRoot, ...repoPath.split("/"));
     if (!fs.existsSync(sourcePath) || !fs.lstatSync(sourcePath).isDirectory()) {
@@ -238,27 +237,22 @@ export function resolveDistributionInventory(
         `Distribution repository ${repoPath} is already provided by a declared dependency`
       );
     }
-    if (!selected.has(repoPath)) {
-      selected.add(repoPath);
-      pending.push(repoPath);
-    }
-  }
-
+    return repoPath;
+  });
   const owners = packageOwners(sourceRoot);
-  while (pending.length > 0) {
-    const repoPath = pending.shift();
-    if (!repoPath) break;
-    const manifest = readPackageManifest(sourceRoot, repoPath);
-    const template = panelTemplateDependency(sourceRoot, repoPath, manifest);
-    if (template && !provided.has(template) && !selected.has(template)) {
-      selected.add(template);
-      pending.push(template);
-    }
-    for (const dependency of workspaceDependencies(repoPath, manifest)) {
+  // The walk itself is shared with publication, which computes the same closure
+  // over a workspace's reviewed VCS state instead of a checkout. Only these
+  // readers know how to resolve an edge on disk.
+  return resolveTemplateClosure({
+    roots: declared,
+    provided,
+    packageDependenciesOf: (repoPath) =>
+      workspaceDependencies(repoPath, readPackageManifest(sourceRoot, repoPath)),
+    ownerOfPackage: (dependency, dependent) => {
       const matches = owners.get(dependency) ?? [];
       if (matches.length === 0) {
         throw new Error(
-          `Distribution repository ${repoPath} requires missing local dependency ${dependency}`
+          `Distribution repository ${dependent} requires missing local dependency ${dependency}`
         );
       }
       if (matches.length > 1) {
@@ -266,14 +260,19 @@ export function resolveDistributionInventory(
           `Distribution local dependency ${dependency} has multiple owners: ${matches.sort(compareUtf16CodeUnits).join(", ")}`
         );
       }
-      const owner = matches[0];
-      if (!owner) throw new Error(`Distribution local dependency ${dependency} has no owner`);
-      if (provided.has(owner) || selected.has(owner)) continue;
-      selected.add(owner);
-      pending.push(owner);
-    }
-  }
-  return [...selected].sort(compareUtf16CodeUnits);
+      return matches[0]!;
+    },
+    // A panel built from a checked-in build template needs that template's
+    // repository, which is not a package dependency of anything.
+    requiredRepositoriesOf: (repoPath) => {
+      const template = panelTemplateDependency(
+        sourceRoot,
+        repoPath,
+        readPackageManifest(sourceRoot, repoPath)
+      );
+      return template ? [template] : [];
+    },
+  }).included;
 }
 
 function addSourceFile(
