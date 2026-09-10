@@ -97,7 +97,6 @@
     "./principalIds": "./src/principalIds.ts",
     "./principalKinds": "./src/principalKinds.ts",
     "./productBuiltinCatalog.generated": "./src/productBuiltinCatalog.generated.ts",
-    "./productSeedTrust": "./src/productSeedTrust.ts",
     "./protectedPublicationEvents": "./src/protectedPublicationEvents.ts",
     "./providerConnect": "./src/providerConnect.ts",
     "./redact": "./src/redact.ts",

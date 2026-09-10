@@ -396,8 +396,8 @@ export interface UnitHostOptions<
    */
   isAdmitted?(identity: UnitBuildIdentity<Entry["unitKind"]>): boolean;
   /**
-   * This unit ships in the host build, proven by a signed record over its own
-   * source (`productSeedTrust`).
+   * This unit ships in the host build, proven by arriving unmodified in a
+   * template the host designates as its own (`hostBuildUnits`).
    *
    * This deliberately does NOT decide activation. The launch gate asks whether
    * the user wants this code running on their computer, and a seeded unit is
