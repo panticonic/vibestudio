@@ -121,6 +121,24 @@ export interface WorkspaceTemplateDeclaration {
   credential?: string;
 }
 
+/**
+ * One dependency address, usually moving.
+ *
+ * A dependency names an upstream template the way a developer names it — a
+ * repository and a branch — and is deliberately allowed to float. Freezing
+ * every dependency would hold a workspace against the upstream fixes it wants,
+ * and here an agent repairs a bad merge far more cheaply than anyone bumps a
+ * lockfile. `commit` is therefore the exception rather than the rule: it is for
+ * a workspace that must have one exact upstream state, and it is the only thing
+ * that can make a shared dependency fail to resolve.
+ */
+export interface WorkspaceTemplateDependency extends WorkspaceTemplateDeclaration {
+  /** Ref this dependency follows. The source's default branch when absent. */
+  ref?: string;
+  /** Set only when this dependency is deliberately frozen to one commit. */
+  commit?: string;
+}
+
 /** One exact, reproducible template source coordinate. */
 export interface WorkspaceTemplatePin extends WorkspaceTemplateDeclaration {
   /** Human-readable source ref used to resolve the exact commit. */
