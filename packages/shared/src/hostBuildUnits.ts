@@ -1,0 +1,162 @@
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+/**
+ * Which units in a workspace are the code Vibestudio ships.
+ *
+ * This settles one question, and a narrow one: whose declaration a unit's
+ * manifest is. Admitting a workspace-declared app normally needs a workspace
+ * review, and that review is rendered by `apps/shell` — so the shell can never
+ * be admitted that way, because the surface that would present the decision is
+ * the thing waiting on it. A unit the host build vouches for skips that review.
+ * It does NOT skip the launch gate: shipping in the build is not consent to run.
+ *
+ * Provenance answers it, rather than a signature. The host already pins the
+ * distributions it provisions and verifies the fetched tree against that pin,
+ * so "this unit arrived unmodified in the tree the host itself designated" is
+ * the same assertion a vendor signature was making, rooted in something the
+ * host already checks. An inventory is therefore written only for a designated
+ * template: a third-party template gets none, so nothing in it can claim to
+ * ship with Vibestudio however its files are arranged.
+ *
+ * The signature it replaces could not be produced without a release key that
+ * was never provisioned, so in a packaged build no unit ever verified, the
+ * shell was never admitted, and the app could not open. Its development
+ * fallback was a plain hash anyone could recompute, and so proved nothing.
+ */
+
+const INVENTORY_VERSION = "vibestudio-host-build-units-v1";
+const DIGEST_VERSION = "vibestudio-host-build-unit-source-v1";
+
+/** Build outputs and checkouts are not source, and differ between machines. */
+const EXCLUDED_ENTRIES = new Set([".git", "node_modules", ".cache"]);
+
+export interface HostBuildUnitInventory {
+  version: typeof INVENTORY_VERSION;
+  /** The designated template this tree came from, for diagnostics. */
+  templateUrl: string;
+  commit: string;
+  /**
+   * Set when the host designated a local checkout rather than a fetched pin.
+   * A developer editing the shell is the vendor in that setup, so holding its
+   * source to a digest would gate the shell on a review only the shell can
+   * render — the exact deadlock this whole mechanism exists to avoid.
+   */
+  vouchesWholeTree?: boolean;
+  /** Repo path to the digest of that unit's source as the template shipped it. */
+  units: Record<string, string>;
+}
+
+export function unitSourceDigest(unitDir: string): string {
+  const hash = createHash("sha256");
+  hash.update(`${DIGEST_VERSION}\0`);
+  for (const file of listUnitSourceFiles(unitDir)) {
+    const content = fs.readFileSync(file);
+    hash.update(toPosixPath(path.relative(unitDir, file)));
+    hash.update("\0");
+    hash.update(String(content.byteLength));
+    hash.update("\0");
+    hash.update(content);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+/** Record what a designated template shipped, from its materialized tree. */
+export function buildHostBuildUnitInventory(input: {
+  root: string;
+  unitRepoPaths: readonly string[];
+  templateUrl: string;
+  commit: string;
+  vouchesWholeTree?: boolean;
+}): HostBuildUnitInventory {
+  const units: Record<string, string> = {};
+  for (const repoPath of [...input.unitRepoPaths].sort()) {
+    const unitDir = path.join(input.root, ...repoPath.split("/"));
+    if (!fs.existsSync(unitDir)) continue;
+    units[repoPath] = unitSourceDigest(unitDir);
+  }
+  return {
+    version: INVENTORY_VERSION,
+    templateUrl: input.templateUrl,
+    commit: input.commit,
+    ...(input.vouchesWholeTree ? { vouchesWholeTree: true } : {}),
+    units,
+  };
+}
+
+export function parseHostBuildUnitInventory(value: unknown): HostBuildUnitInventory | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate["version"] !== INVENTORY_VERSION) return null;
+  if (typeof candidate["templateUrl"] !== "string" || typeof candidate["commit"] !== "string") {
+    return null;
+  }
+  const units = candidate["units"];
+  if (!units || typeof units !== "object" || Array.isArray(units)) return null;
+  for (const digest of Object.values(units as Record<string, unknown>)) {
+    if (typeof digest !== "string") return null;
+  }
+  return {
+    version: INVENTORY_VERSION,
+    templateUrl: candidate["templateUrl"],
+    commit: candidate["commit"],
+    ...(candidate["vouchesWholeTree"] === true ? { vouchesWholeTree: true } : {}),
+    units: units as Record<string, string>,
+  };
+}
+
+export function readHostBuildUnitInventory(filePath: string): HostBuildUnitInventory | null {
+  try {
+    return parseHostBuildUnitInventory(JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this unit's source is what the designated template shipped.
+ *
+ * A missing inventory means the workspace was not created from a template the
+ * host designates, which is the ordinary case for a workspace someone made
+ * themselves; nothing in it ships with Vibestudio and that is not a problem.
+ */
+export function isHostBuildUnitSource(input: {
+  inventory: HostBuildUnitInventory | null;
+  repoPath: string;
+  unitDir: string;
+}): boolean {
+  const inventory = input.inventory;
+  if (!inventory) return false;
+  if (inventory.vouchesWholeTree) return true;
+  const recorded = inventory.units[normalizeUnitRepoPath(input.repoPath)];
+  if (!recorded) return false;
+  return recorded === unitSourceDigest(input.unitDir);
+}
+
+export function normalizeUnitRepoPath(repoPath: string): string {
+  return repoPath
+    .replace(/\\/gu, "/")
+    .replace(/^\/+/u, "")
+    .replace(/^workspace\//u, "")
+    .replace(/\/+$/u, "");
+}
+
+function listUnitSourceFiles(root: string): string[] {
+  const files: string[] = [];
+  const visit = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (EXCLUDED_ENTRIES.has(entry.name)) continue;
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile()) files.push(entryPath);
+    }
+  };
+  visit(root);
+  return files.sort((left, right) => toPosixPath(left).localeCompare(toPosixPath(right)));
+}
+
+function toPosixPath(value: string): string {
+  return value.split(path.sep).join("/");
+}
