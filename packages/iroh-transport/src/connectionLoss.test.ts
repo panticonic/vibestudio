@@ -32,9 +32,24 @@ describe("isIrohConnectionLost", () => {
     expect(isIrohConnectionLost(new Error("ClosedStream"))).toBe(true);
   });
 
+  it("recognizes the connection-error vocabulary when it arrives unwrapped", () => {
+    // A renderer warned `heartbeat failed: RemoteRpcError: TimedOut` while its
+    // link was being re-established: the same lost connection, reported
+    // without the wrapper a stream operation would have put around it.
+    expect(isIrohConnectionLost(new Error("TimedOut"))).toBe(true);
+    expect(isIrohConnectionLost(new Error("LocallyClosed"))).toBe(true);
+    expect(
+      isIrohConnectionLost(new Error("ApplicationClosed(ApplicationClose { error_code: 0 })"))
+    ).toBe(true);
+  });
+
   it("leaves a reset request alone, because that one is worth reporting", () => {
+    // Anchored matching is what keeps this apart from the connection-level
+    // `Reset` that shares its name: this one is a single request the peer
+    // refused while the connection stayed up.
     expect(isIrohConnectionLost(new Error("ReadError(Reset(513))"))).toBe(false);
     expect(isIrohConnectionLost(new Error("no such method"))).toBe(false);
+    expect(isIrohConnectionLost(new Error("Timed out calling vcs.mainState"))).toBe(false);
   });
 
   it("does not treat a missing or shapeless error as a lost connection", () => {

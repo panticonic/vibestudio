@@ -329,7 +329,14 @@ function isTransientDesktopObservation(error) {
     // The host types this one properly — `RpcBoundaryError(.., "transport",
     // "CONNECTION_LOST")` in uiSessions.ts — but only its message survives the
     // Playwright boundary, so the text is all there is to match on here.
-    /Workspace UI session was released while opening/iu.test(message)
+    /Workspace UI session was released while opening/iu.test(message) ||
+    // `nativeRpc`'s own in-page deadline. A call that goes unanswered while a
+    // restarted server is still bringing its workspaces back is the same
+    // transition as the transport failures above, only observed by waiting
+    // rather than by being told. A call that is genuinely wedged still ends
+    // the run: retrying is bounded by the caller's deadline and the last
+    // failure is what surfaces.
+    /^Timed out calling /u.test(message)
   );
 }
 
@@ -1548,11 +1555,24 @@ async function getPanelTree(app) {
  */
 async function throughReconnect(operation, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  let attempts = 0;
   for (;;) {
     try {
       return await operation();
     } catch (error) {
-      if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
+      attempts += 1;
+      if (!isTransientDesktopObservation(error)) throw error;
+      if (Date.now() >= deadline) {
+        // Which of the two it was matters to whoever reads the failure: a
+        // transition that never settled inside the budget reads very
+        // differently from one that was never tolerated at all, and the bare
+        // message cannot tell them apart.
+        const waited = `still transient after ${attempts} attempts over ${Math.round((Date.now() - startedAt) / 1000)}s`;
+        if (error instanceof Error) error.message = `${error.message} (${waited})`;
+        else throw new Error(`${String(error)} (${waited})`);
+        throw error;
+      }
       await sleep(250);
     }
   }
@@ -2281,12 +2301,20 @@ async function main() {
       Math.max(1000, deadlineMs - Date.now())
     );
     await waitForConnectionStatus(electronApp, true, Math.max(1000, deadlineMs - Date.now()));
-    const workspaceIdentityAfter = await evaluateElectron(
-      electronApp,
-      () => globalThis.__testApi.rpcCall("workspace", "getInfo", []),
-      undefined,
-      "checking restored System workspace identity",
-      30000
+    // The chrome saying "Connected to" is one workspace reporting that its own
+    // recovery finished, not a promise that the next call lands: the link can
+    // be re-established and lost again underneath this, and asking during that
+    // gap is answered with the gap. So this asks until it is answered.
+    const workspaceIdentityAfter = await throughReconnect(
+      () =>
+        evaluateElectron(
+          electronApp,
+          () => globalThis.__testApi.rpcCall("workspace", "getInfo", []),
+          undefined,
+          "checking restored System workspace identity",
+          30000
+        ),
+      Math.max(1000, deadlineMs - Date.now())
     );
     if (!workspaceIdentityBefore.id || workspaceIdentityBefore.id !== workspaceIdentityAfter.id) {
       throw new Error("Reconnect changed the owning System workspace");

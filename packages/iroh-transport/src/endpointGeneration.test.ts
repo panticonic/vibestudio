@@ -90,7 +90,7 @@ describe("endpoint generation owner", () => {
     // lost all four every 15s because one workspace's dial kept timing out,
     // and replacing the endpoint is the only cancellation this binding has.
     const binding = new FakeBinding();
-    const owner = new EndpointGenerationOwner(binding);
+    const owner = new EndpointGenerationOwner<FakeConnection, FakeEndpoint>(binding);
     const invalidations: EndpointGenerationInvalidation[] = [];
     owner.onInvalidation((invalidation) => invalidations.push(invalidation));
 

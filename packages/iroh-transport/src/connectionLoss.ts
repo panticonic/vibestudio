@@ -42,10 +42,29 @@ export const IROH_CONNECTION_LOST_CODE = "CONNECTION_LOST" as const;
  */
 const CONNECTION_LOST_MESSAGES = ["ConnectionLost(", "ClosedStream"];
 
+/**
+ * The connection-error vocabulary itself, when it arrives unwrapped.
+ *
+ * Some call sites surface quinn's `ConnectionError` directly rather than
+ * through the `ConnectionLost(..)` wrapper a stream operation puts around it,
+ * so the same lost connection reads as a bare `TimedOut` — which is how a
+ * renderer came to warn `heartbeat failed: RemoteRpcError: TimedOut` while the
+ * link was being re-established. Every variant here ends the connection, and
+ * the match is anchored so that a stream-level `ReadError(Reset(513))`, which
+ * reports one request the peer refused and stays a reportable failure, is not
+ * mistaken for the connection-level `Reset` that shares its name.
+ */
+const CONNECTION_ERROR_MESSAGE =
+  /^(?:TimedOut|LocallyClosed|Reset|VersionMismatch|CidsExhausted|ApplicationClosed\(|ConnectionClosed\(|TransportError)/u;
+
 /** True when an error is Iroh reporting that the connection itself is gone. */
 export function isIrohConnectionLost(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : null;
-  return message !== null && CONNECTION_LOST_MESSAGES.some((text) => message.includes(text));
+  if (message === null) return false;
+  return (
+    CONNECTION_LOST_MESSAGES.some((text) => message.includes(text)) ||
+    CONNECTION_ERROR_MESSAGE.test(message)
+  );
 }
 
 /**
