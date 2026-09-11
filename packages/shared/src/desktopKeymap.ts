@@ -21,6 +21,8 @@ export type DesktopKeyPlatform = "mac" | "other";
 export type DesktopBindingId =
   | "newPanel"
   | "closePanel"
+  | "nextPanel"
+  | "previousPanel"
   | "commandPalette"
   | "keyboardShortcuts"
   | "switchWorkspace"
@@ -73,6 +75,20 @@ interface DesktopBinding {
 const BINDINGS: Record<DesktopBindingId, DesktopBinding> = {
   newPanel: { mac: { primary: "Cmd+T" }, other: { primary: "Ctrl+T" } },
   closePanel: { mac: { primary: "Cmd+W" }, other: { primary: "Ctrl+W" } },
+  // Cycling the panes in reading order, which is this layout's tab strip.
+  //
+  // `Cmd+Alt+Right` is what Chrome uses on macOS and is already spent here on
+  // moving pane focus between columns, so the advertised mac chord is Safari's
+  // spelling. `Ctrl+Tab` works everywhere, because that is the chord people
+  // actually reach for, and `Ctrl+PageDown` is the third way browsers accept.
+  nextPanel: {
+    mac: { primary: "Cmd+Shift+]", also: ["Ctrl+Tab", "Cmd+Alt+]"] },
+    other: { primary: "Ctrl+Tab", also: ["Ctrl+PageDown"] },
+  },
+  previousPanel: {
+    mac: { primary: "Cmd+Shift+[", also: ["Ctrl+Shift+Tab", "Cmd+Alt+["] },
+    other: { primary: "Ctrl+Shift+Tab", also: ["Ctrl+PageUp"] },
+  },
   commandPalette: { mac: { primary: "Cmd+K" }, other: { primary: "Ctrl+K" } },
   keyboardShortcuts: { mac: { primary: "Cmd+/" }, other: { primary: "Ctrl+/" } },
   switchWorkspace: { mac: { primary: "Cmd+Shift+O" }, other: { primary: "Ctrl+Shift+O" } },

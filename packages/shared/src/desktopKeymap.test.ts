@@ -85,6 +85,28 @@ describe("desktop keymap", () => {
     expect(matchesDesktopBinding("back", input({ key: "ArrowLeft" }), "other")).toBe(false);
   });
 
+  it("cycles panes with the chord people actually press", () => {
+    // The layout has panes in columns rather than a tab strip, but the thing a
+    // person wants from Ctrl+Tab is the same: the next one along.
+    expect(matchesDesktopBinding("nextPanel", input({ key: "Tab", ctrl: true }), "other")).toBe(
+      true
+    );
+    expect(
+      matchesDesktopBinding(
+        "previousPanel",
+        input({ key: "Tab", ctrl: true, shift: true }),
+        "other"
+      )
+    ).toBe(true);
+    expect(
+      matchesDesktopBinding("nextPanel", input({ key: "PageDown", ctrl: true }), "other")
+    ).toBe(true);
+    // Ctrl+Tab works on macOS too, where the advertised chord avoids the
+    // Cmd+Alt+arrow chords the pane-focus movement already uses.
+    expect(matchesDesktopBinding("nextPanel", input({ key: "Tab", ctrl: true }), "mac")).toBe(true);
+    expect(desktopAccelerator("nextPanel", "mac")).toBe("Cmd+Shift+]");
+  });
+
   it("resolves the first binding a key event performs", () => {
     expect(
       desktopBindingFor(input({ key: "l", ctrl: true }), "other", [

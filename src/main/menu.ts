@@ -210,6 +210,8 @@ const CHROME_OWNED_BINDINGS = [
   "findNext",
   "findPrevious",
   "newPanel",
+  "nextPanel",
+  "previousPanel",
 ] as const satisfies readonly DesktopBindingId[];
 
 function keyInputOf(input: Electron.Input): DesktopKeyInput {
@@ -279,6 +281,12 @@ function performChromeBinding(id: DesktopBindingId): void {
       return;
     case "newPanel":
       emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
+      return;
+    case "nextPanel":
+      emitMenuEvent("cycle-panel", { forward: true });
+      return;
+    case "previousPanel":
+      emitMenuEvent("cycle-panel", { forward: false });
       return;
     default:
       return;
@@ -385,6 +393,17 @@ export function buildHamburgerMenuTemplate(
       label: "Find in Page…",
       accelerator: key("findInPage"),
       click: () => emitMenuEvent("toggle-find-in-page"),
+    },
+    { type: "separator" },
+    {
+      label: "Next Panel",
+      accelerator: key("nextPanel"),
+      click: () => emitMenuEvent("cycle-panel", { forward: true }),
+    },
+    {
+      label: "Previous Panel",
+      accelerator: key("previousPanel"),
+      click: () => emitMenuEvent("cycle-panel", { forward: false }),
     },
     { type: "separator" },
     {
@@ -615,6 +634,17 @@ export function setupMenu(
           click: () => {
             emitMenuEvent("open-settings", { section: "connection" });
           },
+        },
+        { type: "separator" },
+        {
+          label: "Next Panel",
+          accelerator: key("nextPanel"),
+          click: () => emitMenuEvent("cycle-panel", { forward: true }),
+        },
+        {
+          label: "Previous Panel",
+          accelerator: key("previousPanel"),
+          click: () => emitMenuEvent("cycle-panel", { forward: false }),
         },
         { type: "separator" },
         isMac

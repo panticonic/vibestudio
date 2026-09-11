@@ -73,6 +73,7 @@ export type EventName =
   | "panel-chrome-command"
   | "toggle-find-in-page"
   | "find-in-page-step"
+  | "cycle-panel"
   | "toggle-panel-devtools"
   | "panel-initialization-error"
   | "panel-responsiveness-changed"
@@ -340,6 +341,15 @@ export interface EventPayloads {
    * something is to then look at it.
    */
   "find-in-page-step": { forward: boolean };
+  /**
+   * Move focus to the next or previous pane in reading order.
+   *
+   * The panes of the viewport, taken column by column and top to bottom, are
+   * what this layout has in place of a tab strip, and `Ctrl+Tab` is what a
+   * person presses to walk one. Wrapping is part of it: a cycle that stops at
+   * the end is a worse answer than one that comes back around.
+   */
+  "cycle-panel": { forward: boolean };
   "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
   "panel-responsiveness-changed": { panelId: string; responsive: boolean };
@@ -570,6 +580,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-chrome-command",
   "toggle-find-in-page",
   "find-in-page-step",
+  "cycle-panel",
   "toggle-panel-devtools",
   "panel-initialization-error",
   "panel-responsiveness-changed",
