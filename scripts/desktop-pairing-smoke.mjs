@@ -325,7 +325,11 @@ function isTransientDesktopObservation(error) {
     /CONNECTION_LOST/u.test(message) ||
     /connection lost/iu.test(message) ||
     /evaluation timed out/iu.test(message) ||
-    /Hosted desktop chrome is unavailable/iu.test(message)
+    /Hosted desktop chrome is unavailable/iu.test(message) ||
+    // The host types this one properly — `RpcBoundaryError(.., "transport",
+    // "CONNECTION_LOST")` in uiSessions.ts — but only its message survives the
+    // Playwright boundary, so the text is all there is to match on here.
+    /Workspace UI session was released while opening/iu.test(message)
   );
 }
 
@@ -1533,24 +1537,29 @@ async function getPanelTree(app) {
 }
 
 /**
- * Read the panel tree across a reconnect the scenario itself caused.
+ * Take one observation across a reconnect the scenario itself caused.
  *
- * The server was deliberately stopped and restarted moments earlier, so a read
- * can land in the gap before the desktop's session is back. That is the outage
- * under test, not a failure of the tree, and the assertions that follow still
- * run against whatever it returns. Any other failure, and the gap outlasting
- * the budget, still fail the run.
+ * The server was deliberately stopped and restarted moments earlier, so
+ * anything read in that window can land in the gap before the desktop's
+ * session is back. That is the outage under test rather than a failure of
+ * whatever was being read, and the assertions that follow still run against
+ * the answer this eventually returns. Any other failure, and the gap
+ * outlasting the budget, still fail the run.
  */
-async function readPanelTreeThroughReconnect(app, timeoutMs) {
+async function throughReconnect(operation, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      return await getPanelTree(app);
+      return await operation();
     } catch (error) {
       if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
       await sleep(250);
     }
   }
+}
+
+function readPanelTreeThroughReconnect(app, timeoutMs) {
+  return throughReconnect(() => getPanelTree(app), timeoutMs);
 }
 
 async function waitForSystemNewPanel(app, timeoutMs) {
@@ -2283,12 +2292,20 @@ async function main() {
       throw new Error("Reconnect changed the owning System workspace");
     }
     await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
-    const restoredChrome = await chromePage(electronApp, deadlineMs);
-    await nativeRpc(
-      restoredChrome,
-      { kind: "workspace", workspaceId: personalWorkspace.workspaceId },
-      "vcs.mainState",
-      []
+    // Both of these run inside the reconnect window: the chrome page's own
+    // workspace session is being reopened underneath them, and until it is
+    // back either one answers with a transport failure rather than a result.
+    await throughReconnect(
+      async () => {
+        const restoredChrome = await chromePage(electronApp, deadlineMs);
+        return nativeRpc(
+          restoredChrome,
+          { kind: "workspace", workspaceId: personalWorkspace.workspaceId },
+          "vcs.mainState",
+          []
+        );
+      },
+      Math.max(1000, deadlineMs - Date.now())
     );
     const personalIdsAfter = await workspaceTreeIds(electronApp, "Personal", 30000);
     if (JSON.stringify(personalIdsAfter) !== JSON.stringify(personalIdsBefore)) {

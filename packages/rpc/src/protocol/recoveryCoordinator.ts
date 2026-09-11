@@ -88,6 +88,14 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
 
   private async runOne(kind: RecoveryKind, handler: Handler): Promise<boolean> {
     const maxAttempts = 3;
+    // An attempt this loop is about to retry is not yet a fault, so it is
+    // recorded rather than announced. Warning on each one meant a recovery
+    // that timed out once and then succeeded — the ordinary shape of
+    // resubscribing across a reconnect — left a warning behind for anything
+    // auditing the console to treat as a failure, which is how a healthy
+    // reconnect failed the desktop smoke. Nothing is hidden: every cause is
+    // kept and reported together if the retries do run out.
+    const failures: unknown[] = [];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await handler.fn();
@@ -97,8 +105,9 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
         // Once that outage is known, this generation cannot finish. The host
         // owns the next recovery signal; local retries cannot restore a pipe.
         if (isRpcConnectionLost(error)) return false;
-        console.warn(
-          `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
+        failures.push(error);
+        console.debug(
+          `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}); retrying:`,
           error
         );
         if (attempt < maxAttempts) {
@@ -109,7 +118,8 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
       }
     }
     console.warn(
-      `[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts`
+      `[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts:`,
+      ...failures
     );
     return true;
   }
