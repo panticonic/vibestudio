@@ -3,6 +3,7 @@ import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
 import { workspaceNativeViewId } from "./workspaceNativeViews.js";
+import type { PanelCycler } from "./panelCycleController.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import {
   desktopAccelerator,
@@ -30,6 +31,17 @@ export function setMenuWorkspaceResolver(resolve: () => MenuWorkspace | null): v
 }
 let _menuViewManager: ViewManager | null = null;
 let _menuEventService: EventService | null = null;
+let _menuPanelCycler: PanelCycler | null = null;
+
+/**
+ * Give the menu the cycler that can walk panels across workspaces.
+ *
+ * The menu cannot compute the walk itself: it resolves one workspace, the
+ * focused one, and cycling is explicitly not confined to that.
+ */
+export function setMenuPanelCycler(cycler: PanelCycler): void {
+  _menuPanelCycler = cycler;
+}
 const chromeShortcutInterceptors = new WeakSet<WebContents>();
 
 const KEY_PLATFORM = desktopKeyPlatform(process.platform);
@@ -152,6 +164,14 @@ function zoomFocusedPanel(direction: 1 | -1): void {
 function resetFocusedPanelZoom(): void {
   const viewId = focusedPanelViewId();
   if (viewId && _menuViewManager) _menuViewManager.resetZoom(viewId);
+}
+
+function cyclePanel(forward: boolean): void {
+  if (!_menuPanelCycler) {
+    console.warn("[Menu] panel cycler is not ready");
+    return;
+  }
+  _menuPanelCycler.cycle(forward);
 }
 
 function openFocusedPanelDevTools(): boolean {
@@ -283,10 +303,10 @@ function performChromeBinding(id: DesktopBindingId): void {
       emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
       return;
     case "nextPanel":
-      emitMenuEvent("cycle-panel", { forward: true });
+      cyclePanel(true);
       return;
     case "previousPanel":
-      emitMenuEvent("cycle-panel", { forward: false });
+      cyclePanel(false);
       return;
     default:
       return;
@@ -398,12 +418,12 @@ export function buildHamburgerMenuTemplate(
     {
       label: "Next Panel",
       accelerator: key("nextPanel"),
-      click: () => emitMenuEvent("cycle-panel", { forward: true }),
+      click: () => cyclePanel(true),
     },
     {
       label: "Previous Panel",
       accelerator: key("previousPanel"),
-      click: () => emitMenuEvent("cycle-panel", { forward: false }),
+      click: () => cyclePanel(false),
     },
     { type: "separator" },
     {
@@ -639,12 +659,12 @@ export function setupMenu(
         {
           label: "Next Panel",
           accelerator: key("nextPanel"),
-          click: () => emitMenuEvent("cycle-panel", { forward: true }),
+          click: () => cyclePanel(true),
         },
         {
           label: "Previous Panel",
           accelerator: key("previousPanel"),
-          click: () => emitMenuEvent("cycle-panel", { forward: false }),
+          click: () => cyclePanel(false),
         },
         { type: "separator" },
         isMac

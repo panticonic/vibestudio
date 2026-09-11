@@ -166,7 +166,8 @@ import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { isElectronShellChromeCaller, resolveElectronViewCaller } from "./callerResolution.js";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { setMenuWorkspaceResolver, setMenuEventService } from "./menu.js";
+import { setMenuWorkspaceResolver, setMenuEventService, setMenuPanelCycler } from "./menu.js";
+import { createPanelCycler } from "./panelCycleController.js";
 import { getAppRoot } from "./paths.js";
 import { loadCentralEnv } from "@vibestudio/workspace/loader";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -403,6 +404,15 @@ let npmUpdateController: NpmUpdateController | null = null;
 let npmUpdateResultConsumed = false;
 let presentedStartupFinished = false;
 let deferredStartupWork: (() => void) | null = null;
+/**
+ * Open workspaces in the order the chrome stacks their sections.
+ *
+ * The catalog arrives as an ordered list and the chrome renders it in that
+ * order, so cycling panels past the edge of one workspace follows the same
+ * sequence a person sees. Before the first catalog arrives, the order the
+ * workspaces were opened in is the best available answer.
+ */
+let workspaceCatalogOrder: readonly string[] = [];
 
 function finishPresentedStartup(): void {
   if (presentedStartupFinished) return;
@@ -2690,6 +2700,32 @@ app.on("ready", async () => {
       return id ? (openNativeControllers.get(id) ?? null) : null;
     });
     setMenuEventService(eventService);
+    setMenuPanelCycler(
+      createPanelCycler({
+        orderedWorkspaceIds: () =>
+          workspaceCatalogOrder.length > 0
+            ? workspaceCatalogOrder
+            : [...openNativeControllers.keys()],
+        getRegistry: (workspaceId) => openNativeControllers.get(workspaceId)?.registry ?? null,
+        focusedWorkspaceId: () => applicationWindow.focusedWorkspace,
+        focusWorkspace: (workspaceId) => {
+          applicationWindow.focusWorkspace(workspaceId);
+          // The chrome owns the workspace sections and lives in the System
+          // workspace's shell, so that is where the focus change is announced.
+          const chromeWorkspaceId = serverSession?.workspaceId;
+          if (chromeWorkspaceId) {
+            activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
+              workspaceId,
+            });
+          }
+        },
+        presentPanel: (workspaceId, panelId) => {
+          openNativeControllers.get(workspaceId)?.eventService.emit("navigate-to-panel", {
+            panelId,
+          });
+        },
+      })
+    );
 
     deferredStartupWork = () => {
       npmUpdateController?.start();
@@ -2726,6 +2762,7 @@ app.on("ready", async () => {
     let catalogClosed = false;
     let catalogTail = Promise.resolve();
     const stopCatalog = catalogEvents.on("hub:workspace-catalog-changed", ({ workspaces }) => {
+      workspaceCatalogOrder = workspaces.map((entry) => entry.workspaceId);
       const reconcile = async () => {
         if (catalogClosed) return;
         await conn.workspaceSessions.reconcile(
