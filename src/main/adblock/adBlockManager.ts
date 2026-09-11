@@ -62,6 +62,23 @@ const IPC_MUTATION_OBSERVER = "vibestudio:adblock:mutation-observer-enabled";
  */
 const FILTER_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The page a request belongs to, in the order the answers can be trusted.
+ *
+ * The tab's own main-frame URL is what the request is actually a subresource
+ * of. The Referer header is a hint the page is allowed to withhold, and many
+ * do. The request's own URL is last: it is only reached before this tab's
+ * first main-frame request has been seen, and it makes such a request
+ * first-party to itself, which is the safe direction to be wrong in — it
+ * under-blocks rather than blocking a page's own assets.
+ */
+export function requestPageUrl(
+  details: { referrer?: string; url: string },
+  mainFrameUrl: string | undefined
+): string {
+  return mainFrameUrl || details.referrer || details.url;
+}
+
 export class AdBlockManager {
   private engine: FiltersEngine | null = null;
   private config: AdBlockConfig;
@@ -259,45 +276,50 @@ export class AdBlockManager {
 
   /**
    * Create a Request object from Electron webRequest details.
+   *
+   * The source is the page the request belongs to, and getting it right is not
+   * a nicety: a request with no source is first-party to nothing, so every
+   * `$third-party` and `$domain=` rule stops matching — which is most of
+   * EasyPrivacy and a large part of EasyList. Measured against those rule
+   * shapes, an absent source takes the match rate for them to zero.
+   *
+   * `details.referrer` is the Referer header, which is missing whenever the
+   * page or the request asked for it to be (`no-referrer` is a thing tracking
+   * snippets set deliberately). The tab's own main-frame URL is tracked here
+   * already, for whitelisting, and is both more reliable and more truthful
+   * about which page is making the request.
    */
   private createRequest(
     details: Electron.OnBeforeRequestListenerDetails | Electron.OnHeadersReceivedListenerDetails
   ): Request {
-    const { id, url, resourceType, referrer, webContentsId } = details;
+    const { id, url, resourceType, webContentsId } = details;
+    const sourceUrl = this.getPageUrlForWhitelist(details);
     return Request.fromRawDetails(
       webContentsId
         ? {
             requestId: `${id}`,
-            sourceUrl: referrer,
+            sourceUrl,
             tabId: webContentsId,
             type: (resourceType || "other") as Request["type"],
             url,
           }
         : {
             requestId: `${id}`,
-            sourceUrl: referrer,
+            sourceUrl,
             type: (resourceType || "other") as Request["type"],
             url,
           }
     );
   }
 
-  /**
-   * Get the page URL for whitelist checking.
-   * Uses tracked main frame URL if available, falls back to referrer or request URL.
-   */
+  /** The page a request belongs to: its whitelist subject and its filter source. */
   private getPageUrlForWhitelist(
     details: Electron.OnBeforeRequestListenerDetails | Electron.OnHeadersReceivedListenerDetails
   ): string {
-    // First try the tracked main frame URL for this webContents
-    if (details.webContentsId) {
-      const mainFrameUrl = this.mainFrameUrls.get(details.webContentsId);
-      if (mainFrameUrl) {
-        return mainFrameUrl;
-      }
-    }
-    // Fall back to referrer or request URL
-    return details.referrer || details.url;
+    return requestPageUrl(
+      details,
+      details.webContentsId ? this.mainFrameUrls.get(details.webContentsId) : undefined
+    );
   }
 
   /**
@@ -317,6 +339,17 @@ export class AdBlockManager {
     // Set up network request blocking
     // Handler checks config.enabled to allow efficient disable without removing handlers
     ses.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+      // A main-frame request is this tab's new page, and every later request
+      // is classified against it. Record it before anything else can decide to
+      // pass through: while this only ran once the engine was up, the first
+      // page a tab loaded had no recorded source at all, and the whole of that
+      // page's subresources were classified without one.
+      if (details.resourceType === "mainFrame" && details.webContentsId) {
+        this.mainFrameUrls.set(details.webContentsId, details.url);
+        callback({});
+        return;
+      }
+
       // Fast path: if ad blocking is disabled, pass through immediately
       if (!this.config.enabled || !this.engine) {
         callback({ cancel: false });
@@ -324,13 +357,6 @@ export class AdBlockManager {
       }
 
       const request = this.createRequest(details);
-
-      // Track main frame URLs for accurate whitelist checking
-      if (request.isMainFrame() && details.webContentsId) {
-        this.mainFrameUrls.set(details.webContentsId, details.url);
-        callback({});
-        return;
-      }
 
       // Check if this specific panel has ad blocking disabled
       if (details.webContentsId && this.disabledPanels.has(details.webContentsId)) {

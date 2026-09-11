@@ -2,9 +2,11 @@
 
 import { exposeAutofillBridge } from "./autofillBridge.js";
 import { exposeWebsiteNotificationBridge } from "./websiteNotificationBridge.js";
+import { installAdBlockCosmetics } from "./adblockCosmetics.js";
 
 exposeAutofillBridge();
 exposeWebsiteNotificationBridge();
+installAdBlockCosmetics();
 
 import { exposeWebsiteWorkspaceProvider } from "./websiteWorkspaceProvider.js";
 exposeWebsiteWorkspaceProvider();
