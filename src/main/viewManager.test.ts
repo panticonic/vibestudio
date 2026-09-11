@@ -110,6 +110,12 @@ vi.mock("electron", () => {
       fromPartition: vi.fn(() => mockSession),
       defaultSession: mockSession,
     },
+    Menu: {
+      buildFromTemplate: vi.fn((template: unknown) => ({ template, popup: vi.fn() })),
+      setApplicationMenu: vi.fn(),
+    },
+    clipboard: { writeText: vi.fn() },
+    shell: { openExternal: vi.fn() },
   };
 });
 
@@ -2336,6 +2342,55 @@ describe("ViewManager", () => {
       expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(0.5);
       zoomChanged?.({}, "out");
       expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(-0.5);
+    });
+
+    it("offers spelling corrections where a right-click asks about a word", async () => {
+      // Spellchecking is on — Electron enables it unless told otherwise — so
+      // the red underline appeared and the menu offered nothing about it,
+      // which reads as a broken menu rather than a missing feature.
+      const { Menu } = await import("electron");
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      const contextMenu = (view.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "context-menu"
+      )?.[1] as (event: unknown, params: Electron.ContextMenuParams) => void;
+
+      contextMenu({}, {
+        misspelledWord: "widht",
+        dictionarySuggestions: ["width", "widow"],
+        isEditable: true,
+        editFlags: {},
+        x: 1,
+        y: 2,
+      } as unknown as Electron.ContextMenuParams);
+
+      const template = (Menu.buildFromTemplate as Mock).mock.lastCall?.[0] as Array<{
+        label?: string;
+      }>;
+      expect(template.slice(0, 2).map((item) => item.label)).toEqual(["width", "widow"]);
+      expect(template.map((item) => item.label)).toContain("Add to Dictionary");
+    });
+
+    it("says so when a misspelling has no suggestions, rather than saying nothing", async () => {
+      const { Menu } = await import("electron");
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      const contextMenu = (view.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "context-menu"
+      )?.[1] as (event: unknown, params: Electron.ContextMenuParams) => void;
+
+      contextMenu({}, {
+        misspelledWord: "zzzq",
+        dictionarySuggestions: [],
+        isEditable: true,
+        editFlags: {},
+        x: 1,
+        y: 2,
+      } as unknown as Electron.ContextMenuParams);
+
+      const template = (Menu.buildFromTemplate as Mock).mock.lastCall?.[0] as Array<{
+        label?: string;
+        enabled?: boolean;
+      }>;
+      expect(template[0]).toMatchObject({ label: "No spelling suggestions", enabled: false });
     });
 
     it("navigateView loads URL", async () => {

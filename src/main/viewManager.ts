@@ -889,6 +889,30 @@ export class ViewManager {
   ): MenuItemConstructorOptions[] {
     const items: MenuItemConstructorOptions[] = [];
 
+    // Corrections come first, above the edit commands, because a right-click on
+    // a red-underlined word is asking about the word. Spellchecking was already
+    // on — Electron enables it unless told otherwise — so the underline
+    // appeared and offered nothing when clicked, which reads as a broken menu
+    // rather than a missing feature.
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions) {
+        items.push({ label: suggestion, click: () => contents.replaceMisspelling(suggestion) });
+      }
+      if (params.dictionarySuggestions.length === 0) {
+        items.push({ label: "No spelling suggestions", enabled: false });
+      }
+      items.push(
+        { type: "separator" },
+        {
+          label: "Add to Dictionary",
+          click: () => {
+            contents.session.addWordToSpellCheckerDictionary(params.misspelledWord);
+          },
+        },
+        { type: "separator" }
+      );
+    }
+
     // Undo/Redo for editable fields
     if (params.isEditable) {
       if (params.editFlags.canUndo) {
