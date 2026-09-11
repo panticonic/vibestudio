@@ -22,13 +22,20 @@ const reach: IrohReach = {
 class FakeConnection implements IrohPhysicalConnection {
   readonly peerEndpointId = PEER_ID;
   closedReason = "";
+  // A real connection's `closed()` settles when it closes and not before, and
+  // the owner counts what is still open by exactly that signal.
+  private resolveClosed!: (reason: string) => void;
+  private readonly closedPromise = new Promise<string>((resolve) => {
+    this.resolveClosed = resolve;
+  });
 
   close(_code: bigint, reason: Uint8Array): void {
     this.closedReason = new TextDecoder().decode(reason);
+    this.resolveClosed(this.closedReason);
   }
 
-  async closed(): Promise<string> {
-    return this.closedReason;
+  closed(): Promise<string> {
+    return this.closedPromise;
   }
 
   async openBi(): Promise<never> {
@@ -78,6 +85,48 @@ class FakeBinding implements IrohEndpointBinding<FakeConnection, FakeEndpoint> {
 }
 
 describe("endpoint generation owner", () => {
+  it("abandons a timed-out dial rather than closing live connections to cancel it", async () => {
+    // Measured before it was written: a desktop with four live connections
+    // lost all four every 15s because one workspace's dial kept timing out,
+    // and replacing the endpoint is the only cancellation this binding has.
+    const binding = new FakeBinding();
+    const owner = new EndpointGenerationOwner(binding);
+    const invalidations: EndpointGenerationInvalidation[] = [];
+    owner.onInvalidation((invalidation) => invalidations.push(invalidation));
+
+    const working = await owner.dial({
+      reach: { ...reach, relays: [reach.relays[1]!] },
+      overallDeadlineMs: 1_000,
+      perAttemptDeadlineMs: 100,
+    });
+
+    await expect(
+      owner.dial({
+        reach: { ...reach, relays: [reach.relays[0]!] },
+        overallDeadlineMs: 60,
+        perAttemptDeadlineMs: 20,
+      })
+    ).rejects.toThrow(/Unable to reach/u);
+
+    expect(invalidations).toEqual([]);
+    expect(binding.endpoints).toHaveLength(1);
+    expect(binding.endpoints[0]?.closed).toBe(false);
+    expect(working.connection.closedReason).toBe("");
+    await owner.close();
+  });
+
+  it("still cancels by replacement when the endpoint holds nothing", async () => {
+    const binding = new FakeBinding();
+    const owner = new EndpointGenerationOwner(binding);
+    const invalidations: EndpointGenerationInvalidation[] = [];
+    owner.onInvalidation((invalidation) => invalidations.push(invalidation));
+
+    await owner.dial({ reach, overallDeadlineMs: 1_000, perAttemptDeadlineMs: 10 });
+
+    expect(invalidations.map((invalidation) => invalidation.generation)).toEqual([1]);
+    await owner.close();
+  });
+
   it("waits for a freshly bound endpoint to come online before dialing", async () => {
     // Without this wait the first attempt on every new generation is spent on
     // an endpoint that has not announced itself, its only cure is replacing

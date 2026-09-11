@@ -55,11 +55,21 @@ function orderedRelays(reach: IrohReach, preferredRelay: string | undefined): st
 /**
  * Owns the one native endpoint generation for a process/app.
  *
- * The selected bindings do not expose per-connect cancellation. A timed-out
- * attempt therefore closes the entire current endpoint generation, awaits the
- * native attempt's settlement, and rebinds the same durable secret. All hub and
- * workspace sessions observe one atomic generation transition; no abandoned
- * attempt can overlap its successor.
+ * The selected bindings do not expose per-connect cancellation, so the only
+ * way to cancel a timed-out attempt is to close the entire current endpoint
+ * generation, await the native attempt's settlement, and rebind the same
+ * durable secret. All hub and workspace sessions then observe one atomic
+ * generation transition.
+ *
+ * That cancellation is only free while this endpoint has nothing to lose.
+ * Once it carries live connections, spending it to cancel one dial closes
+ * every one of them, and the replacement hands the next attempt an endpoint
+ * that has to earn its paths again — which is how a desktop spent seventeen
+ * minutes alternating between two groups of connections, each killed 11.9s
+ * into its life by the other group's dial timing out. So a timeout with live
+ * connections abandons its attempt instead: the attempt may then overlap its
+ * successor, and a late arrival is closed on sight, which is a smaller price
+ * than the connections it would otherwise take down with it.
  */
 export class EndpointGenerationOwner<
   Connection extends IrohPhysicalConnection,
@@ -73,6 +83,8 @@ export class EndpointGenerationOwner<
   private readonly activeDials = new Set<Promise<unknown>>();
   /** The endpoint this owner has already waited for, once per generation. */
   private onlineEndpoint: Endpoint | null = null;
+  /** Connections handed out and not yet observed closed. */
+  private readonly openConnections = new Set<Connection>();
   private lastSuccessfulRelay: string | null = null;
   private readonly successfulRelayByPeer = new Map<string, string>();
   private readonly generationListeners = new Set<(snapshot: EndpointGenerationSnapshot) => void>();
@@ -116,6 +128,7 @@ export class EndpointGenerationOwner<
     const endpoint = this.endpoint;
     this.endpoint = null;
     this.onlineEndpoint = null;
+    this.openConnections.clear();
     await endpoint?.close();
     await Promise.allSettled([...this.activeDials]);
     await this.replacementPromise?.catch(() => undefined);
@@ -215,6 +228,7 @@ export class EndpointGenerationOwner<
           const oldest = this.successfulRelayByPeer.keys().next().value as string | undefined;
           if (oldest) this.successfulRelayByPeer.delete(oldest);
         }
+        this.trackConnection(connection);
         return {
           connection,
           relayUrl,
@@ -233,6 +247,22 @@ export class EndpointGenerationOwner<
     );
   }
 
+  /**
+   * Following a connection until it closes, so the cost of a rebind is known.
+   *
+   * Whether cancelling a dial by replacing the endpoint is free or ruinous
+   * depends entirely on how many working connections that endpoint is holding,
+   * and this owner is the only place that knows: it handed every one of them
+   * out.
+   */
+  private trackConnection(connection: Connection): void {
+    this.openConnections.add(connection);
+    const forget = (): void => {
+      this.openConnections.delete(connection);
+    };
+    void connection.closed().then(forget, forget);
+  }
+
   private async connectWithGenerationDeadline(
     endpoint: Endpoint,
     reach: IrohReach,
@@ -246,21 +276,25 @@ export class EndpointGenerationOwner<
     const guardedAttempt = attempt.then(async (connection) => {
       if (!timedOut) return connection;
       await replacement;
-      connection.close(0x100n, new TextEncoder().encode("stale endpoint generation"));
-      throw new Error(`Iroh dial through ${relayUrl} completed on a stale endpoint generation`);
+      connection.close(0x100n, new TextEncoder().encode("abandoned dial"));
+      throw new Error(`Iroh dial through ${relayUrl} completed after it had been given up on`);
     });
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
+        const failure = new Error(`Iroh dial through ${relayUrl} timed out after ${deadlineMs}ms`);
+        if (this.openConnections.size > 0) {
+          // Abandoned rather than cancelled: cancelling costs every live
+          // connection on this endpoint, and this attempt is not worth them.
+          reject(failure);
+          return;
+        }
         replacement = this.replaceGeneration(endpoint, attempt, {
           peerEndpointId: reach.endpointId,
           relayUrl,
           deadlineMs,
         });
-        void replacement.then(
-          () => reject(new Error(`Iroh dial through ${relayUrl} timed out after ${deadlineMs}ms`)),
-          reject
-        );
+        void replacement.then(() => reject(failure), reject);
       }, deadlineMs);
       (timer as unknown as { unref?: () => void }).unref?.();
     });
