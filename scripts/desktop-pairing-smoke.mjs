@@ -1742,24 +1742,37 @@ async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
 
   let latest = null;
   while (Date.now() < deadline) {
-    latest = await evaluateElectron(
-      app,
-      async (_electron, { knownIds }) => {
-        const testApi = globalThis.__testApi;
-        if (!testApi) throw new Error("Desktop test API is not available");
-        const initializationFailure = testApi.readPanelInitializationFailure();
-        if (initializationFailure) return { initializationFailure };
-        const panel = testApi.getPanelTree().find((entry) => !knownIds.includes(entry.id));
-        if (!panel) return { panel: null };
-        const readiness = await testApi.getPanelReadiness(panel.id);
-        return {
-          panel: { id: panel.id, source: panel.snapshot?.source ?? null },
-          readiness,
-        };
-      },
-      { knownIds: [...existingPanelIds] },
-      "waiting for a newly created panel"
-    );
+    // A panel asked for during the reconnect window is observed through an RPC,
+    // so the answer can be the reconnect rather than anything about the panel.
+    // This loop exists to wait that out; rethrowing ended the run on the first
+    // tick instead, which is how a restart that recovered perfectly well still
+    // failed the smoke.
+    let observation;
+    try {
+      observation = await evaluateElectron(
+        app,
+        async (_electron, { knownIds }) => {
+          const testApi = globalThis.__testApi;
+          if (!testApi) throw new Error("Desktop test API is not available");
+          const initializationFailure = testApi.readPanelInitializationFailure();
+          if (initializationFailure) return { initializationFailure };
+          const panel = testApi.getPanelTree().find((entry) => !knownIds.includes(entry.id));
+          if (!panel) return { panel: null };
+          const readiness = await testApi.getPanelReadiness(panel.id);
+          return {
+            panel: { id: panel.id, source: panel.snapshot?.source ?? null },
+            readiness,
+          };
+        },
+        { knownIds: [...existingPanelIds] },
+        "waiting for a newly created panel"
+      );
+    } catch (error) {
+      if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
+      await sleep(250);
+      continue;
+    }
+    latest = observation;
     if (latest.initializationFailure) {
       throw new Error(
         `New panel initialization failed: ${JSON.stringify(latest.initializationFailure)}`
