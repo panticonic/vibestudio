@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { Panel } from "@vibestudio/shared/types";
-import { PanelView } from "./panelView.js";
+import { PanelView, elideForMenu, selectionPrompt } from "./panelView.js";
+import type { MenuItemConstructorOptions } from "electron";
 
 function makePanel(id: string, source = "about/new"): Panel {
   return {
@@ -55,6 +56,7 @@ function createHarness(
   const panel = makePanel(panelId);
   const wc = makeWebContents();
   const viewManager = {
+    setContextMenuContributor: vi.fn(),
     hasView: vi.fn(() => false),
     getViewUrl: vi.fn(() => null),
     isManagedNavigationInFlight: vi.fn(() => options.managedNavigationInFlight ?? false),
@@ -611,5 +613,97 @@ describe("PanelView plain panel links", () => {
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+});
+
+describe("PanelView context menu contributions", () => {
+  const contributorFor = (harness: ReturnType<typeof createHarness>) => {
+    const contributor = harness.viewManager.setContextMenuContributor.mock.calls.at(-1)?.[1] as (
+      params: Electron.ContextMenuParams
+    ) => MenuItemConstructorOptions[];
+    expect(contributor).toBeTypeOf("function");
+    return contributor;
+  };
+  const params = (partial: Partial<Electron.ContextMenuParams>): Electron.ContextMenuParams =>
+    ({ linkURL: "", selectionText: "", ...partial }) as Electron.ContextMenuParams;
+
+  it("opens a link as a child panel, the same as the page asking for it", async () => {
+    const harness = createHarness();
+    await harness.panelView.createViewForPanel(
+      harness.panelId,
+      "http://127.0.0.1:1234/panels/chat/",
+      "ctx-current"
+    );
+    const items = contributorFor(harness)(params({ linkURL: "https://example.com/article" }));
+    const open = items.find((item) => item.label === "Open Link in New Panel");
+    expect(open).toBeDefined();
+
+    open?.click?.(undefined as never, undefined, undefined as never);
+    await vi.waitFor(() =>
+      expect(harness.panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalled()
+    );
+    expect(harness.panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+      harness.panelId,
+      "https://example.com/article",
+      // A child of the panel the link was in, and focused: the person asked
+      // for it, so it is what they are now looking at.
+      { placement: "child", focus: true },
+      undefined
+    );
+  });
+
+  it("asks the agent about a selection, in quickfire, pre-filled and unsent", async () => {
+    const harness = createHarness();
+    await harness.panelView.createViewForPanel(
+      harness.panelId,
+      "http://127.0.0.1:1234/panels/chat/",
+      "ctx-current"
+    );
+    const items = contributorFor(harness)(
+      params({ selectionText: "  the\n  highlighted   bits  " })
+    );
+    const ask = items.find((item) => item.label?.startsWith("Ask about"));
+    expect(ask?.label).toBe("Ask about “the highlighted bits”");
+
+    ask?.click?.(undefined as never, undefined, undefined as never);
+    expect(harness.openShellSurface).toHaveBeenLastCalledWith({
+      kind: "command-agent",
+      panelId: harness.panelId,
+      mode: "quickfire",
+      prompt: "the highlighted bits",
+    });
+  });
+
+  it("contributes nothing when the click was about neither a link nor a selection", async () => {
+    const harness = createHarness();
+    await harness.panelView.createViewForPanel(
+      harness.panelId,
+      "http://127.0.0.1:1234/panels/chat/",
+      "ctx-current"
+    );
+    expect(contributorFor(harness)(params({}))).toEqual([]);
+  });
+});
+
+describe("selection text as a prompt", () => {
+  it("collapses the line breaks a dragged selection carries", () => {
+    expect(selectionPrompt("first line\n\tsecond   line ")).toBe("first line second line");
+  });
+
+  it("has no prompt for whitespace or nothing at all", () => {
+    expect(selectionPrompt("   \n  ")).toBeNull();
+    expect(selectionPrompt(undefined)).toBeNull();
+  });
+
+  it("stays within what a shell surface accepts", () => {
+    // Control characters and over-long text are both refused by the surface,
+    // so producing them here would fail at the boundary instead of the source.
+    const prompt = selectionPrompt("x".repeat(9_000));
+    expect(prompt).toHaveLength(4_000);
+  });
+
+  it("elides a long selection in the menu row rather than widening it", () => {
+    expect(elideForMenu("short")).toBe("short");
+    expect(elideForMenu("y".repeat(60))).toBe(`${"y".repeat(41)}…`);
   });
 });

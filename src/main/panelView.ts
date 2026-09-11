@@ -9,6 +9,8 @@ import { scopedNativePartition } from "./nativeStorageScope.js";
 
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { WorkspaceNativeViews } from "./workspaceNativeViews.js";
+import type { ViewContextMenuContributor } from "./viewManager.js";
+import { MAX_SHELL_SURFACE_PROMPT_LENGTH } from "@vibestudio/shared/shellSurface";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelViewLike, ServerInfoLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
@@ -39,6 +41,26 @@ import {
 import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
+
+/**
+ * The highlighted text, as something an agent can be asked about.
+ *
+ * Whitespace is collapsed because a selection dragged across a page carries
+ * the line breaks of its layout, which are not part of what the person meant,
+ * and because control characters are not valid in a prompt. Nothing is added:
+ * any framing here would be words the user did not choose and would have to
+ * delete before typing their actual question.
+ */
+export function selectionPrompt(selectionText: string | undefined): string | null {
+  const collapsed = (selectionText ?? "").replace(/\s+/gu, " ").trim();
+  if (!collapsed) return null;
+  return collapsed.slice(0, MAX_SHELL_SURFACE_PROMPT_LENGTH);
+}
+
+/** A menu row names what was selected without becoming the width of the page. */
+export function elideForMenu(text: string, limit = 42): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
+}
 
 const log = createDevLogger("PanelView");
 const TRANSIENT_MAIN_FRAME_LOAD_RETRY_CODES = new Set([-21]); // ERR_NETWORK_CHANGED
@@ -895,37 +917,110 @@ export class PanelView implements PanelViewLike {
     translateManagedLinks = true
   ): void {
     contents.setWindowOpenHandler((details) => {
-      const url = details.url;
-      if (this.handleShellSurfaceLink(panelId, url)) {
-        return { action: "deny" as const };
-      }
-      const parsed = translateManagedLinks ? this.parseManagedPanelUrl(url) : null;
-      if (parsed) {
-        void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
-          this.handlePanelLinkError(panelId, err, url)
-        );
-        return { action: "deny" as const };
-      }
-      const policy = classifyPanelUrl(url);
-      if (policy.disposition === "browser-panel") {
-        void this.allowPopup(panelId, contents)
-          .then((allowed) =>
-            allowed ? this.openBrowserLink(panelId, url, details.disposition) : undefined
-          )
-          .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
-      } else if (policy.disposition === "external") {
-        void this.allowPopup(panelId, contents)
-          .then((allowed) => (allowed ? this.openExternalLink(url) : undefined))
-          .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
-      } else {
-        this.handlePanelLinkError(
-          panelId,
-          new Error(policy.reason ?? "This link type is not supported"),
-          url
-        );
-      }
+      this.openLinkFromPanel(panelId, contents, details.url, {
+        translateManagedLinks,
+        disposition: details.disposition,
+        // A page that asked for a window has to pass the popup gate; a person
+        // who chose "open in a new panel" from the menu has already decided.
+        requirePopupPermission: true,
+      });
       return { action: "deny" as const };
     });
+  }
+
+  /**
+   * What a right-click inside a panel offers about what was clicked.
+   *
+   * Both items are the panel's business rather than the view manager's: one
+   * creates a child panel through the orchestrator, the other hands the
+   * selection to the agent that sees this panel.
+   */
+  private panelContextMenuContributor(
+    panelId: string,
+    contents: Electron.WebContents,
+    translateManagedLinks: boolean
+  ): ViewContextMenuContributor {
+    return (params) => {
+      const items: Electron.MenuItemConstructorOptions[] = [];
+      if (params.linkURL) {
+        items.push({
+          label: "Open Link in New Panel",
+          click: () => {
+            this.openLinkFromPanel(panelId, contents, params.linkURL, {
+              translateManagedLinks,
+              // The popup gate exists for a page opening windows unasked. A
+              // person who chose this item has already decided.
+              requirePopupPermission: false,
+            });
+          },
+        });
+      }
+      const selection = selectionPrompt(params.selectionText);
+      if (selection) {
+        items.push({
+          label: `Ask about “${elideForMenu(selection)}”`,
+          click: () => {
+            this.openShellSurface?.({
+              kind: "command-agent",
+              panelId,
+              mode: "quickfire",
+              prompt: selection,
+            });
+          },
+        });
+      }
+      return items;
+    };
+  }
+
+  /**
+   * Opening a link from a panel, wherever the request came from.
+   *
+   * One procedure for one question, because the answer has several branches
+   * and they must not drift: a shell-surface link opens a surface, a managed
+   * panel link becomes a child panel, a web URL becomes a child browser panel,
+   * and anything else is refused with the reason the classifier gave. The
+   * page's own `window.open` and the "Open Link in New Panel" menu item are
+   * the same decision made by different askers, so they share it — which is
+   * also what makes the menu item behave exactly like clicking the link.
+   */
+  private openLinkFromPanel(
+    panelId: string,
+    contents: Electron.WebContents,
+    url: string,
+    options: {
+      translateManagedLinks: boolean;
+      disposition?: Electron.HandlerDetails["disposition"];
+      requirePopupPermission: boolean;
+    }
+  ): void {
+    if (this.handleShellSurfaceLink(panelId, url)) return;
+    const parsed = options.translateManagedLinks ? this.parseManagedPanelUrl(url) : null;
+    if (parsed) {
+      void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
+        this.handlePanelLinkError(panelId, err, url)
+      );
+      return;
+    }
+    const policy = classifyPanelUrl(url);
+    if (policy.disposition !== "browser-panel" && policy.disposition !== "external") {
+      this.handlePanelLinkError(
+        panelId,
+        new Error(policy.reason ?? "This link type is not supported"),
+        url
+      );
+      return;
+    }
+    const open = (): Promise<void> =>
+      policy.disposition === "browser-panel"
+        ? this.openBrowserLink(panelId, url, options.disposition)
+        : this.openExternalLink(url);
+    const permitted = options.requirePopupPermission
+      ? this.allowPopup(panelId, contents)
+      : Promise.resolve(true);
+    void permitted
+      .then((allowed) => (allowed ? open() : undefined))
+      .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
   }
 
   private setupLinkInterception(
@@ -934,6 +1029,10 @@ export class PanelView implements PanelViewLike {
     translateManagedLinks = true
   ): void {
     this.setupWindowOpenInterception(panelId, contents, translateManagedLinks);
+    this.viewManager.setContextMenuContributor(
+      panelId,
+      this.panelContextMenuContributor(panelId, contents, translateManagedLinks)
+    );
 
     const willNavigateHandler = (event: Electron.Event, url: string) => {
       if (this.handleShellSurfaceLink(panelId, url)) {

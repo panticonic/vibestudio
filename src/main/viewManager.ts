@@ -228,6 +228,20 @@ interface ManagedView {
   };
 }
 
+/**
+ * Extra context-menu items the owner of a view contributes for one right-click.
+ *
+ * The menu is built in the view manager because that owns the `context-menu`
+ * event, but what a right-click on a link or a selection should *do* is policy
+ * it does not hold: opening a link as a child panel needs the panel
+ * orchestrator, and handing a selection to an agent needs the shell surfaces.
+ * Rather than give the view manager those dependencies, and with them a say in
+ * link policy, the owner that already holds them contributes the items.
+ */
+export type ViewContextMenuContributor = (
+  params: Electron.ContextMenuParams
+) => MenuItemConstructorOptions[];
+
 export type NativePanelSlotBounds = ViewBounds;
 export type NativePanelSlotSyncResult =
   | { status: "bound" | "updated" }
@@ -284,6 +298,8 @@ export interface LayoutState {
 export class ViewManager {
   private window: BaseWindow;
   private views = new Map<string, ManagedView>();
+  /** Per-view context-menu items contributed by whoever created the view. */
+  private contextMenuContributors = new Map<string, ViewContextMenuContributor>();
   private shellView: WebContentsView;
   /** Whether the bootstrap launch-gate view is currently a child of the window.
    *  It is fully detached on handoff to the hosted shell so its titlebar drag
@@ -758,7 +774,11 @@ export class ViewManager {
         }
       },
       contextMenu: (_event: Electron.Event, params: Electron.ContextMenuParams) => {
-        const menuItems = this.buildContextMenuItems(params, view.webContents);
+        const menuItems = this.buildContextMenuItems(
+          params,
+          view.webContents,
+          this.contributedContextMenuItems(config.id, params)
+        );
         if (menuItems.length > 0) {
           const menu = Menu.buildFromTemplate(menuItems);
           this.popupWebContentsContextMenu(menu, params, managed.bounds);
@@ -883,9 +903,39 @@ export class ViewManager {
   /**
    * Build standard browser context menu items based on the context.
    */
+  /**
+   * Let the owner of a view decide what a right-click on its content offers.
+   *
+   * Passing null removes the contribution; the view's own destruction does the
+   * same, so an owner that forgets leaks nothing.
+   */
+  setViewContextMenuContributor(
+    viewId: string,
+    contributor: ViewContextMenuContributor | null
+  ): void {
+    if (contributor) this.contextMenuContributors.set(viewId, contributor);
+    else this.contextMenuContributors.delete(viewId);
+  }
+
+  private contributedContextMenuItems(
+    viewId: string,
+    params: Electron.ContextMenuParams
+  ): MenuItemConstructorOptions[] {
+    const contributor = this.contextMenuContributors.get(viewId);
+    if (!contributor) return [];
+    try {
+      return contributor(params);
+    } catch (error) {
+      // A contributor that throws must not cost the user their whole menu.
+      log.warn(` Context menu contributor failed for ${viewId}: ${String(error)}`);
+      return [];
+    }
+  }
+
   private buildContextMenuItems(
     params: Electron.ContextMenuParams,
-    contents: WebContents
+    contents: WebContents,
+    contributed: MenuItemConstructorOptions[] = []
   ): MenuItemConstructorOptions[] {
     const items: MenuItemConstructorOptions[] = [];
 
@@ -911,6 +961,10 @@ export class ViewManager {
         },
         { type: "separator" }
       );
+    }
+
+    if (contributed.length > 0) {
+      items.push(...contributed, { type: "separator" });
     }
 
     // Undo/Redo for editable fields
@@ -1020,6 +1074,7 @@ export class ViewManager {
     if (!managed) {
       return;
     }
+    this.contextMenuContributors.delete(id);
 
     const contents = managed.view.webContents;
     if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === id) {

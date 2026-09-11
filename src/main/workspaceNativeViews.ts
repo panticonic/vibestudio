@@ -1,4 +1,4 @@
-import type { ViewManager, ViewConfig } from "./viewManager.js";
+import type { ViewManager, ViewConfig, ViewContextMenuContributor } from "./viewManager.js";
 
 export interface WorkspaceViewIdentity {
   workspaceId: string;
@@ -43,6 +43,14 @@ export class WorkspaceNativeViews {
 
   nativeId(runtimeId: string): string {
     return workspaceNativeViewId({ workspaceId: this.workspaceId, runtimeId });
+  }
+
+  /** Contribute context-menu items for one of this workspace's views. */
+  setContextMenuContributor(
+    runtimeId: string,
+    contributor: ViewContextMenuContributor | null
+  ): void {
+    this.window.setViewContextMenuContributor(this.nativeId(runtimeId), contributor);
   }
 
   setProtectedViews(ids: Set<string>): void {

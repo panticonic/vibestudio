@@ -2393,6 +2393,79 @@ describe("ViewManager", () => {
       expect(template[0]).toMatchObject({ label: "No spelling suggestions", enabled: false });
     });
 
+    it("puts the owner's items above the generic ones, because that is the click", async () => {
+      const { Menu } = await import("electron");
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      vm.setViewContextMenuContributor("test-view", () => [{ label: "Open Link in New Panel" }]);
+      const contextMenu = (view.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "context-menu"
+      )?.[1] as (event: unknown, params: Electron.ContextMenuParams) => void;
+
+      contextMenu({}, {
+        linkURL: "https://example.com/",
+        selectionText: "",
+        editFlags: {},
+        x: 1,
+        y: 2,
+      } as unknown as Electron.ContextMenuParams);
+
+      const labels = (
+        (Menu.buildFromTemplate as Mock).mock.lastCall?.[0] as Array<{
+          label?: string;
+        }>
+      ).map((item) => item.label);
+      expect(labels[0]).toBe("Open Link in New Panel");
+      expect(labels).toContain("Copy Link");
+    });
+
+    it("keeps the menu when a contributor throws", async () => {
+      const { Menu } = await import("electron");
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      vm.setViewContextMenuContributor("test-view", () => {
+        throw new Error("contributor is broken");
+      });
+      const contextMenu = (view.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "context-menu"
+      )?.[1] as (event: unknown, params: Electron.ContextMenuParams) => void;
+
+      contextMenu({}, {
+        linkURL: "https://example.com/",
+        selectionText: "",
+        editFlags: {},
+        x: 1,
+        y: 2,
+      } as unknown as Electron.ContextMenuParams);
+
+      const labels = (
+        (Menu.buildFromTemplate as Mock).mock.lastCall?.[0] as Array<{
+          label?: string;
+        }>
+      ).map((item) => item.label);
+      expect(labels).toContain("Copy Link");
+      expect(labels).not.toContain("Open Link in New Panel");
+    });
+
+    it("forgets a contributor when its view is destroyed", () => {
+      const contributor = vi.fn(() => []);
+      vm.createView({ id: "test-view", type: "panel", preload: null });
+      vm.setViewContextMenuContributor("test-view", contributor);
+      vm.destroyView("test-view");
+
+      const rebuilt = vm.createView({ id: "test-view", type: "panel", preload: null });
+      const contextMenu = (rebuilt.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "context-menu"
+      )?.[1] as (event: unknown, params: Electron.ContextMenuParams) => void;
+      contextMenu({}, {
+        linkURL: "https://example.com/",
+        selectionText: "",
+        editFlags: {},
+        x: 1,
+        y: 2,
+      } as unknown as Electron.ContextMenuParams);
+
+      expect(contributor).not.toHaveBeenCalled();
+    });
+
     it("navigateView loads URL", async () => {
       const view = vm.createView({
         id: "test-view",

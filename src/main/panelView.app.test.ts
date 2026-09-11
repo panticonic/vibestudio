@@ -6,6 +6,7 @@ function makePanelView(appPreloadPath?: string): PanelView {
   return new PanelView({
     nativeStorageScope: "test-host-device",
     viewManager: {
+      setContextMenuContributor: vi.fn(),
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
@@ -37,6 +38,7 @@ describe("PanelView app views", () => {
 
   it("creates panel-hosting app views as full-window host chrome", async () => {
     const viewManager = {
+      setContextMenuContributor: vi.fn(),
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
@@ -83,6 +85,7 @@ describe("PanelView app views", () => {
 
   it("updates existing app view metadata when loading a new app build", async () => {
     const viewManager = {
+      setContextMenuContributor: vi.fn(),
       hasView: vi.fn(() => true),
       getViewUrl: vi.fn(() => "http://127.0.0.1:1234/_a/old/index.html"),
       navigateView: vi.fn(async () => undefined),
@@ -134,6 +137,7 @@ describe("PanelView app views", () => {
       setWindowOpenHandler: vi.fn(),
     });
     const viewManager = {
+      setContextMenuContributor: vi.fn(),
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
@@ -183,6 +187,7 @@ describe("PanelView app views", () => {
     const panelView = new PanelView({
       nativeStorageScope: "test-host-device",
       viewManager: {
+        setContextMenuContributor: vi.fn(),
         hasView: vi.fn(() => false),
         getViewUrl: vi.fn(() => null),
         navigateView: vi.fn(async () => undefined),
