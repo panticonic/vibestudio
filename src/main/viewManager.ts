@@ -38,7 +38,7 @@ import {
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
 import { ContentOverlayManager } from "./contentOverlayManager.js";
-import { interceptCommandOverlayShortcut, isCommandOverlayInput } from "./menu.js";
+import { interceptChromeShortcuts, isChromeOwnedInput } from "./menu.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
@@ -515,7 +515,7 @@ export class ViewManager {
    * "should Escape dismiss this" is presentation policy the host must not own.
    */
   private installContentOverlayKeys(contents: WebContents): void {
-    interceptCommandOverlayShortcut(contents);
+    interceptChromeShortcuts(contents);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key !== "Escape") return;
       if (this.shellContentOverlay.getVisibleViews().length === 0) return;
@@ -540,9 +540,9 @@ export class ViewManager {
       const panelId = this.getFocusedPanelId();
       if (!panelId || this.nativeShellOverlay.isVisible() || this.shellChromeInteractiveFocus)
         return;
-      // The command chord belongs to the overlay, not to the panel: forwarding
-      // it let the panel swallow the key and the menu accelerator never ran.
-      if (isCommandOverlayInput(input)) return;
+      // Chrome chords belong to the chrome, not to the panel: forwarding them
+      // let the panel swallow the key and the menu accelerator never ran.
+      if (isChromeOwnedInput(input)) return;
       // These keys operate focused shell controls and navigation widgets. Never
       // teleport them into a panel even if focus state is momentarily racing.
       if (

@@ -85,6 +85,7 @@
     "./panelAccessPolicy": "./src/panelAccessPolicy.ts",
     "./panelChrome": "./src/panelChrome.ts",
     "./panelCommands": "./src/panelCommands.ts",
+    "./desktopKeymap": "./src/desktopKeymap.ts",
     "./panelContracts": "./src/panelContracts.ts",
     "./panelFactory": "./src/panelFactory.ts",
     "./panelIdUtils": "./src/panelIdUtils.ts",

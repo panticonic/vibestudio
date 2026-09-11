@@ -4,7 +4,13 @@ import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
 import { workspaceNativeViewId } from "./workspaceNativeViews.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import { PANEL_KEYBOARD_ACCELERATORS } from "@vibestudio/shared/panelCommands";
+import {
+  desktopAccelerator,
+  desktopBindingFor,
+  desktopKeyPlatform,
+  type DesktopBindingId,
+  type DesktopKeyInput,
+} from "@vibestudio/shared/desktopKeymap";
 import { assertPresent } from "../lintHelpers";
 // These page ids identify workspace-provided units under `about/` that the menu
 // assumes exist. The `navigate-about` payload is a page id (not a source); the
@@ -24,8 +30,14 @@ export function setMenuWorkspaceResolver(resolve: () => MenuWorkspace | null): v
 }
 let _menuViewManager: ViewManager | null = null;
 let _menuEventService: EventService | null = null;
-const panelDevToolsShortcutInterceptors = new WeakSet<WebContents>();
-const commandOverlayShortcutInterceptors = new WeakSet<WebContents>();
+const chromeShortcutInterceptors = new WeakSet<WebContents>();
+
+const KEY_PLATFORM = desktopKeyPlatform(process.platform);
+
+/** The accelerator for a binding, from the one table that decides them. */
+function key(id: DesktopBindingId): string {
+  return desktopAccelerator(id, KEY_PLATFORM);
+}
 
 /** Set the event service for menu operations. Called from index.ts. */
 export function setMenuEventService(es: EventService): void {
@@ -146,61 +158,127 @@ function toggleAppDevTools(shellContents: WebContents): void {
   }
 }
 
-function isPanelDevToolsInput(input: Electron.Input): boolean {
-  if (input.type !== "keyDown") {
-    return false;
-  }
-  if (input.key.toLowerCase() !== "i" && input.code !== "KeyI") {
-    return false;
-  }
-  const hasPrimary = process.platform === "darwin" ? input.meta : input.control;
-  return hasPrimary && input.shift && !input.alt;
-}
-
 /**
- * The one command chord (§1.3). Shift and alt are excluded so this never
- * shadows a panel's own shifted bindings.
- */
-export function isCommandOverlayInput(input: Electron.Input): boolean {
-  if (input.type !== "keyDown") return false;
-  if (input.key.toLowerCase() !== "k" && input.code !== "KeyK") return false;
-  const hasPrimary = process.platform === "darwin" ? input.meta : input.control;
-  return hasPrimary && !input.shift && !input.alt;
-}
-
-/**
- * Open the command overlay from any web contents that can steal the chord.
+ * The chords the chrome owns no matter what has keyboard focus.
  *
- * The menu accelerator alone is not enough. The shell chrome forwards its
- * keystrokes into the focused panel (`installShellKeyForwarding`), and a focused
- * panel page consumes them itself — so `Ctrl+K` only ever reached the menu when
- * an interactive chrome field held focus, which is exactly the "nothing happens"
- * report. Intercepting here means the chord is app-global as the spec intends,
- * and `preventDefault` keeps the menu accelerator from firing a second time.
+ * This is the difference between an app that has browser shortcuts and an app
+ * where they work. A menu accelerator reaches the menu; a page that has focus
+ * reaches the page first, and a page is perfectly capable of consuming
+ * `Ctrl+R`, `Ctrl+L` or `Ctrl+F` and doing something else with it. In a
+ * browser the chrome wins those, because they are how you get *out* of a page
+ * that is misbehaving. Here they now win too.
+ *
+ * `closePanel` is deliberately not in this list. Every other chord here is
+ * recoverable — the worst case is a reload — and closing the panel a person is
+ * typing in is not, so it stays with the menu, which is reached deliberately.
  */
-export function interceptCommandOverlayShortcut(contents: WebContents): void {
-  if (commandOverlayShortcutInterceptors.has(contents)) return;
-  commandOverlayShortcutInterceptors.add(contents);
+const CHROME_OWNED_BINDINGS = [
+  "commandPalette",
+  "panelDevTools",
+  "back",
+  "forward",
+  "forceReload",
+  "reload",
+  "focusAddress",
+  "findInPage",
+  "findNext",
+  "findPrevious",
+  "newPanel",
+] as const satisfies readonly DesktopBindingId[];
+
+function keyInputOf(input: Electron.Input): DesktopKeyInput {
+  return {
+    key: input.key,
+    code: input.code,
+    ctrl: input.control,
+    shift: input.shift,
+    alt: input.alt,
+    meta: input.meta,
+  };
+}
+
+/** The chrome-owned binding this key event performs, if any. */
+export function chromeOwnedBinding(input: Electron.Input): DesktopBindingId | null {
+  if (input.type !== "keyDown") return null;
+  // `forceReload` is listed before `reload` on purpose: the shifted chord is a
+  // superset match and must be resolved first.
+  return desktopBindingFor(keyInputOf(input), KEY_PLATFORM, CHROME_OWNED_BINDINGS);
+}
+
+/**
+ * True when the chrome, not the panel, is the addressee of this key event.
+ *
+ * The shell forwards its own keystrokes into the focused panel, so without
+ * this a chrome chord typed while the chrome has focus would be delivered to
+ * the page as well as acted on.
+ */
+export function isChromeOwnedInput(input: Electron.Input): boolean {
+  return chromeOwnedBinding(input) !== null;
+}
+
+/** Kept as the narrow question the overlay forwarding guard asks. */
+export function isCommandOverlayInput(input: Electron.Input): boolean {
+  return chromeOwnedBinding(input) === "commandPalette";
+}
+
+function performChromeBinding(id: DesktopBindingId): void {
+  switch (id) {
+    case "commandPalette":
+      emitMenuEvent("open-command-palette");
+      return;
+    case "panelDevTools":
+      togglePanelDevTools();
+      return;
+    case "back":
+    case "forward":
+      emitMenuEvent("panel-chrome-command", { command: id });
+      return;
+    case "reload":
+      dispatchChromeCommand("reload-panel");
+      return;
+    case "forceReload":
+      dispatchChromeCommand("force-reload-view");
+      return;
+    case "focusAddress":
+      emitMenuEvent("panel-chrome-command", { command: "focus-address" });
+      return;
+    case "findInPage":
+      emitMenuEvent("toggle-find-in-page");
+      return;
+    case "findNext":
+      emitMenuEvent("find-in-page-step", { forward: true });
+      return;
+    case "findPrevious":
+      emitMenuEvent("find-in-page-step", { forward: false });
+      return;
+    case "newPanel":
+      emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Give the chrome its chords back from any web contents that could eat them.
+ *
+ * `preventDefault` both keeps the page from seeing the chord and keeps the
+ * menu accelerator from firing a second time for the same press.
+ */
+export function interceptChromeShortcuts(contents: WebContents): void {
+  if (chromeShortcutInterceptors.has(contents)) return;
+  chromeShortcutInterceptors.add(contents);
   contents.on("before-input-event", (event, input) => {
-    if (!isCommandOverlayInput(input)) return;
+    const binding = chromeOwnedBinding(input);
+    if (!binding) return;
     event.preventDefault();
-    emitMenuEvent("open-command-palette");
+    performChromeBinding(binding);
   });
 }
 
-function interceptPanelDevToolsShortcut(shellContents: WebContents): void {
-  if (panelDevToolsShortcutInterceptors.has(shellContents)) {
-    return;
-  }
-  panelDevToolsShortcutInterceptors.add(shellContents);
-
-  shellContents.on("before-input-event", (event, input) => {
-    if (!isPanelDevToolsInput(input)) {
-      return;
-    }
-    event.preventDefault();
-    togglePanelDevTools();
-  });
+/** @deprecated Use `interceptChromeShortcuts`, which owns the whole family. */
+export function interceptCommandOverlayShortcut(contents: WebContents): void {
+  interceptChromeShortcuts(contents);
 }
 
 function refreshPanelDisplay(): void {
@@ -222,16 +300,6 @@ function reportMenuActionError(action: string, error: unknown): void {
 }
 
 /**
- * Electron's default zoomIn role uses CommandOrControl+Plus. On Linux, the
- * keyboard event for the plus key is shifted Equal, so that accelerator does
- * not match the key users actually press. Keep the macOS role spelling while
- * registering the physical shifted-plus chord on other platforms.
- */
-function zoomInAccelerator(isMac: boolean): string {
-  return isMac ? "Cmd+Plus" : "Ctrl+Shift+Plus";
-}
-
-/**
  * Build the hamburger popup menu template.
  *
  * On Windows and Linux the shell window is a `BaseWindow` with a custom
@@ -249,54 +317,53 @@ export function buildHamburgerMenuTemplate(
     onHistoryForward?: () => void;
   }
 ): MenuItemConstructorOptions[] {
-  const isMac = process.platform === "darwin";
-  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
-  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
-  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  // One key, one door. The overlay decides what the input meant: prose talks to
-  // the Quickfire agent, a panel name switches panels, `>` and `@` narrow to
-  // commands and destinations. A second press cycles those scopes. There is
-  // deliberately no shift chord for the agent — it would only pre-expand the
-  // transcript, which typing already does.
-  const commandPaletteAccelerator = "CmdOrCtrl+K";
+  const isMac = KEY_PLATFORM === "mac";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
 
   // Panel: everything acting on the panel in the focused pane.
   const panel: MenuItemConstructorOptions[] = [];
   if (options?.onHistoryBack) {
-    panel.push({ label: "Back", click: () => options.onHistoryBack?.() });
+    panel.push({
+      label: "Back",
+      accelerator: key("back"),
+      click: () => options.onHistoryBack?.(),
+    });
   }
   if (options?.onHistoryForward) {
-    panel.push({ label: "Forward", click: () => options.onHistoryForward?.() });
+    panel.push({
+      label: "Forward",
+      accelerator: key("forward"),
+      click: () => options.onHistoryForward?.(),
+    });
   }
   if (panel.length > 0) panel.push({ type: "separator" });
   panel.push(
     {
       label: "Reload Panel",
-      accelerator: reloadPanelAccelerator,
+      accelerator: key("reload"),
       click: () => dispatchChromeCommand("reload-panel"),
     },
     {
       label: "Force Reload View",
-      accelerator: forceReloadAccelerator,
+      accelerator: key("forceReload"),
       click: () => dispatchChromeCommand("force-reload-view"),
     },
     { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
     { type: "separator" },
     {
       label: "Toggle Address Bar",
-      accelerator: addressBarAccelerator,
+      accelerator: key("focusAddress"),
       click: () => emitMenuEvent("toggle-address-bar"),
     },
     {
       label: "Find in Page…",
-      accelerator: "CmdOrCtrl+F",
+      accelerator: key("findInPage"),
       click: () => emitMenuEvent("toggle-find-in-page"),
     },
     { type: "separator" },
     {
       label: "Close Panel",
-      accelerator: PANEL_KEYBOARD_ACCELERATORS.closePanel,
+      accelerator: key("closePanel"),
       click: () =>
         void archiveFocusedPanel(null).catch((error) =>
           reportMenuActionError("Close panel", error)
@@ -316,11 +383,11 @@ export function buildHamburgerMenuTemplate(
 
   // View: how the window itself is presented, plus the display escape hatches.
   const view: MenuItemConstructorOptions[] = [
-    { label: "Zoom In", role: "zoomIn", accelerator: zoomInAccelerator(isMac) },
-    { label: "Zoom Out", role: "zoomOut" },
-    { label: "Reset Zoom", role: "resetZoom" },
+    { label: "Zoom In", role: "zoomIn", accelerator: key("zoomIn") },
+    { label: "Zoom Out", role: "zoomOut", accelerator: key("zoomOut") },
+    { label: "Reset Zoom", role: "resetZoom", accelerator: key("resetZoom") },
     { type: "separator" },
-    { label: "Toggle Full Screen", role: "togglefullscreen" },
+    { label: "Toggle Full Screen", role: "togglefullscreen", accelerator: key("toggleFullScreen") },
     { label: "Minimize", role: "minimize" },
     { type: "separator" },
     { label: "Refresh Panel Display", click: () => refreshPanelDisplay() },
@@ -331,7 +398,7 @@ export function buildHamburgerMenuTemplate(
   const workspace: MenuItemConstructorOptions[] = [
     {
       label: "Switch Workspace…",
-      accelerator: "CmdOrCtrl+Shift+O",
+      accelerator: key("switchWorkspace"),
       click: () => emitMenuEvent("open-workspace-switcher"),
     },
     {
@@ -341,12 +408,12 @@ export function buildHamburgerMenuTemplate(
     { type: "separator" },
     {
       label: "Bookmarks…",
-      accelerator: "CmdOrCtrl+Shift+B",
+      accelerator: key("bookmarks"),
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.BOOKMARKS }),
     },
     {
       label: "History…",
-      accelerator: "CmdOrCtrl+Y",
+      accelerator: key("history"),
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HISTORY }),
     },
     {
@@ -367,12 +434,12 @@ export function buildHamburgerMenuTemplate(
   const developer: MenuItemConstructorOptions[] = [
     {
       label: "Toggle Panel DevTools",
-      accelerator: "CmdOrCtrl+Shift+I",
+      accelerator: key("panelDevTools"),
       click: () => togglePanelDevTools(),
     },
     {
       label: "Toggle App DevTools",
-      accelerator: "CmdOrCtrl+Alt+I",
+      accelerator: key("appDevTools"),
       click: () => toggleAppDevTools(shellContents),
     },
     { type: "separator" },
@@ -388,12 +455,12 @@ export function buildHamburgerMenuTemplate(
       // Filed with the other "how do I reach things" entries rather than at the
       // top: it is a discovery surface, not a frequent menu click.
       label: "Command…",
-      accelerator: commandPaletteAccelerator,
+      accelerator: key("commandPalette"),
       click: () => emitMenuEvent("open-command-palette"),
     },
     {
       label: "Keyboard Shortcuts",
-      accelerator: "CmdOrCtrl+/",
+      accelerator: key("keyboardShortcuts"),
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS }),
     },
     {
@@ -411,12 +478,12 @@ export function buildHamburgerMenuTemplate(
     // The two actions worth a click without hunting through a submenu.
     {
       label: "New Panel",
-      accelerator: PANEL_KEYBOARD_ACCELERATORS.newPanel,
+      accelerator: key("newPanel"),
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW }),
     },
     {
       label: "Focus Pending Approval",
-      accelerator: "CmdOrCtrl+Shift+A",
+      accelerator: key("focusApproval"),
       click: () => emitMenuEvent("focus-approval-card"),
     },
     { type: "separator" },
@@ -441,33 +508,23 @@ export function setupMenu(
   shellContents: WebContents,
   options?: { onHistoryBack?: () => void; onHistoryForward?: () => void }
 ): void {
-  interceptPanelDevToolsShortcut(shellContents);
-  interceptCommandOverlayShortcut(shellContents);
+  interceptChromeShortcuts(shellContents);
 
-  const isMac = process.platform === "darwin";
-  const newPanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.newPanel;
-  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
-  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
-  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  const closePanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.closePanel;
-  // One key, one door. The overlay decides what the input meant: prose talks to
-  // the Quickfire agent, a panel name switches panels, `>` and `@` narrow to
-  // commands and destinations. A second press cycles those scopes. There is
-  // deliberately no shift chord for the agent — it would only pre-expand the
-  // transcript, which typing already does.
-  const commandPaletteAccelerator = "CmdOrCtrl+K";
+  const isMac = KEY_PLATFORM === "mac";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
 
   if (options?.onHistoryBack) {
     viewSubmenu.push({
       label: "Back",
+      accelerator: key("back"),
       click: () => options.onHistoryBack?.(),
     });
   }
   if (options?.onHistoryForward) {
     viewSubmenu.push({
       label: "Forward",
+      accelerator: key("forward"),
       click: () => options.onHistoryForward?.(),
     });
   }
@@ -501,7 +558,7 @@ export function setupMenu(
       submenu: [
         {
           label: "New Panel",
-          accelerator: newPanelAccelerator,
+          accelerator: key("newPanel"),
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
           },
@@ -509,18 +566,18 @@ export function setupMenu(
         { type: "separator" },
         {
           label: "Command...",
-          accelerator: commandPaletteAccelerator,
+          accelerator: key("commandPalette"),
           click: () => emitMenuEvent("open-command-palette"),
         },
         {
           label: "Focus Pending Approval",
-          accelerator: "CmdOrCtrl+Shift+A",
+          accelerator: key("focusApproval"),
           click: () => emitMenuEvent("focus-approval-card"),
         },
         { type: "separator" },
         {
           label: "Switch Workspace...",
-          accelerator: "CmdOrCtrl+Shift+O",
+          accelerator: key("switchWorkspace"),
           click: () => {
             emitMenuEvent("open-workspace-switcher");
           },
@@ -537,7 +594,7 @@ export function setupMenu(
         isMac
           ? {
               label: "Close Panel",
-              accelerator: closePanelAccelerator,
+              accelerator: key("closePanel"),
               click: () => archiveFocusedPanel(mainWindow),
             }
           : { role: "quit" },
@@ -574,19 +631,19 @@ export function setupMenu(
         ...viewSubmenu,
         {
           label: "Reload Panel",
-          accelerator: reloadPanelAccelerator,
+          accelerator: key("reload"),
           click: () => dispatchChromeCommand("reload-panel"),
         },
         {
           label: "Force Reload View",
-          accelerator: forceReloadAccelerator,
+          accelerator: key("forceReload"),
           click: () => dispatchChromeCommand("force-reload-view"),
         },
         { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
         { type: "separator" },
         {
           label: "Toggle Address Bar",
-          accelerator: addressBarAccelerator,
+          accelerator: key("focusAddress"),
           click: () => {
             emitMenuEvent("toggle-address-bar");
           },
@@ -613,20 +670,20 @@ export function setupMenu(
           },
         },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn", accelerator: zoomInAccelerator(isMac) },
-        { role: "zoomOut" },
+        { role: "resetZoom", accelerator: key("resetZoom") },
+        { role: "zoomIn", accelerator: key("zoomIn") },
+        { role: "zoomOut", accelerator: key("zoomOut") },
         { type: "separator" },
-        { role: "togglefullscreen" },
+        { role: "togglefullscreen", accelerator: key("toggleFullScreen") },
         { type: "separator" },
         {
           label: "Toggle Panel Developer Tools",
-          accelerator: "CmdOrCtrl+Shift+I",
+          accelerator: key("panelDevTools"),
           click: () => togglePanelDevTools(),
         },
         {
           label: "Toggle App Developer Tools",
-          accelerator: "CmdOrCtrl+Alt+I",
+          accelerator: key("appDevTools"),
           click: () => toggleAppDevTools(shellContents),
         },
       ],
@@ -642,7 +699,7 @@ export function setupMenu(
           : [
               {
                 label: "Close Panel",
-                accelerator: closePanelAccelerator,
+                accelerator: key("closePanel"),
                 click: () => archiveFocusedPanel(mainWindow),
               },
             ]),
@@ -653,7 +710,7 @@ export function setupMenu(
       submenu: [
         {
           label: "Keyboard Shortcuts",
-          accelerator: "CmdOrCtrl+/",
+          accelerator: key("keyboardShortcuts"),
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS });
           },

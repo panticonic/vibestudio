@@ -1,4 +1,5 @@
 import type { AddressAction, PanelChromeState } from "./panelChrome.js";
+import { desktopNeutralShortcutLabel } from "./desktopKeymap.js";
 
 export type AddressNavigationMode = "current" | "child" | "root" | "external";
 
@@ -25,7 +26,12 @@ export interface AddressNavigationModifiers {
   altKey?: boolean;
 }
 
-/** Browser-familiar application accelerators for panel lifecycle. */
+/**
+ * Browser-familiar application accelerators for panel lifecycle.
+ *
+ * @deprecated Read the binding from `desktopKeymap`, which is what the menu
+ * registers. These literals are kept only for callers not yet converted.
+ */
 export const PANEL_KEYBOARD_ACCELERATORS = {
   newPanel: "CmdOrCtrl+T",
   closePanel: "CmdOrCtrl+W",
@@ -173,7 +179,7 @@ export function getPanelCommandDefinitions(
       id: "back",
       label: "Back",
       description: "Go back in this panel's history",
-      shortcut: "Alt+Left",
+      shortcut: desktopNeutralShortcutLabel("back"),
       visible: true,
       enabled: Boolean(chrome?.canGoBack),
     },
@@ -181,7 +187,7 @@ export function getPanelCommandDefinitions(
       id: "forward",
       label: "Forward",
       description: "Go forward in this panel's history",
-      shortcut: "Alt+Right",
+      shortcut: desktopNeutralShortcutLabel("forward"),
       visible: true,
       enabled: Boolean(chrome?.canGoForward),
     },
@@ -189,7 +195,7 @@ export function getPanelCommandDefinitions(
       id: "reload-panel",
       label: "Reload",
       description: "Reload the panel",
-      shortcut: "Cmd/Ctrl+R",
+      shortcut: desktopNeutralShortcutLabel("reload"),
       visible: true,
       enabled: Boolean(chrome),
     },
@@ -204,7 +210,7 @@ export function getPanelCommandDefinitions(
       id: "force-reload-view",
       label: "Force Reload View",
       description: "Reload the view, bypassing caches",
-      shortcut: "Cmd/Ctrl+Shift+R",
+      shortcut: desktopNeutralShortcutLabel("forceReload"),
       visible: true,
       enabled: Boolean(chrome),
     },
@@ -219,7 +225,7 @@ export function getPanelCommandDefinitions(
       id: "stop",
       label: "Stop Loading",
       description: "Stop loading the current page",
-      shortcut: "Esc",
+      shortcut: desktopNeutralShortcutLabel("stop"),
       visible: true,
       enabled: Boolean(chrome?.isLoading),
     },
@@ -227,7 +233,7 @@ export function getPanelCommandDefinitions(
       id: "focus-address",
       label: context.addressBarVisible ? "Focus Address" : "Show Address Bar",
       description: "Edit this panel's address",
-      shortcut: "Cmd/Ctrl+L",
+      shortcut: desktopNeutralShortcutLabel("focusAddress"),
       visible: true,
       enabled: true,
     },
@@ -323,7 +329,7 @@ export function getPanelCommandDefinitions(
       label: "Command…",
       description:
         "Open the command palette over this panel, resuming its Quickfire agent conversation if it has one",
-      shortcut: "Cmd/Ctrl+K",
+      shortcut: desktopNeutralShortcutLabel("commandPalette"),
       visible: true,
       enabled: Boolean(chrome),
     },
@@ -331,7 +337,7 @@ export function getPanelCommandDefinitions(
       id: "archive",
       label: "Archive Panel",
       description: "Remove this panel and its descendants from the active tree",
-      shortcut: "Cmd/Ctrl+W",
+      shortcut: desktopNeutralShortcutLabel("closePanel"),
       visible: true,
       enabled: Boolean(chrome),
     },

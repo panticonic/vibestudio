@@ -72,6 +72,7 @@ export type EventName =
   | "focus-address-bar"
   | "panel-chrome-command"
   | "toggle-find-in-page"
+  | "find-in-page-step"
   | "toggle-panel-devtools"
   | "panel-initialization-error"
   | "panel-responsiveness-changed"
@@ -297,7 +298,10 @@ export interface EventPayloads {
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher":
-    | { template?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin; sourceUrl?: string }
+    | {
+        template?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
+        sourceUrl?: string;
+      }
     | undefined;
   "workspace-focused": { workspaceId: string };
   "open-settings": { section: SettingsSection; workspaceId?: string };
@@ -328,6 +332,14 @@ export interface EventPayloads {
   "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
   "toggle-find-in-page": undefined;
+  /**
+   * Advance the find in the focused panel without the find field having focus.
+   *
+   * `Ctrl+G` and `F3` are how a browser steps through matches while the page
+   * itself is focused — which is the normal case, because the point of finding
+   * something is to then look at it.
+   */
+  "find-in-page-step": { forward: boolean };
   "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
   "panel-responsiveness-changed": { panelId: string; responsive: boolean };
@@ -460,7 +472,12 @@ export interface EventPayloads {
   };
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "shell-approval:resolved": ApprovalResolvedEvent;
-  "website:connection-changed": { runtimeId: string; connected: boolean; documentId: string; slotId: string | null };
+  "website:connection-changed": {
+    runtimeId: string;
+    connected: boolean;
+    documentId: string;
+    slotId: string | null;
+  };
   "browser-permissions:changed": {
     environmentKey: string;
     grants: Array<{
@@ -552,6 +569,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "focus-address-bar",
   "panel-chrome-command",
   "toggle-find-in-page",
+  "find-in-page-step",
   "toggle-panel-devtools",
   "panel-initialization-error",
   "panel-responsiveness-changed",
