@@ -101,6 +101,18 @@ class FakePipe implements IrohClientPipe {
   }
 }
 
+/**
+ * A clock that advances a fixed step per reading.
+ *
+ * The pipe judges whether a connection stood up long enough to count by
+ * comparing two readings, so a test about anything else needs a clock that
+ * moves without the test having to think about wall time.
+ */
+function steppingClock(stepMs: number): () => number {
+  let value = 0;
+  return () => (value += stepMs);
+}
+
 async function eventually(assertion: () => void): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
@@ -251,6 +263,7 @@ describe("reconnecting Iroh client", () => {
       minRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       random: () => 0,
+      now: steppingClock(1_000),
     });
     const session = owner.openSession({ getToken: () => "credential" });
     const reconnect = vi.fn();
@@ -277,6 +290,79 @@ describe("reconnecting Iroh client", () => {
     expect(closeEndpoint).toHaveBeenCalledOnce();
   });
 
+  it("keeps the retry budget across an invalidation so a flapping link backs off", async () => {
+    // A connection answered and then lost immediately is the case the backoff
+    // exists for, and the one it used to miss: the retry counter lived inside
+    // `connectLoop`, so every invalidation restarted it at attempt one, which
+    // dials with no delay at all.
+    const first = new FakePipe();
+    const second = new FakePipe();
+    const dial = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial,
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 10,
+      maxRetryDelayMs: 100,
+      random: () => 0,
+      // The link never stands up: both readings of the clock are the same
+      // instant, so it held for no time at all.
+      now: () => 0,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    const progress = vi.fn();
+    owner.onReconnectProgress(progress);
+    await session.ready?.();
+
+    first.disconnect();
+    await eventually(() => expect(dial).toHaveBeenCalledTimes(2));
+
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 2, phase: "scheduled", nextRetryInMs: 15 })
+    );
+    await owner.close();
+  });
+
+  it("redials at once when the link that dropped had stood up", async () => {
+    const first = new FakePipe();
+    const second = new FakePipe();
+    const third = new FakePipe();
+    const dial = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockResolvedValueOnce(third);
+    let nowMs = 0;
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial,
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 10,
+      maxRetryDelayMs: 100,
+      random: () => 0,
+      now: () => nowMs,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    const progress = vi.fn();
+    owner.onReconnectProgress(progress);
+    await session.ready?.();
+
+    first.disconnect();
+    await eventually(() => expect(dial).toHaveBeenCalledTimes(2));
+    await eventually(() => expect(second.sessions).toHaveLength(1));
+
+    // This one lasts longer than the pipe would ever wait between dials, so
+    // losing it is a fresh outage rather than the next step of the old one.
+    nowMs += 10_000;
+    second.disconnect();
+    await eventually(() => expect(dial).toHaveBeenCalledTimes(3));
+
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, phase: "scheduled", nextRetryInMs: 0 })
+    );
+    await owner.close();
+  });
+
   it("invalidates a matching process endpoint generation before its pipe closes independently", async () => {
     const first = new FakePipe(7);
     const second = new FakePipe(8);
@@ -288,6 +374,7 @@ describe("reconnecting Iroh client", () => {
       minRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       random: () => 0,
+      now: steppingClock(1_000),
     });
     const session = owner.openSession({ getToken: () => "credential" });
     const progress = vi.fn();

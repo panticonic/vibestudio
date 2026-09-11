@@ -10,6 +10,26 @@ export interface RemoteCdpHostProviderSocketOptions {
   sessionId?: string;
 }
 
+/**
+ * Resolving once the RPC channel can carry a stream again.
+ *
+ * A remote CDP host socket is one such stream, so opening it while the channel
+ * is disconnected fails with the channel's own unavailability rather than
+ * anything about CDP. The channel already tracks and announces its state; a
+ * retry that waits on that resumes when it can succeed instead of once per
+ * tick of a clock that knows nothing.
+ */
+export function whenServerChannelAvailable(serverClient: ServerClient): Promise<void> {
+  if (serverClient.getConnectionStatus() === "connected") return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const stop = serverClient.onConnectionStatusChange((status) => {
+      if (status !== "connected") return;
+      stop();
+      resolve();
+    });
+  });
+}
+
 export class RemoteCdpHostProviderSocket extends EventEmitter implements CdpHostProviderSocket {
   readyState: number = WebSocket.CONNECTING;
   private readonly sessionId: string;

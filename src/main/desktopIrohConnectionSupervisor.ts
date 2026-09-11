@@ -1,3 +1,4 @@
+import { createDevLogger } from "@vibestudio/dev-log";
 import { EndpointGenerationOwner, type IrohReach } from "@vibestudio/iroh-transport";
 import {
   createNodeEndpointBinding,
@@ -10,6 +11,8 @@ import {
   type IrohServerClient,
   type IrohServerClientArgs,
 } from "./irohServerClient.js";
+
+const log = createDevLogger("DesktopIroh");
 
 export type DesktopIrohClientOptions = Omit<
   IrohServerClientArgs,
@@ -58,6 +61,13 @@ export class DesktopIrohConnectionSupervisor {
       );
     this.createClient = options.createClient ?? createIrohServerClient;
     this.unsubscribeInvalidation = this.endpointOwner.onInvalidation((invalidation) => {
+      // The most destructive event this process can inflict on itself: every
+      // healthy connection on the endpoint dies so that one timed-out dial can
+      // be cancelled. It used to happen silently, which is why an oscillation
+      // built out of it took two sessions of log archaeology to name.
+      log.warn(
+        `Iroh endpoint generation ${invalidation.generation} replaced after a timed-out dial; closing ${this.clients.size} live connection(s)`
+      );
       for (const client of this.clients) {
         client.invalidateEndpointGeneration(
           invalidation.generation,

@@ -75,6 +75,61 @@ class FakeBinding implements IrohEndpointBinding<FakeConnection, FakeEndpoint> {
 }
 
 describe("endpoint generation owner", () => {
+  it("waits for a freshly bound endpoint to come online before dialing", async () => {
+    // Without this wait the first attempt on every new generation is spent on
+    // an endpoint that has not announced itself, its only cure is replacing
+    // that generation, and the replacement starts the same doomed attempt
+    // again — which is how a desktop oscillated between two groups of
+    // connections, each living out the per-attempt deadline, for 17 minutes.
+    let releaseOnline!: () => void;
+    const online = new Promise<void>((resolve) => {
+      releaseOnline = resolve;
+    });
+    const endpoints: FakeEndpoint[] = [];
+    const owner = new EndpointGenerationOwner<FakeConnection, FakeEndpoint>({
+      async bind() {
+        const endpoint = new FakeEndpoint();
+        endpoints.push(endpoint);
+        return endpoint;
+      },
+      waitUntilOnline: () => online,
+    });
+
+    const dialed = owner.dial({
+      reach: { ...reach, relays: [reach.relays[1]!] },
+      overallDeadlineMs: 1_000,
+      perAttemptDeadlineMs: 500,
+    });
+    await Promise.resolve();
+    expect(endpoints[0]?.attempts).toEqual([]);
+
+    releaseOnline();
+    await expect(dialed).resolves.toMatchObject({ relayUrl: reach.relays[1], generation: 1 });
+    expect(endpoints).toHaveLength(1);
+    await owner.close();
+  });
+
+  it("dials anyway when readiness outlasts what one attempt was worth", async () => {
+    const endpoints: FakeEndpoint[] = [];
+    const owner = new EndpointGenerationOwner<FakeConnection, FakeEndpoint>({
+      async bind() {
+        const endpoint = new FakeEndpoint();
+        endpoints.push(endpoint);
+        return endpoint;
+      },
+      waitUntilOnline: () => new Promise<void>(() => undefined),
+    });
+
+    await expect(
+      owner.dial({
+        reach: { ...reach, relays: [reach.relays[1]!] },
+        overallDeadlineMs: 20,
+        perAttemptDeadlineMs: 20,
+      })
+    ).resolves.toMatchObject({ relayUrl: reach.relays[1] });
+    await owner.close();
+  });
+
   it("closes a timed-out generation before attempting the next relay", async () => {
     const binding = new FakeBinding();
     const owner = new EndpointGenerationOwner(binding);

@@ -13,6 +13,8 @@ export interface ReconnectingIrohPipeOptions {
   minRetryDelayMs?: number;
   maxRetryDelayMs?: number;
   random?: () => number;
+  /** Clock for judging how long a connection stood up. */
+  now?: () => number;
   onReconnectAttempt?(attempt: number, delayMs: number): void;
   onReconnectResult?(result: { attempt: number; success: boolean; error?: Error }): void;
 }
@@ -242,9 +244,37 @@ class ReconnectingPipe implements IrohClientPipe {
   private generationValue = 0;
   private closed = false;
   private suspended = false;
+  /**
+   * Consecutive dial attempts since the last connection that stood up.
+   *
+   * The retry budget belongs to the pipe, not to one run of `connectLoop`.
+   * While it was a local counter, every invalidation started a fresh loop at
+   * attempt one — which has no delay — so a connection that died right after
+   * it was established was redialed instantly, forever, and the backoff the
+   * loop computes never applied to the one case it was needed for.
+   */
+  private retryAttempts = 0;
+  /** When the live connection was installed, or null while there is none. */
+  private connectedSince: number | null = null;
 
   constructor(private readonly options: ReconnectingIrohPipeOptions) {
     this.peerEndpointId = options.peerEndpointId;
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+
+  /**
+   * How long a connection has to last to count as having worked.
+   *
+   * The retry ceiling is the natural scale: a link that outlived the longest
+   * wait this pipe would ever impose between dials was not a failed attempt,
+   * so the drop that ends it starts its own count and is redialed at once. One
+   * that dies sooner is exactly the flap the backoff exists for.
+   */
+  private durableConnectionMs(): number {
+    return this.options.maxRetryDelayMs ?? 5_000;
   }
 
   generation(): number {
@@ -286,6 +316,9 @@ class ReconnectingPipe implements IrohClientPipe {
     this.suspended = true;
     const connected = this.connected;
     this.connected = null;
+    this.connectedSince = null;
+    // Suspension is a decision, not a failure, so resuming dials at once.
+    this.retryAttempts = 0;
     this.emitDiagnostics();
     this.setStatus("disconnected");
     if (connected) {
@@ -353,9 +386,8 @@ class ReconnectingPipe implements IrohClientPipe {
     const minimum = this.options.minRetryDelayMs ?? 200;
     const maximum = this.options.maxRetryDelayMs ?? 5_000;
     const random = this.options.random ?? Math.random;
-    let attempt = 0;
     while (!this.closed && !this.suspended) {
-      attempt += 1;
+      const attempt = (this.retryAttempts += 1);
       const baseDelay = Math.min(maximum, minimum * 2 ** Math.min(attempt - 1, 8));
       const retryDelay = Math.max(1, Math.round(baseDelay * (0.75 + random() * 0.5)));
       if (attempt > 1) {
@@ -422,6 +454,7 @@ class ReconnectingPipe implements IrohClientPipe {
           continue;
         }
         this.connected = connected;
+        this.connectedSince = this.now();
         this.emitDiagnostics();
         this.setStatus("connected");
         this.options.onReconnectResult?.({ attempt, success: true });
@@ -450,14 +483,19 @@ class ReconnectingPipe implements IrohClientPipe {
   private invalidate(connected: ConnectedGeneration, reason: string): void {
     if (this.connected !== connected || this.closed) return;
     this.connected = null;
+    const heldForMs = this.connectedSince === null ? 0 : this.now() - this.connectedSince;
+    this.connectedSince = null;
+    if (heldForMs >= this.durableConnectionMs()) this.retryAttempts = 0;
     connected.disposeObservers();
     this.emitDiagnostics();
     this.setStatus("connecting");
     this.emitReconnect({
-      attempt: 1,
+      attempt: this.retryAttempts + 1,
       phase: "scheduled",
       reason,
-      nextRetryInMs: 0,
+      // The loop announces its own delay once it has one; only the redial that
+      // happens immediately can say so here.
+      ...(this.retryAttempts === 0 ? { nextRetryInMs: 0 } : {}),
     });
     for (const session of this.sessions) session.invalidate(connected.generation);
     void connected.pipe.close().catch(() => undefined);

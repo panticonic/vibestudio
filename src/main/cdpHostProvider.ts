@@ -101,10 +101,24 @@ export interface CdpHostProviderOptions {
          */
         kind: "preauthenticated";
         createSocket: (url: string) => CdpHostProviderSocket;
+        /**
+         * Resolves when the channel these sockets ride on can carry one.
+         *
+         * A pre-authenticated socket is a stream on the workspace RPC channel,
+         * so while that channel is down every dial fails the same way, and a
+         * provider retrying on its own clock only reproduces the failure once
+         * per tick. The channel already knows when it is back; asking it beats
+         * guessing, and it recovers on the channel's schedule rather than
+         * somewhere inside the next backoff step.
+         */
+        whenChannelAvailable?: () => Promise<void>;
       };
   hostConnectionId: string;
   getViewManager: () => Pick<ViewManager, "captureView" | "openDevTools" | "getWebContents"> | null;
+  /** First retry delay; each further consecutive failure doubles it. */
   reconnectDelayMs?: number;
+  /** Ceiling for the doubling, so a long outage settles into a slow poll. */
+  maxReconnectDelayMs?: number;
   diagnosticsStore?: RuntimeDiagnosticsStore;
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
   /**
@@ -163,6 +177,10 @@ export class CdpHostProvider {
   private authenticated = false;
   private running = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Consecutive failed connections, reset by one that opens. */
+  private reconnectAttempts = 0;
+  /** Whether this outage has already been reported at warn level. */
+  private reportedSocketFailure = false;
 
   constructor(private readonly options: CdpHostProviderOptions) {}
 
@@ -196,6 +214,8 @@ export class CdpHostProvider {
 
     socket.on("open", () => {
       this.authenticated = true;
+      this.reconnectAttempts = 0;
+      this.reportedSocketFailure = false;
       this.sentRegistrations.clear();
       this.registerAllTargets();
     });
@@ -215,15 +235,21 @@ export class CdpHostProvider {
       this.scheduleReconnect();
     });
     socket.on("error", (error: unknown) => {
-      log.warn(
-        `CDP host provider socket error: ${error instanceof Error ? error.message : String(error)}`
-      );
+      // One outage is one event worth reporting. Repeating it per retry is how
+      // a provider waiting for its workspace server turned into a warning
+      // stream that read like a fault in every diagnostic that collects warnings.
+      const message = `CDP host provider socket error: ${error instanceof Error ? error.message : String(error)}`;
+      if (this.reportedSocketFailure) log.verbose(message);
+      else log.warn(message);
+      this.reportedSocketFailure = true;
     });
   }
 
   stop(): void {
     this.running = false;
     this.clearReconnectTimer();
+    this.reconnectAttempts = 0;
+    this.reportedSocketFailure = false;
     const socket = this.socket;
     this.socket = null;
     this.authenticated = false;
@@ -962,11 +988,29 @@ export class CdpHostProvider {
 
   private scheduleReconnect(): void {
     if (!this.running || this.reconnectTimer) return;
-    const delayMs = this.options.reconnectDelayMs ?? 1_000;
+    const attempt = (this.reconnectAttempts += 1);
+    const base = this.options.reconnectDelayMs ?? 1_000;
+    const delayMs = Math.min(this.options.maxReconnectDelayMs ?? 30_000, base * 2 ** (attempt - 1));
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.running) this.start();
+      if (!this.running) return;
+      this.reconnectWhenChannelAllows();
     }, delayMs);
+  }
+
+  /** Redialing, once the wait is over and the channel it needs can carry it. */
+  private reconnectWhenChannelAllows(): void {
+    const transport = this.options.transport;
+    const available =
+      transport.kind === "preauthenticated" ? transport.whenChannelAvailable?.() : undefined;
+    const redial = (): void => {
+      if (this.running && !this.socket) this.start();
+    };
+    if (!available) {
+      redial();
+      return;
+    }
+    void available.then(redial, () => this.scheduleReconnect());
   }
 
   private clearReconnectTimer(): void {

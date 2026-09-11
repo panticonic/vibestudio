@@ -69,6 +69,8 @@ export class EndpointGenerationOwner<
   private bindingPromise: Promise<Endpoint> | null = null;
   private replacementPromise: Promise<void> | null = null;
   private readonly activeDials = new Set<Promise<unknown>>();
+  /** The endpoint this owner has already waited for, once per generation. */
+  private onlineEndpoint: Endpoint | null = null;
   private lastSuccessfulRelay: string | null = null;
   private readonly successfulRelayByPeer = new Map<string, string>();
   private readonly generationListeners = new Set<(snapshot: EndpointGenerationSnapshot) => void>();
@@ -111,9 +113,46 @@ export class EndpointGenerationOwner<
     this.closed = true;
     const endpoint = this.endpoint;
     this.endpoint = null;
+    this.onlineEndpoint = null;
     await endpoint?.close();
     await Promise.allSettled([...this.activeDials]);
     await this.replacementPromise?.catch(() => undefined);
+  }
+
+  /**
+   * Waiting out the window where a bound endpoint cannot yet be dialed from.
+   *
+   * Binding is not reachability: the endpoint has to announce itself to its
+   * relays first, and a dial issued before that spends its entire per-attempt
+   * deadline on a path that cannot answer. The only cure this owner has for a
+   * timed-out attempt is to replace the endpoint generation — which closes
+   * every healthy connection on it and hands the next attempt another endpoint
+   * that has not announced itself either. That is a stable oscillation, and it
+   * was measured as one: two groups of connections alternating, each living
+   * 11.9s against a 12s per-attempt deadline, for as long as the run lasted.
+   *
+   * A binding that cannot report readiness, or one that does not become ready
+   * within the time one attempt was worth, falls through to dialing anyway:
+   * the attempt deadline remains the backstop, and a dial that reports failure
+   * without ever attempting anything is the worse answer.
+   */
+  private async awaitEndpointOnline(endpoint: Endpoint, remainingMs: number): Promise<void> {
+    if (this.onlineEndpoint === endpoint) return;
+    const waitUntilOnline = this.binding.waitUntilOnline?.bind(this.binding);
+    if (!waitUntilOnline || remainingMs <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        waitUntilOnline(endpoint).catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, remainingMs);
+          (timer as unknown as { unref?: () => void }).unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (endpoint === this.endpoint) this.onlineEndpoint = endpoint;
   }
 
   private async dialConcurrent(
@@ -145,6 +184,11 @@ export class EndpointGenerationOwner<
       if (!relayUrl) throw new Error("Iroh relay order contained an empty entry");
       const endpoint = await this.ensureEndpoint();
       const deadlineMs = Math.min(remaining, options.perAttemptDeadlineMs);
+      // Waiting costs at most what one attempt would have, and the attempt
+      // still gets its own deadline: a dial that reports failure without ever
+      // having attempted anything is the worse answer. The overall deadline is
+      // enforced where it belongs, at the top of the next relay's turn.
+      await this.awaitEndpointOnline(endpoint, deadlineMs);
       try {
         const connection = await this.connectWithGenerationDeadline(
           endpoint,
@@ -260,6 +304,7 @@ export class EndpointGenerationOwner<
     };
     for (const listener of [...this.invalidationListeners]) listener(invalidation);
     this.endpoint = null;
+    this.onlineEndpoint = null;
     await endpoint.close();
     await attempt.then(
       (connection) =>

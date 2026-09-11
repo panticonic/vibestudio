@@ -47,7 +47,10 @@ vi.mock("./cdpHostProvider.js", () => ({
     }
   },
 }));
-vi.mock("./remoteCdpHostProviderSocket.js", () => ({ RemoteCdpHostProviderSocket: class {} }));
+vi.mock("./remoteCdpHostProviderSocket.js", () => ({
+  RemoteCdpHostProviderSocket: class {},
+  whenServerChannelAvailable: () => Promise.resolve(),
+}));
 vi.mock("../server/runtimeDiagnosticsStore.js", () => ({ RuntimeDiagnosticsStore: class {} }));
 vi.mock("./panelPinStore.js", () => ({ PanelPinStore: class {} }));
 vi.mock("./serverEventSubscriptionBridge.js", () => ({

@@ -963,6 +963,86 @@ describe("CdpHostProvider", () => {
     provider.stop();
   });
 
+  it("doubles the retry delay while connections keep failing", async () => {
+    // Against a server that is simply gone, a flat retry is a stream of
+    // identical failures at whatever rate the timer was set to. The delay has
+    // to grow, so a long outage settles into a slow poll.
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const provider = new CdpHostProvider({
+      serverUrl: "ws://127.0.0.1:1234",
+      transport: {
+        kind: "authenticated-websocket",
+        authToken: "token",
+        socketFactory: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+      },
+      hostConnectionId: "host-a",
+      getViewManager: () => null,
+      reconnectDelayMs: 10,
+      maxReconnectDelayMs: 40,
+    });
+
+    provider.start();
+    for (const expected of [10, 20, 40, 40]) {
+      sockets[sockets.length - 1]!.close();
+      await vi.advanceTimersByTimeAsync(expected - 1);
+      const before = sockets.length;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sockets.length).toBe(before + 1);
+    }
+
+    // One that opens ends the outage, so the next failure starts over.
+    sockets[sockets.length - 1]!.emit("open");
+    sockets[sockets.length - 1]!.close();
+    const before = sockets.length;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets.length).toBe(before + 1);
+
+    provider.stop();
+  });
+
+  it("waits for the channel a pre-authenticated socket rides on", async () => {
+    // Dialing a stream on a disconnected RPC channel only reproduces the
+    // channel's own unavailability, so the retry waits to be told it is back
+    // rather than spending attempts to rediscover it.
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    let releaseChannel: () => void = () => undefined;
+    const provider = new CdpHostProvider({
+      serverUrl: "ws://127.0.0.1:1234",
+      transport: {
+        kind: "preauthenticated",
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        whenChannelAvailable: () =>
+          new Promise<void>((resolve) => {
+            releaseChannel = resolve;
+          }),
+      },
+      hostConnectionId: "host-a",
+      getViewManager: () => null,
+      reconnectDelayMs: 10,
+    });
+
+    provider.start();
+    sockets[0]!.close();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(1);
+
+    releaseChannel();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+
+    provider.stop();
+  });
+
   it("does not reconnect after stop", async () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];

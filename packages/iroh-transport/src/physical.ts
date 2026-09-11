@@ -78,4 +78,12 @@ export interface IrohEndpointBinding<
   Endpoint extends IrohPhysicalEndpoint<Connection>,
 > {
   bind(): Promise<Endpoint>;
+  /**
+   * Resolves once a freshly bound endpoint can be dialed from.
+   *
+   * Binding returns before the endpoint has announced itself to its relays,
+   * and a dial issued in that window spends its whole deadline on a path that
+   * cannot answer yet. Bindings that can report the difference should.
+   */
+  waitUntilOnline?(endpoint: Endpoint): Promise<void>;
 }

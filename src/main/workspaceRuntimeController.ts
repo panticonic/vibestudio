@@ -31,7 +31,10 @@ import {
 } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
-import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
+import {
+  RemoteCdpHostProviderSocket,
+  whenServerChannelAvailable,
+} from "./remoteCdpHostProviderSocket.js";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_MAX_LOADED_DESKTOP, PANEL_UI_IDLE_UNLOAD_MS } from "@vibestudio/shared/constants";
@@ -552,6 +555,7 @@ export function createDesktopWorkspaceRuntime(deps: {
                       serverClient: connection.serverClient,
                       hostConnectionId,
                     }),
+                  whenChannelAvailable: () => whenServerChannelAvailable(connection.serverClient),
                 }
               : { kind: "authenticated-websocket", authToken: () => connection.getCdpAuthToken() },
           getViewManager: () => nativeViews(),

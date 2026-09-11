@@ -210,5 +210,8 @@ export function createNodeEndpointBinding(
     async bind() {
       return new NodePhysicalEndpoint(await bindNodeEndpoint(options));
     },
+    async waitUntilOnline(endpoint) {
+      await endpoint.native.online();
+    },
   };
 }
