@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { EndpointGenerationOwner } from "./endpointGeneration.js";
+import {
+  EndpointGenerationOwner,
+  type EndpointGenerationInvalidation,
+} from "./endpointGeneration.js";
 import type {
   IrohEndpointBinding,
   IrohPhysicalConnection,
@@ -134,9 +137,9 @@ describe("endpoint generation owner", () => {
     const binding = new FakeBinding();
     const owner = new EndpointGenerationOwner(binding);
     const generations: number[] = [];
-    const invalidations: number[] = [];
+    const invalidations: EndpointGenerationInvalidation[] = [];
     owner.onGeneration(({ generation }) => generations.push(generation));
-    owner.onInvalidation(({ generation }) => invalidations.push(generation));
+    owner.onInvalidation((invalidation) => invalidations.push(invalidation));
 
     const result = await owner.dial({
       reach,
@@ -150,7 +153,17 @@ describe("endpoint generation owner", () => {
     expect(binding.endpoints[0]?.attempts).toEqual([reach.relays[0]]);
     expect(binding.endpoints[1]?.attempts).toEqual([reach.relays[1]]);
     expect(generations).toEqual([1, 2]);
-    expect(invalidations).toEqual([1]);
+    // Whoever pays for the replacement with its live connections is owed the
+    // identity of the dial that cost them: a warning naming only the
+    // generation says a storm is happening, not which address drives it.
+    expect(invalidations).toEqual([
+      {
+        endpointId: LOCAL_ID,
+        generation: 1,
+        reason: "dial-timeout",
+        timedOutDial: { peerEndpointId: PEER_ID, relayUrl: reach.relays[0], deadlineMs: 10 },
+      },
+    ]);
     await owner.close();
   });
 

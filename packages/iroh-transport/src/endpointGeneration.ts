@@ -12,6 +12,8 @@ export interface EndpointGenerationSnapshot {
 
 export interface EndpointGenerationInvalidation extends EndpointGenerationSnapshot {
   reason: "dial-timeout";
+  /** The dial whose cancellation cost this generation. */
+  timedOutDial: { peerEndpointId: string; relayUrl: string; deadlineMs: number };
 }
 
 export interface EndpointGenerationDialOptions {
@@ -250,7 +252,11 @@ export class EndpointGenerationOwner<
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        replacement = this.replaceGeneration(endpoint, attempt);
+        replacement = this.replaceGeneration(endpoint, attempt, {
+          peerEndpointId: reach.endpointId,
+          relayUrl,
+          deadlineMs,
+        });
         void replacement.then(
           () => reject(new Error(`Iroh dial through ${relayUrl} timed out after ${deadlineMs}ms`)),
           reject
@@ -271,7 +277,11 @@ export class EndpointGenerationOwner<
     }
   }
 
-  private async replaceGeneration(endpoint: Endpoint, attempt: Promise<Connection>): Promise<void> {
+  private async replaceGeneration(
+    endpoint: Endpoint,
+    attempt: Promise<Connection>,
+    timedOutDial: EndpointGenerationInvalidation["timedOutDial"]
+  ): Promise<void> {
     if (endpoint !== this.endpoint) {
       await attempt.catch(() => undefined);
       return;
@@ -280,7 +290,7 @@ export class EndpointGenerationOwner<
       await Promise.all([this.replacementPromise, attempt.catch(() => undefined)]);
       return;
     }
-    const replacement = this.replaceGenerationExclusive(endpoint, attempt);
+    const replacement = this.replaceGenerationExclusive(endpoint, attempt, timedOutDial);
     this.replacementPromise = replacement;
     try {
       await replacement;
@@ -291,7 +301,8 @@ export class EndpointGenerationOwner<
 
   private async replaceGenerationExclusive(
     endpoint: Endpoint,
-    attempt: Promise<Connection>
+    attempt: Promise<Connection>,
+    timedOutDial: EndpointGenerationInvalidation["timedOutDial"]
   ): Promise<void> {
     if (endpoint !== this.endpoint) {
       await attempt.catch(() => undefined);
@@ -301,6 +312,7 @@ export class EndpointGenerationOwner<
       endpointId: endpoint.endpointId,
       generation: this.generation,
       reason: "dial-timeout" as const,
+      timedOutDial,
     };
     for (const listener of [...this.invalidationListeners]) listener(invalidation);
     this.endpoint = null;

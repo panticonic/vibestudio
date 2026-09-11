@@ -65,8 +65,9 @@ export class DesktopIrohConnectionSupervisor {
       // healthy connection on the endpoint dies so that one timed-out dial can
       // be cancelled. It used to happen silently, which is why an oscillation
       // built out of it took two sessions of log archaeology to name.
+      const dial = invalidation.timedOutDial;
       log.warn(
-        `Iroh endpoint generation ${invalidation.generation} replaced after a timed-out dial; closing ${this.clients.size} live connection(s)`
+        `Iroh endpoint generation ${invalidation.generation} replaced after a dial to ${dial.peerEndpointId.slice(0, 12)} through ${dial.relayUrl} timed out after ${dial.deadlineMs}ms; closing ${this.clients.size} live connection(s)`
       );
       for (const client of this.clients) {
         client.invalidateEndpointGeneration(
