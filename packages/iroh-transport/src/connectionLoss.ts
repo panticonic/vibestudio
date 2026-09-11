@@ -28,14 +28,24 @@
  */
 export const IROH_CONNECTION_LOST_CODE = "CONNECTION_LOST" as const;
 
+/**
+ * Messages that mean the transport this call needed is gone.
+ *
+ * `ConnectionLost(..)` is the wrapper Iroh puts around every stream error
+ * whose cause is the connection itself, whichever side ended it. `ClosedStream`
+ * is what a read or write gets once its own stream has been closed, which in
+ * this transport happens when the connection carrying it went away: the call
+ * cannot be completed and a new connection is the remedy, which is exactly
+ * what the transport code tells a caller. A peer that resets one request while
+ * the connection stays up reports that differently, and stays a failure worth
+ * reporting as a failure.
+ */
+const CONNECTION_LOST_MESSAGES = ["ConnectionLost(", "ClosedStream"];
+
 /** True when an error is Iroh reporting that the connection itself is gone. */
 export function isIrohConnectionLost(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : null;
-  // `ConnectionLost(..)` is the wrapper Iroh puts around every stream error
-  // whose cause is the connection itself, whichever side ended it. A stream
-  // that merely finished, or a peer that reset one request, does not carry it —
-  // those remain failures worth reporting as failures.
-  return message !== null && message.includes("ConnectionLost(");
+  return message !== null && CONNECTION_LOST_MESSAGES.some((text) => message.includes(text));
 }
 
 /**
@@ -49,7 +59,13 @@ export async function withIrohConnectionLossTag<T>(operation: () => Promise<T>):
   try {
     return await operation();
   } catch (error) {
-    if (error instanceof Error && isIrohConnectionLost(error) && !("code" in error)) {
+    // The napi binding stamps its own `code` on every error it throws — the
+    // status name, `GenericFailure`. Declining to tag an error that already
+    // carried a code therefore declined to tag all of them, and this whole
+    // edge was inert: a connection lost mid-call still reached renderers as an
+    // unexplained application fault, and the desktop smoke failed on the
+    // warning. A napi status is not a domain code, so ours replaces it.
+    if (error instanceof Error && isIrohConnectionLost(error)) {
       throw Object.assign(error, {
         code: IROH_CONNECTION_LOST_CODE,
         errorKind: "transport" as const,

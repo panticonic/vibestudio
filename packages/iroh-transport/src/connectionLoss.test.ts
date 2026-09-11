@@ -24,9 +24,16 @@ describe("isIrohConnectionLost", () => {
     expect(isIrohConnectionLost("ConnectionLost(TimedOut)")).toBe(true);
   });
 
-  it("leaves stream-level failures alone, because those are worth reporting", () => {
+  it("recognizes a call whose own stream is already closed", () => {
+    // What a read or write gets after the connection carrying it went away.
+    // Treating it as an ordinary fault is what put `heartbeat failed:
+    // RemoteRpcError: ClosedStream` in a renderer's warnings during a
+    // desktop restart, and failed the smoke on it.
+    expect(isIrohConnectionLost(new Error("ClosedStream"))).toBe(true);
+  });
+
+  it("leaves a reset request alone, because that one is worth reporting", () => {
     expect(isIrohConnectionLost(new Error("ReadError(Reset(513))"))).toBe(false);
-    expect(isIrohConnectionLost(new Error("ClosedStream"))).toBe(false);
     expect(isIrohConnectionLost(new Error("no such method"))).toBe(false);
   });
 
@@ -59,12 +66,16 @@ describe("withIrohConnectionLossTag", () => {
     expect(error).not.toHaveProperty("code");
   });
 
-  it("never overwrites a code the thrower already chose", async () => {
+  it("replaces the napi status code that every binding error already carries", async () => {
+    // Measured, not assumed: the binding stamps `code: "GenericFailure"` on
+    // everything it throws. Declining to tag an error that already had a code
+    // therefore declined to tag every error there is, and left this edge inert
+    // for as long as it existed.
     const error = await withIrohConnectionLossTag(() =>
       Promise.reject(
-        Object.assign(new Error("ConnectionLost(LocallyClosed)"), { code: "ALREADY_DECIDED" })
+        Object.assign(new Error("ConnectionLost(LocallyClosed)"), { code: "GenericFailure" })
       )
     ).catch((thrown: unknown) => thrown);
-    expect(error).toMatchObject({ code: "ALREADY_DECIDED" });
+    expect(error).toMatchObject({ code: IROH_CONNECTION_LOST_CODE, errorKind: "transport" });
   });
 });
