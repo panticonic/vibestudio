@@ -15,6 +15,7 @@ import type {
   IrohPhysicalSendStream,
 } from "./physical.js";
 import type { IrohReach } from "./reach.js";
+import { withIrohConnectionLossTag } from "./connectionLoss.js";
 import {
   bindNodeEndpoint,
   configureNodeConnection,
@@ -30,11 +31,11 @@ class NodeSendStream implements IrohPhysicalSendStream {
     // rejects Uint8Array at runtime. Keep that unavoidable conversion at this
     // single physical edge; the shared protocol and mobile bridge remain typed
     // byte surfaces and can adopt a future official zero-copy binding directly.
-    return this.native.writeAll(Array.from(bytes));
+    return withIrohConnectionLossTag(() => this.native.writeAll(Array.from(bytes)));
   }
 
   finish(): Promise<void> {
-    return this.native.finish();
+    return withIrohConnectionLossTag(() => this.native.finish());
   }
 
   reset(errorCode: bigint): Promise<void> {
@@ -50,11 +51,15 @@ class NodeReceiveStream implements IrohPhysicalReceiveStream {
   constructor(readonly native: RecvStream) {}
 
   async read(maximumBytes: number): Promise<Uint8Array> {
-    return Uint8Array.from(await this.native.read(maximumBytes));
+    return withIrohConnectionLossTag(async () =>
+      Uint8Array.from(await this.native.read(maximumBytes))
+    );
   }
 
   async readExact(length: number): Promise<Uint8Array> {
-    return Uint8Array.from(await this.native.readExact(length));
+    return withIrohConnectionLossTag(async () =>
+      Uint8Array.from(await this.native.readExact(length))
+    );
   }
 
   stop(errorCode: bigint): Promise<void> {
@@ -86,11 +91,11 @@ export class NodePhysicalConnection implements IrohPhysicalConnection {
   }
 
   async openBi(): Promise<IrohPhysicalBiStream> {
-    return wrapBiStream(await this.native.openBi());
+    return withIrohConnectionLossTag(async () => wrapBiStream(await this.native.openBi()));
   }
 
   async acceptBi(): Promise<IrohPhysicalBiStream> {
-    return wrapBiStream(await this.native.acceptBi());
+    return withIrohConnectionLossTag(async () => wrapBiStream(await this.native.acceptBi()));
   }
 
   close(code: bigint, reason: Uint8Array): void {

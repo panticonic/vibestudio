@@ -377,11 +377,21 @@ class ReconnectingPipe implements IrohClientPipe {
           break;
         }
         const generation = ++this.generationValue;
-        let connected!: ConnectedGeneration;
+        // A dial can be answered and then dropped before this attempt has
+        // finished installing it. `invalidate` recognizes the live connection
+        // by identity, so a drop arriving that early had nothing to match and
+        // was discarded — and the attempt went on to publish the dead pipe as
+        // connected, leaving a session that believes it can send. Hold the
+        // observation until there is something to apply it to.
+        let connected: ConnectedGeneration | null = null;
+        let droppedBeforeInstalled = false;
         const unsubscribeStatus = pipe.onStatusChange((status) => {
-          if (status === "disconnected") {
-            this.invalidate(connected, "physical Iroh connection closed");
+          if (status !== "disconnected") return;
+          if (!connected) {
+            droppedBeforeInstalled = true;
+            return;
           }
+          this.invalidate(connected, "physical Iroh connection closed");
         });
         const unsubscribeDiagnostics = pipe.onDiagnosticsChange(() => this.emitDiagnostics());
         connected = {
@@ -392,6 +402,25 @@ class ReconnectingPipe implements IrohClientPipe {
             unsubscribeDiagnostics();
           },
         };
+        if (droppedBeforeInstalled) {
+          // Never reached "connected", so this is a failed attempt like any
+          // other: keep the loop's backoff rather than announcing a connection
+          // and immediately retracting it.
+          connected.disposeObservers();
+          await pipe.close().catch(() => undefined);
+          this.options.onReconnectResult?.({
+            attempt,
+            success: false,
+            error: new Error("physical Iroh connection closed before it was installed"),
+          });
+          this.emitReconnect({
+            attempt,
+            phase: "failed",
+            reason: "physical Iroh connection closed before it was installed",
+          });
+          this.setStatus("connecting");
+          continue;
+        }
         this.connected = connected;
         this.emitDiagnostics();
         this.setStatus("connected");

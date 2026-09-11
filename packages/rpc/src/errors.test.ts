@@ -7,7 +7,10 @@ import {
   PANEL_RUNTIME_LEASED_CODE,
   RemoteRpcError,
   RpcBoundaryError,
+  rpcErrorKindOf,
 } from "./errors.js";
+import { IROH_CONNECTION_LOST_CODE } from "@vibestudio/iroh-transport";
+import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 
 describe("isAuthorityDecisionDenied", () => {
   it("requires the structured user decision instead of denial prose", () => {
@@ -126,5 +129,34 @@ describe("isPanelRuntimeLeaseConflict", () => {
     ).toBe(false);
     expect(isPanelRuntimeLeaseConflict(null)).toBe(false);
     expect(isPanelRuntimeLeaseConflict(undefined)).toBe(false);
+  });
+});
+
+describe("Iroh connection loss reaching a caller", () => {
+  it("connectionLossCodeAgreesWithRpc: the transport's tag is this layer's code", () => {
+    // The transport restates the literal because it is the lower package. If
+    // the two ever diverge, a lost connection stops being recognized as one
+    // and every guard that forgives a reconnect silently starts failing.
+    expect(IROH_CONNECTION_LOST_CODE).toBe(SESSION_CONNECTION_LOST_CODE);
+  });
+
+  it("is recognized after the relay, because the tag travels and the message does not", () => {
+    // What the far side receives is a RemoteRpcError rebuilt from the wire
+    // fields, so only what the transport tagged survives the trip.
+    const tagged = Object.assign(new Error("ConnectionLost(LocallyClosed)"), {
+      code: IROH_CONNECTION_LOST_CODE,
+      errorKind: "transport" as const,
+    });
+    const relayed = new RemoteRpcError(
+      tagged.message,
+      rpcErrorKindOf(tagged),
+      typeof tagged.code === "string" ? tagged.code : undefined
+    );
+    expect(isRpcConnectionLost(relayed)).toBe(true);
+  });
+
+  it("still reports an untagged handler failure as a failure", () => {
+    const relayed = new RemoteRpcError("no such record", rpcErrorKindOf(new Error("x")), undefined);
+    expect(isRpcConnectionLost(relayed)).toBe(false);
   });
 });

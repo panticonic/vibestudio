@@ -114,6 +114,40 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("treats a dial dropped before installation as a failed attempt, not a connection", async () => {
+    // The physical connection is answered and then dropped inside the same
+    // turn that installs it, which is the one window where the drop has no
+    // live connection to match. Publishing it anyway left a session convinced
+    // it could send on a pipe that was already gone.
+    const dropped = new FakePipe();
+    vi.spyOn(dropped, "onStatusChange").mockImplementation((handler) => {
+      handler("disconnected");
+      return () => {};
+    });
+    const healthy = new FakePipe();
+    const results: { attempt: number; success: boolean }[] = [];
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: dropped.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(dropped).mockResolvedValue(healthy),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+      onReconnectResult: ({ attempt, success }) => results.push({ attempt, success }),
+    });
+
+    const session = owner.openSession({ connectionId: "drop", getToken: () => "credential" });
+    await expect(session.ready?.()).resolves.toBeUndefined();
+
+    expect(results[0]).toEqual({ attempt: 1, success: false });
+    expect(results.at(-1)?.success).toBe(true);
+    expect(owner.status()).toBe("connected");
+    // The dead pipe never carried a session.
+    expect(dropped.sessions).toHaveLength(0);
+    expect(healthy.sessions.length).toBeGreaterThan(0);
+    await owner.close();
+  });
+
   it("allows awaited recovery replay to use the recovered logical session", async () => {
     const first = new FakePipe();
     const second = new FakePipe();
