@@ -54,10 +54,14 @@ describe("native menu zoom shortcuts", () => {
     const template = buildHamburgerMenuTemplate({} as never, async () => {});
     const view = template.find((item) => item.label === "View");
     const zoomIn = Array.isArray(view?.submenu)
-      ? view.submenu.find((item) => item.role === "zoomIn")
+      ? view.submenu.find((item) => item.label === "Zoom In")
       : undefined;
 
     expect(zoomIn?.accelerator).toBe(desktopAccelerator("zoomIn", keyPlatform));
+    // Not a role: Electron's zoom roles act on the focused window's own web
+    // contents, and this window is a BaseWindow that has none.
+    expect(zoomIn?.role).toBeUndefined();
+    expect(typeof zoomIn?.click).toBe("function");
     expect(desktopChords("zoomIn", keyPlatform)).toEqual(
       expect.arrayContaining(
         keyPlatform === "mac"

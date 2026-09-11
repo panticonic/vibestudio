@@ -128,6 +128,32 @@ function stopFocusedPanel(): void {
   _menuViewManager.stop(nativeId);
 }
 
+/** The native view id of the panel in the focused pane, if there is one. */
+function focusedPanelViewId(): string | null {
+  const workspace = resolveMenuWorkspace();
+  const focusedId = workspace?.registry.getFocusedPanelId();
+  if (!focusedId || !workspace) return null;
+  return workspaceNativeViewId({ workspaceId: workspace.workspaceId, runtimeId: focusedId });
+}
+
+/**
+ * Zoom acts on the panel, not on the window.
+ *
+ * Electron's zoom roles operate on the focused window's own web contents, and
+ * the shell window is a `BaseWindow` that has none — so the Zoom In, Zoom Out
+ * and Reset Zoom items were no-ops with accelerators attached. What a person
+ * means by zoom here is the panel they are reading.
+ */
+function zoomFocusedPanel(direction: 1 | -1): void {
+  const viewId = focusedPanelViewId();
+  if (viewId && _menuViewManager) _menuViewManager.stepZoom(viewId, direction);
+}
+
+function resetFocusedPanelZoom(): void {
+  const viewId = focusedPanelViewId();
+  if (viewId && _menuViewManager) _menuViewManager.resetZoom(viewId);
+}
+
 function openFocusedPanelDevTools(): boolean {
   const workspace = resolveMenuWorkspace();
   const focusedId = workspace?.registry.getFocusedPanelId();
@@ -383,9 +409,9 @@ export function buildHamburgerMenuTemplate(
 
   // View: how the window itself is presented, plus the display escape hatches.
   const view: MenuItemConstructorOptions[] = [
-    { label: "Zoom In", role: "zoomIn", accelerator: key("zoomIn") },
-    { label: "Zoom Out", role: "zoomOut", accelerator: key("zoomOut") },
-    { label: "Reset Zoom", role: "resetZoom", accelerator: key("resetZoom") },
+    { label: "Zoom In", accelerator: key("zoomIn"), click: () => zoomFocusedPanel(1) },
+    { label: "Zoom Out", accelerator: key("zoomOut"), click: () => zoomFocusedPanel(-1) },
+    { label: "Reset Zoom", accelerator: key("resetZoom"), click: () => resetFocusedPanelZoom() },
     { type: "separator" },
     { label: "Toggle Full Screen", role: "togglefullscreen", accelerator: key("toggleFullScreen") },
     { label: "Minimize", role: "minimize" },
@@ -670,9 +696,13 @@ export function setupMenu(
           },
         },
         { type: "separator" },
-        { role: "resetZoom", accelerator: key("resetZoom") },
-        { role: "zoomIn", accelerator: key("zoomIn") },
-        { role: "zoomOut", accelerator: key("zoomOut") },
+        {
+          label: "Actual Size",
+          accelerator: key("resetZoom"),
+          click: () => resetFocusedPanelZoom(),
+        },
+        { label: "Zoom In", accelerator: key("zoomIn"), click: () => zoomFocusedPanel(1) },
+        { label: "Zoom Out", accelerator: key("zoomOut"), click: () => zoomFocusedPanel(-1) },
         { type: "separator" },
         { role: "togglefullscreen", accelerator: key("toggleFullScreen") },
         { type: "separator" },

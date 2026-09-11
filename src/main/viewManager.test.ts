@@ -45,6 +45,8 @@ vi.mock("electron", () => {
     invalidate: vi.fn(),
     executeJavaScript: vi.fn().mockResolvedValue(undefined),
     setBackgroundThrottling: vi.fn(),
+    getZoomLevel: vi.fn().mockReturnValue(0),
+    setZoomLevel: vi.fn(),
   });
 
   const createMockWebContentsView = () => ({
@@ -2300,6 +2302,40 @@ describe("ViewManager", () => {
         shellPreload: "/path/to/preload.js",
         shellHtmlPath: "/path/to/index.html",
       });
+    });
+
+    it("zooms the panel a step at a time, within a range it can come back from", () => {
+      // The window is a BaseWindow and has no web contents of its own, so
+      // Electron's zoom roles had nothing to act on: Zoom In did nothing at
+      // all. Zoom names the view it means.
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+
+      vm.stepZoom("test-view", 1);
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(0.5);
+
+      (view.webContents.getZoomLevel as Mock).mockReturnValue(5);
+      vm.stepZoom("test-view", 1);
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(5);
+
+      (view.webContents.getZoomLevel as Mock).mockReturnValue(-5);
+      vm.stepZoom("test-view", -1);
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(-5);
+
+      vm.resetZoom("test-view");
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(0);
+    });
+
+    it("zooms on Ctrl and the wheel, which Chromium reports without acting on", () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      const zoomChanged = (view.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "zoom-changed"
+      )?.[1] as ((event: unknown, direction: "in" | "out") => void) | undefined;
+      expect(zoomChanged).toBeTypeOf("function");
+
+      zoomChanged?.({}, "in");
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(0.5);
+      zoomChanged?.({}, "out");
+      expect(view.webContents.setZoomLevel).toHaveBeenLastCalledWith(-0.5);
     });
 
     it("navigateView loads URL", async () => {

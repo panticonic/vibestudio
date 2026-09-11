@@ -61,6 +61,17 @@ export interface HostedCodeIdentity {
 
 const log = createDevLogger("ViewManager");
 
+/**
+ * One notch of zoom, and how far it can go.
+ *
+ * Chromium's zoom level is an exponent — the factor is 1.2 to this power — so
+ * half a level is about 10%, which is the step Electron's own zoom roles use.
+ * The limit keeps a view between roughly 40% and 250%, past which a panel
+ * stops being usable and the way back is not obvious.
+ */
+const ZOOM_LEVEL_STEP = 0.5;
+const ZOOM_LEVEL_LIMIT = 5;
+
 export interface ViewBounds {
   x: number;
   y: number;
@@ -736,6 +747,7 @@ export class ViewManager {
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
     if (hostChrome) this.installShellKeyForwarding(view.webContents);
     this.installContentOverlayKeys(view.webContents);
+    this.installWheelZoom(view.webContents, config.id);
     log.trace(` Created view for ${config.id}, type: ${config.type}`);
 
     // Create named handlers for proper cleanup in destroyView
@@ -3090,6 +3102,39 @@ export class ViewManager {
   stop(id: string): void {
     const contents = this.getWebContents(id);
     contents?.stop();
+  }
+
+  /**
+   * Zooming one view, because the window cannot zoom anything.
+   *
+   * Electron's `zoomIn`/`zoomOut`/`resetZoom` menu roles act on the focused
+   * window's own web contents. This window is a `BaseWindow` and has none: its
+   * content is sibling `WebContentsView`s. So zoom has to name the view it
+   * means, and the view a person means is the panel they are looking at.
+   */
+  stepZoom(id: string, direction: 1 | -1): void {
+    const contents = this.getWebContents(id);
+    if (!contents) return;
+    const next = contents.getZoomLevel() + direction * ZOOM_LEVEL_STEP;
+    contents.setZoomLevel(Math.min(ZOOM_LEVEL_LIMIT, Math.max(-ZOOM_LEVEL_LIMIT, next)));
+  }
+
+  /** Return a view to its natural size. */
+  resetZoom(id: string): void {
+    this.getWebContents(id)?.setZoomLevel(0);
+  }
+
+  /**
+   * Ctrl and the wheel, which Chromium reports but does not act on.
+   *
+   * The gesture is handled by the browser rather than the page, so in an
+   * Electron app it is the app's job. Nothing did it, and holding Ctrl while
+   * scrolling did nothing at all.
+   */
+  private installWheelZoom(contents: WebContents, viewId: string): void {
+    contents.on("zoom-changed", (_event, zoomDirection) => {
+      this.stepZoom(viewId, zoomDirection === "in" ? 1 : -1);
+    });
   }
 
   /**
