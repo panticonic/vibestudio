@@ -972,8 +972,27 @@ async function readPersistedTrajectory(
         : null;
     const live = progress ? readLive(progress) : undefined;
     if (live !== undefined) return { runId, stored, value: live };
-    throw durableError;
+    throw unavailableTrajectory(runId, testName, durableError);
   }
+}
+
+/**
+ * Explain a trajectory that neither source can produce.
+ *
+ * Both routes can be empty at once, and for unrelated reasons: the durable
+ * record is written when a run reaches a terminal state, while the live
+ * heartbeat drops per-test trajectories to stay inside its durable size limit
+ * once a run is large. That pairing is most likely exactly when the detail is
+ * most wanted — a long run whose sandbox died under it — so the message has to
+ * say what remains readable instead of only naming the missing record.
+ */
+export function unavailableTrajectory(runId: string, testName: string, cause: unknown): CliError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new CliError(
+    `no trajectory for ${testName} in system-test run ${runId}: ${detail}. A run large ` +
+      "enough to overflow the durable progress heartbeat keeps only its bounded inspection " +
+      `there, so read that instead: vibestudio system-test inspect ${runId} --test ${testName}`
+  );
 }
 
 async function inspect(inv: ParsedInvocation): Promise<number> {

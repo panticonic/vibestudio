@@ -8,6 +8,7 @@ import {
   systemTestCoordinatorScopeKey,
   systemTestRunCode,
   resultValue,
+  unavailableTrajectory,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
@@ -647,5 +648,19 @@ describe("system-test run interrupted mid-suite", () => {
       result: { success: true, returnValue: { runId: "st_abc", passed: 40 } },
     } as unknown as Parameters<typeof resultValue>[0];
     expect(resultValue(done, "st_abc")).toEqual({ runId: "st_abc", passed: 40 });
+  });
+});
+
+describe("system-test trajectory with neither source", () => {
+  it("points at the bounded inspection a large run does keep", () => {
+    const error = unavailableTrajectory(
+      "st_abc",
+      "browser-panel",
+      new Error("No durable system-test record exists for st_abc")
+    );
+
+    expect(error.message).toContain("No durable system-test record exists for st_abc");
+    // The operator needs the route that still works, not only what is missing.
+    expect(error.message).toContain("vibestudio system-test inspect st_abc --test browser-panel");
   });
 });
