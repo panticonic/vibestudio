@@ -4,7 +4,7 @@ name: Release
 # build the native installers. Nothing here publishes to npm; the npm packages are
 # a separate manual `pnpm publish:npm`, and only the server package is still
 # advertised, for hosts no native package covers.
-#   - vars.RELEASE_LINUX = 'true'  → AppImage/deb/rpm/pacman, plus the signed apt and
+#   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages (needs build-resources icons and LINUX_SIGNING_KEY)
 #   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
 #   - vars.RELEASE_MAC   = 'true'  → DMG, signed and notarized when all five Apple secrets
@@ -79,10 +79,9 @@ jobs:
             **Windows** — download the `.exe` installer below. It is not yet code signed,
             so SmartScreen will warn on first run.
 
-            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm`, `.deb`
-            and `.AppImage` files below install directly. Every packaged format carries the
-            AppArmor profile that a workspace sandbox needs on Ubuntu 24.04+; the AppImage
-            cannot, so workspaces there need that profile installed by hand.
+            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
+            `.deb` files below install directly. Every packaged format carries the AppArmor
+            profile that a workspace sandbox needs on Ubuntu 24.04+.
 
             **A server on a host we do not package** — npm still carries the headless server
             and CLI, and needs Node.js 22.19+.
@@ -92,7 +91,7 @@ jobs:
             ```
 
   linux-installers:
-    name: Build Linux installers (AppImage/deb)
+    name: Build Linux installers (deb/rpm/pacman)
     needs: github-release
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-latest
@@ -129,7 +128,7 @@ jobs:
 
       - name: Install Linux packaging tools
         # electron-builder shells out to fpm, which needs rpmbuild for rpm and
-        # libarchive's bsdtar for pacman. AppImage and deb need neither.
+        # libarchive's bsdtar for pacman. deb needs neither.
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y rpm libarchive-tools
@@ -141,7 +140,7 @@ jobs:
         run: |
           cd release
           find . -maxdepth 1 -type f \
-            \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
+            \( -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
             -print0 \
             | sort -z \
             | xargs -0 sha256sum \
@@ -153,7 +152,6 @@ jobs:
         with:
           name: vibestudio-linux-${{ github.sha }}
           path: |
-            release/*.AppImage
             release/*.deb
             release/*.rpm
             release/*.pkg.tar.zst
@@ -183,7 +181,6 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
-            release/*.AppImage
             release/*.deb
             release/*.rpm
             release/*.pkg.tar.zst

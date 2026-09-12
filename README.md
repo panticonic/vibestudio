@@ -71,11 +71,10 @@ sudo dnf install vibestudio
 [releases page](https://github.com/panticonic/vibestudio/releases/latest). It is not
 yet code signed, so SmartScreen warns on first run.
 
-**Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm`, `.deb` and
-`.AppImage` files on the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
+**Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and `.deb`
+files on the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
 install directly. Every packaged format carries the AppArmor profile a workspace
-sandbox needs on Ubuntu 24.04+; the AppImage cannot, so workspaces there need that
-profile installed by hand — `vibestudio remote doctor` reports whether this host
+sandbox needs on Ubuntu 24.04+ — `vibestudio remote doctor` reports whether this host
 permits the sandbox.
 
 Then:

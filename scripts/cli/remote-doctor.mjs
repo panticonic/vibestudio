@@ -101,7 +101,8 @@ export function inspectWorkspaceIsolation(deps = {}) {
       "workspace-isolation",
       "this host grants sandbox user namespaces only to binaries carrying an AppArmor profile " +
         "(kernel.apparmor_restrict_unprivileged_userns=1); packaged installs ship one, and a " +
-        "source checkout or AppImage needs one installed for its launcher"
+        "source checkout installs one for its own launcher with " +
+        "`sudo scripts/install-dev-apparmor-profile.sh`"
     );
   }
   return check(

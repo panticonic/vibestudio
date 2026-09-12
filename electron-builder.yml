@@ -155,10 +155,6 @@ linux:
   synopsis: Stacked panel workspace for agentic workflows
   description: Vibestudio is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
   target:
-    - target: AppImage
-      arch:
-        - x64
-        - arm64
     - target: deb
       arch:
         - x64
