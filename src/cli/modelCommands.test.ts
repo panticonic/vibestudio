@@ -17,7 +17,9 @@ afterEach(() => {
   setPlainOutput(false);
 });
 
-function command(connect = vi.fn(async () => CONNECTED)) {
+function command(
+  connect = vi.fn(async (_providerId: string, _options: { manual: boolean }) => CONNECTED)
+) {
   const modelConnect = createModelCommands({ connect })[0];
   if (!modelConnect) throw new Error("model connect command is missing");
   return { modelConnect, connect };
@@ -32,7 +34,7 @@ describe("model connect CLI command", () => {
 
     expect(code).toBe(0);
     expect(connect).toHaveBeenCalledOnce();
-    expect(connect).toHaveBeenCalledWith("openai-codex");
+    expect(connect).toHaveBeenCalledWith("openai-codex", { manual: false });
   });
 
   it("emits only the secret-free result in JSON mode", async () => {
@@ -86,11 +88,26 @@ describe("model connect CLI command", () => {
     }
   );
 
-  it("declares only the standard structured-output flag", () => {
+  it("requests manual URL handoff only when asked", async () => {
+    const { modelConnect, connect } = command();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await modelConnect.run(
+      parseInvocation(modelConnect, ["openai-codex", "--manual"]),
+      []
+    );
+
+    expect(code).toBe(0);
+    expect(connect).toHaveBeenCalledWith("openai-codex", { manual: true });
+  });
+
+  it("declares only manual handoff beside the standard structured-output flag", () => {
     const { modelConnect } = command();
 
-    expect(modelConnect.flags?.map((flag) => flag.name)).toEqual(["json"]);
-    expect(renderCommandHelp(modelConnect)).toContain("Usage: vibestudio model connect <provider>");
+    expect(modelConnect.flags?.map((flag) => flag.name)).toEqual(["manual", "json"]);
+    expect(renderCommandHelp(modelConnect)).toContain(
+      "Usage: vibestudio model connect <provider> [--manual]"
+    );
     expect(renderCommandHelp(modelConnect)).toContain("--plain");
     expect(renderCommandHelp(modelConnect)).not.toContain("--browser");
   });

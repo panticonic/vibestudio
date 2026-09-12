@@ -55,10 +55,12 @@ describe("connectModelProvider", () => {
       browserResponse = httpGet(`http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`);
     });
 
-    const result = await connectModelProvider(CREDENTIALS, "openai-codex", {
-      createRpc: () => rpc,
-      openExternal,
-    });
+    const result = await connectModelProvider(
+      CREDENTIALS,
+      "openai-codex",
+      {},
+      { createRpc: () => rpc, openExternal }
+    );
 
     expect(calls).toEqual([
       "listen:external-open:open",
@@ -117,15 +119,20 @@ describe("connectModelProvider", () => {
       async close() {},
     };
 
-    await connectModelProvider(CREDENTIALS, "openai-codex", {
-      createRpc: () => rpc,
-      openExternal: async (url) => {
-        opened.push(url);
-        browserResponse = httpGet(
-          `http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`
-        );
-      },
-    });
+    await connectModelProvider(
+      CREDENTIALS,
+      "openai-codex",
+      {},
+      {
+        createRpc: () => rpc,
+        openExternal: async (url) => {
+          opened.push(url);
+          browserResponse = httpGet(
+            `http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`
+          );
+        },
+      }
+    );
 
     expect(opened).toEqual(["https://auth.example.test/oauth/authorize"]);
     await browserResponse;
@@ -160,23 +167,185 @@ describe("connectModelProvider", () => {
     };
 
     await expect(
-      connectModelProvider(CREDENTIALS, "openai-codex", {
-        createRpc: () => rpc,
-        openExternal: async () => {
-          throw new Error("browser unavailable");
-        },
-      })
+      connectModelProvider(
+        CREDENTIALS,
+        "openai-codex",
+        {},
+        {
+          createRpc: () => rpc,
+          openExternal: async () => {
+            throw new Error("browser unavailable");
+          },
+        }
+      )
     ).rejects.toThrow("browser unavailable");
     expect(calls).toEqual(["credentials.connect", "credentials.cancelOAuth"]);
+  });
+
+  it("prints the authorize URL and completes from a pasted callback in manual mode", async () => {
+    const port = await getFreePort();
+    const calls: string[] = [];
+    let listener: ((payload: unknown, fromId: string) => void) | null = null;
+    let resolveConnect!: (value: unknown) => void;
+    const connected = new Promise((resolve) => {
+      resolveConnect = resolve;
+    });
+    const forwarded: unknown[] = [];
+    const rpc = {
+      async onEvent(_event: string, next: (payload: unknown, fromId: string) => void) {
+        listener = next;
+        return () => undefined;
+      },
+      async callTargetPush(_targetId: string, method: string, args: unknown[]) {
+        calls.push(method);
+        if (method === "credentials.connect") {
+          queueMicrotask(() => listener?.(oauthPayload(port), "main"));
+          return await connected;
+        }
+        if (method === "credentials.forwardOAuthCallback") {
+          forwarded.push(args[0]);
+          resolveConnect(storedCredential());
+          return undefined;
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+      async close() {},
+    };
+    const presented: { authorizeUrl: string; redirectUri: string }[] = [];
+    const openExternal = vi.fn(async () => undefined);
+
+    const result = await connectModelProvider(
+      CREDENTIALS,
+      "openai-codex",
+      { manual: true },
+      {
+        createRpc: () => rpc,
+        openExternal,
+        presentUrl: (context) => presented.push(context),
+        awaitPastedCallback: async () =>
+          `http://127.0.0.1:${port}/auth/callback?code=pasted&state=state-1`,
+      }
+    );
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(presented).toEqual([
+      {
+        authorizeUrl: "https://auth.example.test/oauth/authorize",
+        redirectUri: `http://127.0.0.1:${port}/auth/callback`,
+      },
+    ]);
+    expect(forwarded).toEqual([
+      {
+        transactionId: "tx-1",
+        url: `http://127.0.0.1:${port}/auth/callback?code=pasted&state=state-1`,
+        state: "state-1",
+      },
+    ]);
+    expect(result.credential.id).toBe("cred-renewed");
+    expect(calls).toEqual(["credentials.connect", "credentials.forwardOAuthCallback"]);
+  });
+
+  it("rejects a pasted callback that carries another transaction's state", async () => {
+    const port = await getFreePort();
+    const calls: string[] = [];
+    let listener: ((payload: unknown, fromId: string) => void) | null = null;
+    let rejectConnect!: (reason: unknown) => void;
+    const connected = new Promise((_resolve, reject) => {
+      rejectConnect = reject;
+    });
+    const rpc = {
+      async onEvent(_event: string, next: (payload: unknown, fromId: string) => void) {
+        listener = next;
+        return () => undefined;
+      },
+      async callTargetPush(_targetId: string, method: string) {
+        calls.push(method);
+        if (method === "credentials.connect") {
+          queueMicrotask(() => listener?.(oauthPayload(port), "main"));
+          return await connected;
+        }
+        if (method === "credentials.cancelOAuth") {
+          rejectConnect(new Error("cancelled"));
+          return undefined;
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+      async close() {},
+    };
+
+    await expect(
+      connectModelProvider(
+        CREDENTIALS,
+        "openai-codex",
+        { manual: true },
+        {
+          createRpc: () => rpc,
+          openExternal: async () => undefined,
+          presentUrl: () => undefined,
+          awaitPastedCallback: async () =>
+            `http://127.0.0.1:${port}/auth/callback?code=pasted&state=other-state`,
+        }
+      )
+    ).rejects.toThrow("OAuth state mismatch");
+    expect(calls).toEqual(["credentials.connect", "credentials.cancelOAuth"]);
+  });
+
+  it("keeps the loopback route deciding when manual mode is not requested", async () => {
+    const port = await getFreePort();
+    let listener: ((payload: unknown, fromId: string) => void) | null = null;
+    let resolveConnect!: (value: unknown) => void;
+    const connected = new Promise((resolve) => {
+      resolveConnect = resolve;
+    });
+    const awaitPastedCallback = vi.fn(async () => "http://example.test/never");
+    let browserResponse: Promise<void> | null = null;
+    const rpc = {
+      async onEvent(_event: string, next: (payload: unknown, fromId: string) => void) {
+        listener = next;
+        return () => undefined;
+      },
+      async callTargetPush(_targetId: string, method: string) {
+        if (method === "credentials.connect") {
+          queueMicrotask(() => listener?.(oauthPayload(port), "main"));
+          return await connected;
+        }
+        if (method === "credentials.forwardOAuthCallback") {
+          resolveConnect(storedCredential());
+          return undefined;
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+      async close() {},
+    };
+
+    await connectModelProvider(
+      CREDENTIALS,
+      "openai-codex",
+      {},
+      {
+        createRpc: () => rpc,
+        openExternal: async () => {
+          browserResponse = httpGet(
+            `http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`
+          );
+        },
+        awaitPastedCallback,
+      }
+    );
+
+    expect(awaitPastedCallback).not.toHaveBeenCalled();
+    await browserResponse;
   });
 
   it("does not invent a second API-key input flow", async () => {
     const createRpc = vi.fn<ModelConnectDependencies["createRpc"]>();
     await expect(
-      connectModelProvider(CREDENTIALS, "anthropic", {
-        createRpc,
-        openExternal: async () => undefined,
-      })
+      connectModelProvider(
+        CREDENTIALS,
+        "anthropic",
+        {},
+        { createRpc, openExternal: async () => undefined }
+      )
     ).rejects.toThrow("must currently be entered in Vibestudio model settings");
     expect(createRpc).not.toHaveBeenCalled();
   });

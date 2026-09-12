@@ -1021,7 +1021,8 @@ const commandRegistry: CliCommand[] = [
   ...terminalCommands,
   ...mobileCommands,
   ...createModelCommands({
-    connect: (providerId) => connectModelProvider(requirePairedCredentials(), providerId),
+    connect: (providerId, options) =>
+      connectModelProvider(requirePairedCredentials(), providerId, { manual: options.manual }),
   }),
   ...agentCommands,
   ...fsCommands,

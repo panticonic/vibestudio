@@ -18,7 +18,7 @@ export interface ModelCommandDependencies {
    * Run the canonical provider connection flow. The CLI owns browser/callback
    * handoff, but never token exchange or storage, and renders only this view.
    */
-  connect(providerId: string): Promise<ModelConnectResult>;
+  connect(providerId: string, options: { manual: boolean }): Promise<ModelConnectResult>;
 }
 
 /** Copy the public result field-by-field so an adapter cannot leak extras. */
@@ -51,13 +51,23 @@ export function createModelCommands(dependencies: ModelCommandDependencies): Cli
       group: "model",
       name: "connect",
       summary: "Connect or renew a model-provider credential",
-      usage: "vibestudio model connect <provider>",
-      flags: [JSON_FLAG],
+      usage: "vibestudio model connect <provider> [--manual]",
+      flags: [
+        {
+          name: "manual",
+          takesValue: false,
+          description:
+            "Print the authorization URL instead of opening a browser, and accept the pasted callback URL",
+        },
+        JSON_FLAG,
+      ],
       run: async (invocation) => {
         const json = jsonMode(invocation.flags["json"] === true);
         try {
           const providerId = requireProvider(invocation);
-          const result = publicConnectResult(await dependencies.connect(providerId));
+          const result = publicConnectResult(
+            await dependencies.connect(providerId, { manual: invocation.flags["manual"] === true })
+          );
           printResult(result, {
             json,
             human: () => {

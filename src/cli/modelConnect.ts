@@ -9,6 +9,7 @@ import {
   type ExternalOpenPayload,
 } from "../node/oauthLoopbackHandoff.js";
 import { openExternalBrowser } from "../node/openExternalBrowser.js";
+import { presentAuthorizeUrl, readPastedCallbackUrl } from "./manualOAuthHandoff.js";
 import { UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import type { ModelConnectResult } from "./modelCommands.js";
@@ -22,11 +23,26 @@ interface ModelConnectRpc {
 export interface ModelConnectDependencies {
   createRpc(credentials: DeviceCredential): ModelConnectRpc;
   openExternal(url: string): Promise<unknown>;
+  /** Manual mode only: show the authorize URL instead of launching a browser. */
+  presentUrl?(context: { authorizeUrl: string; redirectUri: string }): void;
+  /** Manual mode only: read the callback URL the operator pasted back. */
+  awaitPastedCallback?(context: { authorizeUrl: string; redirectUri: string }): Promise<string>;
+}
+
+export interface ModelConnectOptions {
+  /**
+   * Print the authorization URL and accept a pasted callback instead of
+   * opening a browser on this host. Needed whenever the operator's browser is
+   * elsewhere: a headless server, an SSH session, or a second device.
+   */
+  manual?: boolean;
 }
 
 const DEFAULT_DEPENDENCIES: ModelConnectDependencies = {
   createRpc: (credentials) => new RpcClient(credentials),
   openExternal: openExternalBrowser,
+  presentUrl: presentAuthorizeUrl,
+  awaitPastedCallback: () => readPastedCallbackUrl(),
 };
 
 /**
@@ -37,6 +53,7 @@ const DEFAULT_DEPENDENCIES: ModelConnectDependencies = {
 export async function connectModelProvider(
   credentials: DeviceCredential,
   providerId: string,
+  options: ModelConnectOptions = {},
   dependencies: ModelConnectDependencies = DEFAULT_DEPENDENCIES
 ): Promise<ModelConnectResult> {
   const preset = getProviderConnectPreset(providerId);
@@ -52,6 +69,11 @@ export async function connectModelProvider(
       `${providerId} uses API-key input, which must currently be entered in Vibestudio model settings; ` +
         "the CLI connect command supports browser OAuth providers"
     );
+  }
+
+  const manual = options.manual === true;
+  if (manual && !dependencies.presentUrl) {
+    throw new Error("Manual model connect needs a way to present the authorization URL");
   }
 
   const request = toCredentialConnectRequest(providerId, { browser: "external" });
@@ -76,11 +98,25 @@ export async function connectModelProvider(
       const external = parseOAuthHandoff(payload);
       if (!external) return;
       state.handoff = handleExternalOpenPayload(external, {
-        openExternal: dependencies.openExternal,
+        // Manual mode launches nothing here: the operator opens the URL
+        // wherever their browser actually is. Presentation happens on the
+        // paste route below, which receives the bound redirect too.
+        openExternal: manual ? async () => undefined : dependencies.openExternal,
         forwardOAuthCallback: (callback) =>
           rpc.callTargetPush("main", "credentials.forwardOAuthCallback", [callback]),
         cancelOAuth: (transactionId) =>
           rpc.callTargetPush("main", "credentials.cancelOAuth", [{ transactionId }]),
+        ...(manual
+          ? {
+              awaitPastedCallback: (context: { authorizeUrl: string; redirectUri: string }) => {
+                dependencies.presentUrl?.(context);
+                return (
+                  dependencies.awaitPastedCallback?.(context) ??
+                  new Promise<string>(() => undefined)
+                );
+              },
+            }
+          : {}),
       });
       state.handoff.then(resolveHandoff, rejectHandoff);
     });

@@ -13,6 +13,14 @@ export async function handleExternalOpenPayload(
       state?: string;
     }): Promise<unknown>;
     cancelOAuth(transactionId: string): Promise<unknown>;
+    /**
+     * Optional second completion route for a browser that cannot reach this
+     * host's loopback listener (another device, or a remote shell). It resolves
+     * with the full callback URL the operator copied out of the address bar.
+     * The loopback listener stays live and whichever route completes first
+     * wins.
+     */
+    awaitPastedCallback?(context: { authorizeUrl: string; redirectUri: string }): Promise<string>;
   }
 ): Promise<void> {
   if (!payload.url) return;
@@ -21,8 +29,9 @@ export async function handleExternalOpenPayload(
     return;
   }
 
+  const oauthLoopback = payload.oauthLoopback;
   try {
-    const callback = await startOAuthLoopbackCallback(payload.oauthLoopback);
+    const callback = await startOAuthLoopbackCallback(oauthLoopback);
     try {
       const authorizeUrl = authorizeUrlForBoundLoopback(
         payload.url,
@@ -30,11 +39,20 @@ export async function handleExternalOpenPayload(
         callback.redirectUri
       );
       const opening = deps.openExternal(authorizeUrl);
+      const pasted = deps
+        .awaitPastedCallback?.({ authorizeUrl, redirectUri: callback.redirectUri })
+        .then((url) => pastedCallback(url, oauthLoopback.state));
       // Some launch adapters resolve when the browser process exits rather
       // than when it is spawned. Accept the callback as proof that opening
       // succeeded, while still surfacing a launch rejection that arrives
       // before the callback.
-      const received = await Promise.race([callback.wait, opening.then(() => callback.wait)]);
+      const routes = [callback.wait, opening.then(() => callback.wait)];
+      if (pasted) routes.push(pasted);
+      const received = await Promise.race(routes).finally(() => {
+        // A losing paste route must not surface as an unhandled rejection
+        // once another route has already decided this connection.
+        pasted?.catch(() => undefined);
+      });
       try {
         await deps.forwardOAuthCallback({
           transactionId: payload.oauthLoopback.transactionId,
@@ -53,6 +71,37 @@ export async function handleExternalOpenPayload(
     await deps.cancelOAuth(payload.oauthLoopback.transactionId).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Accept a callback URL copied out of a browser that redirected somewhere this
+ * process cannot listen. The state check is the same one the loopback listener
+ * applies, so a pasted URL cannot complete a different transaction.
+ */
+function pastedCallback(
+  value: string,
+  expectedState: string
+): {
+  url: string;
+  state?: string;
+  respond(success: boolean, detail?: string): void;
+} {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("Pasted OAuth callback is not a URL");
+  }
+  const state = url.searchParams.get("state") ?? undefined;
+  if (state !== expectedState) throw new Error("OAuth state mismatch");
+  return {
+    url: url.toString(),
+    state,
+    respond() {
+      // The browser that produced this URL already rendered the provider's
+      // own redirect target; there is no open response to answer.
+    },
+  };
 }
 
 async function startOAuthLoopbackCallback(
