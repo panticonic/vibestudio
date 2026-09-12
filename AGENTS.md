@@ -81,6 +81,17 @@ command.
 8. When verification is complete, stop the exact managed instance with
    `pnpm system-test [--instance ID] stop`.
 
+Agentic tests judge delivery latency in wall-clock time, and the gate can only
+account for the test agents sharing the instance — it scales its allowance by
+that count, but cannot see load the suite did not create. Do not run other heavy
+work on the same host while a run is in flight: a full unit suite, a build, or a
+second run will push spans past the allowance and report a delivery regression
+in whichever tests happened to be executing. A latency verdict is therefore
+evidence about the run before it is evidence about the product; rerun that exact
+test on an otherwise idle host before treating it as a regression. Every metric
+also carries `overBaseline`, the comparison against the isolated ceiling, so a
+run that was merely slow still leaves a record behind a pass.
+
 The default agentic test route starts with
 `openai-codex:gpt-5.3-codex-spark` and automatically falls back to
 `openai-codex:gpt-5.6-luna` at low thinking effort only when Spark reports
