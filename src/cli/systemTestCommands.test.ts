@@ -7,6 +7,7 @@ import {
   systemTestDoctorRecovery,
   systemTestCoordinatorScopeKey,
   systemTestRunCode,
+  resultValue,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
@@ -599,5 +600,52 @@ describe("system-test durable driver lifecycle", () => {
       passed: 1,
     });
     expect(releaseAttempts).toBe(3);
+  });
+});
+
+describe("system-test run interrupted mid-suite", () => {
+  const interrupted = (completed: Array<{ outcome: string }>, total: number) =>
+    ({
+      status: "done",
+      result: { success: false, error: "eval interrupted by restart" },
+      progress: { total, completed },
+    }) as unknown as Parameters<typeof resultValue>[0];
+
+  it("hands back the run id, what already finished, and how to read it", () => {
+    // A sandbox that dies under a long run leaves every finished test durably
+    // recorded. Reporting only "eval interrupted by restart" discards that.
+    expect(() =>
+      resultValue(
+        interrupted(
+          [
+            { outcome: "passed" },
+            { outcome: "passed" },
+            { outcome: "failed" },
+            { outcome: "errored" },
+          ],
+          40
+        ),
+        "st_abc"
+      )
+    ).toThrow(
+      "system-test run st_abc did not finish: eval interrupted by restart. 4 of 40 tests " +
+        "completed before it stopped (1 errored, 1 failed, 2 passed); those results are " +
+        "preserved: vibestudio system-test inspect st_abc --json"
+    );
+  });
+
+  it("says only what it knows when nothing had finished", () => {
+    expect(() => resultValue(interrupted([], 40), "st_abc")).toThrow(
+      "system-test run st_abc did not finish: eval interrupted by restart"
+    );
+    expect(() => resultValue(interrupted([], 40), "st_abc")).not.toThrow(/preserved/u);
+  });
+
+  it("still reports a successful run's own value", () => {
+    const done = {
+      status: "done",
+      result: { success: true, returnValue: { runId: "st_abc", passed: 40 } },
+    } as unknown as Parameters<typeof resultValue>[0];
+    expect(resultValue(done, "st_abc")).toEqual({ runId: "st_abc", passed: 40 });
   });
 });

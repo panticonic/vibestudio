@@ -597,14 +597,53 @@ function installSystemTestRunCancellation(
   };
 }
 
-function resultValue(status: EvalStatus): unknown {
+/**
+ * What a run produced, or why the CLI cannot say.
+ *
+ * An orchestration that dies mid-run — its sandbox restarted under it, say —
+ * still leaves every finished test durably recorded in the run's progress.
+ * Reporting only the orchestration's own error message throws that away and
+ * leaves the operator without the run id, without knowing that most of the
+ * suite had already answered, and without the command that reads it back.
+ */
+export function resultValue(status: EvalStatus, runId: string): unknown {
   if (status.status === "unknown") throw new CliError("system-test run is unknown to the server");
   if (status.status === "cancelled") throw new CliError("system-test run was cancelled");
   if (status.status !== "done") return undefined;
   if (!status.result?.success) {
-    throw new CliError(status.result?.error ?? "system-test orchestration failed");
+    throw new CliError(
+      `system-test run ${runId} did not finish: ${
+        status.result?.error ?? "system-test orchestration failed"
+      }${interruptedRunEvidence(status, runId)}`
+    );
   }
   return status.result.returnValue;
+}
+
+/** Name the results an unfinished run already has, and how to read them. */
+function interruptedRunEvidence(status: EvalStatus, runId: string): string {
+  const progress = status.progress as { total?: unknown; completed?: unknown } | null | undefined;
+  const completed = Array.isArray(progress?.completed) ? progress.completed : [];
+  if (completed.length === 0) return "";
+  const counts = new Map<string, number>();
+  for (const entry of completed) {
+    const outcome =
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { outcome?: unknown }).outcome === "string"
+        ? (entry as { outcome: string }).outcome
+        : "unknown";
+    counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
+  }
+  const total = typeof progress?.total === "number" ? progress.total : completed.length;
+  const breakdown = [...counts]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([outcome, count]) => `${count} ${outcome}`)
+    .join(", ");
+  return (
+    `. ${completed.length} of ${total} tests completed before it stopped (${breakdown}); ` +
+    `those results are preserved: vibestudio system-test inspect ${runId} --json`
+  );
 }
 
 function failedSummary(value: unknown): boolean {
@@ -706,7 +745,7 @@ async function run(inv: ParsedInvocation): Promise<number> {
         scope.client
       );
       if (await signalCancellation.ensureCancellation()) return 130;
-      const value = resultValue(status);
+      const value = resultValue(status, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
@@ -1092,7 +1131,7 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
         scope.client
       );
       if (await signalCancellation.ensureCancellation()) return 130;
-      const result = resultValue(state);
+      const result = resultValue(state, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", result, stored.artifactDir);
       printRun(result, json, artifact);
       return failedSummary(result) ? 1 : 0;
