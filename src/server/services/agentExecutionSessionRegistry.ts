@@ -68,7 +68,19 @@ export class AgentExecutionSessionRegistry {
     }
     const orchestrator = this.testPoliciesByContext.get(ownerContextId);
     if (!orchestrator || orchestrator.kind !== "orchestrator") {
-      throw new Error("Test-case authority policy requires a live system-test orchestrator");
+      // The owning context holding no orchestrator policy usually means its
+      // run never received one, not that a live one was lost — and a run is
+      // refused a policy when the code driving it is not a blessed product
+      // conduit at the exact version it runs. Say that, because from here the
+      // failure looks like a lifecycle problem in the test rather than a trust
+      // decision taken two layers away, before the first test started.
+      throw new Error(
+        "Test-case authority policy requires a live system-test orchestrator: " +
+          `context ${ownerContextId} holds ${
+            orchestrator ? `a ${orchestrator.kind} policy, not an orchestrator's` : "no test policy"
+          }. A system-test run is granted one only while its harness is a blessed ` +
+          "product conduit; check the server log for [ConduitBlessing]."
+      );
     }
     const digest = createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 20);
     const policy = Object.freeze({
@@ -209,7 +221,12 @@ export class AgentExecutionSessionRegistry {
       if (!root) {
         if (fact.testPolicy.kind !== "orchestrator") {
           this.byRuntime.delete(fact.executor.runtimeId);
-          throw new Error("Test-case authority policy requires a live system-test orchestrator");
+          // Distinct from attachCasePolicy's refusal: a policy was granted and
+          // its orchestrator has since gone, rather than never having existed.
+          throw new Error(
+            `Test-case authority policy ${fact.testPolicy.policyId} outlived its system-test ` +
+              "orchestrator run, whose facts do not survive a host restart"
+          );
         }
         this.orchestratorRuns.set(rootPolicyId, {
           runtimeId: fact.executor.runtimeId,

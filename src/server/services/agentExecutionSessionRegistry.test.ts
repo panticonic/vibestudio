@@ -165,6 +165,35 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     ).toThrow(/orchestrator-owned/);
   });
 
+  it("explains a refused case policy by where trust is actually decided", () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const spec = {
+      testId: "fs-write-read",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2 as const,
+        fallback: "disabled" as const,
+      },
+      authority: [],
+      unexpectedPrompts: "fail" as const,
+    };
+
+    // The owning context never held a policy, which is what a run driven by an
+    // unblessed harness looks like from here — so the message has to point at
+    // the blessing rather than at this call.
+    expect(() => registry.attachCasePolicy("ctx:case", "ctx:orchestrator", spec)).toThrow(
+      /holds no test policy.*blessed product conduit.*\[ConduitBlessing\]/s
+    );
+
+    // A context holding the wrong kind of policy is a different mistake.
+    const orchestrator = registry.createTestPolicy("system-test-runner:run-1");
+    registry.markTestContext("ctx:orchestrator", orchestrator);
+    registry.attachCasePolicy("ctx:case", "ctx:orchestrator", spec);
+    expect(() => registry.attachCasePolicy("ctx:nested", "ctx:case", spec)).toThrow(
+      /holds a case policy, not an orchestrator's/
+    );
+  });
+
   it("revokes descendant execution facts when the orchestrator history expires", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const registry = new AgentExecutionSessionRegistry();

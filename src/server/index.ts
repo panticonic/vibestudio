@@ -2763,8 +2763,9 @@ async function main() {
       // Context attestation is product trust, independent of workspace install
       // approval. Resolve only a configured, exact distribution receipt; an
       // app's initial snapshot or mutable main can never bless its own code.
-      const { trustedConduitTemplate, resolveTrustedConduits } =
+      const { trustedConduitTemplate, resolveTrustedConduits, unblessedLiveConduits } =
         await import("./trustedConduitSnapshot.js");
+      const { PRODUCT_CONDUIT_UNITS } = await import("./productConduitPolicy.js");
       const conduitPin = trustedConduitTemplate(
         workspaceRootPin,
         readDefaultWorkspaceTemplates(appRoot)
@@ -2814,6 +2815,29 @@ async function main() {
           buildSystem.resolveBuildUnits(paths, state)
         );
         conduitBlessingStore.seedProductSnapshot(conduitTree.stateHash, identities);
+      }
+      // Say so when this workspace runs a product conduit at a version the
+      // blessing does not cover. Refusing that code is the policy working when
+      // the workspace edited it, and a broken seed when it did not — either
+      // way, the alternative to one line here is a much later failure in
+      // whatever operation needed the attestation.
+      const unblessed = unblessedLiveConduits({
+        units: PRODUCT_CONDUIT_UNITS,
+        liveVersion: (repoPath) => buildSystem.getEffectiveVersion(repoPath),
+        isBlessed: (identity) => conduitBlessingStore.isBlessed(identity),
+      });
+      if (unblessed.length > 0) {
+        serverLogStore.append("warn", [
+          `[ConduitBlessing] ${unblessed.length} product conduit${
+            unblessed.length === 1 ? "" : "s"
+          } run here at a version no blessing covers; that code cannot attest agent context`,
+          {
+            conduitSnapshotState: conduitTree.stateHash,
+            conduitTemplate: conduitPin.url,
+            composedLayers: conduitComposition.layers.map((layer) => layer.url),
+            unblessed,
+          },
+        ]);
       }
       return buildSystem;
     },

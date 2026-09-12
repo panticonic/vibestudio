@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
-import { trustedConduitTemplate, resolveTrustedConduits } from "./trustedConduitSnapshot.js";
+import {
+  trustedConduitTemplate,
+  resolveTrustedConduits,
+  unblessedLiveConduits,
+} from "./trustedConduitSnapshot.js";
 import { PRODUCT_CONDUIT_UNITS } from "./productConduitPolicy.js";
 
 const pin = (name: string): WorkspaceTemplatePin => ({
@@ -39,5 +43,43 @@ describe("trusted distribution conduit seeds", () => {
       { repoPath: "workers/agent-worker", effectiveVersion: "b".repeat(64) },
     ]);
     expect(resolve).toHaveBeenCalledWith(PRODUCT_CONDUIT_UNITS, state);
+  });
+});
+
+describe("live conduit blessing coverage", () => {
+  const blessed = new Map([["workers/system-test-runner", "a".repeat(64)]]);
+  const isBlessed = (identity: { repoPath: string; effectiveVersion: string }): boolean =>
+    blessed.get(identity.repoPath) === identity.effectiveVersion;
+
+  it("names a conduit whose live version the blessing does not cover", () => {
+    expect(
+      unblessedLiveConduits({
+        units: ["workers/system-test-runner"],
+        liveVersion: () => "b".repeat(64),
+        isBlessed,
+      })
+    ).toEqual([{ repoPath: "workers/system-test-runner", effectiveVersion: "b".repeat(64) }]);
+  });
+
+  it("stays quiet when the live version is the blessed one", () => {
+    expect(
+      unblessedLiveConduits({
+        units: ["workers/system-test-runner"],
+        liveVersion: () => "a".repeat(64),
+        isBlessed,
+      })
+    ).toEqual([]);
+  });
+
+  it("does not treat a unit this distribution never shipped as a mismatch", () => {
+    // The product policy is an allowlist, not a manifest every root fulfils.
+    expect(
+      unblessedLiveConduits({
+        units: [...PRODUCT_CONDUIT_UNITS],
+        liveVersion: (repoPath) =>
+          repoPath === "workers/system-test-runner" ? "a".repeat(64) : null,
+        isBlessed,
+      })
+    ).toEqual([]);
   });
 });

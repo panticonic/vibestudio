@@ -36,3 +36,34 @@ export async function resolveTrustedConduits(
     return [{ repoPath: unit.unitPath, effectiveVersion: unit.effectiveVersion }];
   });
 }
+
+/**
+ * Product conduits this workspace runs at a version the blessing does not
+ * cover.
+ *
+ * A conduit's blessing is keyed to an exact effective version, and that version
+ * covers the unit's whole dependency closure — so a blessing resolved against a
+ * tree that omits part of that closure matches nothing the workspace ever runs.
+ * The failure is silent by construction: the code simply stops being trusted to
+ * attest context, and the first symptom arrives much later, in whatever
+ * operation needed that attestation. Naming the mismatch where it is created
+ * turns that into one readable line.
+ *
+ * A workspace running its own edited copy of a conduit appears here too, and
+ * legitimately: that code is workspace source, not the product's, and refusing
+ * it is the policy working. This reports the state; it does not decide it.
+ */
+export function unblessedLiveConduits(input: {
+  units: readonly string[];
+  liveVersion: (repoPath: string) => string | null;
+  isBlessed: (identity: ConduitIdentity) => boolean;
+}): Array<{ repoPath: string; effectiveVersion: string }> {
+  return input.units.flatMap((repoPath) => {
+    const effectiveVersion = input.liveVersion(repoPath);
+    // A unit absent from this distribution is not a mismatch; the product
+    // policy is an allowlist, not a manifest of what every root ships.
+    if (!effectiveVersion) return [];
+    if (input.isBlessed({ repoPath, effectiveVersion })) return [];
+    return [{ repoPath, effectiveVersion }];
+  });
+}
