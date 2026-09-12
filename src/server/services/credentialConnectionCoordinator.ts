@@ -131,8 +131,20 @@ type OAuthRedirectStrategy =
   | "client-loopback"
   | "app-scheme";
 
-/** Maximum lifetime for a pending interactive OAuth transaction. */
-const PENDING_OAUTH_TTL_MS = 10 * 60 * 1000;
+/**
+ * Maximum lifetime for a pending interactive OAuth transaction.
+ *
+ * This is a human's window, not a machine's: the person has to reach a browser,
+ * sign in, clear whatever second factor the provider asks for, and — when the
+ * browser is on another device than the one holding the loopback listener —
+ * carry the callback URL back by hand. Ten minutes routinely expired mid-flow
+ * and discarded the PKCE verifier, so a callback that did arrive could no
+ * longer be redeemed and the whole authorization had to start over.
+ *
+ * Half an hour covers that without leaving a verifier and an open loopback
+ * listener parked indefinitely.
+ */
+const PENDING_OAUTH_TTL_MS = 30 * 60 * 1000;
 const OAUTH_USERINFO_TIMEOUT_MS = 15_000;
 const DEFAULT_LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_CALLBACK_PATH = "/oauth/callback";
