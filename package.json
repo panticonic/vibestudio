@@ -18,6 +18,7 @@
     "dev": "tsx src/dev/runInstance.ts desktop --ephemeral",
     "dev:production": "tsx src/dev/runInstance.ts desktop --production-base --ephemeral",
     "dev:base": "tsx scripts/dev-base.ts",
+    "dev:apparmor": "sh scripts/install-dev-apparmor-profile.sh",
     "dev:iroh": "NODE_ENV=development tsx src/dev/runInstance.ts desktop --dev-iroh-remote --ephemeral",
     "relay:fixture": "node scripts/iroh-relay-fixture.mjs",
     "test:iroh-relay-fixture": "tsx scripts/test-iroh-relay-fixture.ts",

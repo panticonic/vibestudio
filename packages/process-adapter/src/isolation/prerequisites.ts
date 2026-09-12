@@ -79,6 +79,25 @@ function readApparmorUserNamespaceRestriction(): string | null {
   }
 }
 
+/**
+ * Which AppArmor profile is missing for this launcher.
+ *
+ * A profile attaches by absolute path. Packaged installs ship one for their own
+ * path and load it from the maintainer scripts, so a packaged host that reaches
+ * here has a profile that failed to load. A source checkout's launcher lives
+ * wherever the developer cloned it, which no shipped profile can name — that
+ * tree installs its own, and saying so is the difference between a one-command
+ * fix and rediscovering this from a uid-map error.
+ */
+function apparmorProfileRemedy(launcher: string): string {
+  const packaged = launcher.includes("/resources/app.asar.unpacked/");
+  return packaged
+    ? "This is a packaged install, so its profile ships in /etc/apparmor.d; reload it with " +
+        "`apparmor_parser --replace --skip-cache /etc/apparmor.d/vibestudio-mxc`."
+    : "This launcher is a source checkout, which no packaged profile can name: install one for " +
+        "this tree with `sudo scripts/install-dev-apparmor-profile.sh`.";
+}
+
 export function formatNativeStartupError(input: {
   installation: NativeInstallation;
   error: Error;
@@ -104,8 +123,7 @@ export function formatNativeStartupError(input: {
         restriction?.trim() === "1"
           ? "This host restricts unprivileged user namespaces through AppArmor " +
             "(kernel.apparmor_restrict_unprivileged_userns=1), which bubblewrap requires. " +
-            "Permit them for this host, or ship an AppArmor profile granting the MXC launcher " +
-            "`userns create`."
+            `${apparmorProfileRemedy(installation.launcher)}`
           : "The host refused sandbox namespace creation. Check the host's user-namespace and security policy for bubblewrap.";
     } else if (
       /mkdir parents|mount|bind.*(?:failed|error)|No such file or directory/i.test(evidence)

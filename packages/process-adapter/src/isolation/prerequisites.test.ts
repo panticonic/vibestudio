@@ -109,7 +109,25 @@ it("names the AppArmor restriction when this host is the reason namespaces faile
     readUserNamespaceRestriction: () => "1\n",
   });
   expect(error.message).toContain("apparmor_restrict_unprivileged_userns=1");
-  expect(error.message).toContain("userns create");
+  // A checkout's launcher is the case no shipped profile can cover, so the
+  // remedy has to name the script that writes one for this tree.
+  expect(error.message).toContain("sudo scripts/install-dev-apparmor-profile.sh");
+});
+it("points a packaged install at the profile it already ships", () => {
+  const error = formatNativeStartupError({
+    ...input,
+    installation: {
+      platform: "linux",
+      mechanism: "mxc-process",
+      launcher: "/opt/Vibestudio/resources/app.asar.unpacked/dist/mxc/linux-arm64/lxc-exec",
+    },
+    error: new Error("Exited before readiness"),
+    stderr: "bwrap: setting up uid map: Permission denied",
+    code: 1,
+    readUserNamespaceRestriction: () => "1\n",
+  });
+  expect(error.message).toContain("/etc/apparmor.d/vibestudio-mxc");
+  expect(error.message).not.toContain("install-dev-apparmor-profile.sh");
 });
 it("bounds retained stderr", () => {
   const error = formatNativeStartupError({
