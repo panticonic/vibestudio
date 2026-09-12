@@ -48,6 +48,142 @@ function recordedLayers(receipt: unknown): MaterializedLayer[] {
   );
 }
 
+/** One layer of a composed template root, in the order it was laid down. */
+export interface ComposedTemplateLayer {
+  url: string;
+  ref: string;
+  commit: string;
+}
+
+export interface ComposeDeclaredTemplateLayersInput {
+  pin: WorkspaceTemplatePin;
+  /** The already-acquired snapshot of `pin` itself. */
+  root: ExactGitSnapshot;
+  expectedSystemEpoch: number;
+  acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
+  resolveTrack?(address: {
+    url: string;
+    track: string;
+    credential?: string;
+  }): Promise<{ ref: string; commit: string }>;
+}
+
+/**
+ * Lay any templates one template is built on underneath it, and merge what they
+ * declare into the one manifest the composed workspace runs on.
+ *
+ * A standalone template takes none of this: its acquired snapshot is already
+ * the tree, and round-tripping its manifest through a merge would only risk
+ * changing it.
+ *
+ * This is the composition a workspace install performs, exposed on its own so
+ * that anything reasoning about what a distribution actually runs — including
+ * product trust decisions about its units — resolves the same tree rather than
+ * a bare snapshot whose dependency closure is missing.
+ */
+export async function composeDeclaredTemplateLayers(
+  input: ComposeDeclaredTemplateLayersInput
+): Promise<{ snapshot: ExactGitSnapshot; layers: ComposedTemplateLayer[] }> {
+  const { pin, root } = input;
+  const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest =>
+    readTemplateManifest({
+      readFile: (filePath) => snapshot.readFile(filePath),
+      expectedSystemEpoch: input.expectedSystemEpoch,
+    });
+  const rootManifest = readManifestOf(root);
+  if (rootManifest.dependencies.length === 0) {
+    return { snapshot: root, layers: [{ url: pin.url, ref: pin.ref, commit: pin.commit }] };
+  }
+  const resolveTrack = input.resolveTrack;
+  if (!resolveTrack) {
+    throw new Error(
+      `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
+    );
+  }
+  const acquired = new Map<
+    string,
+    { pin: WorkspaceTemplatePin; snapshot: ExactGitSnapshot; manifest: ParsedTemplateManifest }
+  >();
+  const acquireLayer = async (
+    layer: ResolvedTemplateDependency
+  ): Promise<{
+    pin: WorkspaceTemplatePin;
+    snapshot: ExactGitSnapshot;
+    manifest: ParsedTemplateManifest;
+  }> => {
+    const existing = acquired.get(layer.url);
+    if (existing) return existing;
+    const layerPin = {
+      url: layer.url,
+      ref: layer.ref,
+      commit: layer.commit,
+      ...(layer.credential ? { credential: layer.credential } : {}),
+    } as WorkspaceTemplatePin;
+    const snapshot = await input.acquire(layerPin);
+    if (snapshot.commit !== layer.commit) {
+      throw new Error(`Template dependency ${layer.url} acquired a different commit`);
+    }
+    const entry = { pin: layerPin, snapshot, manifest: readManifestOf(snapshot) };
+    acquired.set(layer.url, entry);
+    return entry;
+  };
+  const resolved = await resolveTemplateDependencies({
+    root: { label: pin.url, dependencies: rootManifest.dependencies },
+    resolveTrack,
+    readDependencies: async (layer) => (await acquireLayer(layer)).manifest.dependencies,
+  });
+  // Dependency-first, with this template last: it is the one being installed.
+  const stack = [
+    ...resolved.layers.map((layer) => acquired.get(layer.url)!),
+    { pin, snapshot: root, manifest: rootManifest },
+  ];
+  const merged = mergeTemplateManifests(
+    stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }))
+  );
+  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(merged.document));
+  const composed = composeTemplateLayers({
+    layers: stack.map((entry) => ({
+      label: entry.pin.url,
+      files: entry.snapshot.files,
+      readFile: (filePath) => entry.snapshot.readFile(filePath),
+    })),
+    composedPaths: [TEMPLATE_SOURCE_MANIFEST_PATH],
+  });
+  const files = [
+    ...composed.files,
+    {
+      path: TEMPLATE_SOURCE_MANIFEST_PATH,
+      contentHash: sha256Hex(manifestBytes),
+      size: manifestBytes.byteLength,
+      mode: 0o644 as const,
+    },
+  ].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+  const layers = stack.map((entry) => ({
+    url: entry.pin.url,
+    ref: entry.pin.ref,
+    commit: entry.pin.commit,
+  }));
+  const snapshot: ExactGitSnapshot = {
+    // The root's commit, which keys this materialization's staging paths. What
+    // the workspace is made of is the recorded layers, not this one commit.
+    commit: pin.commit,
+    snapshot: canonicalSnapshotDigest(
+      files.map((file) => ({
+        path: file.path,
+        mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+        size: file.size,
+        contentHash: file.contentHash,
+      }))
+    ),
+    files,
+    readFile: (filePath) =>
+      filePath === TEMPLATE_SOURCE_MANIFEST_PATH
+        ? new Uint8Array(manifestBytes)
+        : composed.readFile(filePath),
+  };
+  return { snapshot, layers };
+}
+
 /** One layer of a materialized workspace, in the order it was laid down. */
 interface MaterializedLayer {
   url: string;
@@ -262,105 +398,16 @@ export class WorkspaceRootTemplateBootstrap {
     pin: WorkspaceTemplatePin,
     root: ExactGitSnapshot
   ): Promise<ExactGitSnapshot> {
-    const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest =>
-      readTemplateManifest({
-        readFile: (filePath) => snapshot.readFile(filePath),
-        expectedSystemEpoch: this.deps.expectedSystemEpoch,
-      });
-    const rootManifest = readManifestOf(root);
-    if (rootManifest.dependencies.length === 0) {
-      this.acquiredLayers = [{ url: pin.url, ref: pin.ref, commit: pin.commit }];
-      return root;
-    }
-    const resolveTrack = this.deps.resolveTrack;
-    if (!resolveTrack) {
-      throw new Error(
-        `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
-      );
-    }
-    const acquired = new Map<
-      string,
-      { pin: WorkspaceTemplatePin; snapshot: ExactGitSnapshot; manifest: ParsedTemplateManifest }
-    >();
-    const acquireLayer = async (
-      layer: ResolvedTemplateDependency
-    ): Promise<{
-      pin: WorkspaceTemplatePin;
-      snapshot: ExactGitSnapshot;
-      manifest: ParsedTemplateManifest;
-    }> => {
-      const existing = acquired.get(layer.url);
-      if (existing) return existing;
-      const layerPin = {
-        url: layer.url,
-        ref: layer.ref,
-        commit: layer.commit,
-        ...(layer.credential ? { credential: layer.credential } : {}),
-      } as WorkspaceTemplatePin;
-      const snapshot = await this.deps.acquire(layerPin);
-      if (snapshot.commit !== layer.commit) {
-        throw new Error(`Template dependency ${layer.url} acquired a different commit`);
-      }
-      const entry = { pin: layerPin, snapshot, manifest: readManifestOf(snapshot) };
-      acquired.set(layer.url, entry);
-      return entry;
-    };
-    const { layers } = await resolveTemplateDependencies({
-      root: { label: pin.url, dependencies: rootManifest.dependencies },
-      resolveTrack,
-      readDependencies: async (layer) => (await acquireLayer(layer)).manifest.dependencies,
+    const composed = await composeDeclaredTemplateLayers({
+      pin,
+      root,
+      expectedSystemEpoch: this.deps.expectedSystemEpoch,
+      acquire: (layerPin) => this.deps.acquire(layerPin),
+      ...(this.deps.resolveTrack ? { resolveTrack: this.deps.resolveTrack } : {}),
     });
-    // Dependency-first, with this template last: it is the one being installed.
-    const stack = [
-      ...layers.map((layer) => acquired.get(layer.url)!),
-      { pin, snapshot: root, manifest: rootManifest },
-    ];
-    const merged = mergeTemplateManifests(
-      stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }))
-    );
-    const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(merged.document));
-    const composed = composeTemplateLayers({
-      layers: stack.map((entry) => ({
-        label: entry.pin.url,
-        files: entry.snapshot.files,
-        readFile: (filePath) => entry.snapshot.readFile(filePath),
-      })),
-      composedPaths: [TEMPLATE_SOURCE_MANIFEST_PATH],
-    });
-    const files = [
-      ...composed.files,
-      {
-        path: TEMPLATE_SOURCE_MANIFEST_PATH,
-        contentHash: sha256Hex(manifestBytes),
-        size: manifestBytes.byteLength,
-        mode: 0o644 as const,
-      },
-    ].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-    this.acquiredLayers = stack.map((entry) => ({
-      url: entry.pin.url,
-      ref: entry.pin.ref,
-      commit: entry.pin.commit,
-    }));
-    return {
-      // The root's commit, which keys this materialization's staging paths. What
-      // the workspace is made of is the recorded layers, not this one commit.
-      commit: pin.commit,
-      snapshot: canonicalSnapshotDigest(
-        files.map((file) => ({
-          path: file.path,
-          mode: file.mode === 0o755 ? 0o100755 : 0o100644,
-          size: file.size,
-          contentHash: file.contentHash,
-        }))
-      ),
-      files,
-      readFile: (filePath) =>
-        filePath === TEMPLATE_SOURCE_MANIFEST_PATH
-          ? new Uint8Array(manifestBytes)
-          : composed.readFile(filePath),
-    };
+    this.acquiredLayers = composed.layers;
+    return composed.snapshot;
   }
-
   private async acquireInitialization(
     pin: WorkspaceTemplatePin
   ): Promise<PreparedRootTemplateInitialization> {

@@ -13,6 +13,7 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { canonicalTemplateYaml } from "@vibestudio/workspace/templateManifest";
 import {
   WorkspaceRootTemplateBootstrap,
+  composeDeclaredTemplateLayers,
   enumerateRootTemplateRepositories,
 } from "./workspaceRootTemplateBootstrap.js";
 
@@ -402,5 +403,119 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     await expect(fx.bootstrap.prepareInitialization()).rejects.toThrow(
       /cannot resolve their tracks/u
     );
+  });
+});
+
+describe("composeDeclaredTemplateLayers", () => {
+  const baseCommit = "b".repeat(40);
+  const dependencyUrl = "git+https://example.test/foundation.git";
+
+  function baseLayer(): ExactGitSnapshot {
+    return snapshot(
+      [
+        {
+          path: "meta/vibestudio.yml",
+          text: canonicalTemplateYaml({
+            systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+            defaultRepo: "projects/default",
+            template: { name: "Base", repositories: ["packages/runtime"], files: [] },
+          }),
+        },
+        { path: "packages/runtime/package.json", text: '{"name":"@workspace/runtime"}' },
+        { path: "packages/runtime/index.ts", text: "export {};" },
+      ],
+      baseCommit
+    );
+  }
+
+  function dependentRoot(): ExactGitSnapshot {
+    return snapshot([
+      {
+        path: "meta/vibestudio.yml",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: {
+            name: "System",
+            dependencies: [{ url: dependencyUrl }],
+            repositories: ["workers/system-test-runner"],
+            files: [],
+          },
+        }),
+      },
+      {
+        path: "workers/system-test-runner/package.json",
+        text: '{"dependencies":{"@workspace/runtime":"workspace:*"}}',
+      },
+    ]);
+  }
+
+  it("places a declared dependency's files in the tree a unit's closure needs", async () => {
+    const root = dependentRoot();
+
+    const composed = await composeDeclaredTemplateLayers({
+      pin: {
+        url: "git+https://example.test/system.git",
+        ref: "refs/heads/main",
+        commit: "a".repeat(40),
+      },
+      root,
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire: async () => baseLayer(),
+      resolveTrack: async () => ({ ref: "refs/tags/v1.0.0", commit: baseCommit }),
+    });
+
+    const paths = composed.snapshot.files.map((file) => file.path);
+    expect(paths).toContain("workers/system-test-runner/package.json");
+    // The dependency this unit resolves against must be in the same tree, or a
+    // version derived from it names a closure no workspace ever runs.
+    expect(paths).toContain("packages/runtime/package.json");
+    expect(paths).toContain("packages/runtime/index.ts");
+    // Dependency first, with the template being installed last.
+    expect(composed.layers.map((layer) => layer.commit)).toEqual([baseCommit, "a".repeat(40)]);
+    const manifest = new TextDecoder().decode(composed.snapshot.readFile("meta/vibestudio.yml")!);
+    expect(manifest).toContain("workers/system-test-runner");
+    expect(manifest).toContain("packages/runtime");
+    expect(manifest).toContain("projects/default");
+  });
+
+  it("passes a standalone template through as its own acquired tree", async () => {
+    const root = baseLayer();
+    const acquire = vi.fn(async () => baseLayer());
+
+    const composed = await composeDeclaredTemplateLayers({
+      pin: {
+        url: "git+https://example.test/foundation.git",
+        ref: "refs/heads/main",
+        commit: baseCommit,
+      },
+      root,
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire,
+    });
+
+    expect(acquire).not.toHaveBeenCalled();
+    expect(composed.snapshot).toBe(root);
+    expect(composed.layers).toEqual([
+      {
+        url: "git+https://example.test/foundation.git",
+        ref: "refs/heads/main",
+        commit: baseCommit,
+      },
+    ]);
+  });
+
+  it("refuses to compose when it cannot resolve a declared dependency's track", async () => {
+    await expect(
+      composeDeclaredTemplateLayers({
+        pin: {
+          url: "git+https://example.test/system.git",
+          ref: "refs/heads/main",
+          commit: "a".repeat(40),
+        },
+        root: dependentRoot(),
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire: async () => baseLayer(),
+      })
+    ).rejects.toThrow("cannot resolve their tracks");
   });
 });

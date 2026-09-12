@@ -74,6 +74,7 @@ import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/s
 import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
+  TEMPLATE_SOURCE_MANIFEST_PATH,
 } from "@vibestudio/workspace/templateCoordinates";
 import {
   hostDesignatedTemplateUrls,
@@ -1499,7 +1500,8 @@ async function main() {
   const rootTemplateCaller = createHostCaller("server", "server", SYSTEM_SUBJECT);
   const { acquireRootTemplateSnapshot, seedRootTemplateSnapshotFromCheckout } =
     await import("./acquireRootTemplateSnapshot.js");
-  const { WorkspaceRootTemplateBootstrap } = await import("./workspaceRootTemplateBootstrap.js");
+  const { WorkspaceRootTemplateBootstrap, composeDeclaredTemplateLayers } =
+    await import("./workspaceRootTemplateBootstrap.js");
   const createRootTemplateGitClient = (pin: { url: string; credential?: string }) => {
     const remoteUrl = templateGitTransportUrl(pin.url);
     return createHostGitReadClient({
@@ -2767,7 +2769,38 @@ async function main() {
         workspaceRootPin,
         readDefaultWorkspaceTemplates(appRoot)
       );
-      const conduitSnapshot = await acquireWorkspaceTemplate(conduitPin);
+      // A unit's effective version covers its dependency closure, and a
+      // distribution's units routinely depend on packages that live in the
+      // distribution it is built on. Blessing the bare snapshot therefore
+      // resolves versions no workspace ever runs — it must be the same
+      // composition an install performs on this exact pin.
+      const conduitRoot = await acquireWorkspaceTemplate(conduitPin);
+      const conduitComposition = await composeDeclaredTemplateLayers({
+        pin: conduitPin,
+        root: conduitRoot,
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire: acquireWorkspaceTemplate,
+        resolveTrack: resolveTemplateTrack,
+      });
+      const conduitSnapshot = conduitComposition.snapshot;
+      // Every other file arrives from an acquired snapshot already in content
+      // storage; composition authors exactly one itself, so only the merged
+      // source manifest's bytes exist nowhere else yet.
+      const composedManifest = conduitSnapshot.files.find(
+        (file) => file.path === TEMPLATE_SOURCE_MANIFEST_PATH
+      );
+      const composedManifestBytes =
+        conduitComposition.layers.length > 1 && composedManifest
+          ? conduitSnapshot.readFile(composedManifest.path)
+          : null;
+      if (composedManifest && composedManifestBytes) {
+        const stored = await putBootstrapBytes(layout.blobsDir, Buffer.from(composedManifestBytes));
+        if (stored.digest !== composedManifest.contentHash) {
+          throw new Error(
+            `Conduit composition changed the content identity of ${composedManifest.path}`
+          );
+        }
+      }
       const conduitTree = await mirrorWorktreeTree(
         layout.blobsDir,
         conduitSnapshot.files.map((file) => ({
