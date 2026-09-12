@@ -1032,7 +1032,12 @@ function inferGrantScope(input: IssueAuthorityGrantInput): NonNullable<Authority
   if (input.subject.startsWith("agent:")) return "agent";
   if (input.subject.startsWith("mission:")) return "mission";
   if (input.constraints?.invocationDigest) return "once";
-  if (input.constraints?.taskRef) return "task";
+  // A task principal is task-scoped whether or not the grant also carries the
+  // task reference as a constraint. Test-policy consent mints exactly that
+  // shape — subject `task:<digest>`, constrained only by lineage — and reading
+  // scope from the constraint alone labelled it "system", the broadest scope
+  // there is, which hid real task grants from authority.listTaskRules.
+  if (input.constraints?.taskRef || input.subject.startsWith("task:")) return "task";
   if (input.constraints?.sessionId) return "session";
   if (input.subject.startsWith("code:")) return "version";
   return "system";
