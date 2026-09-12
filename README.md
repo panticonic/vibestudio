@@ -103,7 +103,8 @@ self-update.
 Requires **Node.js 22.19.0+**.
 
 ```bash
-npm install -g @panticonic/vibestudio-server
+brew install panticonic/tap/vibestudio-server   # macOS, or Linuxbrew
+npm install -g @panticonic/vibestudio-server    # anywhere else
 vibestudio remote deploy local
 ```
 
@@ -146,6 +147,7 @@ then let the deployment lifecycle reinstall that exact version and restart the
 service:
 
 ```bash
+brew upgrade vibestudio-server                          # or:
 npm install -g @panticonic/vibestudio-server@latest
 vibestudio remote deploy update local
 ```

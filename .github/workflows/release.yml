@@ -314,12 +314,16 @@ jobs:
           if [ "$missing" -eq 0 ]; then
             echo "Signing and notarizing with the configured Apple identity."
             pnpm exec electron-builder --mac
+            # The Homebrew tap renders `auto_updates` from this: a cask must not
+            # defer to an in-app updater that Squirrel will refuse.
+            mkdir -p release && echo developer-id > release/macos-signing.txt
           elif [ "$missing" -eq 5 ]; then
             echo "::warning::No Apple identity configured; publishing an ad-hoc signed, unnotarized macOS build. Gatekeeper will warn on first launch and it cannot auto-update."
             # Keep electron-builder from adopting a stray keychain identity on the
             # runner, so an unsigned build is unsigned deliberately rather than by
             # accident.
             CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
+            mkdir -p release && echo ad-hoc > release/macos-signing.txt
           else
             echo "Apple signing is partially configured: $missing of 5 credentials are missing." >&2
             echo "Set all five secrets to sign, or none to publish an unsigned build." >&2
@@ -345,6 +349,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
+            release/macos-signing.txt
             release/SHA256SUMS-macos
           if-no-files-found: error
           retention-days: 7
@@ -374,6 +379,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
+            release/macos-signing.txt
             release/SHA256SUMS-macos
 
   windows-installer:
