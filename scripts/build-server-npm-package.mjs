@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
-// Stage the two publishable npm packages from a completed `pnpm build`:
+// Stage the one publishable npm package from a completed `pnpm build`:
 //
 //   dist-packages/server  → @panticonic/vibestudio-server  (slim headless server, no electron)
-//   dist-packages/app     → @panticonic/vibestudio         (full Electron desktop app)
+//
+// The desktop app is distributed only as a native package — deb/rpm/pacman with
+// the AppArmor profile a workspace sandbox needs, a Homebrew cask on macOS, and
+// the NSIS installer on Windows. npm remains the route for a headless host that
+// no native package covers, which is the one thing it does better than an
+// archive: it resolves this host's own native dependencies (node-pty, esbuild,
+// ripgrep's fetched binary) instead of shipping every platform's copy.
 //
 // The monorepo root stays private; this script synthesizes each package.json and
 // assembles its file tree. Host @vibestudio/* packages are vendored under
@@ -13,7 +19,7 @@ import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // include packages that require Node >=22.13, so the generated packages declare
 // the same floor.
 //
-// Run AFTER `pnpm build`:  node scripts/build-npm-packages.mjs
+// Run AFTER `pnpm build`:  node scripts/build-server-npm-package.mjs
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -30,11 +36,10 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;
-const PUBLIC_APP_PACKAGE_NAME = "@panticonic/vibestudio";
 const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 
-// Only run the build when invoked directly (`node scripts/build-npm-packages.mjs`),
+// Only run the build when invoked directly (`node scripts/build-server-npm-package.mjs`),
 // not when imported (e.g. by the drift-guard test) — importing must be free of
 // side effects beyond the cheap top-level reads above.
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
@@ -45,7 +50,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 }
 
 async function main() {
-  console.log(`Staging npm packages @ v${VERSION}`);
+  console.log(`Staging ${PUBLIC_SERVER_PACKAGE_NAME} @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
   // This npm package is portable across the supported targets, so retain every
@@ -56,12 +61,9 @@ async function main() {
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
   stageServer(nativeArtifacts, nodeRuntimes);
-  stageApp(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
-  assertNoBundledUserlandSource(path.join(outRoot, "app"), "staged app npm package");
-  console.log("\n✔ Staged dist-packages/{server,app}. Validate with:");
+  console.log("\n✔ Staged dist-packages/server. Validate with:");
   console.log("    (cd dist-packages/server && npm publish --dry-run)");
-  console.log("    (cd dist-packages/app && npm publish --dry-run)");
 }
 
 function assertBuilt() {
@@ -106,9 +108,7 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
 
   // Bin shims.
   copyWorkerdWindowsMetadata(root);
-  copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
-  copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
-  stageNpmUpdateLauncherFiles(root);
+  copyFile("scripts/vibestudio-cli-shim.mjs", path.join(root, "scripts/vibestudio-cli-shim.mjs"));
   copyFile(
     "scripts/vibestudio-server-shim.mjs",
     path.join(root, "scripts/vibestudio-server-shim.mjs")
@@ -139,73 +139,13 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
     license: rootPkg.license ?? "MIT",
     bin: {
       "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
-      vibestudio: "scripts/vibestudio-launcher.mjs",
+      vibestudio: "scripts/vibestudio-cli-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
     files: ["dist", "vendor", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
-    dependencies: computeHostDependencies({ electron: false }),
-    publishConfig: { access: "public" },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// @panticonic/vibestudio
-// ---------------------------------------------------------------------------
-function stageApp(nativeArtifacts) {
-  const root = path.join(outRoot, "app");
-  console.log(`• Staging ${PUBLIC_APP_PACKAGE_NAME}…`);
-  mkdirp(root);
-
-  // Full host build (main + all preloads + server-electron + cli + headless-host).
-  copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), (name, entry) =>
-    DEVELOPMENT_DIST_ENTRIES.has(name) || defaultSkip(name, entry));
-  stageNativeIsolationArtifacts(root, nativeArtifacts);
-
-  copyWorkerdWindowsMetadata(root);
-  copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
-  copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
-  stageNpmUpdateLauncherFiles(root);
-  copyFile(
-    "scripts/vibestudio-server-shim.mjs",
-    path.join(root, "scripts/vibestudio-server-shim.mjs")
-  );
-  copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
-  copyTree(path.join(repoRoot, "scripts/cli"), path.join(root, "scripts/cli"), defaultSkip);
-  assertPassthroughScriptsStaged(root);
-  if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
-    copyTree(
-      path.join(repoRoot, "build-resources"),
-      path.join(root, "build-resources"),
-      defaultSkip
-    );
-  }
-
-  // Vendor the host's @vibestudio/* packages under vendor/ (copied into node_modules
-  // by the postinstall — see the server staging note). @workspace/* packages
-  // are NOT host deps. The exact Base pointer below is the only userland
-  // distribution input in the package.
-  vendorVibestudioPackages(root);
-  vendorExtensionHost(root);
-  copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
-
-  writeJson(path.join(root, "package.json"), {
-    name: PUBLIC_APP_PACKAGE_NAME,
-    version: VERSION,
-    productName: rootPkg.productName ?? "Vibestudio",
-    description: rootPkg.description,
-    type: "module",
-    license: rootPkg.license ?? "MIT",
-    main: "dist/main.cjs",
-    bin: {
-      vibestudio: "scripts/vibestudio-launcher.mjs",
-      "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
-    },
-    engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "scripts", "build-resources"],
-    scripts: { postinstall: "node scripts/vendor-install.mjs" },
-    dependencies: computeHostDependencies({ electron: true }),
+    dependencies: computeHostDependencies(),
     publishConfig: { access: "public" },
   });
 }
@@ -229,17 +169,6 @@ export function assertPassthroughScriptsStaged(root) {
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   if (missing.length > 0) {
     throw new Error(`Staged package is missing CLI support files: ${missing.join(", ")}`);
-  }
-}
-
-export function stageNpmUpdateLauncherFiles(root) {
-  for (const relative of [
-    "scripts/npm-update-contract.mjs",
-    "scripts/npm-update-launcher.mjs",
-    "scripts/historical-host-snapshot.mjs",
-    "scripts/owned-process-tree.mjs",
-  ]) {
-    copyFile(relative, path.join(root, relative));
   }
 }
 
@@ -359,19 +288,14 @@ function copyFile(rel, dest) {
 // The dependency surface a host package needs to build the default template at
 // runtime is the root's declared runtime dependency surface. The vendored
 // @vibestudio packages are NOT listed here — they ship under vendor/ and are
-// copied into node_modules by the postinstall. Electron is the sole exception:
-// it is a development tool in the monorepo and a runtime dependency of the
-// published desktop app. The headless server is therefore "app minus electron".
-export function computeHostDependencies({ electron }) {
+// copied into node_modules by the postinstall. Electron is deliberately absent:
+// it is a development tool in the monorepo and belongs only to the desktop app,
+// which ships as a native package rather than from this registry.
+export function computeHostDependencies() {
   const deps = {};
   for (const [name, range] of Object.entries(rootPkg.dependencies ?? {})) {
     if (typeof range === "string" && range.startsWith("workspace:")) continue;
     deps[name] = range;
-  }
-  if (electron) {
-    const electronVersion = rootPkg.devDependencies?.electron;
-    if (!electronVersion) throw new Error("Root devDependencies must declare electron");
-    deps["electron"] = electronVersion;
   }
   return deps;
 }

@@ -68,7 +68,7 @@ async function main() {
   }
 
   if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
-  if (!options.skipStage) run("node", ["scripts/build-npm-packages.mjs"], { cwd: repoRoot });
+  if (!options.skipStage) run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
 
   const manifests = selected.map((pkg) => validateStagedPackage(pkg));
   const publishQueue = manifests.filter((entry) => {

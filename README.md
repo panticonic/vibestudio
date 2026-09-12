@@ -84,37 +84,14 @@ vibestudio             # launch the desktop app
 vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
-<details>
-<summary>Installing the desktop app from npm instead (requires Node.js 22.19.0+)</summary>
-
-npm predates the packaged builds and remains available, but it cannot install the
-AppArmor profile a workspace sandbox needs, so prefer a native package where one
-exists.
-
-```bash
-npm install -g @panticonic/vibestudio
-```
-
-</details>
-
 On the first launch, choose or create a workspace. Its configured onboarding
 prompt is added to the new chat's history and starts the onboarding agent
 automatically.
 
-Packaged installs update through their package manager, as above. A verified
-global **npm** desktop install instead checks the npm `latest` release
-periodically. When an update is available, **Update and restart** confirms any
-interruption of the desktop-owned local hub, stops its complete process tree,
-installs the exact offered version, and relaunches the app. Vibestudio never
-updates on a timer. If the npm prefix is not writable, the action instead
-copies an exact-version command for the package manager environment that owns
-the installation.
-
-Only one desktop update can mutate the installation at a time. A second launch
-during that window reports that Vibestudio is updating and exits. If
-installation fails, the launcher tries once to restore the previous exact
-version and the relaunched app reports the outcome and private update-log path.
-Local, linked, `npx`, pnpm, and development launches do not self-update.
+The desktop app is distributed only as a native package, and each one updates
+through its own package manager: `apt`/`dnf` from the signed repositories above,
+`brew upgrade` on macOS, and a fresh installer on Windows. Development and
+linked launches never self-update.
 
 ### Headless server (remote/home server; clients connect to it)
 
@@ -126,8 +103,9 @@ vibestudio remote deploy local
 ```
 
 A workspace runtime is sandboxed, which on Ubuntu 24.04+ needs an AppArmor
-profile that npm cannot install. `vibestudio remote doctor` reports whether this
-host permits the sandbox and what to do when it does not.
+profile that npm cannot install — prefer `apt`/`dnf` on a host those cover.
+`vibestudio remote doctor` reports whether this host permits the sandbox and
+what to do when it does not.
 
 On Linux with systemd, `deploy local` installs an always-on user service on this
 computer, enables it at login/boot, runs end-to-end diagnostics, and prints the

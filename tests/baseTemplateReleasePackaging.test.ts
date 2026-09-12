@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { stageBaseTemplateRelease } from "../scripts/build-npm-packages.mjs";
+import { stageBaseTemplateRelease } from "../scripts/build-server-npm-package.mjs";
 
 describe("base-template release packaging", () => {
   it("stages the host artifact into a headless npm package", () => {

@@ -6,10 +6,9 @@ import { tmpdir } from "node:os";
 import {
   assertPassthroughScriptsStaged,
   SERVER_RUNTIME_ARTIFACTS,
-  stageNpmUpdateLauncherFiles,
   stageNativeIsolationArtifacts,
   stageNodeRuntimeArtifacts,
-} from "../scripts/build-npm-packages.mjs";
+} from "../scripts/build-server-npm-package.mjs";
 import {
   NATIVE_ISOLATION_TARGETS,
 } from "../scripts/native-isolation-artifacts.mjs";
@@ -32,31 +31,20 @@ describe("npm CLI packaging", () => {
     ]);
   });
 
-  it("stages the passthrough script tree into both published packages", () => {
-    const buildScript = fs.readFileSync(path.resolve("scripts/build-npm-packages.mjs"), "utf8");
+  it("stages the passthrough script tree into the published server package", () => {
+    const buildScript = fs.readFileSync(
+      path.resolve("scripts/build-server-npm-package.mjs"),
+      "utf8"
+    );
     const copies = buildScript.match(
       /copyTree\(path\.join\(repoRoot, "scripts\/cli"\), path\.join\(root, "scripts\/cli"\), defaultSkip\)/g
     );
-    expect(copies).toHaveLength(2);
+    expect(copies).toHaveLength(1);
     expect(fs.existsSync(path.resolve("scripts/cli/remote-serve.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/server-entry.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/smoke-remote-server.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/mobile-native-android.mjs"))).toBe(true);
     expect(buildScript).not.toContain("stageMobileNativeScaffold");
-  });
-
-  it("stages the complete shared npm update launcher contract", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-update-staging-"));
-    stageNpmUpdateLauncherFiles(root);
-    for (const relative of [
-      "scripts/npm-update-contract.mjs",
-      "scripts/npm-update-launcher.mjs",
-      "scripts/historical-host-snapshot.mjs",
-      "scripts/owned-process-tree.mjs",
-    ]) {
-      expect(fs.existsSync(path.join(root, relative))).toBe(true);
-    }
-    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("fails staging when a packaged passthrough dependency is absent", () => {

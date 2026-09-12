@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { computeHostDependencies } from "../scripts/build-npm-packages.mjs";
+import { computeHostDependencies } from "../scripts/build-server-npm-package.mjs";
 
 const rootPackage = JSON.parse(
   fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
@@ -17,14 +17,12 @@ const publicRuntimeDependencies = Object.fromEntries(
 
 describe("published npm dependency surface", () => {
   it("derives the server manifest from declared root runtime dependencies", () => {
-    expect(computeHostDependencies({ electron: false })).toEqual(publicRuntimeDependencies);
+    expect(computeHostDependencies()).toEqual(publicRuntimeDependencies);
   });
 
-  it("adds only Electron for the desktop app", () => {
-    expect(computeHostDependencies({ electron: true })).toEqual({
-      ...publicRuntimeDependencies,
-      electron: rootPackage.devDependencies.electron,
-    });
+  it("never publishes Electron, which belongs to the natively packaged desktop", () => {
+    expect(computeHostDependencies()).not.toHaveProperty("electron");
+    expect(rootPackage.devDependencies.electron).toBeTruthy();
   });
 
   it("publishes every external native host runtime dependency", () => {

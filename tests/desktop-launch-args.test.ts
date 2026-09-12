@@ -38,6 +38,6 @@ describe("desktop launcher argument routing", () => {
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
     ) as { bin?: Record<string, string> };
 
-    expect(manifest.bin?.vibestudio).toBe("scripts/vibestudio-launcher.mjs");
+    expect(manifest.bin?.vibestudio).toBe("scripts/vibestudio-cli-shim.mjs");
   });
 });

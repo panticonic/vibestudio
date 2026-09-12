@@ -2,8 +2,8 @@ name: Release
 
 # Tag a validated release with `v*` (e.g. v0.2.0) to create the GitHub release and
 # build the native installers. Nothing here publishes to npm; the npm packages are
-# a separate manual `pnpm publish:npm`, and only the server package is still
-# advertised, for hosts no native package covers.
+# a separate manual `pnpm publish:server-npm`, and only the headless server is
+# published there, for hosts no native package covers.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages (needs build-resources icons and LINUX_SIGNING_KEY)
 #   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
@@ -83,8 +83,8 @@ jobs:
             `.deb` files below install directly. Every packaged format carries the AppArmor
             profile that a workspace sandbox needs on Ubuntu 24.04+.
 
-            **A server on a host we do not package** — npm still carries the headless server
-            and CLI, and needs Node.js 22.19+.
+            **A server on a host we do not package** — npm carries the headless server and
+            CLI, and needs Node.js 22.19+.
 
             ```sh
             npm install -g @panticonic/vibestudio-server

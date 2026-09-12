@@ -30,13 +30,6 @@ import {
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
-import {
-  copyPendingNpmUpdateCommand,
-  consumeNpmUpdateResult,
-  createNpmUpdateController,
-  type NpmUpdateController,
-} from "./updateCheck.js";
-import { NPM_UPDATE_REQUESTED_EXIT_CODE } from "../../scripts/npm-update-contract.mjs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createConnectDeepLink,
@@ -397,11 +390,8 @@ let localHubStopConfirmed = false;
 let localHubStopPromise: Promise<void> | null = null;
 type QuitIntent =
   | { kind: "ordinary"; serverDecision: "stop" | "keep" | null }
-  | { kind: "relaunch"; exitCode: number }
-  | { kind: "npm-update"; targetVersion: string };
+  | { kind: "relaunch"; exitCode: number };
 let quitIntent: QuitIntent = { kind: "ordinary", serverDecision: null };
-let npmUpdateController: NpmUpdateController | null = null;
-let npmUpdateResultConsumed = false;
 let presentedStartupFinished = false;
 let deferredStartupWork: (() => void) | null = null;
 /**
@@ -1772,7 +1762,6 @@ app.on("ready", async () => {
   };
   powerMonitor.on("resume", () => {
     nudgeServerLiveness("system resume");
-    npmUpdateController?.triggerIfStale("resume");
   });
   powerMonitor.on("unlock-screen", () => nudgeServerLiveness("screen unlock"));
   // Same recovery, awake path: the shell renderer forwards its `window` `online`
@@ -1780,23 +1769,11 @@ app.on("ready", async () => {
   // instead of lingering on a stale "connected". NUDGE ONLY, never a teardown.
   ipcMain.on("vibestudio:shell.network-online", () => {
     nudgeServerLiveness("network online");
-    npmUpdateController?.triggerIfStale("network");
   });
   ipcMain.on("vibestudio:shell.chrome-interactive-focus", (event, active: unknown) => {
     applicationWindow.viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
   });
   installBootstrapConnectionHandlers();
-  npmUpdateController = createNpmUpdateController({
-    eventService,
-    ownsLocalHub: () =>
-      serverSession?.serverOwnership === "desktop-local" &&
-      serverSession.hubProcessManager !== null,
-    requestUpdateQuit: (targetVersion) => {
-      quitIntent = { kind: "npm-update", targetVersion };
-      app.quit();
-    },
-  });
-
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
   // after the trusted shell approval flow grants that panel access to the
   // target origin. Browser panels use their workspace browser-environment
@@ -2261,27 +2238,6 @@ app.on("ready", async () => {
       });
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
-    onNotificationAction: async (_id, actionId) => {
-      if (actionId === "desktop-npm-update-install") {
-        if (!npmUpdateController) throw new Error("The npm updater is unavailable");
-        await npmUpdateController.requestInstall().catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          eventService.emit("notification:show", {
-            id: "desktop-npm-update-action-error",
-            type: "error",
-            title: "Vibestudio update could not start",
-            message,
-            ttl: 0,
-          });
-          throw error;
-        });
-      } else if (actionId === "desktop-npm-update-copy") {
-        if (npmUpdateController) npmUpdateController.copyUpdateCommand();
-        else copyPendingNpmUpdateCommand();
-      } else if (actionId === "desktop-npm-update-copy-result") {
-        copyPendingNpmUpdateCommand();
-      }
-    },
   };
 
   try {
@@ -2728,12 +2684,6 @@ app.on("ready", async () => {
     );
 
     deferredStartupWork = () => {
-      npmUpdateController?.start();
-      if (!npmUpdateResultConsumed) {
-        npmUpdateResultConsumed = true;
-        consumeNpmUpdateResult(eventService);
-      }
-
       // These are useful background services, but neither belongs on the path
       // to the first usable workspace frame.
       setTimeout(async () => {
@@ -3181,7 +3131,7 @@ app.on("window-all-closed", () => {
 // the will-quit cleanup.
 
 app.on("before-quit", (event) => {
-  if (quitIntent.kind === "npm-update" || quitIntent.kind === "relaunch") return;
+  if (quitIntent.kind === "relaunch") return;
   if (quitIntent.serverDecision !== null || isCleaningUp) return;
   const conn = serverSession;
   const remembered = centralData.getKeepServerOnQuit();
@@ -3233,18 +3183,15 @@ app.on("will-quit", (event) => {
     return;
   }
 
-  const updateQuit = quitIntent.kind === "npm-update";
   const relaunchQuit = quitIntent.kind === "relaunch";
   const hasResourcesToClean =
     serverSession ||
     systemRuntime?.cdpHostProvider ||
     currentHostDevelopmentExecutor ||
-    updateQuit ||
     relaunchQuit;
   if (!hasResourcesToClean) return;
   isCleaningUp = true;
   event.preventDefault();
-  npmUpdateController?.stop();
   stopElectronHostTargetLaunchLoop();
   approvalAttention?.dispose();
   approvalAttention = null;
@@ -3283,7 +3230,8 @@ app.on("will-quit", (event) => {
     const stopServer =
       session.serverOwnership === "desktop-local" &&
       session.hubProcessManager !== null &&
-      (updateQuit || (quitIntent.kind === "ordinary" && quitIntent.serverDecision !== "keep"));
+      quitIntent.kind === "ordinary" &&
+      quitIntent.serverDecision !== "keep";
     if (stopServer) {
       shutdownRequiresLocalHubStop = true;
       localHubStopConfirmed = false;
@@ -3309,26 +3257,20 @@ app.on("will-quit", (event) => {
         if (errors.length) throw new AggregateError(errors, "Workspace runtime cleanup failed");
       });
 
-      let unregisterFailure: unknown = null;
       try {
         await unregister;
       } catch (error) {
-        unregisterFailure = error;
-        if (!updateQuit) {
-          console.error("[App] Failed to unregister runtime client:", error);
-        }
+        console.error("[App] Failed to unregister runtime client:", error);
       }
 
       // All server-side cleanup is complete. Close the transports before
       // stopping or detaching the hub; the producers that could issue new RPCs
       // were stopped above, so this no longer races any required cleanup.
       const close = session.close();
-      let closeFailure: unknown = null;
       try {
         await close;
       } catch (error) {
-        closeFailure = error;
-        if (!updateQuit) console.error("[App] Session close error:", error);
+        console.error("[App] Session close error:", error);
       }
 
       if (stopServer) {
@@ -3352,9 +3294,6 @@ app.on("will-quit", (event) => {
         session.hubProcessManager?.detach();
         if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
-
-      if (updateQuit && unregisterFailure) throw unregisterFailure;
-      if (updateQuit && closeFailure) throw closeFailure;
     })();
     stopPromises.push(cleanupThenClose);
   }
@@ -3378,13 +3317,7 @@ app.on("will-quit", (event) => {
     .then(() => {
       clearTimeout(shutdownTimeout);
       console.log("[App] Shutdown complete");
-      app.exit(
-        updateQuit
-          ? NPM_UPDATE_REQUESTED_EXIT_CODE
-          : quitIntent.kind === "relaunch"
-            ? quitIntent.exitCode
-            : 0
-      );
+      app.exit(quitIntent.kind === "relaunch" ? quitIntent.exitCode : 0);
     })
     .catch((error: unknown) => {
       if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
@@ -3410,10 +3343,7 @@ app.on("will-quit", (event) => {
         return;
       }
       clearTimeout(shutdownTimeout);
-      console.error(
-        `[App] Shutdown failed${updateQuit ? "; update cancelled" : ""}:`,
-        formatUnknownError(error)
-      );
+      console.error("[App] Shutdown failed:", formatUnknownError(error));
       app.exit(1);
     });
 });

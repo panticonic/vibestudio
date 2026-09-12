@@ -82,7 +82,7 @@ builds that do not actually bundle.
 ## Packaging contract
 
 Electron Builder includes the required `dist/` artifacts according to
-`electron-builder.yml`. `scripts/build-npm-packages.mjs` stages the standalone
+`electron-builder.yml`. `scripts/build-server-npm-package.mjs` stages the standalone
 server and CLI packages, including the same `dist/headless-host/main.js`
 contract used by `HeadlessHostManager`. `VIBESTUDIO_APP_ROOT` identifies the
 installed package root; source commands use the repository root.
