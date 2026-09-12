@@ -37,10 +37,19 @@ export interface LinuxUpgrade {
   argv: readonly string[];
 }
 
-/** How this installation can be moved to a newer release. */
+/**
+ * How this installation can be moved to a newer release.
+ *
+ * `command` is whatever package manager owns this copy — apt/dnf/pacman as
+ * root through polkit, or Homebrew as the user. `announce-only` is a packaged
+ * build whose upgrade we cannot drive: saying a release exists is still worth
+ * more than silence, which is what the retired npm updater left every
+ * non-npm install with.
+ */
 export type UpdateDelivery =
   | { kind: "in-app" }
-  | { kind: "privileged-command"; upgrade: LinuxUpgrade; canElevate: boolean };
+  | { kind: "command"; upgrade: LinuxUpgrade; elevate: boolean }
+  | { kind: "announce-only" };
 
 export interface AvailableRelease {
   currentVersion: string;
@@ -73,8 +82,15 @@ export interface ReleaseUpdateControllerDeps {
   linuxUpgrade?: () => LinuxUpgrade | null;
   /** Whether this host can raise one command to root interactively. */
   canElevate?: () => boolean;
-  /** Run one argv as root, prompting the user through polkit. */
-  runPrivileged?: (argv: readonly string[]) => Promise<{ code: number | null; stderr: string }>;
+  /** macOS: whether this build carries a Developer ID signature. */
+  developerIdSigned?: () => boolean;
+  /** macOS: the reachable Homebrew upgrade for the installed cask. */
+  brewUpgrade?: () => LinuxUpgrade | null;
+  /** Run one argv, elevating through polkit when asked. */
+  runCommand?: (
+    argv: readonly string[],
+    options: { elevate: boolean }
+  ) => Promise<{ code: number | null; stderr: string }>;
   installer?: () => ReleaseUpdateInstaller;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
@@ -125,15 +141,26 @@ export function updateDeliveryFor(input: {
   packaged: boolean;
   linuxUpgrade: LinuxUpgrade | null;
   canElevate: boolean;
+  /** macOS only: Squirrel refuses to replace a build without a Developer ID. */
+  developerIdSigned: boolean;
+  /** macOS only: the Homebrew that installed the cask, when it is reachable. */
+  brewUpgrade: LinuxUpgrade | null;
 }): UpdateDelivery | null {
   if (!input.packaged) return null;
-  if (input.platform === "win32" || input.platform === "darwin") return { kind: "in-app" };
-  if (input.platform === "linux" && input.linuxUpgrade) {
-    return {
-      kind: "privileged-command",
-      upgrade: input.linuxUpgrade,
-      canElevate: input.canElevate,
-    };
+  if (input.platform === "win32") return { kind: "in-app" };
+  if (input.platform === "darwin") {
+    if (input.developerIdSigned) return { kind: "in-app" };
+    // An ad-hoc signed build cannot replace itself, so the cask that installed
+    // it is the update path — the reason that tap exists.
+    if (input.brewUpgrade) return { kind: "command", upgrade: input.brewUpgrade, elevate: false };
+    return { kind: "announce-only" };
+  }
+  if (input.platform === "linux") {
+    if (input.linuxUpgrade && input.canElevate) {
+      return { kind: "command", upgrade: input.linuxUpgrade, elevate: true };
+    }
+    if (input.linuxUpgrade) return { kind: "command", upgrade: input.linuxUpgrade, elevate: false };
+    return { kind: "announce-only" };
   }
   return null;
 }
@@ -162,6 +189,8 @@ export function createReleaseUpdateController(
     packaged: deps.packaged,
     linuxUpgrade: deps.linuxUpgrade?.() ?? null,
     canElevate: deps.canElevate?.() ?? false,
+    developerIdSigned: deps.developerIdSigned?.() ?? false,
+    brewUpgrade: deps.brewUpgrade?.() ?? null,
   });
   // A development, linked or unpackaged launch has no release to install, and a
   // Linux install we cannot attribute to a package manager has no command to
@@ -197,21 +226,7 @@ export function createReleaseUpdateController(
       title: `Vibestudio ${available.targetVersion} is available`,
       message: updateMessage(available.delivery),
       ttl: 0,
-      actions: [
-        available.delivery.kind === "in-app" || available.delivery.canElevate
-          ? {
-              id: "desktop-release-update-install",
-              label: "Update and restart",
-              variant: "solid",
-              command: { type: "desktop.installUpdate" as const },
-            }
-          : {
-              id: "desktop-release-update-copy",
-              label: "Copy upgrade command",
-              variant: "solid",
-              command: { type: "desktop.copyUpgradeCommand" as const },
-            },
-      ],
+      actions: updateActions(available.delivery),
     });
   };
 
@@ -268,10 +283,13 @@ export function createReleaseUpdateController(
    * the old build afterwards, so a successful upgrade ends in an offer to
    * restart rather than a silent swap.
    */
-  const installThroughPackageManager = async (upgrade: LinuxUpgrade): Promise<void> => {
-    const run = deps.runPrivileged;
-    if (!run) throw new Error("This host cannot run a privileged upgrade.");
-    const result = await run(upgrade.argv);
+  const installThroughPackageManager = async (
+    upgrade: LinuxUpgrade,
+    elevate: boolean
+  ): Promise<void> => {
+    const run = deps.runCommand;
+    if (!run) throw new Error("This host cannot run the upgrade command.");
+    const result = await run(upgrade.argv, { elevate });
     if (result.code === 0) {
       deps.eventService.emit("notification:show", {
         id: NOTIFICATION_ID,
@@ -321,16 +339,21 @@ export function createReleaseUpdateController(
     },
     async requestInstall() {
       if (!candidate) throw new Error("No update is currently available.");
+      if (delivery.kind === "announce-only") {
+        throw new Error("This installation updates from the releases page.");
+      }
       if (installInFlight) return installInFlight;
       installInFlight = (
-        delivery.kind === "in-app" ? installInApp() : installThroughPackageManager(delivery.upgrade)
+        delivery.kind === "in-app"
+          ? installInApp()
+          : installThroughPackageManager(delivery.upgrade, delivery.elevate)
       ).finally(() => {
         installInFlight = null;
       });
       return installInFlight;
     },
     copyUpgradeCommand() {
-      if (delivery.kind !== "privileged-command") return;
+      if (delivery.kind !== "command") return;
       writeClipboard(delivery.upgrade.display);
       deps.eventService.emit("notification:show", {
         id: "desktop-release-update-command-copied",
@@ -344,10 +367,28 @@ export function createReleaseUpdateController(
 }
 
 function updateMessage(delivery: UpdateDelivery): string {
-  if (delivery.kind === "in-app") return "Install it and restart when you are ready.";
-  return delivery.canElevate
-    ? "Your package manager installs it; the system will ask for permission."
-    : `Your package manager installs it: ${delivery.upgrade.display}`;
+  switch (delivery.kind) {
+    case "in-app":
+      return "Install it and restart when you are ready.";
+    case "command":
+      return delivery.elevate
+        ? "Your package manager installs it; the system will ask for permission."
+        : `Your package manager installs it: ${delivery.upgrade.display}`;
+    default:
+      return "Install it from the releases page when you are ready.";
+  }
+}
+
+function updateActions(delivery: UpdateDelivery) {
+  if (delivery.kind === "announce-only") return [];
+  return [
+    {
+      id: "desktop-release-update-install",
+      label: "Update and restart",
+      variant: "solid" as const,
+      command: { type: "desktop.installUpdate" as const },
+    },
+  ];
 }
 
 async function fetchLatestRelease(fetchImpl: typeof globalThis.fetch): Promise<unknown> {

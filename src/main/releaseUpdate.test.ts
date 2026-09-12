@@ -32,37 +32,51 @@ describe("release discovery", () => {
 describe("update delivery", () => {
   const upgrade = linuxUpgradeCommandFor("deb")!;
 
-  it("installs in-app where no package manager owns the install", () => {
-    for (const platform of ["win32", "darwin"] as const) {
-      expect(
-        updateDeliveryFor({ platform, packaged: true, linuxUpgrade: null, canElevate: false })
-      ).toEqual({ kind: "in-app" });
-    }
+  const base = {
+    packaged: true,
+    linuxUpgrade: null,
+    canElevate: false,
+    developerIdSigned: false,
+    brewUpgrade: null,
+  };
+  const brew = { display: "brew upgrade --cask vibestudio", argv: ["/opt/homebrew/bin/brew"] };
+
+  it("installs in-app on Windows, which has no package manager behind it", () => {
+    expect(updateDeliveryFor({ ...base, platform: "win32" })).toEqual({ kind: "in-app" });
   });
 
-  it("defers to the package manager that owns a Linux install", () => {
-    expect(
-      updateDeliveryFor({
-        platform: "linux",
-        packaged: true,
-        linuxUpgrade: upgrade,
-        canElevate: true,
-      })
-    ).toEqual({ kind: "privileged-command", upgrade, canElevate: true });
+  it("installs in-app on macOS only when the build carries a Developer ID", () => {
+    // Squirrel refuses an ad-hoc signed build, so the cask is the path there.
+    expect(updateDeliveryFor({ ...base, platform: "darwin", developerIdSigned: true })).toEqual({
+      kind: "in-app",
+    });
+    expect(updateDeliveryFor({ ...base, platform: "darwin", brewUpgrade: brew })).toEqual({
+      kind: "command",
+      upgrade: brew,
+      elevate: false,
+    });
   });
 
-  it("stays silent where there is nothing it could install", () => {
-    // A development or linked launch, and a Linux tree no package database claims.
+  it("elevates a Linux package manager, and only when it can", () => {
     expect(
-      updateDeliveryFor({
-        platform: "linux",
-        packaged: false,
-        linuxUpgrade: upgrade,
-        canElevate: true,
-      })
-    ).toBeNull();
+      updateDeliveryFor({ ...base, platform: "linux", linuxUpgrade: upgrade, canElevate: true })
+    ).toEqual({ kind: "command", upgrade, elevate: true });
+    expect(updateDeliveryFor({ ...base, platform: "linux", linuxUpgrade: upgrade })).toEqual({
+      kind: "command",
+      upgrade,
+      elevate: false,
+    });
+  });
+
+  it("still announces a release it cannot install", () => {
+    // A Linux tree no package database claims, and an unsigned mac without brew.
+    expect(updateDeliveryFor({ ...base, platform: "linux" })).toEqual({ kind: "announce-only" });
+    expect(updateDeliveryFor({ ...base, platform: "darwin" })).toEqual({ kind: "announce-only" });
+  });
+
+  it("says nothing at all for an unpackaged launch", () => {
     expect(
-      updateDeliveryFor({ platform: "linux", packaged: true, linuxUpgrade: null, canElevate: true })
+      updateDeliveryFor({ ...base, platform: "linux", packaged: false, linuxUpgrade: upgrade })
     ).toBeNull();
   });
 
@@ -94,7 +108,7 @@ function harness(
     platform: "linux",
     linuxUpgrade: () => linuxUpgradeCommandFor("deb"),
     canElevate: () => true,
-    runPrivileged: async () => ({ code: 0, stderr: "" }),
+    runCommand: async () => ({ code: 0, stderr: "" }),
     fetch: (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch,
     now: () => 1_000,
     ...overrides,
@@ -113,13 +127,12 @@ describe("release update controller", () => {
     expect(shown?.payload["actions"]).toMatchObject([{ id: "desktop-release-update-install" }]);
   });
 
-  it("offers the command to copy when nothing can raise it to root", async () => {
+  it("names the command when it cannot raise it to root itself", async () => {
     const { controller, emitted } = harness({ canElevate: () => false });
 
     await controller!.checkNow("startup");
 
     const shown = emitted.find((entry) => entry.event === "notification:show");
-    expect(shown?.payload["actions"]).toMatchObject([{ id: "desktop-release-update-copy" }]);
     expect(String(shown?.payload["message"])).toContain("apt install --only-upgrade vibestudio");
   });
 
@@ -136,7 +149,7 @@ describe("release update controller", () => {
 
   it("tells the user to run it themselves when polkit refuses", async () => {
     const { controller } = harness({
-      runPrivileged: async () => ({ code: 126, stderr: "" }),
+      runCommand: async () => ({ code: 126, stderr: "" }),
     });
 
     await controller!.checkNow("startup");

@@ -482,6 +482,42 @@ function detectLinuxPackageOwner(executable: string): "deb" | "rpm" | "pacman" |
   return null;
 }
 
+/**
+ * Whether this macOS build is signed with a Developer ID.
+ *
+ * Squirrel refuses to replace a build that is only ad-hoc signed, which is what
+ * a release without the Apple secrets produces — so an in-app install offered
+ * there would fail at the last step. Ask the signature rather than assume it.
+ */
+function hasDeveloperIdSignature(executable: string): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    const result = spawnSync("codesign", ["--display", "--verbose=2", executable], {
+      timeout: 5_000,
+      encoding: "utf8",
+    });
+    // codesign reports the certificate chain on stderr.
+    return /Authority=Developer ID Application:/u.test(result.stderr ?? "");
+  } catch {
+    return false;
+  }
+}
+
+/** The Homebrew upgrade for the installed cask, when brew is reachable. */
+function brewCaskUpgrade(): { display: string; argv: readonly string[] } | null {
+  if (process.platform !== "darwin") return null;
+  // A GUI launch inherits a minimal PATH, so brew is found by its install
+  // locations rather than by name.
+  for (const brew of ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]) {
+    if (!fs.existsSync(brew)) continue;
+    return {
+      display: "brew upgrade --cask vibestudio",
+      argv: [brew, "upgrade", "--cask", "vibestudio"],
+    };
+  }
+  return null;
+}
+
 /** Whether one command can be raised to root with a prompt the user can answer. */
 function canRunPrivilegedCommand(): boolean {
   if (process.platform !== "linux") return false;
@@ -492,12 +528,20 @@ function canRunPrivilegedCommand(): boolean {
   }
 }
 
-/** Run one argv as root through polkit, which owns the consent prompt. */
-function runPrivilegedCommand(
-  argv: readonly string[]
+/**
+ * Run one upgrade command, through polkit when it needs root.
+ *
+ * polkit owns the consent prompt for a system package manager; Homebrew runs as
+ * the user who installed it and must not be elevated.
+ */
+function runUpgradeCommand(
+  argv: readonly string[],
+  options: { elevate: boolean }
 ): Promise<{ code: number | null; stderr: string }> {
+  const [command, ...rest] = options.elevate ? ["pkexec", ...argv] : argv;
+  if (!command) return Promise.resolve({ code: 127, stderr: "no upgrade command" });
   return new Promise((resolve) => {
-    const child = spawn("pkexec", [...argv], { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(command, rest, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -1843,7 +1887,9 @@ app.on("ready", async () => {
     packaged: app.isPackaged,
     linuxUpgrade: () => linuxUpgradeCommandFor(detectLinuxPackageOwner(app.getPath("exe"))),
     canElevate: () => canRunPrivilegedCommand(),
-    runPrivileged: (argv) => runPrivilegedCommand(argv),
+    developerIdSigned: () => hasDeveloperIdSignature(app.getPath("exe")),
+    brewUpgrade: () => brewCaskUpgrade(),
+    runCommand: (argv, options) => runUpgradeCommand(argv, options),
     installer: () => ({
       // electron-updater refuses to download a release it has not resolved
       // itself, so its own check runs here rather than duplicating the feed.
