@@ -329,7 +329,12 @@ jobs:
       - name: Generate DMG checksums
         run: |
           cd release
-          shasum -a 256 ./*.dmg > SHA256SUMS-macos
+          # electron-updater downloads the zip, not the dmg, and resolves it
+          # through latest-mac.yml. Publishing the installer alone leaves the
+          # in-app updater with nothing to fetch.
+          test -f latest-mac.yml
+          ls ./*.zip >/dev/null
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS-macos
           test -s SHA256SUMS-macos
 
       - name: Upload immutable macOS release candidate
@@ -338,6 +343,8 @@ jobs:
           name: vibestudio-macos-${{ github.sha }}
           path: |
             release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
             release/SHA256SUMS-macos
           if-no-files-found: error
           retention-days: 7
@@ -365,6 +372,8 @@ jobs:
         with:
           files: |
             release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
             release/SHA256SUMS-macos
 
   windows-installer:
@@ -398,13 +407,18 @@ jobs:
       - name: Generate installer checksums
         shell: bash
         working-directory: release
-        run: sha256sum ./*.exe > SHA256SUMS-windows
+        # The in-app updater resolves the installer through latest.yml, so a
+        # release without it silently never offers an update.
+        run: |
+          test -f latest.yml
+          sha256sum ./*.exe > SHA256SUMS-windows
       - name: Upload immutable Windows release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vibestudio-windows-${{ github.sha }}
           path: |
             release/*.exe
+            release/latest.yml
             release/SHA256SUMS-windows
           if-no-files-found: error
           retention-days: 7
@@ -430,6 +444,7 @@ jobs:
         with:
           files: |
             release/*.exe
+            release/latest.yml
             release/SHA256SUMS-windows
 
   accept-macos-installer:

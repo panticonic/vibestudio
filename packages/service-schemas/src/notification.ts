@@ -83,8 +83,9 @@ export const NotificationActionSchema = z.object({
           strategy: z.enum(["restore-exact", "replace-incarnation"]),
         })
         .strict(),
-      z.object({ type: z.literal("desktop.installNpmUpdate") }),
-      z.object({ type: z.literal("desktop.copyNpmUpdateCommand") }),
+      z.object({ type: z.literal("desktop.installUpdate") }),
+      z.object({ type: z.literal("desktop.copyUpgradeCommand") }),
+      z.object({ type: z.literal("desktop.restartForUpdate") }),
       z.object({ type: z.literal("browser.downloadOpen"), downloadId: z.string() }),
       z.object({ type: z.literal("browser.downloadReveal"), downloadId: z.string() }),
       z
@@ -157,7 +158,11 @@ export const NotificationShowRequestSchema = z
 
 export const notificationMethods = defineServiceMethods({
   show: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -173,7 +178,11 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: [{ type: "info", title: "Hello", message: "World" }] }],
   },
   showToUser: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     tier: {
       tier: "open",
@@ -190,7 +199,11 @@ export const notificationMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   dismiss: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -206,7 +219,11 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123"] }],
   },
   reportAction: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     tier: {
       tier: "open",
@@ -223,7 +240,11 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123", "approve"] }],
   },
   signalUserInbox: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -240,7 +261,11 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["usr_alice"] }],
   },
   pushUserInbox: {
-    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     tier: {
       tier: "open",

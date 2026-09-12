@@ -129,8 +129,9 @@ export interface NotificationAction {
         expectedExecutionDigest: string;
         strategy: "restore-exact" | "replace-incarnation";
       }
-    | { type: "desktop.installNpmUpdate" }
-    | { type: "desktop.copyNpmUpdateCommand" }
+    | { type: "desktop.installUpdate" }
+    | { type: "desktop.copyUpgradeCommand" }
+    | { type: "desktop.restartForUpdate" }
     | { type: "browser.downloadOpen"; downloadId: string }
     | { type: "browser.downloadReveal"; downloadId: string }
     | {

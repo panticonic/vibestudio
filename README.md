@@ -88,10 +88,15 @@ On the first launch, choose or create a workspace. Its configured onboarding
 prompt is added to the new chat's history and starts the onboarding agent
 automatically.
 
-The desktop app is distributed only as a native package, and each one updates
-through its own package manager: `apt`/`dnf` from the signed repositories above,
-`brew upgrade` on macOS, and a fresh installer on Windows. Development and
-linked launches never self-update.
+Vibestudio tells you when a release exists rather than waiting for you to look:
+it reads the releases feed a while after launch and every six hours, and offers
+one action suited to how this copy was installed. On Windows and macOS it
+downloads and installs the release itself, then restarts. On Linux it asks the
+package manager that owns the installation — `apt`, `dnf` or `pacman` — through
+the system's own permission prompt, and offers to restart when that finishes; if
+nothing can raise the command to root, it hands you the exact command instead.
+Nothing installs without being asked, and development or linked launches never
+self-update.
 
 ### Headless server (remote/home server; clients connect to it)
 

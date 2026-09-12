@@ -29,7 +29,13 @@ import {
   resolveStartupErrorPaths,
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
+import { spawn, spawnSync } from "node:child_process";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
+import {
+  createReleaseUpdateController,
+  linuxUpgradeCommandFor,
+  type ReleaseUpdateController,
+} from "./releaseUpdate.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createConnectDeepLink,
@@ -392,6 +398,7 @@ type QuitIntent =
   | { kind: "ordinary"; serverDecision: "stop" | "keep" | null }
   | { kind: "relaunch"; exitCode: number };
 let quitIntent: QuitIntent = { kind: "ordinary", serverDecision: null };
+let releaseUpdateController: ReleaseUpdateController | null = null;
 let presentedStartupFinished = false;
 let deferredStartupWork: (() => void) | null = null;
 /**
@@ -444,6 +451,62 @@ function finishPresentedStartup(): void {
   }
 
   deferredStartupWork?.();
+}
+
+/**
+ * Which package manager owns this installation's own executable.
+ *
+ * Asked of the package databases rather than inferred from the distribution: a
+ * host can carry several of these tools, and only the one that recorded our
+ * files can upgrade them. Anything unexpected — a tarball, a checkout, a
+ * container with no package database — answers null, and the updater then
+ * offers no command rather than a wrong one.
+ */
+function detectLinuxPackageOwner(executable: string): "deb" | "rpm" | "pacman" | null {
+  if (process.platform !== "linux") return null;
+  const probes: ReadonlyArray<{ owner: "deb" | "rpm" | "pacman"; argv: readonly string[] }> = [
+    { owner: "deb", argv: ["dpkg", "-S", executable] },
+    { owner: "rpm", argv: ["rpm", "-qf", executable] },
+    { owner: "pacman", argv: ["pacman", "-Qo", executable] },
+  ];
+  for (const probe of probes) {
+    const [command, ...args] = probe.argv;
+    if (!command) continue;
+    try {
+      const result = spawnSync(command, args, { timeout: 5_000, stdio: "ignore" });
+      if (result.status === 0) return probe.owner;
+    } catch {
+      // A missing tool is an answer, not an error: this host is not that kind.
+    }
+  }
+  return null;
+}
+
+/** Whether one command can be raised to root with a prompt the user can answer. */
+function canRunPrivilegedCommand(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    return spawnSync("pkexec", ["--version"], { timeout: 5_000, stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Run one argv as root through polkit, which owns the consent prompt. */
+function runPrivilegedCommand(
+  argv: readonly string[]
+): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("pkexec", [...argv], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      // Bound what a failing package manager can hand back to a dialog.
+      if (stderr.length < 8_192) stderr += chunk;
+    });
+    child.once("error", (error) => resolve({ code: 127, stderr: error.message }));
+    child.once("close", (code) => resolve({ code, stderr }));
+  });
 }
 
 function relaunchWithIntent(opts: RelaunchOptions = {}): void {
@@ -1774,6 +1837,30 @@ app.on("ready", async () => {
     applicationWindow.viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
   });
   installBootstrapConnectionHandlers();
+  releaseUpdateController = createReleaseUpdateController({
+    eventService,
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    linuxUpgrade: () => linuxUpgradeCommandFor(detectLinuxPackageOwner(app.getPath("exe"))),
+    canElevate: () => canRunPrivilegedCommand(),
+    runPrivileged: (argv) => runPrivilegedCommand(argv),
+    installer: () => ({
+      // electron-updater refuses to download a release it has not resolved
+      // itself, so its own check runs here rather than duplicating the feed.
+      downloadUpdate: async () => {
+        const { autoUpdater } = await import("electron-updater");
+        autoUpdater.autoDownload = false;
+        await autoUpdater.checkForUpdates();
+        return autoUpdater.downloadUpdate();
+      },
+      quitAndInstall: () => {
+        void import("electron-updater").then(({ autoUpdater }) => {
+          quitIntent = { kind: "relaunch", exitCode: 0 };
+          autoUpdater.quitAndInstall();
+        });
+      },
+    }),
+  });
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
   // after the trusted shell approval flow grants that panel access to the
   // target origin. Browser panels use their workspace browser-environment
@@ -2684,6 +2771,7 @@ app.on("ready", async () => {
     );
 
     deferredStartupWork = () => {
+      releaseUpdateController?.start();
       // These are useful background services, but neither belongs on the path
       // to the first usable workspace frame.
       setTimeout(async () => {
