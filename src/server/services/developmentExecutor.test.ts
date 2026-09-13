@@ -263,6 +263,38 @@ describe("DevelopmentExecutor exact private execution", () => {
     await expect(fsp.stat(path.join(root, "runs"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("verifies the host lockfile and the Base manifest, and no Base lockfile", async () => {
+    const planSource = vi.fn(
+      async ({ repositoryId }: { repositoryId: string; requiredFiles: readonly string[] }) =>
+        repositoryId === "repository:base"
+          ? sourcePlan("repository:base", "templates/base")
+          : sourcePlan()
+    );
+    const executor = new DevelopmentExecutor({
+      workspaceId: "workspace:test",
+      hostExecutionDigest: digest("9"),
+      runRoots: runRoots(root),
+      planSource,
+      materializeSource: vi.fn(),
+    });
+
+    await executor.prepareExact({
+      session: session(),
+      runId: "run-required-inputs",
+      recipe: developmentRecipeFixture(process.platform, process.arch),
+      pair,
+    });
+
+    const required = Object.fromEntries(
+      planSource.mock.calls.map(([input]) => [input.repositoryId, input.requiredFiles])
+    );
+    expect(required["repository:vibestudio"]).toEqual(["pnpm-lock.yaml"]);
+    // A workspace source distribution has no root lockfile — its dependencies
+    // come from the host's semantic projection — so requiring one refused
+    // every build of an adopted Base.
+    expect(required["repository:base"]).toEqual(["meta/vibestudio.yml"]);
+  });
+
   it("binds host-only, Base-only, and combined pairs to the session-owned candidate", async () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
@@ -317,6 +349,16 @@ describe("DevelopmentExecutor exact private execution", () => {
             "console.log('token=should-not-survive');",
             "fs.mkdirSync('dist', {recursive:true});",
             "fs.writeFileSync('dist/server.mjs', 'export const exact = true;\\n');",
+            // The real build stages each host generation with a symlinked
+            // dependency realm pointing outside the output tree.
+            "fs.mkdirSync('dist/host-generations/desktop-exact', {recursive:true});",
+            "fs.writeFileSync('dist/host-generations/desktop-exact/main.cjs', 'exact');",
+            "fs.symlinkSync(process.cwd() + '/node_modules', 'dist/host-generations/desktop-exact/node_modules');",
+            // A staged runtime's bin shims are relative links to files in it.
+            "fs.mkdirSync('dist/node/exact/bin', {recursive:true});",
+            "fs.mkdirSync('dist/node/exact/lib', {recursive:true});",
+            "fs.writeFileSync('dist/node/exact/lib/npm-cli.js', '#!/usr/bin/env node\\n');",
+            "fs.symlinkSync('../lib/npm-cli.js', 'dist/node/exact/bin/npm');",
             "fs.writeFileSync('dist/environment.json', JSON.stringify({",
             "  cwd: process.cwd(),",
             "  declared: process.env.NODE_ENV,",
@@ -356,6 +398,19 @@ describe("DevelopmentExecutor exact private execution", () => {
     });
     expect(logs).toContain("[REDACTED]");
     expect(logs.join("\n")).not.toContain("should-not-survive");
+    // The generation's real output is archived; its dependency realm is not.
+    expect(stored?.artifacts.map((entry) => entry.path)).toContain(
+      "dist/host-generations/desktop-exact/main.cjs"
+    );
+    expect(stored?.artifacts.filter((entry) => entry.path.includes("node_modules"))).toEqual([]);
+    // The shim is archived at its own path, carrying the linked file's bytes.
+    const shim = stored?.artifacts.find((entry) => entry.path === "dist/node/exact/bin/npm");
+    expect(shim).toBeDefined();
+    expect(
+      shim?.encoding === "base64"
+        ? Buffer.from(shim.content, "base64").toString("utf8")
+        : shim?.content
+    ).toBe("#!/usr/bin/env node\n");
   });
 
   it("refuses path escapes and foreign owner markers before execution or deletion", async () => {

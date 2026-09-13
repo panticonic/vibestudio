@@ -177,7 +177,11 @@ export const preparedNativeBuildSchema = z
 
 export const developmentNativeMethods = defineServiceMethods({
   describeHost: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Read the exact platform and architecture of the local native executor.",
     tier: {
       tier: "open",
@@ -191,8 +195,37 @@ export const developmentNativeMethods = defineServiceMethods({
     authority: nativePrincipals,
     access: { sensitivity: "read" },
   },
+  resolveAdoptedRepository: {
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    description:
+      "Read whether one repository is adopted in an exact semantic context, and its workspace path, for the development builtin's not-adopted decision.",
+    capability: "development.native.execute",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.discovery",
+      rationale:
+        "The development builtin must read the session owner's context, which is outside its own reachable context graph; the host performs that read and returns only the repository's presence and path",
+    },
+    args: z.tuple([z.object({ contextId: nonEmpty, repositoryId: nonEmpty }).strict()]),
+    returns: z
+      .object({ repoPath: nonEmpty, workingHead: vcsStateNodeRefSchema })
+      .strict()
+      .nullable(),
+    authority: nativeExecuteAuthority,
+    access: { sensitivity: "read" },
+  },
   listClientExecutors: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "List the authenticated user's live reviewed client-device executors.",
     tier: {
       tier: "open",
@@ -207,7 +240,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   describeTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Read availability of one sealed native development tool driver.",
     tier: {
       tier: "open",
@@ -230,7 +267,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   openTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Launch one sealed tool in an exact private native session root.",
     presentation: {
       title: "Launch a native development tool",
@@ -264,7 +305,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   checkpointTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Checkpoint one exact native tool session into semantic source.",
     tier: {
       tier: "open",
@@ -279,7 +324,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   inspectTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Inspect one exact native tool session and its proven effects.",
     tier: {
       tier: "open",
@@ -296,7 +345,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   stopTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Stop the process group owned by one exact native tool session.",
     tier: {
       tier: "open",
@@ -311,7 +364,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   recoverTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Recover one exact native tool session from its durable marker.",
     tier: {
       tier: "open",
@@ -326,7 +383,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   keepTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Keep one exact native tool session's repair state.",
     tier: {
       tier: "open",
@@ -341,7 +402,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retireTool: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "development.native.session.retire",
     description: "Retire the proven process and private root of one exact native tool session.",
     presentation: {
@@ -365,7 +430,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   readTerminal: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Read bounded output from one exact native terminal session.",
     tier: {
       tier: "open",
@@ -393,7 +462,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   writeTerminal: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Write bounded idempotent input to one exact native terminal session.",
     tier: {
       tier: "open",
@@ -416,7 +489,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   resizeTerminal: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Resize one exact native terminal session.",
     tier: {
       tier: "open",
@@ -439,7 +516,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   prepareBuild: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Attest an exact semantic source, reviewed recipe, and local toolchain.",
     tier: {
       tier: "open",
@@ -465,7 +546,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   prepareTemplateExchange: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Plan one explicit three-way exchange with a selected sibling Git checkout.",
     capability: "development.native.execute",
     presentation: {
@@ -500,7 +585,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   applyTemplateExchange: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Apply one previously reviewed exact template checkout exchange.",
     capability: "development.native.execute",
     presentation: {
@@ -540,7 +629,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   beginBuild: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Begin execution of one exact prepared native build handle.",
     presentation: {
       title: "Build exact workspace source",
@@ -563,7 +656,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   inspectBuild: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Inspect bounded state, phase, and output for one exact native build handle.",
     tier: {
       tier: "open",
@@ -636,7 +733,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   stopBuild: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Stop the process group owned by one exact native build handle.",
     tier: {
       tier: "open",
@@ -651,7 +752,11 @@ export const developmentNativeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retireBuild: {
-    website: {"kind":"closed","reason":"The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "development.native.build.retire",
     description: "Retire the private execution root owned by one exact native build handle.",
     presentation: {

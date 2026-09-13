@@ -9,6 +9,7 @@ import type {
   DevelopmentSession,
   DevelopmentTarget,
 } from "@vibestudio/service-schemas/development";
+import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { z } from "zod";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -119,6 +120,19 @@ export function createDevelopmentNativeService(deps: {
   attachedHostAuthorityCeiling?: readonly CapabilityScope[];
   takeLogs?: (runId: string) => Array<{ stream: "stdout" | "stderr"; line: string }>;
   templateExchange?: Pick<TemplateRepositoryExchangeExecutor, "prepare" | "apply">;
+  /**
+   * Read one repository's presence in an exact semantic context.
+   *
+   * The development builtin decides whether a repository is adopted before it
+   * forks anything, which means reading the session owner's context — outside
+   * its own reachable context graph, and refused by the workspace-source
+   * receiver to every principal but the host. Its semantic writes are already
+   * host-mediated; this is the matching read.
+   */
+  resolveAdoptedRepository?: (input: {
+    contextId: string;
+    repositoryId: string;
+  }) => Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null>;
 }): ServiceDefinition {
   const plans = new Map<string, PreparedDevelopmentBuild>();
   const builds = new Map<string, NativeBuildState>();
@@ -343,6 +357,14 @@ export function createDevelopmentNativeService(deps: {
     methods: developmentNativeMethods,
     handler: defineServiceHandler("developmentNative", developmentNativeMethods, {
       describeHost: () => ({ platform: process.platform, arch: process.arch }),
+      resolveAdoptedRepository: async (_ctx, [input]) => {
+        if (!deps.resolveAdoptedRepository) {
+          throw Object.assign(new Error("This host cannot read adopted development repositories"), {
+            code: "EEXECUTOR_UNAVAILABLE",
+          });
+        }
+        return deps.resolveAdoptedRepository(input);
+      },
       listClientExecutors: (ctx) => {
         const ownerUserId = verifiedInitiatingUserId(ctx);
         if (!ownerUserId || !deps.clientExecutors) return [];

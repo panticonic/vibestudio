@@ -153,7 +153,11 @@ export class DevelopmentExecutor {
       this.deps.planSource({
         contextId: input.session.contextId,
         repositoryId: input.pair.baseRepositoryId,
-        requiredFiles: ["meta/vibestudio.yml", "pnpm-lock.yaml"],
+        // The workspace source distribution declares its units in the manifest
+        // and carries no root lockfile: its dependencies are resolved by the
+        // host's semantic projection, not by a pnpm install at its root.
+        // Requiring one here refused every build of an adopted Base.
+        requiredFiles: ["meta/vibestudio.yml"],
       }),
       this.toolchain(),
     ]);
@@ -895,7 +899,38 @@ async function collectArtifacts(outputRoot: string): Promise<BuildArtifactInput[
     for (const entry of entries) {
       const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
       const absolutePath = path.join(directory, entry.name);
-      if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+      // A dependency realm is a pointer into an install, not build output. The
+      // host build stages every generation with a `node_modules` symlink to
+      // the repository's realm, so collecting it would both refuse the build
+      // and, if it succeeded, archive a link that means nothing anywhere else.
+      if (entry.name === "node_modules") continue;
+      // The build stages a pinned Node runtime whose `bin` shims are relative
+      // links to files inside it. An artifact is content-addressed and cannot
+      // represent a link, so an in-tree link to a file is archived as that
+      // file's bytes at the link's own path — which is exactly how it behaves
+      // when executed. Anything else (absolute, escaping, or pointing at a
+      // directory) is still refused rather than silently mangled.
+      if (entry.isSymbolicLink()) {
+        const target = await fs.readlink(absolutePath);
+        const resolved = path.resolve(directory, target);
+        const escape = path.relative(outputRoot, resolved);
+        const linked =
+          path.isAbsolute(target) || escape.startsWith("..") || path.isAbsolute(escape)
+            ? null
+            : await fs.stat(resolved).catch(() => null);
+        if (!linked?.isFile()) {
+          throw Object.assign(new Error(`Unsupported build output entry ${relativePath}`), {
+            code: "EUNSUPPORTED_OUTPUT",
+          });
+        }
+        files.push({
+          relativePath,
+          absolutePath: resolved,
+          mode: linked.mode & 0o111 ? EXECUTABLE_MODE : REGULAR_MODE,
+        });
+        continue;
+      }
+      if (!entry.isDirectory() && !entry.isFile()) {
         throw Object.assign(new Error(`Unsupported build output entry ${relativePath}`), {
           code: "EUNSUPPORTED_OUTPUT",
         });
