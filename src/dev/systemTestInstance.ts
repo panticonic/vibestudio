@@ -31,11 +31,23 @@ const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
 const STARTUP_TIMEOUT_MS = 12 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 
+/**
+ * Which of the instance's workspaces a run's commands are scoped to.
+ *
+ * Tests run in the instance's ordinary `dev` workspace. A desktop client
+ * pairs its workspace connection to the user's System workspace instead —
+ * that is where native client code comes from — so anything it registers
+ * there, a client-device executor above all, is invisible from `dev`.
+ * Scenarios that need one select `system` for themselves; nothing else moves.
+ */
+export type SystemTestWorkspaceRole = "dev" | "system";
+
 type LauncherArgs = {
   instanceId: string;
   explicitInstance: boolean;
   bootstrapWorkspace?: string;
   selfDevelopment: boolean;
+  workspaceRole: SystemTestWorkspaceRole;
   command: string[];
 };
 
@@ -84,6 +96,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   let instanceId: string | undefined;
   let bootstrapWorkspace: string | undefined;
   let selfDevelopment = false;
+  let workspaceRole: SystemTestWorkspaceRole = "dev";
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -120,6 +133,14 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       selfDevelopment = true;
       continue;
     }
+    if (arg === "--workspace-role" || arg.startsWith("--workspace-role=")) {
+      const value = arg.includes("=") ? arg.slice("--workspace-role=".length) : argv[(index += 1)];
+      if (value !== "dev" && value !== "system") {
+        throw new Error("--workspace-role accepts dev or system");
+      }
+      workspaceRole = value;
+      continue;
+    }
     command.push(arg);
   }
   return {
@@ -127,6 +148,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
     explicitInstance: instanceId !== undefined,
     ...(bootstrapWorkspace ? { bootstrapWorkspace } : {}),
     selfDevelopment,
+    workspaceRole,
     command,
   };
 }

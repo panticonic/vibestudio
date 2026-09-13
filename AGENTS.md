@@ -91,6 +91,15 @@ instance, so a plain instance cannot be upgraded to one — stop it and create
 another. Adopting costs a few thousand files of semantic import, so do not pass
 the flag for unrelated tests.
 
+Tests run in the instance's `dev` workspace. A desktop client pairs its
+workspace connection to the user's System workspace instead, so a client-device
+executor it registers is invisible from `dev`. Pass `--workspace-role system`
+for the scenarios that need one: the launcher pairs a scoped CLI profile to
+that workspace, settles its own creation review, adopts into it when
+`--self-development` is also passed, and leaves every other run where it was.
+Attach the executor itself with `node scripts/development-client-executor.mjs
+--instance ID`, which pairs a headless Electron client to the same instance.
+
 Agentic tests judge delivery latency in wall-clock time, and the gate can only
 account for the test agents sharing the instance — it scales its allowance by
 that count, but cannot see load the suite did not create. Do not run other heavy

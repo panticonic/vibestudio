@@ -40,6 +40,7 @@ describe("self-provisioning system-test instance", () => {
       instanceId: "incident-a",
       explicitInstance: true,
       selfDevelopment: false,
+      workspaceRole: "dev",
       command: ["doctor", "--json"],
     });
     expect(
@@ -55,19 +56,33 @@ describe("self-provisioning system-test instance", () => {
       explicitInstance: true,
       bootstrapWorkspace: "dogfood-system-test",
       selfDevelopment: false,
+      workspaceRole: "dev",
       command: ["doctor"],
     });
     expect(parseSystemTestLauncherArgs(["list"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
       selfDevelopment: false,
+      workspaceRole: "dev",
       command: ["list"],
     });
+    // A workspace role is the launcher's too, and it is not a test argument.
+    expect(parseSystemTestLauncherArgs(["--workspace-role", "system", "run", "x"])).toMatchObject({
+      workspaceRole: "system",
+      command: ["run", "x"],
+    });
+    expect(parseSystemTestLauncherArgs(["--workspace-role=system", "list"])).toMatchObject({
+      workspaceRole: "system",
+    });
+    expect(() => parseSystemTestLauncherArgs(["--workspace-role", "personal", "list"])).toThrow(
+      /accepts dev or system/u
+    );
     // The adoption flag is the launcher's, never the test command's.
     expect(parseSystemTestLauncherArgs(["--self-development", "run", "x"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
       selfDevelopment: true,
+      workspaceRole: "dev",
       command: ["run", "x"],
     });
     expect(() =>

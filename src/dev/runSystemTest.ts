@@ -17,8 +17,16 @@ import {
 } from "./systemTestPreparation.js";
 import {
   adoptSelfDevelopmentProjects,
+  selfDevelopmentProjects,
   type SelfDevelopmentProject,
 } from "./selfDevelopmentAdoption.js";
+import {
+  profileIsPaired,
+  selectWorkspaceForRole,
+  workspaceProfileRoot,
+  type SystemTestWorkspaceProfile,
+  type WorkspaceSummary,
+} from "./systemTestWorkspaceProfile.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -41,16 +49,47 @@ Options:
   --instance ID                  Stable unique instance name (default: system-test)
   --bootstrap-workspace NAME     Use a named persistent bootstrap workspace
   --self-development             Adopt this checkout as projects/vibestudio
+  --workspace-role dev|system    Run the command against this workspace of the
+                                 instance (default: dev); system is where a
+                                 desktop client registers its executor.
   -h, --help                     Show this help without starting infrastructure
 `;
 
-function runCli(instanceId: string, command: readonly string[]): Promise<number> {
+/**
+ * Argv and environment for one CLI invocation, scoped or not.
+ *
+ * `--instance` resolves the instance and overwrites VIBESTUDIO_INSTANCE_ROOT,
+ * which is exactly the root a scoped profile must not use — so a scoped
+ * invocation names no instance and is located by its profile root alone.
+ */
+function cliInvocation(
+  instanceId: string,
+  command: readonly string[],
+  profileRoot: string | undefined
+): { argv: string[]; env: NodeJS.ProcessEnv } {
+  if (!profileRoot) {
+    return {
+      argv: [tsxCli, "src/dev/runCli.ts", "--instance", instanceId, ...command],
+      env: process.env,
+    };
+  }
+  const env: NodeJS.ProcessEnv = { ...process.env, VIBESTUDIO_INSTANCE_ROOT: profileRoot };
+  delete env["VIBESTUDIO_INSTANCE"];
+  return { argv: [tsxCli, "src/dev/runCli.ts", ...command], env };
+}
+
+function runCli(
+  instanceId: string,
+  command: readonly string[],
+  profileRoot?: string
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [tsxCli, "src/dev/runCli.ts", "--instance", instanceId, "system-test", ...command],
-      { cwd: process.cwd(), env: process.env, stdio: "inherit" }
-    );
+    const invocation = cliInvocation(instanceId, ["system-test", ...command], profileRoot);
+    const child = spawn(process.execPath, invocation.argv, {
+      cwd: process.cwd(),
+      env: invocation.env,
+      stdio: "inherit",
+    });
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (signal) reject(new Error(`system-test CLI exited from signal ${signal}`));
@@ -113,14 +152,16 @@ function prepareFreshInstance(instanceId: string, expectedWorkspaceId: string): 
 /** Run one ordinary CLI command and capture what it reported. */
 function captureCli(
   instanceId: string,
-  command: readonly string[]
+  command: readonly string[],
+  profileRoot?: string
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [tsxCli, "src/dev/runCli.ts", "--instance", instanceId, ...command],
-      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] }
-    );
+    const invocation = cliInvocation(instanceId, command, profileRoot);
+    const child = spawn(process.execPath, invocation.argv, {
+      cwd: process.cwd(),
+      env: invocation.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -141,12 +182,13 @@ function captureCli(
 
 async function adoptSelfDevelopmentSource(
   instanceId: string,
-  projects: readonly SelfDevelopmentProject[]
+  projects: readonly SelfDevelopmentProject[],
+  profileRoot?: string
 ): Promise<void> {
   if (projects.length === 0) return;
   const adopted = await adoptSelfDevelopmentProjects({
     projects,
-    runCli: (args) => captureCli(instanceId, args),
+    runCli: (args) => captureCli(instanceId, args, profileRoot),
   });
   for (const project of adopted) {
     console.error(
@@ -154,6 +196,73 @@ async function adoptSelfDevelopmentSource(
         `from ${project.url}`
     );
   }
+}
+
+/**
+ * Bind a scoped CLI profile to the instance's workspace for `role`.
+ *
+ * The profile is paired the ordinary way — the instance's own profile mints a
+ * device invite, and the scoped profile redeems it — so the second binding is
+ * an ordinary device credential rather than a copied one.
+ */
+async function ensureWorkspaceProfile(
+  instanceId: string,
+  instanceRoot: string,
+  role: "system"
+): Promise<SystemTestWorkspaceProfile> {
+  const listed = await captureCli(instanceId, ["remote", "workspaces", "--json"]);
+  if (listed.code !== 0) {
+    throw new Error(
+      `Could not list workspaces on ${instanceId}: ${listed.stderr || listed.stdout}`
+    );
+  }
+  const workspaces = (
+    JSON.parse(listed.stdout.trim().split("\n").at(-1) ?? "{}") as {
+      workspaces?: WorkspaceSummary[];
+    }
+  ).workspaces;
+  const workspace = selectWorkspaceForRole(workspaces ?? [], role);
+  const root = workspaceProfileRoot(instanceRoot, role);
+  const profile: SystemTestWorkspaceProfile = {
+    root,
+    workspaceId: workspace.workspaceId,
+    workspaceName: workspace.name,
+  };
+  if (profileIsPaired(root, workspace.workspaceId)) return profile;
+
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const invited = await captureCli(instanceId, [
+    "remote",
+    "pair-device",
+    "--workspace",
+    workspace.name,
+    "--json",
+  ]);
+  if (invited.code !== 0) {
+    throw new Error(
+      `Could not invite a ${role}-workspace profile: ${invited.stderr || invited.stdout}`
+    );
+  }
+  const link = (
+    JSON.parse(invited.stdout.trim().split("\n").at(-1) ?? "{}") as {
+      pairing?: { deepLink?: string };
+    }
+  ).pairing?.deepLink;
+  if (!link) throw new Error(`The ${role}-workspace invite carried no pairing link`);
+  const paired = await captureCli(
+    instanceId,
+    ["remote", "pair", link, "--label", `system-test-${role}`, "--json"],
+    root
+  );
+  if (paired.code !== 0) {
+    throw new Error(
+      `Could not pair the ${role}-workspace profile: ${paired.stderr || paired.stdout}`
+    );
+  }
+  console.error(
+    `[system-test] scoped ${role}-workspace profile paired to ${workspace.name} (${workspace.workspaceId})`
+  );
+  return profile;
 }
 
 function pairedWorkspaceId(instanceRoot: string): string {
@@ -215,8 +324,43 @@ async function main(): Promise<void> {
     // project. It also creates the system-test session, whose context forks
     // main at that moment — so tests move to a session created afterwards.
     await prepareFreshInstance(ensured.instance.id, pairedWorkspaceId(ensured.instance.root));
-    if (ensured.selfDevelopmentProjects.length > 0) {
-      await adoptSelfDevelopmentSource(ensured.instance.id, ensured.selfDevelopmentProjects);
+  }
+  // A scoped profile is a different workspace of the same server, with its own
+  // semantic history: repositories adopted for one are absent from the other,
+  // so each workspace a run targets adopts for itself. The scoped profile has
+  // no session yet, so its first one forks main after that publication and the
+  // instance profile's session move does not apply to it.
+  const profile =
+    parsed.workspaceRole === "system"
+      ? await ensureWorkspaceProfile(ensured.instance.id, ensured.instance.root, "system")
+      : null;
+  if (profile) {
+    console.error(
+      `[system-test] scoped to the ${parsed.workspaceRole} workspace ${profile.workspaceName}`
+    );
+    // Every workspace owns its own creation review, and an unresolved one
+    // refuses extension invocation — including the import that adopts a
+    // project. The instance's own profile settles the dev workspace's review
+    // during provisioning; this settles the scoped workspace's.
+    const prepared = await captureCli(
+      ensured.instance.id,
+      ["system-test", "doctor", "--approve-startup", "--json"],
+      profile.root
+    );
+    if (prepared.code !== 0) {
+      throw new Error(
+        `Could not settle startup for the ${parsed.workspaceRole} workspace: ` +
+          `${prepared.stderr.trim() || prepared.stdout.trim()}`
+      );
+    }
+  }
+  if (parsed.selfDevelopment) {
+    const projects =
+      ensured.selfDevelopmentProjects.length > 0
+        ? ensured.selfDevelopmentProjects
+        : selfDevelopmentProjects(repoRoot);
+    await adoptSelfDevelopmentSource(ensured.instance.id, projects, profile?.root);
+    if (!profile) {
       const session = adoptSystemTestSession(ensured.instance, "self-development");
       console.error(`[system-test] tests on this instance run under session ${session}`);
     }
@@ -236,11 +380,17 @@ async function main(): Promise<void> {
   // A moved session belongs to the instance, not to one invocation, so every
   // later command on it has to name the same one. An explicit --session the
   // caller passed always wins.
-  const session = managedTestSessionName(ensured.instance);
-  process.exitCode = await runCli(
-    ensured.instance.id,
-    session && !command.includes("--session") ? [...command, "--session", session] : command
-  );
+  // A scoped profile carries its own session state, so the instance's moved
+  // session name belongs only to the instance's own profile.
+  // Both profiles need a session created after anything a run must see was
+  // published to their workspace's main; a session's context forks main once,
+  // when the session is created.
+  const session = profile
+    ? `system-tests-${parsed.workspaceRole}`
+    : managedTestSessionName(ensured.instance);
+  const scopedCommand =
+    session && !command.includes("--session") ? [...command, "--session", session] : command;
+  process.exitCode = await runCli(ensured.instance.id, scopedCommand, profile?.root);
 }
 
 try {
