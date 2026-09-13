@@ -97,6 +97,11 @@ function evalClientFor(scope: SessionScope) {
   return typedClient("eval", evalMethods, scope.client);
 }
 
+/**
+ * The dedicated CLI session system tests run under. Its context forks
+ * protected main when it is created, so anything a run must see has to be
+ * published before the first system-test command creates it.
+ */
 const SYSTEM_TEST_SESSION = "system-tests";
 const SYSTEM_TEST_RUNNER_SOURCE = "workers/system-test-runner";
 const SYSTEM_TEST_RUNNER_CLASS = "SystemTestRunnerDO";

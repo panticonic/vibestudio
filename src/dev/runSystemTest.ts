@@ -4,8 +4,10 @@ import * as fs from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import {
+  adoptSystemTestSession,
   ensureSystemTestInstance,
   isLocalSystemTestHelpCommand,
+  managedTestSessionName,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
 } from "./systemTestInstance.js";
@@ -208,11 +210,16 @@ async function main(): Promise<void> {
   // leaves a race where it can return at transport readiness and the creation
   // review appears immediately afterward, blocking the first real test.
   if (ensured.created) {
+    // Startup preparation has to come first: until the creation review is
+    // resolved, the workspace refuses to invoke the extension that adopts a
+    // project. It also creates the system-test session, whose context forks
+    // main at that moment — so tests move to a session created afterwards.
     await prepareFreshInstance(ensured.instance.id, pairedWorkspaceId(ensured.instance.root));
-    // Adoption publishes to protected main, so it has to land before the first
-    // test context forks from it; a context created earlier would never see
-    // the adopted repositories.
-    await adoptSelfDevelopmentSource(ensured.instance.id, ensured.selfDevelopmentProjects);
+    if (ensured.selfDevelopmentProjects.length > 0) {
+      await adoptSelfDevelopmentSource(ensured.instance.id, ensured.selfDevelopmentProjects);
+      const session = adoptSystemTestSession(ensured.instance, "self-development");
+      console.error(`[system-test] tests on this instance run under session ${session}`);
+    }
   }
   const command =
     ensured.managed &&
@@ -226,7 +233,14 @@ async function main(): Promise<void> {
   // can therefore keep the pre-provision profile and also entangle its RPC
   // connection lifecycle with the launcher. The process boundary is the same
   // canonical path as `pnpm cli --instance ...` and preserves exit status.
-  process.exitCode = await runCli(ensured.instance.id, command);
+  // A moved session belongs to the instance, not to one invocation, so every
+  // later command on it has to name the same one. An explicit --session the
+  // caller passed always wins.
+  const session = managedTestSessionName(ensured.instance);
+  process.exitCode = await runCli(
+    ensured.instance.id,
+    session && !command.includes("--session") ? [...command, "--session", session] : command
+  );
 }
 
 try {

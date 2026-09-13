@@ -44,6 +44,17 @@ type ManagedMarker = {
   instanceId: string;
   generationId: string;
   repoDigest: string;
+  /**
+   * CLI session every test command on this instance runs under.
+   *
+   * A session's context forks protected main when the session is created, and
+   * recreating a session under the same key recovers the same context rather
+   * than forking again. An instance that published something after startup
+   * preparation — adopting a development source — therefore has to move its
+   * tests to a session created after that publication, or they would run in a
+   * context where it never happened.
+   */
+  testSessionName?: string;
 };
 
 export function systemTestInstanceEnvironment(
@@ -177,16 +188,31 @@ function readManagedMarker(instance: DevInstanceRecord): ManagedMarker | null {
   }
 }
 
-function writeManagedMarker(instance: DevInstanceRecord): void {
+function writeManagedMarker(instance: DevInstanceRecord, testSessionName?: string): void {
   const marker: ManagedMarker = {
     schemaVersion: 1,
     instanceId: instance.id,
     generationId: instance.generationId,
     repoDigest: repoDigest(instance.repoRoot),
+    ...(testSessionName ? { testSessionName } : {}),
   };
   fs.writeFileSync(markerPath(instance), `${JSON.stringify(marker, null, 2)}\n`, {
     mode: 0o600,
   });
+}
+
+/** Move this instance's tests to a session created after `label`. */
+export function adoptSystemTestSession(instance: DevInstanceRecord, label: string): string {
+  const marker = readManagedMarker(instance);
+  if (!marker) throw new Error(`Instance ${instance.id} is not a managed system-test instance`);
+  const name = `system-tests-${label}`;
+  writeManagedMarker(instance, name);
+  return name;
+}
+
+/** The session this instance's test commands must run under, if it moved. */
+export function managedTestSessionName(instance: DevInstanceRecord): string | null {
+  return readManagedMarker(instance)?.testSessionName ?? null;
 }
 
 function resolveRunning(repoRoot: string, instanceId: string): DevInstanceRecord | null {
