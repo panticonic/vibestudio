@@ -69,6 +69,24 @@ profile ${PROFILE_NAME} "${LAUNCHER_GLOB}" flags=(unconfined) {
 
   include if exists <local/${PROFILE_NAME}>
 }
+
+# A self-development run builds a host and starts it from its own materialized
+# tree under the workspace's state directory, so that host's launcher carries
+# the run's id and no fixed path can name it. Its workspaces need the same
+# permission, or nothing inside an isolated host can start. Both roots a
+# developer instance uses are covered: the default profile directory, and the
+# temporary root an ephemeral or system-test instance is given.
+profile ${PROFILE_NAME}-runs "@{HOME}/.config/vibestudio/workspaces/*/state/development/runs/*/source/dist/mxc/*/lxc-exec" flags=(unconfined) {
+  userns,
+  /usr/bin/bwrap ix,
+  include if exists <local/${PROFILE_NAME}-runs>
+}
+
+profile ${PROFILE_NAME}-ephemeral-runs "/tmp/vibestudio-*/workspaces/*/state/development/runs/*/source/dist/mxc/*/lxc-exec" flags=(unconfined) {
+  userns,
+  /usr/bin/bwrap ix,
+  include if exists <local/${PROFILE_NAME}-ephemeral-runs>
+}
 PROFILE
 chmod 0644 "$PROFILE_TARGET"
 
@@ -78,7 +96,7 @@ if ! command -v apparmor_parser >/dev/null 2>&1; then
 fi
 
 apparmor_parser --replace --skip-cache "$PROFILE_TARGET"
-echo "Loaded $PROFILE_NAME for ${LAUNCHER_GLOB}."
+echo "Loaded $PROFILE_NAME for ${LAUNCHER_GLOB}, and its development-run companions."
 
 # Electron is installed by the package manager, so a checkout that has never
 # run the desktop simply has nothing to cover yet.

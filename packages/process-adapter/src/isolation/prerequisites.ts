@@ -90,6 +90,19 @@ function readApparmorUserNamespaceRestriction(): string | null {
  * fix and rediscovering this from a uid-map error.
  */
 function apparmorProfileRemedy(launcher: string): string {
+  // A self-development run starts a host from its own materialized tree, whose
+  // path carries the run's id. Neither the packaged rule nor a checkout's own
+  // names it, so both remedies would send the reader to the wrong place: the
+  // rule that covers it is the development-run companion profile.
+  if (/[/\\]state[/\\]development[/\\]runs[/\\]/.test(launcher)) {
+    return (
+      "This launcher belongs to a development run, which is covered by the " +
+      "vibestudio-mxc-development profile a packaged install ships, or by the companions " +
+      "`sudo scripts/install-dev-apparmor-profile.sh` writes for a checkout. Reinstall or " +
+      "reload that profile; a run root outside the profiled locations needs its own rule " +
+      "through the profile's local/ include."
+    );
+  }
   const packaged = launcher.includes("/resources/app.asar.unpacked/");
   return packaged
     ? "This is a packaged install, so its profile ships in /etc/apparmor.d; reload it with " +

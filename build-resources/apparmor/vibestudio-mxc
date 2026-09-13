@@ -19,3 +19,21 @@ profile vibestudio-mxc "/opt/Vibestudio/resources/app.asar.unpacked/dist/mxc/*/l
 
   include if exists <local/vibestudio-mxc>
 }
+
+# A self-development run builds a host and starts it from its own materialized
+# tree under the workspace's state directory, so that host's launcher is at a
+# path no install-time rule can name — it carries the run's id. Its workspaces
+# need the same permission as this one's, or nothing inside an isolated host
+# can start.
+#
+# A run root is only ever written by the app under the profile above. Anything
+# matching this shape was therefore put there by a Vibestudio the user already
+# installed, which is what makes naming it by shape rather than by exact path
+# an acceptable trade for a sandbox that works.
+profile vibestudio-mxc-development "@{HOME}/.config/vibestudio/workspaces/*/state/development/runs/*/source/dist/mxc/*/lxc-exec" flags=(unconfined) {
+  userns,
+
+  /usr/bin/bwrap ix,
+
+  include if exists <local/vibestudio-mxc-development>
+}

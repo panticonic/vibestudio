@@ -129,6 +129,25 @@ it("points a packaged install at the profile it already ships", () => {
   expect(error.message).toContain("/etc/apparmor.d/vibestudio-mxc");
   expect(error.message).not.toContain("install-dev-apparmor-profile.sh");
 });
+it("names the development-run profile for a launcher inside a run root", () => {
+  const error = formatNativeStartupError({
+    ...input,
+    installation: {
+      platform: "linux",
+      mechanism: "mxc-process",
+      launcher:
+        "/home/dev/.config/vibestudio/workspaces/dev/state/development/runs/run-1/source/dist/mxc/linux-arm64/lxc-exec",
+    },
+    error: new Error("Exited before readiness"),
+    stderr: "bwrap: setting up uid map: Permission denied",
+    code: 1,
+    readUserNamespaceRestriction: () => "1\n",
+  });
+  // Neither of the other remedies covers a path carrying a run's id, and both
+  // would send the reader to a rule that cannot match it.
+  expect(error.message).toContain("vibestudio-mxc-development");
+  expect(error.message).not.toContain("/etc/apparmor.d/vibestudio-mxc`");
+});
 it("bounds retained stderr", () => {
   const error = formatNativeStartupError({
     ...input,
