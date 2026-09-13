@@ -97,9 +97,9 @@ export interface CommonDeps {
   container: ServiceContainer;
   dispatcher: ServiceDispatcher;
   workspace: Workspace;
-  /** Opaque host-owned identity, including for ephemeral workspaces. */
+  /** Opaque host-owned identity, stable across a workspace's rename. */
   workspaceId: string;
-  /** User-facing hub catalog name; may differ from an ephemeral child's disk name. */
+  /** User-facing hub catalog name. */
   activeWorkspaceName: string;
   workspacePath: string;
   workspaceConfig: WorkspaceConfig;

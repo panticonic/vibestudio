@@ -299,7 +299,8 @@ The target uses the same exact snapshot and normal workspace creation approval.
 It does not import code into Personal or System. A changed snapshot selects a
 new workspace; an unchanged snapshot can reopen its existing workspace in a
 persistent instance. The target checkout is read-only to the running instance.
-Base write-back remains owned by System. `pnpm dev` is ephemeral by default.
+Base write-back remains owned by System. `pnpm dev` uses a disposable instance
+root by default.
 
 The launcher derives the template's canonical identity from its `origin`,
 snapshots tracked and untracked non-ignored worktree changes into a private
@@ -315,17 +316,17 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 and launches it against the ordinary desktop profile. It reopens the most
 recently used registered workspace, creating `default` from the linked
 development Base only when the profile has no workspace yet. It does not expose
-developer instances, ephemeral workspaces, or Base write-back. `pnpm dev`
-explicitly launches a fresh,
-hub-owned disposable workspace and always stops its hub on quit so the
-workspace checkout and catalog lifecycle are removed. Persistent and ephemeral
-launches therefore exercise the same application; only workspace ownership and
-lifetime differ.
+developer instances or Base write-back. `pnpm dev` launches into a disposable
+instance root — its own identity, catalog and workspaces under a temporary
+directory — and always stops its hub on quit, so the whole instance is removed
+with it. Persistent and disposable launches therefore exercise the same
+application; only where that instance's state lives, and how long it lasts,
+differ.
 
 `pnpm server:live` remains the explicit persistent `source` instance for CLI
 and long-lived server work. Add `--instance NAME` for another persistent
 isolated instance, or `--ephemeral --instance NAME` for a disposable parallel
-test hub. Named and ephemeral instances never write their workspace
+test hub. Named and disposable instances never write their workspace
 publications into the checkout.
 Profile-owned model configuration and encrypted provider credentials remain
 shared. For system tests, the self-provisioning launcher creates and pairs the
@@ -382,9 +383,9 @@ pnpm dev:iroh
 ```
 
 `pnpm dev:iroh` starts a clean, isolated hub, routes its default workspace, and launches Electron with the
-fresh root-bootstrap `vibestudio://connect` link from the hub ready file. Use
-`pnpm dev:iroh -- --ephemeral` for an explicitly ephemeral child; named
-workspace selection happens through the paired client, as it does in production.
+fresh root-bootstrap `vibestudio://connect` link from the hub ready file. It
+uses a disposable instance root, like `pnpm dev`; named workspace selection
+happens through the paired client, as it does in production.
 
 ### Memory Diagnostics (optional)
 
@@ -477,7 +478,6 @@ ambiguous “Invalid token.”
 | `--app-root PATH`                    | Application root (the installed package root by default) |
 | `--relay-url URL`                    | Explicit canonical HTTPS Iroh relay (repeatable)         |
 | `--dev`                              | Development mode                                         |
-| `--ephemeral`                        | Use a disposable workspace                               |
 
 The gateway binds loopback only; remote clients reach it over Iroh (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were

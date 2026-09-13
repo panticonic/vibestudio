@@ -2,25 +2,25 @@ import { describe, expect, it } from "vitest";
 import { ordinaryQuitServerDecision } from "./quitServerPolicy.js";
 
 describe("ordinaryQuitServerDecision", () => {
-  it("always stops a desktop-owned ephemeral hub", () => {
+  it("always stops a disposable instance's hub", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: true,
+        disposableInstance: true,
         rememberedKeepServer: true,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: true,
+        disposableInstance: true,
         rememberedKeepServer: false,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: true,
+        disposableInstance: true,
         rememberedKeepServer: null,
       })
     ).toBe("stop");
@@ -30,14 +30,14 @@ describe("ordinaryQuitServerDecision", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: false,
+        disposableInstance: false,
         rememberedKeepServer: false,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: false,
+        disposableInstance: false,
         rememberedKeepServer: true,
       })
     ).toBe("keep");
@@ -47,14 +47,14 @@ describe("ordinaryQuitServerDecision", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeral: false,
+        disposableInstance: false,
         rememberedKeepServer: null,
       })
     ).toBe("prompt");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: false,
-        ephemeral: false,
+        disposableInstance: false,
         rememberedKeepServer: null,
       })
     ).toBe("keep");

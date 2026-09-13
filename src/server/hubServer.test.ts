@@ -352,8 +352,7 @@ describe("workspace child startup diagnostics", () => {
 describe("workspace child exit reconciliation", () => {
   function runtimeState(child: ChildProcess): HubRuntimeState {
     const runtime: WorkspaceRuntime = {
-      name: "dev-deadbeef",
-      advertisedName: "dev",
+      name: "dev",
       workspaceId: "ws_dev",
       port: 43545,
       publicUrl: "http://127.0.0.1:3030/w/dev",
@@ -362,17 +361,8 @@ describe("workspace child exit reconciliation", () => {
       runtimeToken: "child-token",
     };
     return {
-      args: { ephemeral: true },
-      centralData: {
-        hasWorkspace: () => true,
-        getEphemeralWorkspace: () => ({
-          name: "dev",
-          workspaceId: "ws_dev",
-          ownerBootId: "boot-owner",
-          lastOpened: 1,
-          diskName: "dev-deadbeef",
-        }),
-      },
+      args: {},
+      centralData: { hasWorkspace: () => true },
       serverBootId: "boot-owner",
       workspaceChildTokens: new Map([["child-token", "ws_dev"]]),
       workspacePresence: new Map([
@@ -406,9 +396,8 @@ describe("workspace child exit reconciliation", () => {
       ...(state.runtimes.get("dev") as WorkspaceRuntime),
       child: Object.assign(new EventEmitter(), { pid: 8765 }) as unknown as ChildProcess,
     };
-    const restart = vi.fn(async (_state, input, reapedPromise) => {
+    const restart = vi.fn(async (_state, _input, reapedPromise) => {
       expect(state.runtimes.has("dev")).toBe(false);
-      expect(input.childWorkspaceName).toBe("dev-deadbeef");
       await reapedPromise;
       state.runtimes.set("dev", replacement);
       return replacement;
@@ -417,8 +406,7 @@ describe("workspace child exit reconciliation", () => {
     await handleWorkspaceChildExit(
       state,
       {
-        advertisedName: "dev",
-        childWorkspaceName: "dev-deadbeef",
+        workspaceName: "dev",
         workspaceId: "ws_dev",
         runtimeToken: "child-token",
         child,
@@ -452,8 +440,7 @@ describe("workspace child exit reconciliation", () => {
     await handleWorkspaceChildExit(
       state,
       {
-        advertisedName: "dev",
-        childWorkspaceName: "dev-deadbeef",
+        workspaceName: "dev",
         workspaceId: "ws_dev",
         runtimeToken: "child-token",
         child,
@@ -484,8 +471,7 @@ describe("workspace child exit reconciliation", () => {
     await handleWorkspaceChildExit(
       state,
       {
-        advertisedName: "dev",
-        childWorkspaceName: "dev-deadbeef",
+        workspaceName: "dev",
         workspaceId: "ws_dev",
         runtimeToken: "child-token",
         child,
@@ -518,8 +504,7 @@ describe("workspace child exit reconciliation", () => {
     await handleWorkspaceChildExit(
       state,
       {
-        advertisedName: "dev",
-        childWorkspaceName: "dev-deadbeef",
+        workspaceName: "dev",
         workspaceId: "ws_dev",
         runtimeToken: "child-token",
         child,
@@ -549,8 +534,7 @@ describe("workspace child exit reconciliation", () => {
     await handleWorkspaceChildExit(
       state,
       {
-        advertisedName: "dev",
-        childWorkspaceName: "dev-deadbeef",
+        workspaceName: "dev",
         workspaceId: "ws_dev",
         runtimeToken: "child-token",
         child,
@@ -592,7 +576,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/hub/runtime/internal-do.bundle.mjs",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
-    advertisedWorkspaceName: "base",
+    workspaceName: "base",
     hubUrl: "http://127.0.0.1:3030",
     identityDbPath: "/hub/state/identity.db",
     workspaceChildToken: "workspace-child-identity",
@@ -600,15 +584,15 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     ephemeral: false,
   };
 
-  it("shares the hub identity DB read-only and gives each advertised workspace one endpoint identity", () => {
+  it("shares the hub identity DB read-only and gives each workspace its own endpoint identity", () => {
     const envA = buildWorkspaceChildEnv({
       ...base,
-      childWorkspaceName: "alpha",
+      workspaceName: "alpha",
       workspaceId: "ws_alpha",
     });
     const envB = buildWorkspaceChildEnv({
       ...base,
-      childWorkspaceName: "beta",
+      workspaceName: "beta",
       workspaceId: "ws_beta",
     });
 
@@ -619,17 +603,21 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     // gate (VIBESTUDIO_WORKSPACE_ID, WP2) — keyed on the id, never the name.
     expect(envA["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_alpha");
     expect(envB["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_beta");
+    // A workspace's endpoint key lives under its own directory, so a
+    // replacement child keeps the Endpoint ID its peers already hold.
     expect(envA["VIBESTUDIO_IROH_IDENTITY"]).toBe(
-      path.join(getWorkspaceDir("base"), "reach", "iroh", "endpoint.key")
+      path.join(getWorkspaceDir("alpha"), "reach", "iroh", "endpoint.key")
     );
-    expect(envA["VIBESTUDIO_IROH_IDENTITY"]).toBe(envB["VIBESTUDIO_IROH_IDENTITY"]);
+    expect(envB["VIBESTUDIO_IROH_IDENTITY"]).toBe(
+      path.join(getWorkspaceDir("beta"), "reach", "iroh", "endpoint.key")
+    );
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).toMatch(/^[a-f0-9]{64}$/);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).not.toBe(base.baseEnv["VIBESTUDIO_ADMIN_TOKEN"]);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).not.toBe(envB["VIBESTUDIO_ADMIN_TOKEN"]);
   });
 
   it("keeps the strict hub-child control contract and clears inherited ports", () => {
-    const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha" });
+    const env = buildWorkspaceChildEnv({ ...base, workspaceName: "alpha" });
     expect(env["VIBESTUDIO_REQUIRE_MOBILE_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_REQUIRE_ELECTRON_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
@@ -637,7 +625,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"]).toBe("workspace-child-identity");
     expect(env["VIBESTUDIO_CURRENT_SYSTEM_EPOCH"]).toBe(String(WORKSPACE_SYSTEM_EPOCH));
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
-    expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
@@ -657,7 +644,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     };
     const env = buildWorkspaceChildEnv({
       ...base,
-      childWorkspaceName: "base",
+      workspaceName: "base",
       creationIntent,
     });
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]!)).toEqual(creationIntent);
@@ -675,7 +662,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     };
     const env = buildWorkspaceChildEnv({
       ...base,
-      childWorkspaceName: "base",
+      workspaceName: "base",
       workspaceSources: [source],
     });
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual([source]);
@@ -688,7 +675,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         ...base.baseEnv,
         VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1",
       },
-      childWorkspaceName: "alpha",
+      workspaceName: "alpha",
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
@@ -703,7 +690,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: writeback,
         VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
       },
-      childWorkspaceName: "base",
+      workspaceName: "base",
     });
     const other = buildWorkspaceChildEnv({
       ...base,
@@ -713,7 +700,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
       },
       workspaceId: "ws_other",
-      childWorkspaceName: "other",
+      workspaceName: "other",
     });
 
     expect(JSON.parse(designated["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
@@ -732,7 +719,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         ...base.baseEnv,
         VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "true",
       },
-      childWorkspaceName: "alpha",
+      workspaceName: "alpha",
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
@@ -762,16 +749,15 @@ describe("historical workspace runtime environment", () => {
 function fakeRuntime(
   port: number,
   ready: Record<string, unknown>,
-  opts: { advertisedName?: string; workspaceId?: string } = {}
+  opts: { name?: string; workspaceId?: string } = {}
 ): WorkspaceRuntime {
-  const advertisedName = opts.advertisedName ?? "dev";
+  const workspaceName = opts.name ?? "dev";
   return {
-    name: advertisedName,
-    advertisedName,
+    name: workspaceName,
     // Opaque stable registry id (WP2) — membership rows key on this, not the name.
     workspaceId: opts.workspaceId ?? "ws_dev",
     port,
-    publicUrl: `http://127.0.0.1:9/_workspace/${advertisedName}`,
+    publicUrl: `http://127.0.0.1:9/_workspace/${workspaceName}`,
     child: { exitCode: null } as ChildProcess,
     ready: {
       serverId: `srv_${"S".repeat(24)}`,
@@ -908,7 +894,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
     const catalog = new DatabaseSync(identityDbPath);
     catalog
       .prepare("INSERT INTO workspaces (workspace_id, name, last_opened) VALUES (?, ?, ?)")
-      .run(runtime.workspaceId, runtime.advertisedName, 1000);
+      .run(runtime.workspaceId, runtime.name, 1000);
     catalog.close();
     const userStore = new UserStore(identityDb);
     const membershipStore = new MembershipStore(identityDb, userStore);
@@ -934,7 +920,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       // Seeded so invite-workspace inference can resolve the running workspace
       // by name without spawning (the runtime is already in `runtimes`).
       centralData: makeHubCentralData([
-        { name: runtime.advertisedName, workspaceId: runtime.workspaceId, lastOpened: 1000 },
+        { name: runtime.name, workspaceId: runtime.workspaceId, lastOpened: 1000 },
       ]),
       deviceAuthStore,
       identityDb,
@@ -955,7 +941,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       identityDbPath,
       workspaceChildTokens: new Map(),
       workspacePresence: new Map(),
-      runtimes: new Map([[runtime.advertisedName, runtime]]),
+      runtimes: new Map([[runtime.name, runtime]]),
       shuttingDown: false,
     };
     state.controlTransport = {
@@ -1096,7 +1082,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       state,
       { userId: rootUserId, handle: "root", role: "root" },
       "removeWorkspaceMember",
-      [{ workspace: runtime.advertisedName, userId: member.id }],
+      [{ workspace: runtime.name, userId: member.id }],
       vi.fn()
     );
     const emit = vi.mocked(state.controlTransport!.eventService.emitProjected);
@@ -1172,7 +1158,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
           state,
           { userId: rootUserId, handle: "root", role: "root" },
           "inviteUser",
-          [{ handle: "unapproved_guest", workspaces: [runtime.advertisedName] }],
+          [{ handle: "unapproved_guest", workspaces: [runtime.name] }],
           vi.fn()
         )
       ).rejects.toThrow("Requires workspace administrator role");
@@ -1241,7 +1227,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       expect((await list(bob.id))[0]?.pendingApprovalCount).toBe(5);
       state.workspaceChildTokens.delete(runtime.runtimeToken);
       const replacement = { ...runtime, runtimeToken: "replacement-token" };
-      state.runtimes.set(runtime.advertisedName, replacement);
+      state.runtimes.set(runtime.name, replacement);
       state.workspaceChildTokens.set(replacement.runtimeToken, runtime.workspaceId);
       expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
       expect(
@@ -1261,7 +1247,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
         )
       ).toBe(true);
       expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
-      state.runtimes.delete(runtime.advertisedName);
+      state.runtimes.delete(runtime.name);
       expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
     } finally {
       state.identityDb.close();

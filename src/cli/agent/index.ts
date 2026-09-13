@@ -145,7 +145,7 @@ async function ensureAgentSessionWithCredentials(
 
 /** Ensure a named session exists in the currently selected workspace.
  * System-test commands use this for explicit `--session` scopes so an
- * ephemeral dev-workspace restart repairs its context without a manual attach. */
+ * workspace restart repairs its context without a manual attach. */
 export async function ensureNamedAgentSession(
   name: string,
   client?: RpcClient

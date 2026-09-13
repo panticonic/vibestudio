@@ -558,7 +558,7 @@ installRelaunchHandler(relaunchWithIntent);
 installProcessSignalShutdown(process, () => {
   // Signals and development-runner stop requests are unattended lifecycle
   // commands, not interactive window closes. Stop the owned hub explicitly so
-  // an ephemeral development session cannot leak behind a prompt nobody can
+  // a disposable developer instance cannot leak behind a prompt nobody can
   // answer. Preserve stronger update/relaunch intents if one is already active.
   if (quitIntent.kind === "ordinary") {
     quitIntent = { kind: "ordinary", serverDecision: "stop" };
@@ -3230,9 +3230,9 @@ app.on("window-all-closed", () => {
 // mid-turn — finishes and the next launch reattaches instantly) or stop it.
 // No activity guessing: the user decides, and can persist that choice with
 // "Remember my choice" (cleared by re-toggling in Settings / deleting the
-// `keepServerOnQuit` field). Ephemeral development hubs always stop because
-// their workspace is command-owned disposable state. Decided here, consumed by
-// the will-quit cleanup.
+// `keepServerOnQuit` field). A disposable developer instance's hub always
+// stops, because its whole root is about to be removed. Decided here, consumed
+// by the will-quit cleanup.
 
 app.on("before-quit", (event) => {
   if (quitIntent.kind === "relaunch") return;
@@ -3244,7 +3244,7 @@ app.on("before-quit", (event) => {
   const disposableInstance = process.env["VIBESTUDIO_INSTANCE_LIFECYCLE"] === "ephemeral";
   const decision = ordinaryQuitServerDecision({
     ownsLocalHub: conn?.serverOwnership === "desktop-local" && conn.hubProcessManager !== null,
-    ephemeral: disposableInstance,
+    disposableInstance,
     rememberedKeepServer: remembered,
   });
   if (decision !== "prompt") {

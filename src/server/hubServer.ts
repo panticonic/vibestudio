@@ -163,7 +163,6 @@ export interface HubServerArgs {
 
 export interface WorkspaceRuntime {
   name: string;
-  advertisedName: string;
   /** Opaque stable registry id (`ws_<rand>`, WP2) — membership rows key on this. */
   workspaceId: string;
   port: number;
@@ -558,11 +557,11 @@ async function cleanupRevokedUserInRuntime(
   fetchImpl: typeof fetch = fetch
 ): Promise<RevokedUserCleanupResult> {
   if (runtime.child.exitCode !== null) {
-    throw new Error(`Workspace "${runtime.advertisedName}" exited before revocation cleanup`);
+    throw new Error(`Workspace "${runtime.name}" exited before revocation cleanup`);
   }
   const adminToken =
     typeof runtime.ready["adminToken"] === "string" ? runtime.ready["adminToken"] : null;
-  if (!adminToken) throw new Error(`Workspace "${runtime.advertisedName}" has no admin token`);
+  if (!adminToken) throw new Error(`Workspace "${runtime.name}" has no admin token`);
   const response = await fetchImpl(
     `http://127.0.0.1:${runtime.port}/_r/s/revocation/cleanup-user`,
     {
@@ -579,7 +578,7 @@ async function cleanupRevokedUserInRuntime(
       typeof (payload as Record<string, unknown>)["error"] === "string"
         ? String((payload as Record<string, unknown>)["error"])
         : `HTTP ${response.status}`;
-    throw new Error(`Workspace "${runtime.advertisedName}" cleanup failed: ${message}`);
+    throw new Error(`Workspace "${runtime.name}" cleanup failed: ${message}`);
   }
   return RevokedUserCleanupResultSchema.parse(payload);
 }
@@ -661,10 +660,7 @@ async function closeDeviceSessionsAcrossChildren(
       const payload = (await response.json()) as Record<string, unknown>;
       if (typeof payload["closed"] === "number") closed += payload["closed"];
     } catch (error) {
-      console.warn(
-        `[Hub] closing device sessions in workspace "${entry.advertisedName}" failed:`,
-        error
-      );
+      console.warn(`[Hub] closing device sessions in workspace "${entry.name}" failed:`, error);
     }
   }
   return closed;
@@ -1142,13 +1138,13 @@ type ChildRouteRequest = { deviceId: string };
 
 /** Ask a child to arm ingress only. No identity row is ever written there. */
 async function armChildReach(
-  runtime: Pick<WorkspaceRuntime, "port" | "ready" | "advertisedName">,
+  runtime: Pick<WorkspaceRuntime, "port" | "ready" | "name">,
   input: ChildRouteRequest,
   fetchImpl: typeof fetch = fetch
 ): Promise<ChildReach> {
   const adminToken =
     typeof runtime.ready["adminToken"] === "string" ? runtime.ready["adminToken"] : null;
-  if (!adminToken) throw new Error(`Workspace "${runtime.advertisedName}" has no control token`);
+  if (!adminToken) throw new Error(`Workspace "${runtime.name}" has no control token`);
   const response = await fetchImpl(`http://127.0.0.1:${runtime.port}/_r/s/internal/route`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
@@ -1170,7 +1166,7 @@ async function armChildReach(
   try {
     assertIrohReach(reach);
   } catch {
-    throw new Error(`Workspace "${runtime.advertisedName}" returned invalid reach coordinates`);
+    throw new Error(`Workspace "${runtime.name}" returned invalid reach coordinates`);
   }
   return reach;
 }
@@ -1670,7 +1666,7 @@ export async function executeHubControl(
     }
     state.centralData.setLastWorkspaceForUser(subject.userId, name);
     respond({
-      workspace: runtime.advertisedName,
+      workspace: runtime.name,
       workspaceId: runtime.workspaceId,
       running: true,
       serverUrl: runtime.publicUrl,
@@ -2260,9 +2256,9 @@ function parseWorkspaceProxyUrl(rawUrl: string): { name: string; upstreamPath: s
 
 async function existingWorkspaceRuntime(
   state: HubRuntimeState,
-  advertisedName: string
+  workspaceName: string
 ): Promise<WorkspaceRuntime | null> {
-  const current = state.runtimes.get(advertisedName);
+  const current = state.runtimes.get(workspaceName);
   if (!current) return null;
   const runtime = "promise" in current ? await current.promise : current;
   return workspaceChildExited(runtime.child) ? null : runtime;
@@ -2413,23 +2409,23 @@ async function proxyUpgrade(
 
 async function ensureWorkspaceRuntime(
   state: HubRuntimeState,
-  advertisedName: string
+  workspaceName: string
 ): Promise<WorkspaceRuntime> {
-  requireWorkspaceId(state, advertisedName);
-  const current = state.runtimes.get(advertisedName);
+  requireWorkspaceId(state, workspaceName);
+  const current = state.runtimes.get(workspaceName);
   if (current) {
     if ("promise" in current) return current.promise;
     if (!workspaceChildExited(current.child)) return current;
-    state.runtimes.delete(advertisedName);
+    state.runtimes.delete(workspaceName);
   }
-  return beginWorkspaceRuntimeStart(state, advertisedName, (onSpawn) =>
-    startWorkspaceRuntime(state, advertisedName, onSpawn)
+  return beginWorkspaceRuntimeStart(state, workspaceName, (onSpawn) =>
+    startWorkspaceRuntime(state, workspaceName, onSpawn)
   );
 }
 
 function beginWorkspaceRuntimeStart(
   state: HubRuntimeState,
-  advertisedName: string,
+  workspaceName: string,
   start: (onSpawn: (child: ChildProcess) => void) => Promise<WorkspaceRuntime>
 ): Promise<WorkspaceRuntime> {
   const pending: PendingWorkspaceRuntime = { promise: null as never };
@@ -2440,22 +2436,22 @@ function beginWorkspaceRuntimeStart(
     .then((runtime) => {
       if (workspaceChildExited(runtime.child)) {
         throw new Error(
-          `Workspace runtime "${advertisedName}" exited while readiness was being published`
+          `Workspace runtime "${workspaceName}" exited while readiness was being published`
         );
       }
-      if (state.runtimes.get(advertisedName) === pending) {
-        state.runtimes.set(advertisedName, runtime);
+      if (state.runtimes.get(workspaceName) === pending) {
+        state.runtimes.set(workspaceName, runtime);
       }
       return runtime;
     })
     .catch((error: unknown) => {
-      if (state.runtimes.get(advertisedName) === pending) {
-        state.runtimes.delete(advertisedName);
+      if (state.runtimes.get(workspaceName) === pending) {
+        state.runtimes.delete(workspaceName);
       }
       throw error;
     });
   pending.promise = promise;
-  state.runtimes.set(advertisedName, pending);
+  state.runtimes.set(workspaceName, pending);
   return promise;
 }
 
@@ -2464,9 +2460,9 @@ function beginWorkspaceRuntimeStart(
  *
  * Identity is one hub-owned store (WP0 §2): the child opens `identity.db`
  * query-only via `VIBESTUDIO_IDENTITY_DB_PATH` to resolve subjects and rosters.
- * Each advertised workspace keeps its own durable Iroh endpoint identity
- * under the canonical advertised workspace directory, so a replacement process
- * preserves its Endpoint ID while different workspaces remain isolated.
+ * Each workspace keeps its own durable Iroh endpoint identity under its own
+ * directory, so a replacement process preserves its Endpoint ID while
+ * different workspaces remain isolated.
  *
  * `workspaceId` is the registry's OPAQUE stable id (WP2) — the child gates
  * connections with `membershipStore.has(subject.userId, workspaceId)`, so it
@@ -2475,8 +2471,7 @@ function beginWorkspaceRuntimeStart(
 export function buildWorkspaceChildEnv(input: {
   baseEnv: NodeJS.ProcessEnv;
   appRoot: string;
-  advertisedWorkspaceName: string;
-  childWorkspaceName: string;
+  workspaceName: string;
   workspaceId: string;
   hubUrl: string;
   identityDbPath: string;
@@ -2484,24 +2479,21 @@ export function buildWorkspaceChildEnv(input: {
   creationIntent?: WorkspaceCreationDescriptor | null;
   workspaceSources?: readonly WorkspaceSource[];
 }): NodeJS.ProcessEnv {
-  const reach = workspaceIrohReachPaths(input.advertisedWorkspaceName);
+  const reach = workspaceIrohReachPaths(input.workspaceName);
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
     VIBESTUDIO_APP_ROOT: input.appRoot,
     VIBESTUDIO_HOST: "127.0.0.1",
     VIBESTUDIO_BIND_HOST: "127.0.0.1",
-    VIBESTUDIO_WORKSPACE: input.childWorkspaceName,
-    // Child RPCs report the catalog name so clients can route back through
-    // the hub.
-    VIBESTUDIO_ADVERTISED_WORKSPACE: input.advertisedWorkspaceName,
+    VIBESTUDIO_WORKSPACE: input.workspaceName,
     VIBESTUDIO_WORKSPACE_ID: input.workspaceId,
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
     VIBESTUDIO_WORKSPACE_CHILD_TOKEN: input.workspaceChildToken,
     // Every child gets a distinct loopback-management capability. Never pass
     // through the hub's operator token from baseEnv.
     VIBESTUDIO_ADMIN_TOKEN: randomBytes(32).toString("hex"),
-    // The endpoint key identifies the advertised logical workspace, so stored
-    // reaches survive a replacement child process.
+    // The endpoint key belongs to the workspace, so stored reaches survive a
+    // replacement child process.
     VIBESTUDIO_IROH_IDENTITY: reach.identityFile,
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
@@ -2584,36 +2576,34 @@ export function buildWorkspaceChildArgs(input: {
 
 async function startWorkspaceRuntime(
   state: HubRuntimeState,
-  advertisedName: string,
+  workspaceName: string,
   onSpawn: (child: ChildProcess) => void
 ): Promise<WorkspaceRuntime> {
-  const workspaceId = requireWorkspaceId(state, advertisedName);
-  const creationIntent = state.centralData.getWorkspaceCreationIntent(advertisedName);
+  const workspaceId = requireWorkspaceId(state, workspaceName);
+  const creationIntent = state.centralData.getWorkspaceCreationIntent(workspaceName);
   // A new child instance owns a fresh report stream. Never retain endpoints
   // from a prior process while the replacement is starting.
   state.workspacePresence.delete(workspaceId);
   // Runtime startup consumes an explicitly registered workspace; it never
-  // creates catalog state as a routing side effect. A workspace's disk
-  // coordinate is its advertised name.
-  const childWorkspaceName = advertisedName;
+  // creates catalog state as a routing side effect.
   if (semverMajor(state.version) !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
       `Installed application ${state.version} does not match compiled workspace epoch ${WORKSPACE_SYSTEM_EPOCH}`
     );
   }
   const launchRecord = readWorkspaceHostLaunchRecord(
-    path.join(getWorkspaceDir(childWorkspaceName), "state")
+    path.join(getWorkspaceDir(workspaceName), "state")
   );
   if (launchRecord && launchRecord.workspaceId !== workspaceId) {
-    throw new Error(`Workspace "${advertisedName}" launch record has the wrong identity`);
+    throw new Error(`Workspace "${workspaceName}" launch record has the wrong identity`);
   }
   if (!launchRecord && !creationIntent) {
     throw new Error(
-      `Workspace "${advertisedName}" has neither a host launch record nor a pending creation intent`
+      `Workspace "${workspaceName}" has neither a host launch record nor a pending creation intent`
     );
   }
   if (creationIntent && creationIntent.workspaceId !== workspaceId) {
-    throw new Error(`Workspace "${advertisedName}" creation intent has the wrong identity`);
+    throw new Error(`Workspace "${workspaceName}" creation intent has the wrong identity`);
   }
   const launchSet: WorkspaceHostLaunchSet =
     !launchRecord || launchRecord.systemEpoch === WORKSPACE_SYSTEM_EPOCH
@@ -2631,14 +2621,12 @@ async function startWorkspaceRuntime(
           launchRecord.systemEpoch
         );
   if (!launchSet.serverEntry) throw new Error("Workspace child launch set has no server entry");
-  const readyDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `vibestudio-workspace-${advertisedName}-`)
-  );
+  const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `vibestudio-workspace-${workspaceName}-`));
   const readyFile = path.join(readyDir, "ready.json");
-  const publicUrl = workspaceEndpointUrl(state, advertisedName);
+  const publicUrl = workspaceEndpointUrl(state, workspaceName);
   const childArgs = buildWorkspaceChildArgs({
     entry: launchSet.serverEntry,
-    workspaceName: childWorkspaceName,
+    workspaceName,
     appRoot: launchSet.appRoot,
     readyFile,
     logLevel: state.args.logLevel,
@@ -2650,8 +2638,7 @@ async function startWorkspaceRuntime(
   const childEnv = buildWorkspaceChildEnv({
     baseEnv: process.env,
     appRoot: launchSet.appRoot,
-    advertisedWorkspaceName: advertisedName,
-    childWorkspaceName,
+    workspaceName,
     workspaceId,
     hubUrl: state.connectUrl,
     identityDbPath: state.identityDbPath,
@@ -2710,7 +2697,7 @@ async function startWorkspaceRuntime(
     });
   };
   child.stdout?.on("data", (chunk) =>
-    forwardOutput(process.stdout, `[workspace:${advertisedName}] `, chunk)
+    forwardOutput(process.stdout, `[workspace:${workspaceName}] `, chunk)
   );
   let retainStartupStderr = true;
   let startupStderrTail = Buffer.alloc(0);
@@ -2724,12 +2711,11 @@ async function startWorkspaceRuntime(
         );
       }
     }
-    forwardOutput(process.stderr, `[workspace:${advertisedName}:err] `, chunk);
+    forwardOutput(process.stderr, `[workspace:${workspaceName}:err] `, chunk);
   });
   child.on("exit", (code, signal) => {
     void handleWorkspaceChildExit(state, {
-      advertisedName,
-      childWorkspaceName,
+      workspaceName,
       workspaceId,
       runtimeToken,
       child,
@@ -2737,7 +2723,7 @@ async function startWorkspaceRuntime(
       signal,
     }).catch((error) => {
       console.error(
-        `[Hub] Workspace "${advertisedName}" exit reconciliation failed; runtime remains unavailable:`,
+        `[Hub] Workspace "${workspaceName}" exit reconciliation failed; runtime remains unavailable:`,
         error
       );
     });
@@ -2751,15 +2737,15 @@ async function startWorkspaceRuntime(
         startupStderrTail.toString("utf8").trim()
       )
     );
-    if (ready["workspaceName"] !== childWorkspaceName || ready["workspaceId"] !== workspaceId) {
+    if (ready["workspaceName"] !== workspaceName || ready["workspaceId"] !== workspaceId) {
       throw new Error(
-        `Workspace "${advertisedName}" ready identity does not match its spawn ` +
-          `(expected name=${JSON.stringify(childWorkspaceName)} id=${JSON.stringify(workspaceId)}, ` +
+        `Workspace "${workspaceName}" ready identity does not match its spawn ` +
+          `(expected name=${JSON.stringify(workspaceName)} id=${JSON.stringify(workspaceId)}, ` +
           `received name=${JSON.stringify(ready["workspaceName"])} id=${JSON.stringify(ready["workspaceId"])})`
       );
     }
     port = ready["gatewayPort"] as number;
-    state.centralData.touchWorkspace(advertisedName);
+    state.centralData.touchWorkspace(workspaceName);
   } catch (error) {
     await terminateWorkspaceChild(child);
     state.workspaceChildTokens.delete(runtimeToken);
@@ -2770,8 +2756,7 @@ async function startWorkspaceRuntime(
     fs.rmSync(readyDir, { recursive: true, force: true });
   }
   return {
-    name: childWorkspaceName,
-    advertisedName,
+    name: workspaceName,
     workspaceId,
     port,
     publicUrl,
@@ -2794,8 +2779,7 @@ function workspaceChildExited(child: ChildProcess): boolean {
 }
 
 type WorkspaceChildExitInput = {
-  advertisedName: string;
-  childWorkspaceName: string;
+  workspaceName: string;
   workspaceId: string;
   runtimeToken: string;
   child: ChildProcess;
@@ -2804,7 +2788,7 @@ type WorkspaceChildExitInput = {
 };
 
 type WorkspaceChildExitDeps = {
-  shouldRestart?: (state: HubRuntimeState, advertisedName: string) => boolean;
+  shouldRestart?: (state: HubRuntimeState, workspaceName: string) => boolean;
   reap?: (child: ChildProcess) => Promise<void>;
   restart?: (
     state: HubRuntimeState,
@@ -2813,11 +2797,11 @@ type WorkspaceChildExitDeps = {
   ) => Promise<WorkspaceRuntime>;
 };
 
-function workspaceRuntimeIsDesired(state: HubRuntimeState, advertisedName: string): boolean {
-  if (!state.centralData.hasWorkspace(advertisedName)) return false;
+function workspaceRuntimeIsDesired(state: HubRuntimeState, workspaceName: string): boolean {
+  if (!state.centralData.hasWorkspace(workspaceName)) return false;
   const workspace = state.centralData
     .listWorkspaces()
-    .find((candidate) => candidate.name === advertisedName);
+    .find((candidate) => candidate.name === workspaceName);
   return (
     !!workspace &&
     state.identityDb
@@ -2836,9 +2820,9 @@ function restartExitedWorkspaceRuntime(
   input: WorkspaceChildExitInput,
   reaped: Promise<void>
 ): Promise<WorkspaceRuntime> {
-  return beginWorkspaceRuntimeStart(state, input.advertisedName, async (onSpawn) => {
+  return beginWorkspaceRuntimeStart(state, input.workspaceName, async (onSpawn) => {
     await reaped;
-    return startWorkspaceRuntime(state, input.advertisedName, onSpawn);
+    return startWorkspaceRuntime(state, input.workspaceName, onSpawn);
   });
 }
 
@@ -2854,35 +2838,35 @@ export async function handleWorkspaceChildExit(
 ): Promise<void> {
   state.workspaceChildTokens.delete(input.runtimeToken);
   state.workspacePresence.delete(input.workspaceId);
-  const current = state.runtimes.get(input.advertisedName);
+  const current = state.runtimes.get(input.workspaceName);
   if (!current || current.child !== input.child) return;
   const wasReady = !("promise" in current);
   const epochHandoff = input.code === WORKSPACE_EPOCH_HANDOFF_EXIT_CODE;
-  state.runtimes.delete(input.advertisedName);
+  state.runtimes.delete(input.workspaceName);
 
   const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child);
   const exitDescription = `code=${input.code ?? "null"}, signal=${input.signal ?? "null"}, pid=${input.child.pid ?? "unknown"}`;
   if (state.shuttingDown) {
     console.log(
-      `[Hub] Workspace "${input.advertisedName}" exited during shutdown (${exitDescription})`
+      `[Hub] Workspace "${input.workspaceName}" exited during shutdown (${exitDescription})`
     );
     await reaped;
     return;
   }
   if (epochHandoff) {
     console.log(
-      `[Hub] Workspace "${input.advertisedName}" handed off to its new host (${exitDescription})`
+      `[Hub] Workspace "${input.workspaceName}" handed off to its new host (${exitDescription})`
     );
   } else {
     console.error(
-      `[Hub] Workspace "${input.advertisedName}" exited unexpectedly (${exitDescription})`
+      `[Hub] Workspace "${input.workspaceName}" exited unexpectedly (${exitDescription})`
     );
   }
 
   if (
     !wasReady ||
     (!epochHandoff &&
-      !(deps.shouldRestart ?? workspaceRuntimeIsDesired)(state, input.advertisedName))
+      !(deps.shouldRestart ?? workspaceRuntimeIsDesired)(state, input.workspaceName))
   ) {
     await reaped;
     return;
@@ -2891,11 +2875,11 @@ export async function handleWorkspaceChildExit(
   try {
     const runtime = await (deps.restart ?? restartExitedWorkspaceRuntime)(state, input, reaped);
     console.log(
-      `[Hub] Workspace "${input.advertisedName}" recovered on child ${runtime.child.pid ?? "unknown"} using checkout "${runtime.name}"`
+      `[Hub] Workspace "${input.workspaceName}" recovered on child ${runtime.child.pid ?? "unknown"}`
     );
   } catch (error) {
     console.error(
-      `[Hub] Workspace "${input.advertisedName}" recovery failed; runtime remains unavailable:`,
+      `[Hub] Workspace "${input.workspaceName}" recovery failed; runtime remains unavailable:`,
       error
     );
   }

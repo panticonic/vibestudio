@@ -460,7 +460,6 @@ async function main() {
 
   const wsDir = args.workspaceDir ?? process.env["VIBESTUDIO_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["VIBESTUDIO_WORKSPACE"];
-  const advertisedWorkspaceName = process.env["VIBESTUDIO_ADVERTISED_WORKSPACE"] ?? wsName;
   const childWorkspaceId = process.env["VIBESTUDIO_WORKSPACE_ID"];
   if (!childWorkspaceId) {
     throw new Error("Workspace runtime requires its authoritative workspace id from the hub");
@@ -6645,7 +6644,7 @@ async function main() {
     connectionGrants,
     workspace,
     workspaceId,
-    activeWorkspaceName: advertisedWorkspaceName ?? workspaceName,
+    activeWorkspaceName: workspaceName,
     workspacePath,
     workspaceConfig,
     getWorkspaceConfig: () => workspaceConfig,
@@ -7027,7 +7026,7 @@ async function main() {
             url: getLocalGatewayUrl("linked Claude"),
             serverId: deviceAuthStore.getServerId(),
             workspaceId: entryWorkspaceId,
-            workspaceName: advertisedWorkspaceName ?? workspaceName,
+            workspaceName,
             transport: "local",
           },
         };

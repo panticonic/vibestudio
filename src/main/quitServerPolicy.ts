@@ -2,17 +2,17 @@ export type OrdinaryQuitServerDecision = "keep" | "stop" | "prompt";
 
 /**
  * Resolve the local hub's lifecycle before Electron begins asynchronous quit
- * cleanup. An ephemeral development hub is disposable command-owned state, so
- * ordinary quit always stops it and lets the hub remove its workspace. An
+ * cleanup. A hub belonging to a disposable developer instance owns state the
+ * supervisor is about to delete, so ordinary quit always stops it. An
  * unattended shutdown sets its decision before this policy is consulted.
  */
 export function ordinaryQuitServerDecision(options: {
   ownsLocalHub: boolean;
-  ephemeral: boolean;
+  disposableInstance: boolean;
   rememberedKeepServer: boolean | null;
 }): OrdinaryQuitServerDecision {
   if (!options.ownsLocalHub) return "keep";
-  if (options.ephemeral) return "stop";
+  if (options.disposableInstance) return "stop";
   if (options.rememberedKeepServer === null) return "prompt";
   return options.rememberedKeepServer ? "keep" : "stop";
 }

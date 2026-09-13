@@ -790,8 +790,8 @@ async function status(inv: ParsedInvocation): Promise<number> {
           ? { error: state.result.error }
           : {}),
     };
-    // Detached runs often outlive (or are followed by a restart of) an
-    // ephemeral source workspace. Persist the terminal summary at the moment
+    // Detached runs often outlive (or are followed by a restart of) the
+    // workspace they ran in. Persist the terminal summary at the moment
     // status observes it so `rerun RUN_ID` can recover failed/tool-failure test
     // names without depending on the old EvalDO still existing.
     if (state.status === "done" && state.result?.success) {
