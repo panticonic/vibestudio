@@ -210,18 +210,34 @@ async function ensureWorkspaceProfile(
   instanceRoot: string,
   role: "system"
 ): Promise<SystemTestWorkspaceProfile> {
-  const listed = await captureCli(instanceId, ["remote", "workspaces", "--json"]);
-  if (listed.code !== 0) {
-    throw new Error(
-      `Could not list workspaces on ${instanceId}: ${listed.stderr || listed.stdout}`
-    );
-  }
-  const workspaces = (
-    JSON.parse(listed.stdout.trim().split("\n").at(-1) ?? "{}") as {
-      workspaces?: WorkspaceSummary[];
+  // A freshly created instance publishes its private workspaces after the
+  // server is answering, so the role's workspace can be absent for a while
+  // rather than absent for good. Wait for it instead of refusing the run.
+  const deadline = Date.now() + WORKSPACE_ROLE_TIMEOUT_MS;
+  let workspace: WorkspaceSummary | undefined;
+  let lastFailure = "";
+  for (;;) {
+    const listed = await captureCli(instanceId, ["remote", "workspaces", "--json"]);
+    if (listed.code !== 0) {
+      lastFailure = `could not list workspaces: ${listed.stderr.trim() || listed.stdout.trim()}`;
+    } else {
+      const workspaces = (
+        JSON.parse(listed.stdout.trim().split("\n").at(-1) ?? "{}") as {
+          workspaces?: WorkspaceSummary[];
+        }
+      ).workspaces;
+      try {
+        workspace = selectWorkspaceForRole(workspaces ?? [], role);
+        break;
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : String(error);
+      }
     }
-  ).workspaces;
-  const workspace = selectWorkspaceForRole(workspaces ?? [], role);
+    if (Date.now() >= deadline) {
+      throw new Error(`No ${role} workspace appeared on ${instanceId}: ${lastFailure}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
   const root = workspaceProfileRoot(instanceRoot, role);
   const profile: SystemTestWorkspaceProfile = {
     root,
@@ -276,6 +292,9 @@ function commandTakesScope(command: readonly string[]): boolean {
   const subcommand = command[0];
   return subcommand !== undefined && !UNSCOPED_SYSTEM_TEST_COMMANDS.has(subcommand);
 }
+
+/** How long a fresh instance may take to publish its private workspaces. */
+const WORKSPACE_ROLE_TIMEOUT_MS = 5 * 60_000;
 
 function pairedWorkspaceId(instanceRoot: string): string {
   const credentialsPath = path.join(instanceRoot, "cli-credentials.json");
