@@ -14,6 +14,12 @@ import {
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
 import { DEFAULT_IROH_RELAYS } from "../server/irohRelayConfig.js";
+import {
+  prepareSelfDevelopmentMirrors,
+  selfDevelopmentMirrorEnvironment,
+  selfDevelopmentProjects,
+  type SelfDevelopmentProject,
+} from "./selfDevelopmentAdoption.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -29,6 +35,7 @@ type LauncherArgs = {
   instanceId: string;
   explicitInstance: boolean;
   bootstrapWorkspace?: string;
+  selfDevelopment: boolean;
   command: string[];
 };
 
@@ -40,10 +47,12 @@ type ManagedMarker = {
 };
 
 export function systemTestInstanceEnvironment(
-  base: NodeJS.ProcessEnv = process.env
+  base: NodeJS.ProcessEnv = process.env,
+  extra: NodeJS.ProcessEnv = {}
 ): NodeJS.ProcessEnv {
   return {
     ...base,
+    ...extra,
     // Managed tests own their network topology and must not inherit a caller's
     // relay override. Use the same public Phase-0 topology as the product default.
     VIBESTUDIO_IROH_RELAYS: DEFAULT_IROH_RELAYS.join(","),
@@ -55,12 +64,15 @@ export type EnsuredSystemTestInstance = {
   ready: DevInstanceReadyRecord;
   created: boolean;
   managed: boolean;
+  /** Projects this launch prepared mirrors for; empty unless newly created. */
+  selfDevelopmentProjects: readonly SelfDevelopmentProject[];
   logFile?: string;
 };
 
 export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherArgs {
   let instanceId: string | undefined;
   let bootstrapWorkspace: string | undefined;
+  let selfDevelopment = false;
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -93,12 +105,17 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       if (!bootstrapWorkspace) throw new Error("--bootstrap-workspace requires a name");
       continue;
     }
+    if (arg === "--self-development") {
+      selfDevelopment = true;
+      continue;
+    }
     command.push(arg);
   }
   return {
     instanceId: instanceId ?? DEFAULT_SYSTEM_TEST_INSTANCE,
     explicitInstance: instanceId !== undefined,
     ...(bootstrapWorkspace ? { bootstrapWorkspace } : {}),
+    selfDevelopment,
     command,
   };
 }
@@ -126,6 +143,18 @@ function markerPath(instance: Pick<DevInstanceRecord, "root">): string {
 function logPath(repoRoot: string, instanceId: string): string {
   const instanceRoot = persistentInstanceRoot(repoRoot, instanceId);
   return path.join(path.dirname(instanceRoot), "system-test-logs", `${instanceId}.log`);
+}
+
+/**
+ * Where an instance's local acquisition mirrors live.
+ *
+ * They sit beside the instance root rather than inside it: the server has to
+ * serve them from the moment it starts, and an ephemeral instance root is
+ * removed on every stop.
+ */
+function selfDevelopmentMirrorRoot(repoRoot: string, instanceId: string): string {
+  const instanceRoot = persistentInstanceRoot(repoRoot, instanceId);
+  return path.join(path.dirname(instanceRoot), "self-development-mirrors", instanceId);
 }
 
 function readManagedMarker(instance: DevInstanceRecord): ManagedMarker | null {
@@ -216,7 +245,8 @@ function spawnManagedInstance(
   repoRoot: string,
   instanceId: string,
   outputFile: string,
-  bootstrapWorkspace?: string
+  bootstrapWorkspace?: string,
+  extraEnvironment: NodeJS.ProcessEnv = {}
 ): void {
   fs.mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o700 });
   const output = fs.openSync(outputFile, "a", 0o600);
@@ -234,7 +264,7 @@ function spawnManagedInstance(
       ],
       {
         cwd: repoRoot,
-        env: systemTestInstanceEnvironment(),
+        env: systemTestInstanceEnvironment(process.env, extraEnvironment),
         detached: true,
         stdio: ["ignore", output, output],
       }
@@ -295,16 +325,36 @@ export async function ensureSystemTestInstance(
     explicitInstance?: boolean;
     startupTimeoutMs?: number;
     bootstrapWorkspace?: string;
+    /** Serve the developer's own checkouts so their projects can be adopted. */
+    selfDevelopment?: boolean;
   } = {}
 ): Promise<EnsuredSystemTestInstance> {
   const repoRoot = canonicalRepoRoot(repoRootInput);
   let instance = resolveRunning(repoRoot, instanceId);
   let created = false;
   let outputFile: string | undefined;
+  let projects: readonly SelfDevelopmentProject[] = [];
   if (!instance) {
     reclaimStaleManagedInstance(repoRoot, instanceId);
     outputFile = logPath(repoRoot, instanceId);
-    spawnManagedInstance(repoRoot, instanceId, outputFile, options.bootstrapWorkspace);
+    let mirrorEnvironment: NodeJS.ProcessEnv = {};
+    if (options.selfDevelopment) {
+      projects = selfDevelopmentProjects(repoRoot);
+      mirrorEnvironment = selfDevelopmentMirrorEnvironment(
+        prepareSelfDevelopmentMirrors({
+          repoRoot,
+          target: selfDevelopmentMirrorRoot(repoRoot, instanceId),
+          projects,
+        })
+      );
+    }
+    spawnManagedInstance(
+      repoRoot,
+      instanceId,
+      outputFile,
+      options.bootstrapWorkspace,
+      mirrorEnvironment
+    );
     created = true;
     try {
       instance = await waitForRegistration(
@@ -358,7 +408,14 @@ export async function ensureSystemTestInstance(
         `${JSON.stringify(options.bootstrapWorkspace)}`
     );
   }
-  return { instance, ready, created, managed, ...(outputFile ? { logFile: outputFile } : {}) };
+  return {
+    instance,
+    ready,
+    created,
+    managed,
+    selfDevelopmentProjects: projects,
+    ...(outputFile ? { logFile: outputFile } : {}),
+  };
 }
 
 async function waitForStopped(instance: DevInstanceRecord, timeoutMs: number): Promise<void> {

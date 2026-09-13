@@ -39,6 +39,7 @@ describe("self-provisioning system-test instance", () => {
     expect(parseSystemTestLauncherArgs(["doctor", "--instance", "incident-a", "--json"])).toEqual({
       instanceId: "incident-a",
       explicitInstance: true,
+      selfDevelopment: false,
       command: ["doctor", "--json"],
     });
     expect(
@@ -53,12 +54,21 @@ describe("self-provisioning system-test instance", () => {
       instanceId: "self-development",
       explicitInstance: true,
       bootstrapWorkspace: "dogfood-system-test",
+      selfDevelopment: false,
       command: ["doctor"],
     });
     expect(parseSystemTestLauncherArgs(["list"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
+      selfDevelopment: false,
       command: ["list"],
+    });
+    // The adoption flag is the launcher's, never the test command's.
+    expect(parseSystemTestLauncherArgs(["--self-development", "run", "x"])).toEqual({
+      instanceId: "system-test",
+      explicitInstance: false,
+      selfDevelopment: true,
+      command: ["run", "x"],
     });
     expect(() =>
       parseSystemTestLauncherArgs(["--instance", "a", "--instance=b", "doctor"])

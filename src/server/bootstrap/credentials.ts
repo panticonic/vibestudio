@@ -10,6 +10,7 @@ import {
   type CredentialRuntimePanelInfo,
   type CredentialServiceDeps,
 } from "../services/credentialService.js";
+import { createLocalGitMirrorTransport, readLocalGitMirrors } from "../services/localGitMirrors.js";
 
 export interface CredentialBootstrapDeps {
   container: Pick<ServiceContainer, "registerManaged">;
@@ -63,6 +64,16 @@ export function wireCredentialService(
     return captureBridge.captureSessionCredential<T>(userId, payload, signal);
   };
 
+  // Host-declared local acquisition for a canonical Git remote. Announced at
+  // startup because it changes where adopted project bytes come from, and a
+  // silent redirection of a remote would be indistinguishable from the remote
+  // having those contents.
+  const mirrors = readLocalGitMirrors();
+  const localGitMirrors = createLocalGitMirrorTransport({ mirrors });
+  for (const mirror of mirrors) {
+    console.warn(`[git] serving ${mirror.url} from the local checkout ${mirror.checkout}`);
+  }
+
   const credentialService = createCredentialService({
     completeCapture: (userId, captureId, response) => {
       if (!deps.isPersonalWorkspaceOwner(userId)) {
@@ -77,6 +88,7 @@ export function wireCredentialService(
     relayOAuthRegistrar: deps.relayOAuthRegistrar,
     connectionLookup: { getAuthorizingShell: deps.getAuthorizingShell },
     egressProxy: deps.egressProxy,
+    ...(localGitMirrors ? { localGitMirrors } : {}),
     workspaceId: deps.workspaceId,
     approvalQueue: deps.approvalQueue,
     sessionGrantStore: deps.sessionGrantStore,

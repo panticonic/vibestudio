@@ -81,6 +81,7 @@ import { assertPresent } from "../../lintHelpers";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { credentialGrantAgentId } from "./credentialGrantIdentity.js";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
+import type { LocalGitMirrorTransport } from "./localGitMirrors.js";
 import { normalizeRemoteUrl } from "@vibestudio/workspace/remotes";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
 import { OAuthConnectionError } from "./credentialMechanisms/errors.js";
@@ -147,6 +148,11 @@ export interface CredentialServiceDeps {
     } | null;
   };
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
+  /**
+   * Serves a host-authorized local checkout for one declared canonical remote.
+   * Present only when the host declared mirrors; see localGitMirrors.ts.
+   */
+  localGitMirrors?: LocalGitMirrorTransport;
   workspaceId?: string;
   approvalQueue?: ApprovalQueue;
   sessionGrantStore?: CredentialSessionGrantStore;
@@ -186,6 +192,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   const eventService = deps.eventService;
   const connectionLookup = deps.connectionLookup;
   const egressProxy = deps.egressProxy;
+  const localGitMirrors = deps.localGitMirrors;
   const approvalQueue = deps.approvalQueue;
   const sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
   const credentialUseGrantStore = deps.credentialUseGrantStore ?? null;
@@ -884,6 +891,16 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (request.logicalCredential) {
       assertGitRequestBelongsToRemote(request.url, request.logicalCredential.remoteUrl);
     }
+    // A declared mirror answers before the egress proxy because these bytes
+    // never leave the machine: there is no remote to authorize, no credential
+    // to select, and nothing to audit as egress. The caller still had to hold
+    // the capability of whatever operation asked for them.
+    const mirrored = await localGitMirrors?.request({
+      url: request.url,
+      method: request.method ?? "GET",
+      body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
+    });
+    if (mirrored) return serializeGitHttpResponse(mirrored);
     if (!egressProxy) {
       throw new Error("Egress proxy is unavailable");
     }

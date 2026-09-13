@@ -81,6 +81,16 @@ command.
 8. When verification is complete, stop the exact managed instance with
    `pnpm system-test [--instance ID] stop`.
 
+The `self-development` tests build Vibestudio itself, which a managed instance
+can only do once the monorepo is adopted there as `projects/vibestudio`. Pass
+`--self-development` when creating the instance: the launcher mirrors this
+checkout and the linked Base checkout for their canonical upstreams, adopts
+both through the ordinary import, and publishes them to protected main before
+the first test context forks from it. Adoption is part of creating the
+instance, so a plain instance cannot be upgraded to one — stop it and create
+another. Adopting costs a few thousand files of semantic import, so do not pass
+the flag for unrelated tests.
+
 Agentic tests judge delivery latency in wall-clock time, and the gate can only
 account for the test agents sharing the instance — it scales its allowance by
 that count, but cannot see load the suite did not create. Do not run other heavy

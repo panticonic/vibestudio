@@ -13,6 +13,10 @@ import {
   assertSystemTestPreparationResult,
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
+import {
+  adoptSelfDevelopmentProjects,
+  type SelfDevelopmentProject,
+} from "./selfDevelopmentAdoption.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -34,6 +38,7 @@ Commands:
 Options:
   --instance ID                  Stable unique instance name (default: system-test)
   --bootstrap-workspace NAME     Use a named persistent bootstrap workspace
+  --self-development             Adopt this checkout as projects/vibestudio
   -h, --help                     Show this help without starting infrastructure
 `;
 
@@ -103,6 +108,52 @@ function prepareFreshInstance(instanceId: string, expectedWorkspaceId: string): 
   });
 }
 
+/** Run one ordinary CLI command and capture what it reported. */
+function captureCli(
+  instanceId: string,
+  command: readonly string[]
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [tsxCli, "src/dev/runCli.ts", "--instance", instanceId, ...command],
+      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) reject(new Error(`${command[0]} exited from signal ${signal}`));
+      else resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+async function adoptSelfDevelopmentSource(
+  instanceId: string,
+  projects: readonly SelfDevelopmentProject[]
+): Promise<void> {
+  if (projects.length === 0) return;
+  const adopted = await adoptSelfDevelopmentProjects({
+    projects,
+    runCli: (args) => captureCli(instanceId, args),
+  });
+  for (const project of adopted) {
+    console.error(
+      `[system-test] ${project.adopted ? "adopted" : "reusing"} ${project.repoPath} ` +
+        `from ${project.url}`
+    );
+  }
+}
+
 function pairedWorkspaceId(instanceRoot: string): string {
   const credentialsPath = path.join(instanceRoot, "cli-credentials.json");
   const value = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as Record<string, unknown>;
@@ -136,6 +187,7 @@ async function main(): Promise<void> {
   const ensured = await ensureSystemTestInstance(repoRoot, parsed.instanceId, {
     explicitInstance: parsed.explicitInstance,
     ...(parsed.bootstrapWorkspace ? { bootstrapWorkspace: parsed.bootstrapWorkspace } : {}),
+    ...(parsed.selfDevelopment ? { selfDevelopment: true } : {}),
   });
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = ensured.instance.root;
   process.env["VIBESTUDIO_INSTANCE"] = ensured.instance.id;
@@ -157,6 +209,10 @@ async function main(): Promise<void> {
   // review appears immediately afterward, blocking the first real test.
   if (ensured.created) {
     await prepareFreshInstance(ensured.instance.id, pairedWorkspaceId(ensured.instance.root));
+    // Adoption publishes to protected main, so it has to land before the first
+    // test context forks from it; a context created earlier would never see
+    // the adopted repositories.
+    await adoptSelfDevelopmentSource(ensured.instance.id, ensured.selfDevelopmentProjects);
   }
   const command =
     ensured.managed &&
