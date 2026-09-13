@@ -679,7 +679,12 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
   };
 
   delete env.VIBESTUDIO_INSTANCE_ROOT;
-  if (!deepLink) env.VIBESTUDIO_INSTANCE_ROOT = path.join(tempRoot, "instance");
+  if (!deepLink) {
+    env.VIBESTUDIO_INSTANCE_ROOT = path.join(tempRoot, "instance");
+    // A temporary instance root: the hub must stop with the app rather than
+    // asking whether to keep serving state this smoke run is about to delete.
+    env.VIBESTUDIO_INSTANCE_LIFECYCLE = "ephemeral";
+  }
   delete env.VIBESTUDIO_WORKSPACE;
   await fsp.mkdir(env.HOME, { recursive: true });
   await fsp.mkdir(env.XDG_CONFIG_HOME, { recursive: true });
@@ -701,7 +706,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
       // Load the application package, as pnpm dev does, so Electron uses its
       // actual version/name metadata when starting the owned local server.
       repoRoot,
-      ...(deepLink ? [deepLink] : ["--ephemeral"]),
+      ...(deepLink ? [deepLink] : []),
     ],
     env,
     timeout: launchTimeoutMs,

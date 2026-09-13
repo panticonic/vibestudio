@@ -17,7 +17,6 @@ type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 type BootstrapBridge = {
   getState: () => Promise<unknown>;
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
-  launchEphemeralWorkspace: () => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
@@ -59,8 +58,6 @@ const bootstrapBridge: BootstrapBridge = {
   getState: () => ipcRenderer.invoke("vibestudio:bootstrap:get-state"),
   launchLocalWorkspace: (workspaceName) =>
     ipcRenderer.invoke("vibestudio:bootstrap:launch-local-workspace", workspaceName),
-  launchEphemeralWorkspace: () =>
-    ipcRenderer.invoke("vibestudio:bootstrap:launch-ephemeral-workspace"),
   pairRemote: (payload) => ipcRenderer.invoke("vibestudio:bootstrap:pair-remote", payload),
   retryStartup: () => ipcRenderer.invoke("vibestudio:bootstrap:retry-startup"),
   chooseConnection: () => ipcRenderer.invoke("vibestudio:bootstrap:choose-connection"),

@@ -36,7 +36,7 @@ export function extractDevelopmentTemplateCheckoutArguments(argv: readonly strin
   if (
     workspaceCheckout &&
     forwarded.some((arg) =>
-      ["--workspace", "--bootstrap-workspace", "--ephemeral-workspace"].some(
+      ["--workspace", "--bootstrap-workspace"].some(
         (option) => arg === option || arg.startsWith(`${option}=`)
       )
     )

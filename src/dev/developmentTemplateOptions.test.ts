@@ -45,7 +45,6 @@ it.each([
   ["--workspace-checkout=/a", "--workspace-checkout=/b"],
   ["--workspace-checkout=/a", "--workspace=existing"],
   ["--workspace-checkout=/a", "--bootstrap-workspace", "existing"],
-  ["--workspace-checkout=/a", "--ephemeral-workspace"],
 ])("rejects ambiguous or missing startup checkout selections: %s", (...args) => {
   expect(() => extractDevelopmentTemplateCheckoutArguments(args)).toThrow();
 });

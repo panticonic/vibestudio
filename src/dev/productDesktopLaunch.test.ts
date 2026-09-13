@@ -28,8 +28,6 @@ const templates = [{ pin: { commit: "template" }, checkout: "/private/template" 
 describe("product desktop source launch", () => {
   it.each([
     "--ephemeral",
-    "--ephemeral-workspace",
-    "--resume-ephemeral-workspace",
     "--instance=other",
     "--base-checkout=/tmp/base",
     "--workspace-checkout=/tmp/app",

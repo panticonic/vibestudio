@@ -13,24 +13,12 @@ import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { resolveWorkspaceName } from "@vibestudio/workspace/loader";
 import { readWorkspaceCreationTemplate } from "@vibestudio/workspace/baseTemplateRelease";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
-import {
-  EPHEMERAL_DEV_WORKSPACE_NAME,
-  EPHEMERAL_WORKSPACE_ARG,
-  RESUME_EPHEMERAL_WORKSPACE_ARG,
-} from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
 export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
-/**
- * Starts a fresh disposable dev-workspace lifecycle. Internal Electron
- * relaunches replace this with RESUME_EPHEMERAL_WORKSPACE_ARG so they retain
- * the same lifecycle until ordinary quit removes it.
- */
-export { EPHEMERAL_DEV_WORKSPACE_NAME, EPHEMERAL_WORKSPACE_ARG, RESUME_EPHEMERAL_WORKSPACE_ARG };
-
 export type StartupMode =
   | {
       kind: "pending";
@@ -47,13 +35,6 @@ export type StartupMode =
       wsDir: string | null;
       workspaceName: string | null;
       workspaceId: string | null;
-      isEphemeral: boolean;
-      /**
-       * A new development session replaces any prior hub-owned `dev`
-       * lifecycle; an internal Electron relaunch resumes the lifecycle it
-       * already created. Non-ephemeral workspaces carry null.
-       */
-      ephemeralLifecycle: "replace" | "resume" | null;
     };
 
 export type LocalStartupMode = Extract<StartupMode, { kind: "local" }>;
@@ -97,7 +78,7 @@ export function localShellUserDataDir(
 ): string {
   if (!mode.workspaceName)
     return path.join(getPendingUserDataDir(), options.headless ? "headless" : "desktop");
-  if (mode.isEphemeral || options.pendingCreation) {
+  if (options.pendingCreation) {
     return path.join(
       getPendingUserDataDir(),
       "workspace-creation",
@@ -124,18 +105,6 @@ export function resolveStartupMode(
   if (opts?.interactiveDesktop === true && hasConnectDeepLinkArg()) {
     log.info("[Workspace] Waiting for Iroh pairing link opened at launch");
     return { kind: "pending" };
-  }
-
-  const freshEphemeral = process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
-  const resumedEphemeral = process.argv.includes(RESUME_EPHEMERAL_WORKSPACE_ARG);
-  if (freshEphemeral || resumedEphemeral) {
-    const requested = resolveWorkspaceName();
-    if (requested && requested !== EPHEMERAL_DEV_WORKSPACE_NAME) {
-      throw new Error(
-        `Ephemeral development launches use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
-      );
-    }
-    return resolveEphemeralDevStartupMode(freshEphemeral ? "replace" : "resume");
   }
 
   if (hasExplicitWorkspaceSelection()) {
@@ -182,8 +151,6 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === CHOOSE_CONNECTION_ARG) continue;
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
     if (arg === DEV_IROH_REMOTE_ARG) continue;
-    if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
-    if (arg === RESUME_EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg?.startsWith("vibestudio://connect") || arg?.startsWith("https://vibestudio.app/p#"))
       continue;
     if (arg?.startsWith("vibestudio://panel")) continue;
@@ -202,40 +169,6 @@ export function chooseConnectionRelaunchArgs(rawArgs = process.argv.slice(1)): s
   return [...stripStartupSelectionArgs(rawArgs), CHOOSE_CONNECTION_ARG];
 }
 
-/** Relaunch into the one hub-owned disposable development workspace. */
-export function ephemeralWorkspaceRelaunchArgs(rawArgs = process.argv.slice(1)): string[] {
-  return [
-    ...stripStartupSelectionArgs(rawArgs),
-    "--workspace",
-    EPHEMERAL_DEV_WORKSPACE_NAME,
-    RESUME_EPHEMERAL_WORKSPACE_ARG,
-  ];
-}
-
-/**
- * Select the hub-owned disposable development workspace without creating or
- * registering a competing desktop-owned checkout. The logical directory is
- * reserved for desktop state and durable reach identity; the hub owns the
- * random source/state checkout used by the workspace child.
- */
-export function resolveEphemeralDevStartupMode(
-  ephemeralLifecycle: "replace" | "resume" = "replace"
-): LocalStartupMode {
-  const wsDir = path.join(getCentralConfigDirectory(), "workspaces", EPHEMERAL_DEV_WORKSPACE_NAME);
-  log.info(`[Workspace] Selected hub-owned ephemeral workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`);
-  return {
-    kind: "local",
-    connectionIntent: "local",
-    wsDir,
-    workspaceName: EPHEMERAL_DEV_WORKSPACE_NAME,
-    // Provisional until the hub returns its opaque registry id. Main replaces
-    // this immediately after the server session is established.
-    workspaceId: EPHEMERAL_DEV_WORKSPACE_NAME,
-    isEphemeral: true,
-    ephemeralLifecycle,
-  };
-}
-
 export function resolveLocalStartupMode(
   centralData: CentralDataManager,
   preferredName?: string,
@@ -250,8 +183,6 @@ export function resolveLocalStartupMode(
       wsDir: null,
       workspaceName: null,
       workspaceId: null,
-      isEphemeral: false,
-      ephemeralLifecycle: null,
     };
   const name = explicitlyNamed;
   let entry = centralData.getWorkspaceEntry(name);
@@ -277,7 +208,5 @@ export function resolveLocalStartupMode(
     wsDir: getWorkspaceDir(name),
     workspaceName: name,
     workspaceId: entry.workspaceId,
-    isEphemeral: false,
-    ephemeralLifecycle: null,
   };
 }

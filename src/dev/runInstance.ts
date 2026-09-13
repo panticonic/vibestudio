@@ -23,10 +23,6 @@ import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
-import {
-  EPHEMERAL_DEV_WORKSPACE_NAME,
-  EPHEMERAL_WORKSPACE_ARG,
-} from "@vibestudio/workspace-contracts/ephemeral";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -153,6 +149,10 @@ function hasFlag(argv: readonly string[], name: string): boolean {
   return argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
+function withoutFlag(argv: readonly string[], name: string): string[] {
+  return argv.filter((arg) => arg !== name && !arg.startsWith(`${name}=`));
+}
+
 function optionValue(argv: readonly string[], name: string): string | undefined {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -236,11 +236,7 @@ async function runServer(
   return supervisor.wait();
 }
 
-async function runDesktop(
-  forwarded: string[],
-  env: NodeJS.ProcessEnv,
-  instanceRoot: string
-): Promise<number> {
+async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   // Desktop launches share the repository host artifacts with parallel
   // developer instances. The coordinator waits for an in-flight build and
@@ -256,26 +252,7 @@ async function runDesktop(
     forwardParentSignals: true,
   });
   await supervisor.start();
-  try {
-    return await supervisor.wait();
-  } finally {
-    if (hasFlag(forwarded, EPHEMERAL_WORKSPACE_ARG)) {
-      // The hub removes the semantic checkout and catalog row. The desktop
-      // launcher owns the remaining logical reach and Chromium profile, and
-      // removes them only after Electron and its hub have fully exited.
-      for (const target of [
-        path.join(instanceRoot, "workspaces", EPHEMERAL_DEV_WORKSPACE_NAME),
-        path.join(
-          instanceRoot,
-          "bootstrap-state",
-          "workspace-creation",
-          EPHEMERAL_DEV_WORKSPACE_NAME
-        ),
-      ]) {
-        fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      }
-    }
-  }
+  return await supervisor.wait();
 }
 
 async function main(): Promise<void> {
@@ -290,8 +267,8 @@ async function main(): Promise<void> {
   if (mode === "server" && hasFlag(parsed.forwarded, "--help")) {
     console.log(`Developer instance options:
   --instance <id>  Use a named persistent isolated instance (default: source)
-  --ephemeral      Use an isolated temporary instance; combine with --instance
-                   to give parallel CLI commands a stable target
+  --ephemeral      Use an isolated temporary instance root; combine with
+                   --instance to give parallel CLI commands a stable target
   --base-checkout <path>
                    Boot from the checkout's visible worktree via a private checkpoint
   --template-checkout <path>
@@ -311,6 +288,10 @@ async function main(): Promise<void> {
     return;
   }
   const disposable = hasFlag(parsed.forwarded, "--ephemeral");
+  // `--ephemeral` selects a disposable instance root and nothing else. It is
+  // consumed here so that no launcher further down can read a second meaning
+  // into the same word.
+  const forwarded = withoutFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -373,7 +354,7 @@ async function main(): Promise<void> {
       : developmentTemplates[0];
     const launchArgs = targetWorkspace
       ? [
-          ...parsed.forwarded,
+          ...forwarded,
           ...(mode === "desktop" ? ["--workspace-create-if-missing"] : []),
           mode === "server" ? "--bootstrap-workspace" : "--workspace",
           `${path
@@ -385,7 +366,7 @@ async function main(): Promise<void> {
             )}-${createHash("sha256").update(JSON.stringify(targetWorkspace.pin)).digest("hex").slice(0, 24)}`,
         ]
       : [
-          ...parsed.forwarded,
+          ...forwarded,
           ...(mode === "desktop" && selectedTemplate
             ? [
                 createShellSurfaceLink({
@@ -402,6 +383,7 @@ async function main(): Promise<void> {
       instanceRoot: root,
       instanceId: id,
       sourceCoupled,
+      disposable,
       ...(developmentBase ? { base: developmentBase } : {}),
       ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
@@ -450,7 +432,7 @@ async function main(): Promise<void> {
     process.exitCode =
       mode === "server"
         ? await runServer(launchArgs, env, instance)
-        : await runDesktop(launchArgs, env, root);
+        : await runDesktop(launchArgs, env);
   } finally {
     if (!disposable) await prunePersistentInstanceBuildCache(root, id);
     fs.rmSync(checkpointTarget, { recursive: true, force: true });

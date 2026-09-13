@@ -19,6 +19,8 @@ export function developmentInstanceEnvironment(input: {
   instanceRoot: string;
   instanceId: string;
   sourceCoupled: boolean;
+  /** True when the instance root is a temporary directory removed on exit. */
+  disposable: boolean;
   base?: DevelopmentBaseEnvironmentSelection;
   initialWorkspaceTemplate?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
   templates?: ReadonlyArray<import("@vibestudio/workspace/workspaceSources").WorkspaceSource>;
@@ -43,6 +45,9 @@ export function developmentInstanceEnvironment(input: {
     VIBESTUDIO_INSTANCE_ROOT: input.instanceRoot,
     VIBESTUDIO_INSTANCE: input.instanceId,
     VIBESTUDIO_SOURCE_INSTANCE: input.sourceCoupled ? "1" : "0",
+    // A disposable instance root is deleted when the supervisor exits, so
+    // nothing it started may be left running behind an interactive prompt.
+    VIBESTUDIO_INSTANCE_LIFECYCLE: input.disposable ? "ephemeral" : "persistent",
     ...(selectedBase || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(

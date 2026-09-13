@@ -203,6 +203,15 @@ export const developmentNativeMethods = defineServiceMethods({
     } as const,
     description:
       "Read whether one repository is adopted in an exact semantic context, and its workspace path, for the development builtin's not-adopted decision.",
+    presentation: {
+      title: "Look up an adopted repository",
+      action: "look up an adopted repository",
+      description: "Read whether a repository is adopted in this context, and where it lives.",
+      group: "runtime",
+      // One capability carries one category. `development.native.execute` is
+      // the development builtin's acting capability; this read shares it.
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
     capability: "development.native.execute",
     tier: {
       tier: "gated",

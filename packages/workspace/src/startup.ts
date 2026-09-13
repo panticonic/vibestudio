@@ -15,7 +15,6 @@ export interface ResolveLocalWorkspaceStartupOpts {
 
 export interface LocalWorkspaceStartup {
   resolved: ResolvedWorkspace;
-  isEphemeral: boolean;
 }
 
 /**
@@ -40,10 +39,7 @@ export function resolveLocalWorkspaceStartup(
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     });
-    return {
-      resolved,
-      isEphemeral: false,
-    };
+    return { resolved };
   }
 
   if (opts.name) {
@@ -54,7 +50,7 @@ export function resolveLocalWorkspaceStartup(
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     });
-    return { resolved, isEphemeral: false };
+    return { resolved };
   }
 
   if (opts.requireExplicitSelection) {
@@ -69,6 +65,5 @@ export function resolveLocalWorkspaceStartup(
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     }),
-    isEphemeral: false,
   };
 }

@@ -124,17 +124,12 @@ function makeCentralData(initial: typeof LEASE | null = LEASE) {
 function manager(
   centralData: ReturnType<typeof makeCentralData>,
   options: {
-    ephemeral?: boolean;
-    ephemeralLifecycle?: "replace" | "resume";
     workspaceName?: string | null;
     onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   } = {}
 ) {
-  const ephemeral = options.ephemeral ?? false;
   return new HubProcessManager({
     workspaceName: options.workspaceName === undefined ? "alpha" : options.workspaceName,
-    ephemeral,
-    ephemeralLifecycle: ephemeral ? (options.ephemeralLifecycle ?? "replace") : null,
     appRoot: "/tmp/app",
     appVersion: "1.2.3",
     buildId: BUILD_ID,
@@ -372,174 +367,6 @@ describe("HubProcessManager", () => {
     expect(spawnMock).toHaveBeenCalledOnce();
   });
 
-  it("resumes the same ephemeral lifecycle during an internal Electron relaunch", async () => {
-    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
-      serverId: RECORD.serverId,
-      transport: "loopback",
-      deviceId: "dev-1",
-      refreshToken: "refresh-1",
-      pairedAt: 1,
-    });
-    const rpcCalls: Array<{ method: string; args: unknown[] }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.endsWith("/healthz")) {
-          return Response.json({
-            ok: true,
-            mode: "hub",
-            serverId: RECORD.serverId,
-            serverBootId: SERVER_BOOT_ID,
-            gatewayPort: RECORD.gatewayPort,
-            pid: RECORD.pid,
-            version: RECORD.version,
-            buildId: RECORD.buildId,
-          });
-        }
-        if (url.endsWith("/_r/s/auth/refresh-shell")) {
-          return Response.json({ shellToken: "shell-session" });
-        }
-        const request = rpcCall(init);
-        rpcCalls.push({ method: request.method, args: request.args });
-        if (request.method === "hubControl.ensureUserWorkspaces")
-          return rpcResult(request.body, PRIVATE_WORKSPACES);
-        if (request.method === "hubControl.ensureEphemeralWorkspace") {
-          return rpcResult(request.body, {
-            workspaceId: "ws_dev",
-            name: "dev",
-            lastOpened: 1,
-            pendingApprovalCount: 0,
-            running: true,
-            ephemeral: true,
-          });
-        }
-        return rpcResult(request.body, workspaceRoute("system", "ws_system"));
-      })
-    );
-
-    const target = await manager(makeCentralData(), {
-      ephemeral: true,
-      ephemeralLifecycle: "resume",
-      workspaceName: "dev",
-    }).attachOrSpawn();
-
-    expect(rpcCalls).toEqual([
-      { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.ensureUserWorkspaces", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
-    ]);
-    expect(target).toMatchObject({
-      attached: true,
-      workspaceId: "ws_system",
-      initialFocusedWorkspaceId: "ws_dev",
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("replaces an existing ephemeral lifecycle for a new development session", async () => {
-    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
-      serverId: RECORD.serverId,
-      transport: "loopback",
-      deviceId: "dev-1",
-      refreshToken: "refresh-1",
-      pairedAt: 1,
-    });
-    const rpcCalls: Array<{ method: string; args: unknown[] }> = [];
-    let healthChecks = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.endsWith("/healthz")) {
-          healthChecks += 1;
-          return Response.json({
-            ok: true,
-            mode: "hub",
-            serverId: RECORD.serverId,
-            serverBootId: SERVER_BOOT_ID,
-            gatewayPort: RECORD.gatewayPort,
-            pid: RECORD.pid,
-            version: RECORD.version,
-            buildId: RECORD.buildId,
-          });
-        }
-        if (url.endsWith("/_r/s/auth/refresh-shell")) {
-          return Response.json({ shellToken: "shell-session" });
-        }
-        const request = rpcCall(init);
-        rpcCalls.push({ method: request.method, args: request.args });
-        if (request.method === "hubControl.ensureUserWorkspaces")
-          return rpcResult(request.body, PRIVATE_WORKSPACES);
-        if (request.method === "hubControl.listWorkspaces") {
-          return rpcResult(request.body, [
-            {
-              workspaceId: "ws_dev_previous",
-              name: "dev",
-              lastOpened: 1,
-              pendingApprovalCount: 0,
-              running: true,
-              ephemeral: true,
-            },
-          ]);
-        }
-        if (request.method === "hubControl.deleteWorkspace") {
-          return rpcResult(request.body, {
-            deleted: true,
-            workspaceId: "ws_dev_previous",
-          });
-        }
-        if (request.method === "hubControl.ensureEphemeralWorkspace") {
-          return rpcResult(request.body, {
-            workspaceId: "ws_dev_fresh",
-            name: "dev",
-            lastOpened: 2,
-            pendingApprovalCount: 0,
-            running: false,
-            ephemeral: true,
-          });
-        }
-        return rpcResult(request.body, workspaceRoute("system", "ws_system"));
-      })
-    );
-
-    const processManager = manager(makeCentralData(), {
-      ephemeral: true,
-      ephemeralLifecycle: "replace",
-      workspaceName: "dev",
-    });
-    const target = await processManager.attachOrSpawn();
-
-    expect(rpcCalls).toEqual([
-      { method: "hubControl.listWorkspaces", args: [] },
-      { method: "hubControl.deleteWorkspace", args: [{ workspace: "dev" }] },
-      { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.ensureUserWorkspaces", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
-    ]);
-    expect(target).toMatchObject({
-      attached: true,
-      workspaceId: "ws_system",
-      initialFocusedWorkspaceId: "ws_dev_fresh",
-      hubServerBootId: SERVER_BOOT_ID,
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
-
-    // The workspace client's initial "connecting" status probes supervision.
-    // A healthy hub must not be mistaken for its routed child, and the consumed
-    // replacement intent must never reset the new lifecycle a second time.
-    processManager.handleDisconnect();
-    await vi.waitFor(() => expect(healthChecks).toBe(2));
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(rpcCalls).toEqual([
-      { method: "hubControl.listWorkspaces", args: [] },
-      { method: "hubControl.deleteWorkspace", args: [{ workspace: "dev" }] },
-      { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.ensureUserWorkspaces", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
-    ]);
-  });
-
   it("fails closed when an initialized hub has no credential for this desktop", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
     vi.stubGlobal(
@@ -671,34 +498,6 @@ describe("HubProcessManager", () => {
       "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json",
       "--bootstrap-workspace",
       "alpha",
-    ]);
-  });
-
-  it("hands the canonical ephemeral lifecycle to the spawned hub", async () => {
-    credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Promise.reject(new Error("refused")))
-    );
-    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
-    child.pid = 42;
-    child.unref = () => undefined;
-    spawnMock.mockImplementation(() => {
-      setTimeout(() => child.emit("exit", 1), 0);
-      return child;
-    });
-
-    await expect(
-      manager(makeCentralData(), { ephemeral: true, workspaceName: "dev" }).attachOrSpawn()
-    ).rejects.toThrow("Local hub exited during startup");
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
-      "--max-old-space-size=4096",
-      "/tmp/server-entry.js",
-      "--ready-file",
-      "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json",
-      "--bootstrap-workspace",
-      "dev",
-      "--ephemeral",
     ]);
   });
 

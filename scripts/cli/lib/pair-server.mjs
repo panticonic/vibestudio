@@ -240,8 +240,8 @@ Options:
   --bootstrap-workspace <name>
       Register a named source workspace and preserve its state across server restarts.
   --dev
-      Use a disposable dev workspace copied fresh from the template and deleted
-      when the server exits.
+      Serve from a fresh template copy and never mirror commits back to the
+      source checkout. Clients create their own workspaces when they pair.
   --help
       Show this help message.
 
@@ -329,7 +329,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     }`
   );
   if (options.dev) {
-    console.log(`[${config.logPrefix}] Dev workspace: fresh template copy, deleted on exit`);
+    console.log(`[${config.logPrefix}] Dev mode: fresh template copy, source checkout untouched`);
   }
   if (config.startupHint) console.log(`${config.startupHint}\n`);
 
@@ -358,7 +358,6 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     ...(options.dev
       ? {
           NODE_ENV: "development",
-          VIBESTUDIO_WORKSPACE_EPHEMERAL: "1",
           // `remote serve --dev` promises a disposable copy. pnpm's desktop
           // dev loop intentionally mirrors commits back to the template, but
           // unattended/system-test hosts must never mutate the source checkout.
@@ -656,7 +655,6 @@ function buildServerArgs(options) {
     "--serve-panels",
   ];
 
-  if (options.dev) args.push("--ephemeral");
   if (options.bootstrapWorkspace) {
     args.push("--bootstrap-workspace", options.bootstrapWorkspace);
   }

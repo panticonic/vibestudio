@@ -27,9 +27,7 @@ import {
   HubCompletePairingBodySchema,
   HubDeviceCredentialBodySchema,
   openHubDataStores,
-  prepareEphemeralWorkspaceDisk,
   reapWorkspaceChildProcessGroup,
-  removeOwnedEphemeralWorkspace,
   revokeHubDevice,
   revokeHubUser,
   restoreRoutedWorkspaceRuntimes,
@@ -44,10 +42,6 @@ import {
   type WorkspaceRuntime,
 } from "./hubServer.js";
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
-
-const removeWorkspaceTreeForTest = (target: string): void => {
-  fs.rmSync(target, { recursive: true, force: true });
-};
 
 describe("hub control HTTP routing", () => {
   it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
@@ -120,18 +114,11 @@ describe("hub bootstrap workspace selection", () => {
     expect(selectBootstrapWorkspace({}, [])).toBeNull();
   });
 
-  it("honors explicit persistent and canonical ephemeral bootstraps", () => {
+  it("registers an explicit persistent bootstrap", () => {
     expect(selectBootstrapWorkspace({ bootstrapWorkspace: "dogfood" }, [])).toEqual({
       name: "dogfood",
       lifecycle: "register",
     });
-    expect(selectBootstrapWorkspace({ ephemeral: true }, [])).toEqual({
-      name: "dev",
-      lifecycle: "ephemeral",
-    });
-    expect(() =>
-      selectBootstrapWorkspace({ ephemeral: true, bootstrapWorkspace: "not-dev" }, [])
-    ).toThrow("canonical dev workspace");
   });
 
   it("consumes an explicit bootstrap already registered by the desktop", () => {
@@ -578,116 +565,6 @@ describe("workspace child exit reconciliation", () => {
   });
 });
 
-describe("ephemeral workspace evidence retention", () => {
-  it("deletes the previous checkout only when its replacement starts", () => {
-    const calls: string[] = [];
-    let record: { workspaceId: string; diskName: string | null } | null = {
-      workspaceId: "ws_dev",
-      diskName: "dev-crashed",
-    };
-    const centralData = {
-      rotateEphemeralWorkspaceDiskName: (
-        _ownerBootId: string,
-        workspaceId: string,
-        diskName: string
-      ) => {
-        const previous = record?.diskName ?? null;
-        record = { workspaceId, diskName };
-        return previous
-          ? {
-              cleanupId: "cleanup_previous",
-              diskName: previous,
-              sourceOwnerBootId: "boot-owner",
-              createdAt: 1,
-            }
-          : null;
-      },
-    } as unknown as CentralDataManager;
-
-    prepareEphemeralWorkspaceDisk(
-      centralData,
-      "boot-owner",
-      "ws_dev",
-      "dev-replacement",
-      removeWorkspaceTreeForTest,
-      (cleanup) => {
-        calls.push(cleanup.diskName);
-        return true;
-      }
-    );
-
-    expect(calls).toEqual(["dev-crashed"]);
-    expect(record).toEqual({ workspaceId: "ws_dev", diskName: "dev-replacement" });
-  });
-
-  it("does not remove a checkout when re-registering the same disk name", () => {
-    const remove = vi.fn(() => true);
-    const centralData = {
-      rotateEphemeralWorkspaceDiskName: vi.fn(() => null),
-    } as unknown as CentralDataManager;
-
-    prepareEphemeralWorkspaceDisk(
-      centralData,
-      "boot-owner",
-      "ws_dev",
-      "dev-current",
-      removeWorkspaceTreeForTest,
-      remove
-    );
-
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  it("gives a displaced shutdown no filesystem coordinate to delete", () => {
-    const remove = vi.fn(() => true);
-    const compareRemove = vi.fn(() => null);
-    const centralData = {
-      removeEphemeralWorkspace: compareRemove,
-    } as unknown as CentralDataManager;
-
-    removeOwnedEphemeralWorkspace(
-      centralData,
-      "boot-displaced",
-      removeWorkspaceTreeForTest,
-      remove
-    );
-
-    expect(compareRemove).toHaveBeenCalledWith("boot-displaced", "boot-displaced");
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  it("deletes only the durable cleanup ticket returned for the shutdown owner", () => {
-    const cleanup = {
-      cleanupId: "cleanup_owned",
-      diskName: "dev-deadbeef",
-      sourceOwnerBootId: "boot-owner",
-      createdAt: 1,
-    };
-    const remove = vi.fn(() => true);
-    const centralData = {
-      removeEphemeralWorkspace: vi.fn(() => ({
-        workspace: {
-          workspaceId: "ws_dev",
-          name: "dev",
-          ownerBootId: "boot-owner",
-          lastOpened: 1,
-          diskName: "dev-deadbeef",
-        },
-        cleanup,
-      })),
-    } as unknown as CentralDataManager;
-
-    removeOwnedEphemeralWorkspace(centralData, "boot-owner", removeWorkspaceTreeForTest, remove);
-
-    expect(remove).toHaveBeenCalledWith(
-      cleanup,
-      centralData,
-      "boot-owner",
-      removeWorkspaceTreeForTest
-    );
-  });
-});
-
 describe("buildWorkspaceChildArgs", () => {
   it("uses only current server flags and binds the child gateway to loopback", () => {
     const args = buildWorkspaceChildArgs({
@@ -752,7 +629,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
   });
 
   it("keeps the strict hub-child control contract and clears inherited ports", () => {
-    const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha", ephemeral: true });
+    const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha" });
     expect(env["VIBESTUDIO_REQUIRE_MOBILE_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_REQUIRE_ELECTRON_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
@@ -762,7 +639,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
     expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
-    expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
     expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/hub/runtime/internal-do.bundle.mjs");

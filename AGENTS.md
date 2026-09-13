@@ -65,8 +65,8 @@ command.
    bugs by over-specifying prompts.
 6. Implement the fix and run focused conventional tests/type checks. Restarting
    the current source server is sufficient for host-code-only changes. Changes
-   in the external Base checkout are workspace source: a named `--bootstrap-workspace`
-   preserves its semantic state across restarts and does not reread the checkout
+   in the external Base checkout are workspace source: `--persistent` keeps the
+   instance's state on disk across restarts and does not reread the checkout
    template. Stop the managed test instance with
    `pnpm system-test [--instance ID] stop`, then rerun doctor to provision a
    fresh checkout copied from the current template. Never stop or reuse another
@@ -91,17 +91,13 @@ instance, so a plain instance cannot be upgraded to one — stop it and create
 another. Adopting costs a few thousand files of semantic import, so do not pass
 the flag for unrelated tests.
 
-Tests run in the instance's `dev` workspace. A desktop client pairs its
-workspace connection to the user's System workspace instead, so a client-device
-executor it registers is invisible from `dev`. Pass `--workspace-role system`
-for the scenarios that need one: the launcher pairs a scoped CLI profile to
-that workspace, settles its own creation review, adopts into it when
-`--self-development` is also passed, and leaves every other run where it was.
-Attach the executor itself with `node scripts/development-client-executor.mjs
---instance ID`, which pairs a headless Electron client to the same instance.
-Attach it before the first `--workspace-role system` command: a fresh instance
-has only its `dev` workspace, and the private ones are created when a desktop
-client pairs.
+Tests run in the instance's System workspace. That is where the account's
+tooling lives — `workers/system-test-runner` is part of the System
+distribution, not Personal — and it is the workspace a desktop client routes
+its own connection to, so a client-device executor a client registers is
+visible to every run without any extra scoping. Attach such a client with
+`node scripts/development-client-executor.mjs --instance ID`, which pairs a
+headless Electron client to the same instance.
 Both that client and the clients it launches need this host to permit sandbox
 user namespaces; `docs/linux-sandbox-setup.md` covers the profiles that grant
 them and the failure each missing one produces.
@@ -137,8 +133,10 @@ state, ports, ready file, CLI credential, and CLI sessions. Provider/model
 configuration and encrypted provider credentials remain profile-scoped and are
 shared safely. `pnpm server:live` uses the persistent `source` instance;
 `--instance NAME` selects another persistent instance; `--ephemeral` creates a
-temporary instance (an explicit name makes parallel logs and CLI commands
-stable). `pnpm system-test` owns only instances it created and refuses to stop
+temporary instance root, discarded with everything in it when the process exits
+(an explicit name makes parallel logs and CLI commands stable). That is the
+only thing `--ephemeral` means anywhere: the supervisor consumes it and no
+launcher below it sees the word. `pnpm system-test` owns only instances it created and refuses to stop
 an unrelated instance.
 
 Do not stop after merely listing artifact paths or restating validation errors.

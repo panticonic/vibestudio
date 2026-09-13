@@ -7,7 +7,6 @@ import YAML from "yaml";
 import {
   createWorkspace,
   deleteAndUnregisterWorkspace,
-  deleteUnregisteredWorkspace,
   initWorkspace,
   loadWorkspaceConfig,
   recoverStagedWorkspaceDeletions,
@@ -545,83 +544,6 @@ describe("initWorkspace", () => {
         },
       ],
     });
-  });
-
-  it("keeps the ephemeral disk-only cleanup path from deleting registered workspaces", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const templateRoot = path.join(root, "template");
-    writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("dev-deadbeef", exactCreation("ws_dev_deadbeef"));
-    const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
-      "workspaces",
-      "dev-deadbeef"
-    );
-    const cleanup = {
-      cleanupId: "cleanup_test",
-      diskName: "dev-deadbeef",
-      sourceOwnerBootId: "boot-owner",
-      createdAt: 1,
-    };
-    const registered = {
-      assertEphemeralWorkspaceCleanup: vi.fn(),
-      hasWorkspace: () => true,
-      completeEphemeralWorkspaceCleanup: vi.fn(() => true),
-    } as unknown as CentralDataManager;
-
-    expect(() =>
-      deleteUnregisteredWorkspace(cleanup, registered, "boot-owner", removeWorkspaceTreeForTest)
-    ).toThrow(/is registered and must be deleted with deleteAndUnregisterWorkspace/);
-    expect(fs.existsSync(workspaceDir)).toBe(true);
-
-    const unregistered = {
-      assertEphemeralWorkspaceCleanup: vi.fn(),
-      hasWorkspace: () => false,
-      completeEphemeralWorkspaceCleanup: vi.fn(() => true),
-    } as unknown as CentralDataManager;
-    expect(
-      deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner", removeWorkspaceTreeForTest)
-    ).toBe(true);
-    expect(fs.existsSync(workspaceDir)).toBe(false);
-    expect(
-      deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner", removeWorkspaceTreeForTest)
-    ).toBe(false);
-  });
-
-  it("restores an ephemeral checkout when its fenced cleanup ticket is refused", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const templateRoot = path.join(root, "template");
-    writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("dev-deadbeef", exactCreation("ws_dev_deadbeef"));
-    const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
-      "workspaces",
-      "dev-deadbeef"
-    );
-    const cleanup = {
-      cleanupId: "cleanup_refused",
-      diskName: "dev-deadbeef",
-      sourceOwnerBootId: "boot-displaced",
-      createdAt: 1,
-    };
-    const centralData = {
-      assertEphemeralWorkspaceCleanup: vi.fn(),
-      hasWorkspace: () => false,
-      completeEphemeralWorkspaceCleanup: vi.fn(() => {
-        throw new Error("lease displaced");
-      }),
-    } as unknown as CentralDataManager;
-
-    expect(() =>
-      deleteUnregisteredWorkspace(cleanup, centralData, "boot-displaced", removeWorkspaceTreeForTest)
-    ).toThrow(/lease displaced/);
-    expect(fs.existsSync(workspaceDir)).toBe(true);
   });
 
   it("completes the registered filesystem and control-data lifecycle as one operation", () => {

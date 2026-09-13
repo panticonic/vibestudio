@@ -165,7 +165,6 @@ interface CliArgs {
   appRoot?: string;
   logLevel?: string;
   readyFile?: string;
-  ephemeral?: boolean;
   servePanels?: boolean;
   gatewayPort?: number;
   init?: boolean;
@@ -192,7 +191,6 @@ Options:
   --bootstrap-workspace <name>
                            Register and use an existing workspace for first-run pairing
   --ready-file <path>      Write structured readiness JSON to this file
-  --ephemeral              Use a disposable dev workspace (deleted on shutdown)
   --host <hostname>        External hostname (also sets bind to 0.0.0.0)
   --bind-host <addr>       Explicit bind address (default: 127.0.0.1, or 0.0.0.0 with --host)
   --serve-panels           Enable panel HTTP serving
@@ -249,7 +247,6 @@ function parseArgs(argv: string[]): CliArgs {
     "workspace-dir",
     "app-root",
     "ready-file",
-    "ephemeral",
     "log-level",
     "serve-panels",
     "gateway-port",
@@ -264,7 +261,6 @@ function parseArgs(argv: string[]): CliArgs {
   /** Flags that don't take a value */
   const booleanFlags = new Set([
     "serve-panels",
-    "ephemeral",
     "init",
     "require-mobile-ready",
     "require-electron-ready",
@@ -328,9 +324,6 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "serve-panels":
         args.servePanels = true;
-        break;
-      case "ephemeral":
-        args.ephemeral = true;
         break;
       case "init":
         args.init = true;
@@ -490,7 +483,6 @@ async function main() {
   }
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
-  let workspaceIsEphemeral = false;
   try {
     const startup = resolveLocalWorkspaceStartup({
       appRoot,
@@ -502,15 +494,12 @@ async function main() {
       ...(creationIntent ? { rootTemplate: creationIntent.rootTemplate } : {}),
     });
     // Managed directory names are storage coordinates, not workspace
-    // identities. In particular, ephemeral children use a randomized disk
-    // name while retaining the hub catalog's opaque id.
+    // identities: a child retains the hub catalog's opaque id.
     workspace = {
       ...startup.resolved.workspace,
       config: { ...startup.resolved.workspace.config, id: workspaceId },
     };
     workspaceName = startup.resolved.name;
-    workspaceIsEphemeral =
-      startup.isEphemeral || process.env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] === "1";
   } catch (error) {
     console.error(`Workspace resolution failed: ${error}`);
     if (!args.init) console.error("  Use --init to auto-create from template.");
@@ -2545,7 +2534,6 @@ async function main() {
           appRoot,
           runNativeJob: (input) => nativeWorkspace.runJob(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          workspaceIdStability: workspaceIsEphemeral ? "ephemeral" : "stable",
           workspaceAuthorityEnvironmentAt: async (stateHash) => {
             const { exactWorkspaceServiceBindings } =
               await import("./buildV2/userlandAuthority.js");
@@ -7732,7 +7720,7 @@ async function main() {
     const proto = "http";
     const wsProto = "ws";
     console.log("vibestudio-server ready:");
-    console.log(`  Workspace:   ${workspaceName}${workspaceIsEphemeral ? " (ephemeral dev)" : ""}`);
+    console.log(`  Workspace:   ${workspaceName}`);
     console.log(`  Gateway:     ${proto}://${hostConfig.externalHost}:${gatewayPort} (loopback)`);
     console.log(`  Workerd:     (via gateway /_w/)`);
     console.log(`  RPC:         ${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`);
@@ -7751,7 +7739,6 @@ async function main() {
         workspaceName,
         workspaceId,
         workspaceDir: workspacePath,
-        isEphemeral: workspaceIsEphemeral,
         gatewayUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}`,
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,

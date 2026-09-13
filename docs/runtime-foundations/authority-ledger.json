@@ -14993,6 +14993,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:developmentNative.resolveAdoptedRepository",
+      "rpcPlane": "host-service",
+      "owner": "developmentNative",
+      "method": "resolveAdoptedRepository",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "development-native.discovery",
+      "reviewRationale": "The development builtin must read the session owner's context, which is outside its own reachable context graph; the host performs that read and returns only the repository's presence and path",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "development.native.execute"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"development.native.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:developmentNative.resolveAdoptedRepository",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:developmentNative.retireBuild",
       "rpcPlane": "host-service",
       "owner": "developmentNative",
@@ -19833,51 +19879,6 @@
         "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
       },
       "capability": "service:hubControl.deleteWorkspace",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:hubControl.ensureEphemeralWorkspace",
-      "rpcPlane": "host-service",
-      "owner": "hubControl",
-      "method": "ensureEphemeralWorkspace",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "hubControl.control",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:hubControl.ensureEphemeralWorkspace"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureEphemeralWorkspace),allOf(capability(user,service:hubControl.ensureEphemeralWorkspace),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:hubControl.ensureEphemeralWorkspace",
       "parityAssertion": "generated-census:host-authority"
     },
     {

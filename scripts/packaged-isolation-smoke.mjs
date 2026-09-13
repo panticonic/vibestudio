@@ -322,7 +322,6 @@ export async function runPackagedIsolationSmoke(options) {
         appRoot,
         "--bootstrap-workspace",
         "dev",
-        "--ephemeral",
         "--require-electron-ready",
         "--ready-file",
         readyFile,

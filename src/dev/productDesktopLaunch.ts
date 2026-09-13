@@ -4,15 +4,9 @@ import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
 } from "@vibestudio/workspace/baseTemplateRelease";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
-import {
-  EPHEMERAL_WORKSPACE_ARG,
-  RESUME_EPHEMERAL_WORKSPACE_ARG,
-} from "@vibestudio/workspace-contracts/ephemeral";
 
 const DEVELOPMENT_ONLY_ARGUMENTS = new Set([
   "--ephemeral",
-  EPHEMERAL_WORKSPACE_ARG,
-  RESUME_EPHEMERAL_WORKSPACE_ARG,
   "--instance",
   "--base-checkout",
   "--workspace-checkout",

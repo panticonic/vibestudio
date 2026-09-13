@@ -177,7 +177,7 @@ export class IsolatedDevelopmentHostExecutor {
     const supervisor = Supervisor({
       sourceRoot: launch.sourceRoot,
       command: launch.nodePath,
-      args: [launch.serverEntryPath, "--ephemeral", "--ready-file", readyFile],
+      args: [launch.serverEntryPath, "--ready-file", readyFile],
       env: isolatedEnvironment(
         instanceRoot,
         instanceId,

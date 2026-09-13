@@ -33,7 +33,6 @@ export const HubWorkspaceEntrySchema = z
     lastOpened: z.number(),
     running: z.boolean(),
     pendingApprovalCount: z.number().int().nonnegative(),
-    ephemeral: z.boolean().optional(),
     privateRole: z.enum(["personal", "system"]).optional(),
   })
   .strict();
@@ -45,7 +44,6 @@ export const HubReadyWorkspaceEntrySchema = HubWorkspaceEntrySchema.pick({
   name: true,
   lastOpened: true,
   running: true,
-  ephemeral: true,
 });
 
 export const HubReachSchema = z
@@ -414,36 +412,6 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   ...workspaceCreationMethods,
-  ensureEphemeralWorkspace: {
-    website: {
-      kind: "closed",
-      reason:
-        "The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-    } as const,
-    capability: "workspaces.create",
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "identity",
-      family: "hubControl.control",
-      rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-    },
-    presentation: {
-      title: "Prepare a temporary workspace",
-      action: "prepare a temporary workspace",
-      description: "Create a temporary workspace for quick experiments or testing.",
-      group: "accounts",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-    description: "Ensure the canonical disposable development workspace exists on the live hub.",
-    args: z.tuple([]),
-    returns: HubWorkspaceEntrySchema,
-    access: adminAccess,
-  },
   deleteWorkspace: {
     website: {
       kind: "closed",

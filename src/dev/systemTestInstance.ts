@@ -31,23 +31,11 @@ const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
 const STARTUP_TIMEOUT_MS = 12 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 
-/**
- * Which of the instance's workspaces a run's commands are scoped to.
- *
- * Tests run in the instance's ordinary `dev` workspace. A desktop client
- * pairs its workspace connection to the user's System workspace instead —
- * that is where native client code comes from — so anything it registers
- * there, a client-device executor above all, is invisible from `dev`.
- * Scenarios that need one select `system` for themselves; nothing else moves.
- */
-export type SystemTestWorkspaceRole = "dev" | "system";
-
 type LauncherArgs = {
   instanceId: string;
   explicitInstance: boolean;
-  bootstrapWorkspace?: string;
+  persistent: boolean;
   selfDevelopment: boolean;
-  workspaceRole: SystemTestWorkspaceRole;
   command: string[];
 };
 
@@ -94,9 +82,8 @@ export type EnsuredSystemTestInstance = {
 
 export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherArgs {
   let instanceId: string | undefined;
-  let bootstrapWorkspace: string | undefined;
+  let persistent = false;
   let selfDevelopment = false;
-  let workspaceRole: SystemTestWorkspaceRole = "dev";
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -115,30 +102,12 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       if (!instanceId) throw new Error("--instance requires an id");
       continue;
     }
-    if (arg === "--bootstrap-workspace") {
-      const value = argv[index + 1];
-      if (!value) throw new Error("--bootstrap-workspace requires a name");
-      if (bootstrapWorkspace) throw new Error("--bootstrap-workspace may only be specified once");
-      bootstrapWorkspace = value;
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--bootstrap-workspace=")) {
-      if (bootstrapWorkspace) throw new Error("--bootstrap-workspace may only be specified once");
-      bootstrapWorkspace = arg.slice("--bootstrap-workspace=".length);
-      if (!bootstrapWorkspace) throw new Error("--bootstrap-workspace requires a name");
+    if (arg === "--persistent") {
+      persistent = true;
       continue;
     }
     if (arg === "--self-development") {
       selfDevelopment = true;
-      continue;
-    }
-    if (arg === "--workspace-role" || arg.startsWith("--workspace-role=")) {
-      const value = arg.includes("=") ? arg.slice("--workspace-role=".length) : argv[(index += 1)];
-      if (value !== "dev" && value !== "system") {
-        throw new Error("--workspace-role accepts dev or system");
-      }
-      workspaceRole = value;
       continue;
     }
     command.push(arg);
@@ -146,9 +115,8 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   return {
     instanceId: instanceId ?? DEFAULT_SYSTEM_TEST_INSTANCE,
     explicitInstance: instanceId !== undefined,
-    ...(bootstrapWorkspace ? { bootstrapWorkspace } : {}),
+    persistent,
     selfDevelopment,
-    workspaceRole,
     command,
   };
 }
@@ -293,7 +261,7 @@ function spawnManagedInstance(
   repoRoot: string,
   instanceId: string,
   outputFile: string,
-  bootstrapWorkspace?: string,
+  persistent: boolean,
   extraEnvironment: NodeJS.ProcessEnv = {}
 ): void {
   fs.mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o700 });
@@ -305,10 +273,9 @@ function spawnManagedInstance(
         tsxCli,
         "src/dev/runInstance.ts",
         "server",
-        ...(bootstrapWorkspace ? [] : ["--ephemeral"]),
+        ...(persistent ? [] : ["--ephemeral"]),
         "--instance",
         instanceId,
-        ...(bootstrapWorkspace ? ["--bootstrap-workspace", bootstrapWorkspace] : []),
       ],
       {
         cwd: repoRoot,
@@ -372,7 +339,8 @@ export async function ensureSystemTestInstance(
   options: {
     explicitInstance?: boolean;
     startupTimeoutMs?: number;
-    bootstrapWorkspace?: string;
+    /** Keep this instance's state on disk across restarts. */
+    persistent?: boolean;
     /** Serve the developer's own checkouts so their projects can be adopted. */
     selfDevelopment?: boolean;
   } = {}
@@ -400,7 +368,7 @@ export async function ensureSystemTestInstance(
       repoRoot,
       instanceId,
       outputFile,
-      options.bootstrapWorkspace,
+      options.persistent === true,
       mirrorEnvironment
     );
     created = true;
@@ -447,13 +415,6 @@ export async function ensureSystemTestInstance(
       instanceId,
       outputFile ?? logPath(repoRoot, instanceId),
       "the server did not provide an automatically pairable development invite"
-    );
-  }
-  if (options.bootstrapWorkspace && ready.workspaceName !== options.bootstrapWorkspace) {
-    throw new Error(
-      `System-test instance ${JSON.stringify(instanceId)} is attached to workspace ` +
-        `${JSON.stringify(ready.workspaceName)}, not requested bootstrap workspace ` +
-        `${JSON.stringify(options.bootstrapWorkspace)}`
     );
   }
   return {

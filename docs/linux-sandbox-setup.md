@@ -109,13 +109,10 @@ and launches the client under `xvfb-run` — owning its own HOME, XDG
 directories, Chromium profile, D-Bus session and keyring, so it touches nothing
 of yours. It needs `xvfb-run`, `dbus-daemon`, and `gnome-keyring-daemon`.
 
-A desktop client pairs its workspace connection to the user's System workspace
-— which that pairing also creates, since a fresh instance has only its `dev`
-workspace — so attach the client first, then run the tests that need its
-executor against that workspace:
+A desktop client pairs its workspace connection to the user's System workspace,
+which is the same workspace the system-test CLI opens, so attach the client
+first and then run the tests that need its executor:
 
 ```bash
-pnpm system-test --instance ID --workspace-role system run TEST_NAME
+pnpm system-test --instance ID run TEST_NAME
 ```
-
-See AGENTS.md for how that scoping interacts with `--self-development`.

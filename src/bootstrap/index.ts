@@ -34,7 +34,6 @@ type ShellTransportBridge = {
 type BootstrapBridge = {
   getState: () => Promise<unknown>;
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
-  launchEphemeralWorkspace: () => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
@@ -735,27 +734,6 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
   };
   form.append(input, launchButton);
   card.append(form);
-
-  if (state.isDev) {
-    const ephemeralRow = document.createElement("div");
-    ephemeralRow.className = "workspace-row";
-    const ephemeralText = document.createElement("div");
-    const ephemeralName = document.createElement("div");
-    ephemeralName.className = "workspace-name";
-    ephemeralName.textContent = "Ephemeral workspace";
-    const ephemeralMeta = document.createElement("div");
-    ephemeralMeta.className = "meta";
-    ephemeralMeta.textContent = "Fresh and disposed at exit.";
-    ephemeralText.append(ephemeralName, ephemeralMeta);
-    ephemeralRow.append(
-      ephemeralText,
-      connectionButton("New", "local:ephemeral", async () => {
-        if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
-        await bootstrapApi.launchEphemeralWorkspace();
-      })
-    );
-    card.append(ephemeralRow);
-  }
 
   parent.append(card);
 }

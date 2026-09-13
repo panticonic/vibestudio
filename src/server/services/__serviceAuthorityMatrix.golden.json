@@ -4187,6 +4187,73 @@
         "capability": null,
         "presentation": null
       },
+      "resolveAdoptedRepository": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "development.native.execute"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "development.native.execute"
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "codeOnly",
+          "residency": "native-effect",
+          "family": "development-native.discovery",
+          "rationale": "The development builtin must read the session owner's context, which is outside its own reachable context graph; the host performs that read and returns only the repository's presence and path"
+        },
+        "capability": "development.native.execute",
+        "presentation": {
+          "title": "Look up an adopted repository",
+          "action": "look up an adopted repository",
+          "description": "Read whether a repository is adopted in this context, and where it lives.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
+        }
+      },
       "retireBuild": {
         "authority": {
           "principals": [

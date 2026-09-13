@@ -243,8 +243,6 @@ export async function establishServerSession(args: {
   const externalHost = "localhost";
   const hubProcessManager = new HubProcessManager({
     workspaceName: mode.workspaceName,
-    ephemeral: mode.isEphemeral,
-    ephemeralLifecycle: mode.ephemeralLifecycle,
     appRoot: getAppRoot(),
     appVersion: app.getVersion(),
     buildId: getServerProcessBuildId(),

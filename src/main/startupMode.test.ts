@@ -156,8 +156,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "--workspace",
         "old",
         mod.WORKSPACE_CREATE_IF_MISSING_ARG,
-        mod.EPHEMERAL_WORKSPACE_ARG,
-        mod.RESUME_EPHEMERAL_WORKSPACE_ARG,
         mod.CHOOSE_CONNECTION_ARG,
       ])
     ).toEqual(["--foo", mod.CHOOSE_CONNECTION_ARG]);
@@ -172,54 +170,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])
     ).toEqual(["--foo", "--workspace", "default"]);
-  });
-
-  it("builds relaunch args for the canonical hub-owned ephemeral workspace", () => {
-    expect(
-      mod.ephemeralWorkspaceRelaunchArgs([
-        "--foo",
-        "--workspace",
-        "old",
-        mod.EPHEMERAL_WORKSPACE_ARG,
-      ])
-    ).toEqual(["--foo", "--workspace", "dev", mod.RESUME_EPHEMERAL_WORKSPACE_ARG]);
-  });
-
-  it("starts a fresh hub-owned lifecycle for --ephemeral-workspace", () => {
-    setArgv([mod.EPHEMERAL_WORKSPACE_ARG]);
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
-      kind: "local",
-      workspaceName: "dev",
-      isEphemeral: true,
-      ephemeralLifecycle: "replace",
-    });
-    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
-  });
-
-  it("resumes the hub-owned lifecycle only for an internal ephemeral relaunch", () => {
-    mockResolveWorkspaceName.mockReturnValue("dev");
-    setArgv(["--workspace", "dev", mod.RESUME_EPHEMERAL_WORKSPACE_ARG]);
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
-      kind: "local",
-      connectionIntent: "local",
-      wsDir: "/tmp/workspaces/dev",
-      workspaceName: "dev",
-      workspaceId: "dev",
-      isEphemeral: true,
-      ephemeralLifecycle: "resume",
-    });
-    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-canonical names tagged as ephemeral", () => {
-    mockResolveWorkspaceName.mockReturnValue("dev-abc123");
-    setArgv(["--workspace", "dev-abc123", mod.EPHEMERAL_WORKSPACE_ARG]);
-
-    expect(() => mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toThrow(
-      /canonical workspace "dev"/
-    );
   });
 
   it("records a creation intent only for an explicitly authorized missing workspace", () => {
@@ -258,8 +208,6 @@ describe("shouldRequestSingleInstanceLock", () => {
           wsDir: "/workspace",
           workspaceName: "dev",
           workspaceId: "dev",
-          isEphemeral: true,
-          ephemeralLifecycle: "replace",
         },
         { isHeadlessHost: false, isDevelopment: true }
       )
@@ -277,8 +225,6 @@ describe("shouldRequestSingleInstanceLock", () => {
           wsDir: "/workspace",
           workspaceName: "default",
           workspaceId: "default",
-          isEphemeral: false,
-          ephemeralLifecycle: null,
         },
         { isHeadlessHost: false, isDevelopment: false }
       )
@@ -317,8 +263,6 @@ describe("localShellUserDataDir", () => {
       wsDir: "/tmp/workspaces/new-workspace",
       workspaceName: "new-workspace",
       workspaceId: "ws_new",
-      isEphemeral: false,
-      ephemeralLifecycle: null,
     };
 
     expect(mod.localShellUserDataDir(mode, { pendingCreation: true, headless: false })).toBe(

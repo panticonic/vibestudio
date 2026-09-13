@@ -13,10 +13,14 @@ import {
 import { RpcClient } from "../cli/rpcClient.js";
 import { ConnectionError } from "../cli/output.js";
 
+/**
+ * A pairing invite carries whichever workspace minted it, and a development
+ * hub's root invite carries none: the account's own workspaces are created by
+ * the device that redeems it. Only the credential itself is required here.
+ */
 type PairingResponse = {
   deviceId: string;
   refreshToken: string;
-  workspaceId: string;
 };
 
 export type DevCliBootstrapResult =
@@ -47,8 +51,7 @@ function pairingResponse(value: unknown): PairingResponse {
     typeof value !== "object" ||
     Array.isArray(value) ||
     typeof (value as Partial<PairingResponse>).deviceId !== "string" ||
-    typeof (value as Partial<PairingResponse>).refreshToken !== "string" ||
-    typeof (value as Partial<PairingResponse>).workspaceId !== "string"
+    typeof (value as Partial<PairingResponse>).refreshToken !== "string"
   ) {
     throw new Error("Local development pairing returned a malformed device credential");
   }
@@ -205,8 +208,6 @@ async function pairWithInvite(
     gatewayUrl: string;
     serverId: string;
     invite: HubPairingInvite;
-    /** Workspace this bootstrap was asked for, when it named one. */
-    requestedWorkspaceId?: string;
   },
   credentialFile: string | undefined,
   deps: BootstrapDeps = {}
@@ -223,10 +224,10 @@ async function pairWithInvite(
     },
     deps
   );
-  // Personal is where the account's own work lives, which is what mobile
-  // selects by default and what a headless client should open too. The
-  // invite's workspace still wins when one was requested for it.
-  const workspaceId = input.requestedWorkspaceId ?? pair.personal.workspaceId;
+  // System is where the account's tooling lives — the system-test runner among
+  // it — and it is what a desktop client routes its own connection to, so a
+  // headless development CLI and an attached client see the same workspace.
+  const workspaceId = pair.system.workspaceId;
   const route = await routeWorkspace(
     {
       gatewayUrl: input.gatewayUrl,

@@ -179,10 +179,10 @@ describe("bootstrapInstanceCliFromDevice", () => {
           };
         }
         return {
-          workspace: "personal-ws_personal",
-          workspaceId: "ws_personal",
+          workspace: "system-ws_system",
+          workspaceId: "ws_system",
           running: true,
-          serverUrl: "http://127.0.0.1:5000/_r/ws/personal-ws_personal",
+          serverUrl: "http://127.0.0.1:5000/_r/ws/system-ws_system",
           workspaceReach: reach("bb"),
           serverId,
           serverBootId,
@@ -214,11 +214,12 @@ describe("bootstrapInstanceCliFromDevice", () => {
         },
         { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
       )
-    ).resolves.toEqual({ status: "paired", workspaceName: "personal-ws_personal" });
+    ).resolves.toEqual({ status: "paired", workspaceName: "system-ws_system" });
 
-    // The account's own workspaces are prepared first and Personal is opened,
-    // which is the sequence a desktop and a phone already follow. The invite's
-    // workspace is a preference, not the shape of the account.
+    // The account's own workspaces are prepared first and System is opened —
+    // where the account's tooling lives, and what a desktop client routes its
+    // own connection to. The invite's workspace is a preference, not the
+    // shape of the account.
     expect(calls).toEqual([
       {
         deviceId: `dev_${"A".repeat(24)}`,
@@ -233,14 +234,14 @@ describe("bootstrapInstanceCliFromDevice", () => {
       {
         deviceId: `dev_${"C".repeat(24)}`,
         method: "hubControl.routeWorkspace",
-        args: [{ workspaceId: "ws_personal" }],
+        args: [{ workspaceId: "ws_system" }],
       },
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(loadCliCredentials(credentialFile)).toMatchObject({
       serverId,
-      workspaceId: "ws_personal",
-      workspaceName: "personal-ws_personal",
+      workspaceId: "ws_system",
+      workspaceName: "system-ws_system",
       deviceId: `dev_${"C".repeat(24)}`,
       transport: "local",
     });
@@ -272,8 +273,8 @@ describe("bootstrapInstanceCliFromDevice", () => {
         if (method === "hubControl.pairDevice") return { pairing: invite };
         if (method === "hubControl.ensureUserWorkspaces") {
           return {
-            personal: { workspaceId: "ws_dev" },
-            system: { workspaceId: "ws_system" },
+            personal: { workspaceId: "ws_personal" },
+            system: { workspaceId: "ws_dev" },
           };
         }
         routedDeviceIds.push(credential.deviceId);

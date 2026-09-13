@@ -92,7 +92,6 @@ function fixture() {
                 name: "main",
                 lastOpened: 1,
                 running: true,
-                ephemeral: true,
               },
             ],
           });

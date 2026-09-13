@@ -39,62 +39,36 @@ describe("self-provisioning system-test instance", () => {
     expect(parseSystemTestLauncherArgs(["doctor", "--instance", "incident-a", "--json"])).toEqual({
       instanceId: "incident-a",
       explicitInstance: true,
+      persistent: false,
       selfDevelopment: false,
-      workspaceRole: "dev",
       command: ["doctor", "--json"],
     });
     expect(
-      parseSystemTestLauncherArgs([
-        "--instance",
-        "self-development",
-        "--bootstrap-workspace",
-        "dogfood-system-test",
-        "doctor",
-      ])
+      parseSystemTestLauncherArgs(["--instance", "self-development", "--persistent", "doctor"])
     ).toEqual({
       instanceId: "self-development",
       explicitInstance: true,
-      bootstrapWorkspace: "dogfood-system-test",
+      persistent: true,
       selfDevelopment: false,
-      workspaceRole: "dev",
       command: ["doctor"],
     });
     expect(parseSystemTestLauncherArgs(["list"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
+      persistent: false,
       selfDevelopment: false,
-      workspaceRole: "dev",
       command: ["list"],
     });
-    // A workspace role is the launcher's too, and it is not a test argument.
-    expect(parseSystemTestLauncherArgs(["--workspace-role", "system", "run", "x"])).toMatchObject({
-      workspaceRole: "system",
-      command: ["run", "x"],
-    });
-    expect(parseSystemTestLauncherArgs(["--workspace-role=system", "list"])).toMatchObject({
-      workspaceRole: "system",
-    });
-    expect(() => parseSystemTestLauncherArgs(["--workspace-role", "personal", "list"])).toThrow(
-      /accepts dev or system/u
-    );
     // The adoption flag is the launcher's, never the test command's.
     expect(parseSystemTestLauncherArgs(["--self-development", "run", "x"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
+      persistent: false,
       selfDevelopment: true,
-      workspaceRole: "dev",
       command: ["run", "x"],
     });
     expect(() =>
       parseSystemTestLauncherArgs(["--instance", "a", "--instance=b", "doctor"])
-    ).toThrow(/only be specified once/u);
-    expect(() =>
-      parseSystemTestLauncherArgs([
-        "--bootstrap-workspace=a",
-        "--bootstrap-workspace",
-        "b",
-        "doctor",
-      ])
     ).toThrow(/only be specified once/u);
   });
 

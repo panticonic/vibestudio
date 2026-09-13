@@ -7,7 +7,6 @@
  */
 
 import { spawn } from "node:child_process";
-import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -74,8 +73,6 @@ function hubStartupFailureDetail(logPath: string): string | null {
 
 export interface HubProcessManagerConfig {
   workspaceName: string | null;
-  ephemeral: boolean;
-  ephemeralLifecycle: "replace" | "resume" | null;
   appRoot: string;
   appVersion: string;
   /** SHA-256 identity of the exact server bundle this desktop will execute. */
@@ -214,25 +211,13 @@ async function postJson(
 export class HubProcessManager {
   private current: HubWorkspaceTarget | null = null;
   private currentHubPid: number | null = null;
-  /** Consumed once the new dev session owns a freshly established lifecycle. */
-  private ephemeralReplacementPending = false;
   private restartTimestamps: number[] = [];
   private isStopping = false;
   private ensureAlivePromise: Promise<void> | null = null;
   /** PIDs proven to be this manager's hub, either by spawn or authenticated health metadata. */
   private verifiedHubPids = new Set<number>();
 
-  constructor(private readonly config: HubProcessManagerConfig) {
-    if (config.ephemeral !== (config.ephemeralLifecycle !== null)) {
-      throw new Error("Ephemeral workspace mode requires one explicit lifecycle intent");
-    }
-    if (config.ephemeral && config.workspaceName !== EPHEMERAL_DEV_WORKSPACE_NAME) {
-      throw new Error(
-        `Ephemeral desktop sessions use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
-      );
-    }
-    this.ephemeralReplacementPending = config.ephemeralLifecycle === "replace";
-  }
+  constructor(private readonly config: HubProcessManagerConfig) {}
 
   async attachOrSpawn(options: { onHubReady?: () => void } = {}): Promise<HubWorkspaceTarget> {
     const existing = this.liveLease();
@@ -397,7 +382,6 @@ export class HubProcessManager {
         "--ready-file",
         readyFile,
         ...(this.config.workspaceName ? ["--bootstrap-workspace", this.config.workspaceName] : []),
-        ...(this.config.ephemeral ? ["--ephemeral"] : []),
       ],
       { detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env }
     );
@@ -522,36 +506,7 @@ export class HubProcessManager {
       (service, method, args) => rpc.call("main", `${service}.${method}`, args)
     );
     let workspace: z.infer<typeof HubWorkspaceEntrySchema> | undefined;
-    if (this.config.ephemeral) {
-      if (target.attached && this.ephemeralReplacementPending) {
-        const visible = await hubControl.listWorkspaces();
-        const previous = visible.find((entry) => entry.name === this.config.workspaceName);
-        if (previous && previous.ephemeral !== true) {
-          throw new Error(
-            `Cannot replace persistent workspace "${this.config.workspaceName}" with ephemeral dev`
-          );
-        }
-        if (previous) {
-          const deleted = await hubControl.deleteWorkspace({
-            workspace: previous.name,
-          });
-          if (!deleted.deleted || deleted.workspaceId !== previous.workspaceId) {
-            throw new Error("Hub did not retire the previous ephemeral workspace lifecycle");
-          }
-          log.info(
-            `[ephemeral] Retired previous ${this.config.workspaceName} lifecycle ${previous.workspaceId}`
-          );
-        }
-      }
-      workspace = await hubControl.ensureEphemeralWorkspace();
-      // The replace intent belongs to this desktop launch, not to every later
-      // reconnect. A freshly spawned hub already satisfies it; an attached hub
-      // satisfies it after the delete+ensure sequence above.
-      this.ephemeralReplacementPending = false;
-      if (workspace.name !== this.config.workspaceName || workspace.ephemeral !== true) {
-        throw new Error("Hub did not establish the requested ephemeral workspace lifecycle");
-      }
-    } else if (this.config.workspaceName) {
+    if (this.config.workspaceName) {
       const visible = await hubControl.listWorkspaces();
       const selected = visible.find((entry) => entry.name === this.config.workspaceName);
       if (!selected) {

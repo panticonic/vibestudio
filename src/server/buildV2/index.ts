@@ -236,7 +236,6 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 export interface BuildSystemRootOptions {
   runNativeJob: RunNativeWorkspaceJob;
   /** Whether this workspace identity survives a process restart. Diagnostics only. */
-  workspaceIdStability?: "stable" | "ephemeral";
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
    * This is an explicit host construction input, never inferred from process state.
@@ -1010,7 +1009,6 @@ export async function initBuildSystemV2(
             console.log("[BuildV2] Authority analysis phases", {
               stateHash,
               workspaceId: source.workspaceId,
-              workspaceIdStability: rootOptions.workspaceIdStability ?? "stable",
               consumers: nodes.length,
               unknownEffectiveVersions: nodes.filter((node) => !view.evMap[node.name]).length,
               memoryFactHits,
@@ -1206,7 +1204,6 @@ export async function initBuildSystemV2(
         console.log("[BuildV2] Manifest authority index cache miss", {
           stateHash,
           workspaceId: source.workspaceId,
-          workspaceIdStability: rootOptions.workspaceIdStability ?? "stable",
           reason: persistedLookup.reason,
         });
         const index = await authorityDependencyIndexFromDeclarations({

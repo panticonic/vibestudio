@@ -176,9 +176,6 @@ import {
   getPendingUserDataDir,
   localShellUserDataDir,
   chooseConnectionRelaunchArgs,
-  EPHEMERAL_DEV_WORKSPACE_NAME,
-  ephemeralWorkspaceRelaunchArgs,
-  resolveEphemeralDevStartupMode,
   resolveLocalStartupMode,
   workspaceRelaunchArgs,
   type StartupMode,
@@ -257,7 +254,6 @@ let startupMode: StartupMode;
 let workspaceId: string = "unknown";
 let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
 let retryWorkspaceName: string | null = crashLoopWorkspaceName;
-let retryWorkspaceIsEphemeral = false;
 
 if (localServerCrashLoopCode) {
   bootstrapStartupError = {
@@ -285,11 +281,6 @@ try {
   };
 }
 
-if (startupMode.kind === "local" && startupMode.isEphemeral) {
-  retryWorkspaceName = startupMode.workspaceName;
-  retryWorkspaceIsEphemeral = true;
-}
-
 if (
   shouldRequestSingleInstanceLock(startupMode, {
     isHeadlessHost: IS_HEADLESS_HOST,
@@ -310,7 +301,6 @@ if (startupMode.kind === "local") {
     "userData",
     localShellUserDataDir(startupMode, {
       pendingCreation:
-        !startupMode.isEphemeral &&
         startupMode.workspaceName !== null &&
         centralData.getWorkspaceCreationIntent(startupMode.workspaceName) !== null,
       headless: IS_HEADLESS_HOST,
@@ -357,9 +347,7 @@ function isTerminalRemoteCredentialFailure(error: unknown): boolean {
 // `chooserChoice`, the pending startup path awaits it, and we fall through to the
 // connected setup in the SAME process. A `local` choice reassigns `startupMode`;
 // a `remote` choice sets `pendingRemotePairing` (the fresh pairing IS the session).
-type ChooserChoice =
-  | { kind: "local"; name: string; ephemeral: boolean }
-  | { kind: "remote"; pairing: ConnectPairing };
+type ChooserChoice = { kind: "local"; name: string } | { kind: "remote"; pairing: ConnectPairing };
 let chooserChoiceMade = false;
 let resolveChooserChoice!: (choice: ChooserChoice) => void;
 const chooserChoice = new Promise<ChooserChoice>((resolve) => {
@@ -1686,11 +1674,7 @@ function installBootstrapConnectionHandlers(): void {
   ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
     relaunchWithIntent({
-      args: retryWorkspaceIsEphemeral
-        ? ephemeralWorkspaceRelaunchArgs()
-        : retryWorkspaceName
-          ? workspaceRelaunchArgs(retryWorkspaceName)
-          : process.argv.slice(1),
+      args: retryWorkspaceName ? workspaceRelaunchArgs(retryWorkspaceName) : process.argv.slice(1),
     });
   });
 
@@ -1741,23 +1725,7 @@ function installBootstrapConnectionHandlers(): void {
       );
     }
     log.info(`[bootstrap] Launching local workspace "${name}" by user request`);
-    resolveChooserChoice({ kind: "local", name, ephemeral: false });
-    return { ok: true };
-  });
-
-  ipcMain.handle("vibestudio:bootstrap:launch-ephemeral-workspace", (event) => {
-    requireBootstrapShellSender(event, "vibestudio:bootstrap:launch-ephemeral-workspace");
-    if (!isDev()) {
-      throw new Error("Ephemeral workspaces are only available in development mode");
-    }
-    log.info(
-      `[bootstrap] Launching hub-owned ephemeral dev workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}" by user request`
-    );
-    resolveChooserChoice({
-      kind: "local",
-      name: EPHEMERAL_DEV_WORKSPACE_NAME,
-      ephemeral: true,
-    });
+    resolveChooserChoice({ kind: "local", name });
     return { ok: true };
   });
 
@@ -2146,12 +2114,7 @@ app.on("ready", async () => {
       // Resolve (creating if missing) the chosen local workspace in-process and
       // promote `startupMode` to local so the connected setup spawns its server.
       retryWorkspaceName = choice.name;
-      retryWorkspaceIsEphemeral = choice.ephemeral;
-      if (choice.ephemeral) {
-        startupMode = resolveEphemeralDevStartupMode();
-        workspaceId = assertPresent(startupMode.workspaceId);
-        log.info(`[bootstrap] Ephemeral workspace chosen: ${workspaceId}`);
-      } else {
+      {
         try {
           startupMode = resolveLocalStartupMode(centralData, choice.name, "local", true);
         } catch (error) {
@@ -2410,7 +2373,7 @@ app.on("ready", async () => {
           const { response } = await dialog.showMessageBox({
             type: "question",
             buttons: ["Start fresh", "Connect to existing", "Cancel"],
-            defaultId: mode?.isEphemeral ? 0 : 1,
+            defaultId: 1,
             cancelId: 2,
             title: "A Vibestudio server is already running",
             message: "Choose which local server this session should use.",
@@ -3276,12 +3239,12 @@ app.on("before-quit", (event) => {
   if (quitIntent.serverDecision !== null || isCleaningUp) return;
   const conn = serverSession;
   const remembered = centralData.getKeepServerOnQuit();
-  const ephemeralLocalHub =
-    startupMode.kind === "local" &&
-    (startupMode.isEphemeral || process.argv.includes("--ephemeral"));
+  // A disposable developer instance root is removed when its supervisor exits,
+  // so its hub must never be left running behind a prompt.
+  const disposableInstance = process.env["VIBESTUDIO_INSTANCE_LIFECYCLE"] === "ephemeral";
   const decision = ordinaryQuitServerDecision({
     ownsLocalHub: conn?.serverOwnership === "desktop-local" && conn.hubProcessManager !== null,
-    ephemeral: ephemeralLocalHub,
+    ephemeral: disposableInstance,
     rememberedKeepServer: remembered,
   });
   if (decision !== "prompt") {

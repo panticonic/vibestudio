@@ -3007,6 +3007,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "developmentNative.resolveAdoptedRepository": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.discovery",
+      rationale:
+        "The development builtin must read the session owner's context, which is outside its own reachable context graph; the host performs that read and returns only the repository's presence and path",
+    },
+    capability: "development.native.execute",
+    presentation: {
+      title: "Look up an adopted repository",
+      action: "look up an adopted repository",
+      description: "Read whether a repository is adopted in this context, and where it lives.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "developmentNative.retireBuild": {
     tier: {
       tier: "critical",
@@ -4185,27 +4206,6 @@ export const HOST_AUTHORITY_METHODS = {
       title: "Delete a workspace",
       action: "delete a workspace",
       description: "Permanently remove a workspace and all its data.",
-      group: "accounts",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-  },
-  "hubControl.ensureEphemeralWorkspace": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "identity",
-      family: "hubControl.control",
-      rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-    },
-    capability: "workspaces.create",
-    presentation: {
-      title: "Prepare a temporary workspace",
-      action: "prepare a temporary workspace",
-      description: "Create a temporary workspace for quick experiments or testing.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",

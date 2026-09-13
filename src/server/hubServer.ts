@@ -16,14 +16,12 @@ import type { Duplex } from "node:stream";
 import { z } from "zod";
 import {
   deleteAndUnregisterWorkspace,
-  deleteUnregisteredWorkspace,
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
   readDefaultWorkspaceTemplates,
 } from "@vibestudio/workspace/baseTemplateRelease";
-import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceCreationDescriptor,
@@ -154,7 +152,6 @@ export interface HubServerArgs {
   bootstrapWorkspace?: string;
   logLevel?: string;
   readyFile?: string;
-  ephemeral?: boolean;
   servePanels?: boolean;
   gatewayPort?: number;
   host?: string;
@@ -273,7 +270,6 @@ const WorkspaceChildReadySchema = z
     workspaceName: z.string().regex(WORKSPACE_NAME_RE),
     workspaceId: z.string().min(1),
     workspaceDir: z.string().min(1),
-    isEphemeral: z.boolean(),
     gatewayUrl: z.string().url(),
     rpcUrl: z.string().url(),
     workerdUrl: z.string().url(),
@@ -801,7 +797,6 @@ function listHubWorkspaces(state: HubRuntimeState, viewer: HubSubject | null): H
         viewer
       ),
       ...(entry.privateRole ? { privateRole: entry.privateRole } : {}),
-      ...(isWorkspaceEphemeral(state, entry.name) ? { ephemeral: true } : {}),
     };
   });
   return entries;
@@ -917,7 +912,6 @@ export function buildHubReadyPayload(
       name: entry["name"],
       lastOpened: entry["lastOpened"],
       running: entry["running"],
-      ...(entry["ephemeral"] !== undefined ? { ephemeral: entry["ephemeral"] } : {}),
     })),
   });
 }
@@ -954,11 +948,6 @@ function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
   return !!runtime && !("promise" in runtime) && runtime.child.exitCode === null;
 }
 
-function isWorkspaceEphemeral(state: HubRuntimeState, name: string): boolean {
-  const ephemeral = state.centralData.getEphemeralWorkspace();
-  return ephemeral?.ownerBootId === state.serverBootId && ephemeral.name === name;
-}
-
 function normalizeWorkspaceName(raw: unknown): string {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new Error("Workspace name is required");
@@ -971,16 +960,9 @@ function normalizeWorkspaceName(raw: unknown): string {
 }
 
 export function selectBootstrapWorkspace(
-  args: Pick<HubServerArgs, "bootstrapWorkspace" | "ephemeral">,
+  args: Pick<HubServerArgs, "bootstrapWorkspace">,
   registered: readonly { name: string }[]
-): { name: string; lifecycle: "existing" | "register" | "ephemeral" } | null {
-  if (args.ephemeral) {
-    const name = normalizeWorkspaceName(args.bootstrapWorkspace ?? EPHEMERAL_DEV_WORKSPACE_NAME);
-    if (name !== EPHEMERAL_DEV_WORKSPACE_NAME) {
-      throw new Error("Ephemeral hubs use the canonical dev workspace");
-    }
-    return { name, lifecycle: "ephemeral" };
-  }
+): { name: string; lifecycle: "existing" | "register" } | null {
   if (args.bootstrapWorkspace) {
     const name = normalizeWorkspaceName(args.bootstrapWorkspace);
     return {
@@ -1449,10 +1431,7 @@ async function handleInternalRoute(
     }
     if (route === "workspace/creation-complete") {
       WorkspaceChildCreationCompleteInputSchema.parse(rawBody);
-      const workspaceName = requireWorkspaceName(state, boundWorkspaceId);
-      const completed = isWorkspaceEphemeral(state, workspaceName)
-        ? false
-        : state.centralData.completeWorkspaceCreation(boundWorkspaceId);
+      const completed = state.centralData.completeWorkspaceCreation(boundWorkspaceId);
       if (
         completed &&
         process.env["NODE_ENV"] !== "development" &&
@@ -1740,48 +1719,6 @@ export async function executeHubControl(
     );
     return;
   }
-  if (method === "ensureEphemeralWorkspace") {
-    requireRole(subject, "admin");
-    const existing = state.centralData.getEphemeralWorkspace();
-    if (existing) {
-      if (
-        existing.ownerBootId !== state.serverBootId ||
-        existing.name !== EPHEMERAL_DEV_WORKSPACE_NAME
-      ) {
-        throw new Error("Another ephemeral workspace lifecycle is already registered");
-      }
-      respond({
-        workspaceId: existing.workspaceId,
-        name: existing.name,
-        lastOpened: existing.lastOpened,
-        running: isRuntimeRunning(state, existing.name),
-        pendingApprovalCount: workspacePendingApprovalCount(
-          state,
-          existing.workspaceId,
-          existing.name,
-          subject
-        ),
-        ephemeral: true,
-      });
-      return;
-    }
-    const entry = state.centralData.addEphemeralWorkspace(
-      EPHEMERAL_DEV_WORKSPACE_NAME,
-      state.serverBootId,
-      selectWorkspaceCreationRootTemplate({ appRoot: state.appRoot })
-    );
-    state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
-    emitWorkspaceCatalogChanged(state);
-    respond({
-      workspaceId: entry.workspaceId,
-      name: entry.name,
-      lastOpened: entry.lastOpened,
-      running: false,
-      pendingApprovalCount: 0,
-      ephemeral: true,
-    });
-    return;
-  }
   if (method === "deleteWorkspace") {
     const opts = asRecord(args[0]) ?? {};
     const name = normalizeWorkspaceName(opts["workspace"]);
@@ -1797,17 +1734,11 @@ export async function executeHubControl(
       await terminateWorkspaceChild(runtime.child);
       state.workspacePresence.delete(workspaceId);
     }
-    const removedWorkspaceId = isWorkspaceEphemeral(state, name)
-      ? removeOwnedEphemeralWorkspace(
-          state.centralData,
-          state.serverBootId,
-          nativeWorkspaceCleanup(state.appRoot)
-        )
-      : deleteAndUnregisterWorkspace(
-          name,
-          state.centralData,
-          nativeWorkspaceCleanup(state.appRoot)
-        );
+    const removedWorkspaceId = deleteAndUnregisterWorkspace(
+      name,
+      state.centralData,
+      nativeWorkspaceCleanup(state.appRoot)
+    );
     if (removedWorkspaceId) emitWorkspaceCatalogChanged(state);
     respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
     return;
@@ -2482,8 +2413,7 @@ async function proxyUpgrade(
 
 async function ensureWorkspaceRuntime(
   state: HubRuntimeState,
-  advertisedName: string,
-  options: { reuseEphemeralDiskName?: string } = {}
+  advertisedName: string
 ): Promise<WorkspaceRuntime> {
   requireWorkspaceId(state, advertisedName);
   const current = state.runtimes.get(advertisedName);
@@ -2493,7 +2423,7 @@ async function ensureWorkspaceRuntime(
     state.runtimes.delete(advertisedName);
   }
   return beginWorkspaceRuntimeStart(state, advertisedName, (onSpawn) =>
-    startWorkspaceRuntime(state, advertisedName, onSpawn, options)
+    startWorkspaceRuntime(state, advertisedName, onSpawn)
   );
 }
 
@@ -2535,9 +2465,8 @@ function beginWorkspaceRuntimeStart(
  * Identity is one hub-owned store (WP0 §2): the child opens `identity.db`
  * query-only via `VIBESTUDIO_IDENTITY_DB_PATH` to resolve subjects and rosters.
  * Each advertised workspace keeps its own durable Iroh endpoint identity
- * under the canonical advertised workspace directory. A replacement process
- * (including a fresh ephemeral dev checkout) therefore preserves its Endpoint
- * ID, while different advertised workspaces remain isolated.
+ * under the canonical advertised workspace directory, so a replacement process
+ * preserves its Endpoint ID while different workspaces remain isolated.
  *
  * `workspaceId` is the registry's OPAQUE stable id (WP2) — the child gates
  * connections with `membershipStore.has(subject.userId, workspaceId)`, so it
@@ -2552,7 +2481,6 @@ export function buildWorkspaceChildEnv(input: {
   hubUrl: string;
   identityDbPath: string;
   workspaceChildToken: string;
-  ephemeral: boolean;
   creationIntent?: WorkspaceCreationDescriptor | null;
   workspaceSources?: readonly WorkspaceSource[];
 }): NodeJS.ProcessEnv {
@@ -2563,9 +2491,8 @@ export function buildWorkspaceChildEnv(input: {
     VIBESTUDIO_HOST: "127.0.0.1",
     VIBESTUDIO_BIND_HOST: "127.0.0.1",
     VIBESTUDIO_WORKSPACE: input.childWorkspaceName,
-    // The disk coordinate can differ from the user-facing catalog name (the
-    // ephemeral dev workspace is the canonical example). Child RPCs must
-    // report the catalog name so clients can route back through the hub.
+    // Child RPCs report the catalog name so clients can route back through
+    // the hub.
     VIBESTUDIO_ADVERTISED_WORKSPACE: input.advertisedWorkspaceName,
     VIBESTUDIO_WORKSPACE_ID: input.workspaceId,
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
@@ -2573,8 +2500,8 @@ export function buildWorkspaceChildEnv(input: {
     // Every child gets a distinct loopback-management capability. Never pass
     // through the hub's operator token from baseEnv.
     VIBESTUDIO_ADMIN_TOKEN: randomBytes(32).toString("hex"),
-    // The endpoint key identifies the advertised logical workspace. Ephemeral
-    // dev may replace its checkout, but stored reaches retain this Endpoint ID.
+    // The endpoint key identifies the advertised logical workspace, so stored
+    // reaches survive a replacement child process.
     VIBESTUDIO_IROH_IDENTITY: reach.identityFile,
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
@@ -2608,11 +2535,6 @@ export function buildWorkspaceChildEnv(input: {
   } else {
     delete env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"];
   }
-  if (input.ephemeral) {
-    env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] = "1";
-  } else {
-    delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
-  }
   delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
   // Obsolete product-wide callback-relay credentials must never enter a workspace
   // process. Backhaul auth is derived from the workspace's persistent key.
@@ -2628,44 +2550,6 @@ export function applyWorkspaceHostRuntimeEnv(
   if (!launchSet.historical) return;
   if (launchSet.runtimeMode === "electron-node") env["ELECTRON_RUN_AS_NODE"] = "1";
   else delete env["ELECTRON_RUN_AS_NODE"];
-}
-
-/** Rotate the ephemeral dev checkout at the point a replacement runtime is
- * actually started. A crashed child's disk stays available until then so its
- * durable test trajectories and logs remain inspectable; normal hub shutdown
- * still removes the currently recorded checkout. */
-export function prepareEphemeralWorkspaceDisk(
-  centralData: CentralDataManager,
-  ownerBootId: string,
-  workspaceId: string,
-  nextDiskName: string,
-  removeTree: import("@vibestudio/workspace/loader").WorkspaceTrashRemoval,
-  removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
-): void {
-  const cleanup = centralData.rotateEphemeralWorkspaceDiskName(
-    ownerBootId,
-    workspaceId,
-    nextDiskName
-  );
-  if (cleanup) {
-    removeWorkspace(cleanup, centralData, ownerBootId, removeTree);
-  }
-}
-
-/**
- * Release only the checkout owned by this process instance. There is no marker
- * read before the compare-and-remove: a displaced shutdown receives no cleanup
- * ticket and therefore has no filesystem coordinate it may delete.
- */
-export function removeOwnedEphemeralWorkspace(
-  centralData: CentralDataManager,
-  ownerBootId: string,
-  removeTree: import("@vibestudio/workspace/loader").WorkspaceTrashRemoval,
-  removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
-): string | null {
-  const removal = centralData.removeEphemeralWorkspace(ownerBootId, ownerBootId);
-  if (removal?.cleanup) removeWorkspace(removal.cleanup, centralData, ownerBootId, removeTree);
-  return removal?.workspace.workspaceId ?? null;
 }
 
 export function buildWorkspaceChildArgs(input: {
@@ -2701,41 +2585,17 @@ export function buildWorkspaceChildArgs(input: {
 async function startWorkspaceRuntime(
   state: HubRuntimeState,
   advertisedName: string,
-  onSpawn: (child: ChildProcess) => void,
-  options: { reuseEphemeralDiskName?: string } = {}
+  onSpawn: (child: ChildProcess) => void
 ): Promise<WorkspaceRuntime> {
-  const isEphemeralDevWorkspace = isWorkspaceEphemeral(state, advertisedName);
   const workspaceId = requireWorkspaceId(state, advertisedName);
   const creationIntent = state.centralData.getWorkspaceCreationIntent(advertisedName);
   // A new child instance owns a fresh report stream. Never retain endpoints
   // from a prior process while the replacement is starting.
   state.workspacePresence.delete(workspaceId);
-  if (options.reuseEphemeralDiskName && !isEphemeralDevWorkspace) {
-    throw new Error("Only an ephemeral dev runtime may reuse an ephemeral disk coordinate");
-  }
-  if (options.reuseEphemeralDiskName && !/^dev-[0-9a-f]{8}$/.test(options.reuseEphemeralDiskName)) {
-    throw new Error("Invalid ephemeral restart disk coordinate");
-  }
-  const childWorkspaceName =
-    options.reuseEphemeralDiskName ??
-    (isEphemeralDevWorkspace ? `dev-${randomBytes(4).toString("hex")}` : advertisedName);
-  if (options.reuseEphemeralDiskName && !fs.existsSync(getWorkspaceDir(childWorkspaceName))) {
-    throw new Error(
-      `Cannot recover workspace "${advertisedName}": owned checkout "${childWorkspaceName}" is missing`
-    );
-  }
   // Runtime startup consumes an explicitly registered workspace; it never
-  // creates catalog state as a routing side effect. Ephemeral dev children use
-  // a random disk name but retain the registered advertised workspace id.
-  if (isEphemeralDevWorkspace) {
-    prepareEphemeralWorkspaceDisk(
-      state.centralData,
-      state.serverBootId,
-      workspaceId,
-      childWorkspaceName,
-      nativeWorkspaceCleanup(state.appRoot)
-    );
-  }
+  // creates catalog state as a routing side effect. A workspace's disk
+  // coordinate is its advertised name.
+  const childWorkspaceName = advertisedName;
   if (semverMajor(state.version) !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
       `Installed application ${state.version} does not match compiled workspace epoch ${WORKSPACE_SYSTEM_EPOCH}`
@@ -2796,7 +2656,6 @@ async function startWorkspaceRuntime(
     hubUrl: state.connectUrl,
     identityDbPath: state.identityDbPath,
     workspaceChildToken: randomBytes(32).toString("base64url"),
-    ephemeral: isEphemeralDevWorkspace === true,
     creationIntent,
     workspaceSources: state.workspaceSources,
   });
@@ -2956,7 +2815,6 @@ type WorkspaceChildExitDeps = {
 
 function workspaceRuntimeIsDesired(state: HubRuntimeState, advertisedName: string): boolean {
   if (!state.centralData.hasWorkspace(advertisedName)) return false;
-  if (isWorkspaceEphemeral(state, advertisedName)) return true;
   const workspace = state.centralData
     .listWorkspaces()
     .find((candidate) => candidate.name === advertisedName);
@@ -2980,19 +2838,14 @@ function restartExitedWorkspaceRuntime(
 ): Promise<WorkspaceRuntime> {
   return beginWorkspaceRuntimeStart(state, input.advertisedName, async (onSpawn) => {
     await reaped;
-    return startWorkspaceRuntime(state, input.advertisedName, onSpawn, {
-      reuseEphemeralDiskName: isWorkspaceEphemeral(state, input.advertisedName)
-        ? input.childWorkspaceName
-        : undefined,
-    });
+    return startWorkspaceRuntime(state, input.advertisedName, onSpawn);
   });
 }
 
 /**
  * Converge the runtime registry after an observed OS exit. A ready child with
- * durable demand is replaced immediately; ephemeral recovery reuses the exact
- * hub-owned checkout so run/DO state survives the process fault. Intentional
- * stops remove the map entry before signaling and are therefore ignored here.
+ * durable demand is replaced immediately. Intentional stops remove the map
+ * entry before signaling and are therefore ignored here.
  */
 export async function handleWorkspaceChildExit(
   state: HubRuntimeState,
@@ -3174,9 +3027,8 @@ export function openHubDataStores(databasePath: string): {
 
 /**
  * Claim the hub's externally visible ownership boundary before opening or
- * mutating central state. A second hub must fail at listen(2), while the first
- * still owns its ephemeral lifecycle, rather than treating that live state as
- * crash residue and deleting it.
+ * mutating central state. A second hub must fail at listen(2) rather than
+ * treating the first hub's live state as crash residue and deleting it.
  */
 async function startHubGateway(input: {
   requestedPort?: number;
@@ -3325,18 +3177,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     process.kill(process.pid, "SIGTERM");
   }, HUB_PROCESS_LEASE_HEARTBEAT_MS);
   processLeaseHeartbeat.unref();
-  const staleEphemeral = centralData.getEphemeralWorkspace();
-  if (staleEphemeral) {
-    centralData.removeEphemeralWorkspace(serverBootId, staleEphemeral.ownerBootId);
-  }
-  for (const cleanup of centralData.listEphemeralWorkspaceCleanups(serverBootId)) {
-    deleteUnregisteredWorkspace(
-      cleanup,
-      centralData,
-      serverBootId,
-      nativeWorkspaceCleanup(appRoot)
-    );
-  }
   recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
   const version =
     process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
@@ -3359,13 +3199,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const membershipStore = new MembershipStore(identityDb, userStore);
   const bootstrap = selectBootstrapWorkspace(args, centralData.listWorkspaces());
   const bootstrapWorkspace = bootstrap?.name ?? null;
-  if (bootstrap?.lifecycle === "ephemeral") {
-    centralData.addEphemeralWorkspace(
-      bootstrap.name,
-      serverBootId,
-      selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
-    );
-  } else if (bootstrap?.lifecycle === "register") {
+  if (bootstrap?.lifecycle === "register") {
     centralData.addWorkspaceCreation(
       bootstrap.name,
       selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
@@ -3553,20 +3387,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     const childProcesses = workspaceChildren();
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
     console.log("[Hub] Shutdown: workspace children stopped");
-    if (state.centralData.getEphemeralWorkspace()?.ownerBootId === state.serverBootId) {
-      try {
-        console.log("[Hub] Shutdown: ephemeral storage cleanup started");
-        removeOwnedEphemeralWorkspace(
-          state.centralData,
-          state.serverBootId,
-          nativeWorkspaceCleanup(state.appRoot)
-        );
-        console.log("[Hub] Shutdown: ephemeral storage cleanup completed");
-      } catch (error) {
-        // Keep the lifecycle marker intact so the next startup retries cleanup.
-        console.error("[Hub] Ephemeral workspace cleanup will retry on next startup:", error);
-      }
-    }
     console.log("[Hub] Shutdown: gateway close started");
     await new Promise<void>((resolve) => server.close(() => resolve()));
     console.log("[Hub] Shutdown: gateway closed; governance close started");

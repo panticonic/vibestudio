@@ -36,6 +36,7 @@ describe("development instance environment", () => {
       instanceRoot: "/instance",
       instanceId: "source",
       sourceCoupled: true,
+      disposable: false,
       base,
     });
     expect(env).toMatchObject({
@@ -56,6 +57,7 @@ describe("development instance environment", () => {
       instanceRoot: "/instance",
       instanceId: "isolated",
       sourceCoupled: false,
+      disposable: false,
       templates,
     });
     expect(env["VIBESTUDIO_WORKSPACE_SOURCES"]).toBe(JSON.stringify(templates));
@@ -68,6 +70,7 @@ describe("development instance environment", () => {
       instanceRoot: "/instance",
       instanceId: "source",
       sourceCoupled: true,
+      disposable: false,
       base,
       templates,
     });
@@ -100,6 +103,7 @@ describe("development instance environment", () => {
       instanceRoot: "/instance",
       instanceId: "isolated",
       sourceCoupled: false,
+      disposable: false,
       ...(hasBase ? { base } : {}),
     });
     expect(env["VIBESTUDIO_SOURCE_INSTANCE"]).toBe("0");
@@ -118,6 +122,7 @@ it("selects an exact additional checkout without changing the private workspace 
     instanceRoot: "/instance",
     instanceId: "test",
     sourceCoupled: false,
+    disposable: false,
     base,
     templates,
     initialWorkspaceTemplate: templates[0]!.pin,

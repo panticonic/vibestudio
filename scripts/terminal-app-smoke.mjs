@@ -265,7 +265,6 @@ async function main() {
       serverEntryArg(),
       "--app-root",
       repoRoot,
-      "--ephemeral",
       "--ready-file",
       readyFile,
     ]);

@@ -39,10 +39,7 @@ import type {
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { createWorkspaceId } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import type {
-  CentralDataManager,
-  EphemeralWorkspaceCleanupRecord,
-} from "@vibestudio/shared/centralData";
+import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import {
   WORKSPACE_SOURCE_DIRS,
   WORKSPACE_STATE_DIRS,
@@ -683,59 +680,6 @@ export function recoverStagedWorkspaceDeletions(
     }
   }
   return report;
-}
-
-/**
- * Consume one lease-fenced ephemeral cleanup ticket through the same staged
- * rename/compensation protocol used by registered workspace deletion. The
- * ticket—not a caller-supplied path—is the filesystem authority.
- */
-export function deleteUnregisteredWorkspace(
-  cleanup: EphemeralWorkspaceCleanupRecord,
-  centralData: CentralDataManager,
-  ownerBootId: string,
-  removeWorkspaceTree: WorkspaceTrashRemoval
-): boolean {
-  const name = cleanup.diskName;
-  validateWorkspaceName(name);
-  centralData.assertEphemeralWorkspaceCleanup(ownerBootId, cleanup);
-  if (centralData.hasWorkspace(name)) {
-    throw new Error(
-      `Workspace "${name}" is registered and must be deleted with deleteAndUnregisterWorkspace`
-    );
-  }
-  const workspaceDir = getWorkspaceDir(name);
-  if (!fs.existsSync(workspaceDir)) {
-    if (!centralData.completeEphemeralWorkspaceCleanup(ownerBootId, cleanup)) {
-      throw new Error(`Ephemeral cleanup ticket ${cleanup.cleanupId} changed before completion`);
-    }
-    return false;
-  }
-  const staged = stageWorkspaceDeletion(name, cleanup.cleanupId, workspaceDir, removeWorkspaceTree);
-  try {
-    if (!centralData.completeEphemeralWorkspaceCleanup(ownerBootId, cleanup)) {
-      throw new Error(`Ephemeral cleanup ticket ${cleanup.cleanupId} changed before completion`);
-    }
-  } catch (error) {
-    try {
-      restoreWorkspaceDeletion(staged, removeWorkspaceTree);
-    } catch (restoreError) {
-      throw new AggregateError(
-        [error, restoreError],
-        `Ephemeral cleanup ${cleanup.cleanupId} was refused and its directory could not be restored`
-      );
-    }
-    throw error;
-  }
-  try {
-    removeWorkspaceTree(staged.trashRoot);
-  } catch (error) {
-    log.warn(
-      `[Workspace] Ephemeral cleanup ${cleanup.cleanupId} committed; filesystem cleanup remains queued at ${staged.trashRoot}: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  log.info(`[Workspace] Deleted unregistered ephemeral workspace "${name}"`);
-  return true;
 }
 
 function stageWorkspaceDeletion(
