@@ -24,8 +24,8 @@ type PairingResponse = {
 };
 
 export type DevCliBootstrapResult =
-  | { status: "existing"; workspaceName: string }
-  | { status: "paired"; workspaceName: string }
+  | { status: "existing"; workspaceName: string; workspaceId: string }
+  | { status: "paired"; workspaceName: string; workspaceId: string }
   | { status: "invite-required" };
 
 export interface DevCliPairingSponsor {
@@ -200,7 +200,7 @@ async function reconcileExistingCredential(
     },
     credentialFile
   );
-  return { status: "existing", workspaceName: route.workspace };
+  return { status: "existing", workspaceName: route.workspace, workspaceId: route.workspaceId };
 }
 
 async function pairWithInvite(
@@ -254,7 +254,7 @@ async function pairWithInvite(
     pairedAt: Date.now(),
   };
   saveCliCredentials(credentials, credentialFile);
-  return { status: "paired", workspaceName: route.workspace };
+  return { status: "paired", workspaceName: route.workspace, workspaceId: route.workspaceId };
 }
 
 /**

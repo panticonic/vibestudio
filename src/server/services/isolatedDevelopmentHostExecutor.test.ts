@@ -57,7 +57,13 @@ function fixture() {
       };
     },
     unregister,
-    bootstrap: vi.fn(async () => ({ status: "paired" as const, workspaceName: "main" })),
+    // A device creates the account's private workspaces as it pairs, so the
+    // route it reports is not in the startup catalog snapshot below.
+    bootstrap: vi.fn(async () => ({
+      status: "paired" as const,
+      workspaceName: "system-workspace:main",
+      workspaceId: "workspace:main",
+    })),
     createManager: vi.fn(async () => manager),
     supervisor(options) {
       supervisorOptions = options;

@@ -231,14 +231,9 @@ export class IsolatedDevelopmentHostExecutor {
               { code: "ECLI_BOOTSTRAP" }
             );
           }
-          const workspace = ready.workspaces.find(
-            (candidate) => candidate.name === bootstrap.workspaceName
-          );
-          if (!workspace) {
-            throw Object.assign(new Error("Paired workspace is absent from exact readiness"), {
-              code: "EREADINESS_DRIFT",
-            });
-          }
+          // The bootstrap's own route is authoritative: a device creates the
+          // account's private workspaces as it pairs, so they postdate the
+          // catalog snapshot the host published at startup.
           publishDevInstanceReady(instance, bootstrap);
           active.manager = await (this.deps.createManager ?? createIsolatedDevelopmentManager)({
             credentialFile,
@@ -257,8 +252,8 @@ export class IsolatedDevelopmentHostExecutor {
             state: "ready",
             serverId: ready.serverId,
             serverBootId: ready.serverBootId,
-            workspaceId: workspace.workspaceId,
-            workspaceName: workspace.name,
+            workspaceId: bootstrap.workspaceId,
+            workspaceName: bootstrap.workspaceName,
             gatewayUrl: ready.gatewayUrl,
             readyAt: now(),
           };

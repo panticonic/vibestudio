@@ -75,6 +75,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     ).resolves.toEqual({
       status: "existing",
       workspaceName: "private-new-name",
+      workspaceId: "ws_private",
     });
     expect(loadCliCredentials(credentialFile)).toMatchObject({ workspaceId: "ws_private" });
     expect(close).toHaveBeenCalledOnce();
@@ -133,7 +134,11 @@ describe("bootstrapInstanceCliFromDevice", () => {
         },
         { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
       )
-    ).resolves.toEqual({ status: "existing", workspaceName: "dev" });
+    ).resolves.toEqual({
+      status: "existing",
+      workspaceName: "dev",
+      workspaceId: "ws_dev_current",
+    });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(rpcClient).toHaveBeenCalledOnce();
@@ -214,7 +219,11 @@ describe("bootstrapInstanceCliFromDevice", () => {
         },
         { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
       )
-    ).resolves.toEqual({ status: "paired", workspaceName: "system-ws_system" });
+    ).resolves.toEqual({
+      status: "paired",
+      workspaceName: "system-ws_system",
+      workspaceId: "ws_system",
+    });
 
     // The account's own workspaces are prepared first and System is opened —
     // where the account's tooling lives, and what a desktop client routes its
@@ -312,7 +321,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
         },
         { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
       )
-    ).resolves.toEqual({ status: "paired", workspaceName: "dev" });
+    ).resolves.toEqual({ status: "paired", workspaceName: "dev", workspaceId: "ws_dev" });
 
     expect(routeAttempts).toBe(2);
     expect(routedDeviceIds).toEqual([`dev_${"C".repeat(24)}`, `dev_${"C".repeat(24)}`]);
