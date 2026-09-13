@@ -251,6 +251,35 @@ describe("AttachedHostController", () => {
     expect(exchange).not.toHaveBeenCalled();
   });
 
+  it("attaches from the readiness callback, before the run records a generation", async () => {
+    const f = fixture();
+    // Publication happens inside the callback that produces the receipt, so
+    // the run has not been written back yet and carries instance: null.
+    const published = await f.controller.attach({
+      run: { ...RUN, instance: null },
+      instance: INSTANCE,
+      parentHostId: "server-parent",
+      authorityCeiling: CEILING,
+      bootstrap: f.bootstrap,
+      route: f.route,
+    });
+    expect(published.childGenerationId).toBe(INSTANCE.generationId);
+  });
+
+  it("still refuses a child that is not ready", async () => {
+    const f = fixture();
+    await expect(
+      f.controller.attach({
+        run: { ...RUN, instance: null },
+        instance: { ...INSTANCE, state: "registered" },
+        parentHostId: "server-parent",
+        authorityCeiling: CEILING,
+        bootstrap: f.bootstrap,
+        route: f.route,
+      })
+    ).rejects.toMatchObject({ code: "EATTACHED_GENERATION" });
+  });
+
   it("closes instead of recovering when generation proof drifts", async () => {
     const f = fixture();
     await f.controller.attach({

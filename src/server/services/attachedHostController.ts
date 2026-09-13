@@ -330,12 +330,15 @@ function assertAttachableRun(
   if (run.target.kind !== "isolated-host") {
     throw attachedError("EATTACHED_TARGET", "Only an isolated development host can be attached");
   }
-  if (
-    instance.state !== "ready" ||
-    !run.instance ||
-    run.instance.instanceId !== instance.instanceId ||
-    run.instance.generationId !== instance.generationId
-  ) {
+  // The caller supplies the live readiness receipt, and attachment happens
+  // from inside the callback that produces it — so the run's own copy is not
+  // written yet. Once it is, the two must still name the same generation,
+  // which is what stops a later attach from addressing a restarted child.
+  const drifted =
+    run.instance !== null &&
+    (run.instance.instanceId !== instance.instanceId ||
+      run.instance.generationId !== instance.generationId);
+  if (instance.state !== "ready" || drifted) {
     throw attachedError(
       "EATTACHED_GENERATION",
       "Attachment requires the run's exact ready child generation"
