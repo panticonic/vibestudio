@@ -59,11 +59,13 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
       signalCode: null as NodeJS.Signals | null,
     }) as unknown as ChildProcess;
     let spawnOptions: SpawnOptions | undefined;
+    let spawnArgs: readonly string[] | undefined;
     const executor = new CurrentHostDevelopmentClientExecutor({
       client: client as never,
       stateRoot,
       electronExecutable: executable,
-      spawnProcess: ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+      spawnProcess: ((_command: string, args: readonly string[], options: SpawnOptions) => {
+        spawnArgs = args;
         spawnOptions = options;
         return child;
       }) as never,
@@ -75,6 +77,7 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
         startCoordinate: "test-start",
       }),
       nativeModulesRoot: nativeModules,
+      processArgv: ["electron", "--password-store=gnome-libsecret", "--no-sandbox", "/app"],
     });
 
     const priorSecret = process.env["VIBESTUDIO_TEST_SECRET"];
@@ -93,6 +96,10 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
     const linked = path.join(ownedRoot, "node_modules");
     expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
     expect(fs.existsSync(path.join(linked, "@number0", "iroh", "package.json"))).toBe(true);
+    // Which secret store holds a device credential belongs to the session, and
+    // a launched client saves its own there before it can pair at all.
+    expect(spawnArgs?.[0]).toBe("--password-store=gnome-libsecret");
+    expect(spawnArgs).not.toContain("--no-sandbox");
     expect(spawnOptions?.env).not.toHaveProperty("VIBESTUDIO_TEST_SECRET");
     expect(spawnOptions?.env).toMatchObject({
       VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST: requestId,

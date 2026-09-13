@@ -42,6 +42,8 @@ export class CurrentHostDevelopmentClientExecutor {
       spawnProcess?: typeof spawn;
       /** Native dependency realm a launched client resolves through. */
       nativeModulesRoot?: string | null;
+      /** Argv this executor was started with, for device-scoped switches. */
+      processArgv?: readonly string[];
       captureProcessIdentity?: typeof captureOwnedProcessIdentity;
       now?: () => number;
       log?: (message: string) => void;
@@ -245,7 +247,12 @@ export class CurrentHostDevelopmentClientExecutor {
     fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
     const child = (this.deps.spawnProcess ?? spawn)(
       executable,
-      [`--user-data-dir=${profile}`, root, claim.pairingDeepLink],
+      [
+        ...inheritedDeviceSwitches(this.deps.processArgv ?? process.argv),
+        `--user-data-dir=${profile}`,
+        root,
+        claim.pairingDeepLink,
+      ],
       {
         cwd: root,
         detached: process.platform !== "win32",
@@ -290,6 +297,19 @@ export class CurrentHostDevelopmentClientExecutor {
     })();
     return owned.exitReport;
   }
+}
+
+/**
+ * Electron switches that describe this device rather than this app instance.
+ *
+ * Which secret store holds a device credential is a property of the session
+ * the executor was started in, and a client it launches saves its own
+ * credential into that same store before it can pair at all. Without the
+ * selection the launched client finds no usable store, refuses to pair, and
+ * exits — leaving the run to report an executor that never completed it.
+ */
+function inheritedDeviceSwitches(argv: readonly string[]): string[] {
+  return argv.filter((argument) => argument.startsWith("--password-store="));
 }
 
 /**
