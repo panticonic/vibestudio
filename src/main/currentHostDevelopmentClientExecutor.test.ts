@@ -20,6 +20,9 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
     const executable = path.join(root, "electron");
     fs.writeFileSync(executable, "reviewed-electron");
     const stateRoot = path.join(root, "clients");
+    const nativeModules = path.join(root, "node_modules");
+    fs.mkdirSync(path.join(nativeModules, "@number0", "iroh"), { recursive: true });
+    fs.writeFileSync(path.join(nativeModules, "@number0", "iroh", "package.json"), "{}");
     const requestId = `development-client-${"1".repeat(32)}`;
     const main = Buffer.from("module.exports = {};\n");
     const integrity = `sha256-${createHash("sha256").update(main).digest("hex")}`;
@@ -71,6 +74,7 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
         processGroupId: 4242,
         startCoordinate: "test-start",
       }),
+      nativeModulesRoot: nativeModules,
     });
 
     const priorSecret = process.env["VIBESTUDIO_TEST_SECRET"];
@@ -84,6 +88,11 @@ describe("CurrentHostDevelopmentClientExecutor", () => {
 
     const ownedRoot = path.join(stateRoot, requestId);
     expect(fs.readFileSync(path.join(ownedRoot, "dist", "main.cjs"))).toEqual(main);
+    // A client bundle resolves native modules next to itself; materialized on
+    // its own it cannot open the transport it was told to pair over.
+    const linked = path.join(ownedRoot, "node_modules");
+    expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(linked, "@number0", "iroh", "package.json"))).toBe(true);
     expect(spawnOptions?.env).not.toHaveProperty("VIBESTUDIO_TEST_SECRET");
     expect(spawnOptions?.env).toMatchObject({
       VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST: requestId,

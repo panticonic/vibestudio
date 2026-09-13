@@ -40,6 +40,8 @@ export class CurrentHostDevelopmentClientExecutor {
       stateRoot: string;
       electronExecutable?: string;
       spawnProcess?: typeof spawn;
+      /** Native dependency realm a launched client resolves through. */
+      nativeModulesRoot?: string | null;
       captureProcessIdentity?: typeof captureOwnedProcessIdentity;
       now?: () => number;
       log?: (message: string) => void;
@@ -230,6 +232,7 @@ export class CurrentHostDevelopmentClientExecutor {
       })}\n`,
       { mode: 0o400, flag: "wx" }
     );
+    linkNativeDependencies(root, this.deps.nativeModulesRoot ?? nativeModulesRoot());
     return root;
   }
 
@@ -287,6 +290,38 @@ export class CurrentHostDevelopmentClientExecutor {
     })();
     return owned.exitReport;
   }
+}
+
+/**
+ * Where this executor's own native dependencies are installed.
+ *
+ * A client bundle resolves native modules next to itself, which is how an
+ * installed host finds them. A development client is materialized into a
+ * private directory with nothing next to it, so it cannot open the Iroh
+ * transport it is told to pair over and exits before readiness.
+ */
+function nativeModulesRoot(): string | null {
+  try {
+    // <root>/node_modules/@number0/iroh/package.json
+    return path.resolve(path.dirname(require.resolve("@number0/iroh/package.json")), "..", "..");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Point the client at them, rather than copying a native realm per launch.
+ *
+ * The executor and the client it launches are the same build on the same
+ * device — the executor refuses to launch a binary whose digest differs from
+ * its own — so the modules it resolves are exactly the ones the client needs.
+ * The host build already stages each of its generations this way.
+ */
+function linkNativeDependencies(root: string, modulesRoot: string | null): void {
+  if (!modulesRoot || !fs.existsSync(modulesRoot)) return;
+  const link = path.join(root, "node_modules");
+  assertOwnedRootCoordinate(root, link);
+  fs.symlinkSync(modulesRoot, link, "junction");
 }
 
 function clientEnvironment(claim: LaunchClaim): NodeJS.ProcessEnv {
