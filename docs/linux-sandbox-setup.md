@@ -1,0 +1,98 @@
+# Linux sandbox setup
+
+Vibestudio runs two different sandboxes, and on a modern Ubuntu each needs a
+small amount of host setup before it will start. This page explains what they
+are, what installs their permission, and how to recognise each failure.
+
+## Why anything is needed
+
+Both sandboxes are built on an **unprivileged user namespace**. Ubuntu 24.04
+and later ship `kernel.apparmor_restrict_unprivileged_userns=1`, which grants
+that capability only to binaries carrying an AppArmor profile. A binary with no
+profile is refused, and the refusal surfaces deep inside whatever was starting.
+
+The fix is never to relax the machine's policy. Each profile below grants
+`userns` to exactly one path and nothing else, and carries `flags=(unconfined)`
+so the confinement the sandbox itself provides is unchanged — the profile
+exists to permit the sandbox, not to replace it.
+
+| Sandbox                        | Binary                                  | Profile          |
+| ------------------------------ | --------------------------------------- | ---------------- |
+| Workspace runtime (bubblewrap) | the MXC launcher, `dist/mxc/*/lxc-exec` | `vibestudio-mxc` |
+| Desktop renderers (Chromium)   | Electron                                | `vibestudio`     |
+
+## Installed packages
+
+`apt`, `dnf`, and `pacman` packages ship both profiles and install them from
+their maintainer scripts (`build-resources/linux/after-install.sh`), so an
+installed Vibestudio needs nothing further. Uninstalling withdraws them; an
+upgrade keeps them.
+
+`npm` cannot install an AppArmor profile, so prefer a package manager on a host
+that restricts user namespaces. `vibestudio remote doctor` reports what this
+host permits.
+
+## Source checkouts
+
+A profile attaches to an absolute path, and a checkout lives wherever it was
+cloned, so a developer tree installs its own rather than using the packaged
+paths:
+
+```bash
+sudo scripts/install-dev-apparmor-profile.sh
+```
+
+That writes two profiles for this tree — `vibestudio-mxc-dev` for its workspace
+launcher and `vibestudio-electron-dev` for `node_modules/electron/dist/electron`
+— and loads them. **Re-run it after moving or re-cloning the checkout**, since
+the old profiles name paths that no longer exist. Remove them with:
+
+```bash
+sudo apparmor_parser --remove /etc/apparmor.d/vibestudio-mxc-dev
+sudo apparmor_parser --remove /etc/apparmor.d/vibestudio-electron-dev
+sudo rm /etc/apparmor.d/vibestudio-mxc-dev /etc/apparmor.d/vibestudio-electron-dev
+```
+
+The script skips the Electron profile when a checkout has not installed Electron
+yet; run it again after `pnpm install` if you started from a bare tree.
+
+## Recognising each failure
+
+**`bwrap: setting up uid map: Permission denied`** — the workspace launcher has
+no profile. No workspace can start. `pnpm system-test --instance ID doctor`
+reports it as the `workspace-isolation` check.
+
+**The desktop exits before its first window, with `SIGTRAP`** — Electron has no
+profile, so Chromium cannot sandbox its renderers. A development client launched
+by the desktop reports this as `Development client exited before readiness
+(SIGTRAP)`.
+
+One Electron profile covers every development client, even though each client
+runs from its own temporary directory: a client reuses the executor's exact
+executable — the executor refuses to launch a binary whose digest differs from
+its own — and a profile attaches to the executable, not to the directory a
+process runs in.
+
+## Running a desktop client on a headless host
+
+Self-development's client-device scenarios need a desktop client registered as
+a client-device executor. Attach one without a desktop session:
+
+```bash
+node scripts/development-client-executor.mjs --instance ID
+```
+
+It mints a device invite from that running instance, starts an isolated D-Bus
+session and keyring so Electron's `safeStorage` can save the device credential,
+and launches the client under `xvfb-run` — owning its own HOME, XDG
+directories, Chromium profile, D-Bus session and keyring, so it touches nothing
+of yours. It needs `xvfb-run`, `dbus-daemon`, and `gnome-keyring-daemon`.
+
+A desktop client pairs its workspace connection to the user's System workspace,
+so tests that need its executor run against that workspace:
+
+```bash
+pnpm system-test --instance ID --workspace-role system run TEST_NAME
+```
+
+See AGENTS.md for how that scoping interacts with `--self-development`.

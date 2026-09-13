@@ -108,10 +108,28 @@ npm install -g @panticonic/vibestudio-server    # anywhere else
 vibestudio remote deploy local
 ```
 
-A workspace runtime is sandboxed, which on Ubuntu 24.04+ needs an AppArmor
-profile that npm cannot install — prefer `apt`/`dnf` on a host those cover.
+Vibestudio sandboxes both a workspace runtime and the desktop's own renderers,
+and each sandbox needs an unprivileged user namespace. Ubuntu 24.04+ sets
+`kernel.apparmor_restrict_unprivileged_userns=1`, which grants those only to
+binaries carrying an AppArmor profile, so `apt`/`dnf` packages ship one for
+each and install them; npm cannot. Prefer a package manager on such a host.
 `vibestudio remote doctor` reports whether this host permits the sandbox and
 what to do when it does not.
+
+Working from a source checkout, install the same two profiles for that tree:
+
+```bash
+sudo scripts/install-dev-apparmor-profile.sh
+```
+
+A profile attaches to an absolute path, and a checkout lives wherever it was
+cloned, which is why a developer tree installs its own rather than using the
+packaged ones. It covers the checkout's workspace launcher and its Electron
+binary — and through that binary every development client the desktop launches,
+since a client reuses the same executable from a private directory. Re-run it
+after moving the checkout. See [Linux sandbox
+setup](docs/linux-sandbox-setup.md) for what each profile permits, how to
+recognise each failure, and how to run a desktop client on a headless host.
 
 On Linux with systemd, `deploy local` installs an always-on user service on this
 computer, enables it at login/boot, runs end-to-end diagnostics, and prints the

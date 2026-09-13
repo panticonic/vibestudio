@@ -99,6 +99,9 @@ that workspace, settles its own creation review, adopts into it when
 `--self-development` is also passed, and leaves every other run where it was.
 Attach the executor itself with `node scripts/development-client-executor.mjs
 --instance ID`, which pairs a headless Electron client to the same instance.
+Both that client and the clients it launches need this host to permit sandbox
+user namespaces; `docs/linux-sandbox-setup.md` covers the profiles that grant
+them and the failure each missing one produces.
 
 Agentic tests judge delivery latency in wall-clock time, and the gate can only
 account for the test agents sharing the instance — it scales its allowance by
