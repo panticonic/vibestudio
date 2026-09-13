@@ -137,8 +137,16 @@ function repoDigest(repoRoot: string): string {
   return createHash("sha256").update(canonicalRepoRoot(repoRoot)).digest("hex").slice(0, 16);
 }
 
-function markerPath(instance: Pick<DevInstanceRecord, "root">): string {
-  return path.join(instance.root, "system-test-managed.json");
+/**
+ * The marker is what authorises stopping and reclaiming an instance, so it
+ * lives in the launcher's own state rather than inside the disposable root it
+ * describes. A cleanup that fails partway through that root would otherwise
+ * delete the marker before the thing that refused it, leaving an instance
+ * nothing could ever reclaim.
+ */
+export function managedMarkerPath(instance: Pick<DevInstanceRecord, "id" | "repoRoot">): string {
+  const instanceRoot = persistentInstanceRoot(instance.repoRoot, instance.id);
+  return path.join(path.dirname(instanceRoot), "system-test-markers", `${instance.id}.json`);
 }
 
 function logPath(repoRoot: string, instanceId: string): string {
@@ -161,7 +169,7 @@ function selfDevelopmentMirrorRoot(repoRoot: string, instanceId: string): string
 function readManagedMarker(instance: DevInstanceRecord): ManagedMarker | null {
   try {
     const value = JSON.parse(
-      fs.readFileSync(markerPath(instance), "utf8")
+      fs.readFileSync(managedMarkerPath(instance), "utf8")
     ) as Partial<ManagedMarker>;
     if (
       value.schemaVersion !== 1 ||
@@ -186,9 +194,9 @@ function writeManagedMarker(instance: DevInstanceRecord, testSessionName?: strin
     repoDigest: repoDigest(instance.repoRoot),
     ...(testSessionName ? { testSessionName } : {}),
   };
-  fs.writeFileSync(markerPath(instance), `${JSON.stringify(marker, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  const target = managedMarkerPath(instance);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** Move this instance's tests to a session created after `label`. */
@@ -255,6 +263,7 @@ function reclaimStaleManagedInstance(repoRoot: string, instanceId: string): bool
   }
   unregisterDevInstance(repoRoot, instanceId);
   removeSelfDevelopmentMirrors(repoRoot, instanceId);
+  fs.rmSync(managedMarkerPath(instance), { force: true });
   return true;
 }
 
@@ -469,5 +478,6 @@ export async function stopManagedSystemTestInstance(
   process.kill(instance.supervisorPid, "SIGTERM");
   await waitForStopped(instance, timeoutMs);
   removeSelfDevelopmentMirrors(repoRoot, instanceId);
+  fs.rmSync(managedMarkerPath(instance), { force: true });
   return true;
 }

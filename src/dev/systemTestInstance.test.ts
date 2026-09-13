@@ -11,6 +11,7 @@ import {
 import {
   ensureSystemTestInstance,
   isLocalSystemTestHelpCommand,
+  managedMarkerPath,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
   systemTestInstanceEnvironment,
@@ -128,8 +129,10 @@ describe("self-provisioning system-test instance", () => {
       startedAt: Date.now(),
     });
     publishDevInstanceReady(instance, { status: "paired", workspaceName: "dev" });
+    const marker = managedMarkerPath(instance);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
     fs.writeFileSync(
-      path.join(root, "system-test-managed.json"),
+      marker,
       JSON.stringify({
         schemaVersion: 1,
         instanceId: instance.id,
@@ -183,8 +186,10 @@ describe("self-provisioning system-test instance", () => {
       lifecycle: "ephemeral",
       startedAt: Date.now(),
     });
+    const marker = managedMarkerPath(instance);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
     fs.writeFileSync(
-      path.join(root, "system-test-managed.json"),
+      marker,
       JSON.stringify({
         schemaVersion: 1,
         instanceId: instance.id,
