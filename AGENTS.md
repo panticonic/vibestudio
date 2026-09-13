@@ -99,6 +99,9 @@ that workspace, settles its own creation review, adopts into it when
 `--self-development` is also passed, and leaves every other run where it was.
 Attach the executor itself with `node scripts/development-client-executor.mjs
 --instance ID`, which pairs a headless Electron client to the same instance.
+Attach it before the first `--workspace-role system` command: a fresh instance
+has only its `dev` workspace, and the private ones are created when a desktop
+client pairs.
 Both that client and the clients it launches need this host to permit sandbox
 user namespaces; `docs/linux-sandbox-setup.md` covers the profiles that grant
 them and the failure each missing one produces.

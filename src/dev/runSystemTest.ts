@@ -234,7 +234,12 @@ async function ensureWorkspaceProfile(
       }
     }
     if (Date.now() >= deadline) {
-      throw new Error(`No ${role} workspace appeared on ${instanceId}: ${lastFailure}`);
+      throw new Error(
+        `No ${role} workspace appeared on ${instanceId}: ${lastFailure}. A private workspace ` +
+          `is created when a desktop client pairs with the instance, so attach one first — ` +
+          `\`node scripts/development-client-executor.mjs --instance ${instanceId}\` — and ` +
+          `run this again.`
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
