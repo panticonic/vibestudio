@@ -412,11 +412,25 @@ export class DevelopmentClientExecutorRegistry {
         timeout,
       });
       input.onRequested?.({ requestId, requestedAt: this.now() });
-      this.deps.eventService.emitToCaller(
+      // A registered executor whose transport has gone holds its lease until
+      // that lease expires, so the request can be addressed to a caller with
+      // no live connection. Say so now: waiting out the launch budget reports
+      // an executor that ignored the request, which is a different fault.
+      const delivered = this.deps.eventService.emitToCaller(
         input.binding.ownerRuntimeId,
         "development:client-launch-request",
         { requestId, runId: input.runId, expiresAt }
       );
+      if (!delivered) {
+        clearTimeout(timeout);
+        this.pending.delete(requestId);
+        reject(
+          coded(
+            "EEXECUTOR_UNAVAILABLE",
+            "Selected desktop executor has no live connection to receive the launch"
+          )
+        );
+      }
     });
     return { requestId, ready };
   }

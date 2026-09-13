@@ -370,6 +370,13 @@ const chooserChoice = new Promise<ChooserChoice>((resolve) => {
 });
 
 function shouldAutoPairPendingDevIrohLink(): boolean {
+  // A development client is launched by an executor the user already
+  // authorized, which hands it a one-time invite for the very server that
+  // asked for the launch. Routing that through the chooser would ask the user
+  // to confirm a connection they just requested — and nothing can answer it
+  // when the launch was unattended, so the run waits out its whole budget and
+  // reports that the executor never completed the launch.
+  if (process.env["VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST"]) return true;
   return isDev() && startupInvocation.devIrohRemote;
 }
 

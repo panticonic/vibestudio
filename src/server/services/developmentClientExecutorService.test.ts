@@ -11,7 +11,10 @@ function caller(runtimeId: string, userId: string, kind: "shell" | "worker" = "s
   } satisfies ServiceContext;
 }
 
-function fixture(isolatedHost?: { instanceId: string; generationId: string }) {
+function fixture(
+  isolatedHost?: { instanceId: string; generationId: string },
+  options: { deliver?: boolean } = {}
+) {
   let now = 1_000;
   const emitted: Array<{ callerId: string; event: string; payload: unknown }> = [];
   const registry = new DevelopmentClientExecutorRegistry({
@@ -19,7 +22,7 @@ function fixture(isolatedHost?: { instanceId: string; generationId: string }) {
     eventService: {
       emitToCaller(callerId, event, payload) {
         emitted.push({ callerId, event, payload });
-        return true;
+        return options.deliver ?? true;
       },
     },
     ...(isolatedHost ? { isolatedHost } : {}),
@@ -93,6 +96,34 @@ describe("DevelopmentClientExecutorRegistry", () => {
     ).toBeNull();
     f.advance(60_001);
     expect(f.registry.list("user:one")).toEqual([]);
+  });
+
+  it("fails a launch its executor has no live connection to receive", async () => {
+    const f = fixture(undefined, { deliver: false });
+    await register(f, "shell:initiating");
+    const binding = f.registry.select({
+      ownerUserId: "user:one",
+      executorId: "shell:initiating",
+      platform: process.platform,
+      arch: process.arch,
+    })!;
+
+    const launch = f.registry.launch({
+      runId: "run:gone",
+      binding,
+      mainEntryBuildId: MAIN,
+      executionDigest: DIGEST,
+      recipeId: "recipe:one",
+      artifactSource: {
+        manifest: [{ path: "dist/main.cjs", integrity: `sha256-${MAIN}`, byteLength: 3 }],
+        read: () => Buffer.from("app"),
+      },
+      pairingDeepLink: "vibestudio://connect/one",
+    });
+
+    // Without this it waits out the whole launch budget and then reports an
+    // executor that ignored the request, which is a different fault.
+    await expect(launch.ready).rejects.toMatchObject({ code: "EEXECUTOR_UNAVAILABLE" });
   });
 
   it("requires both the selected provider receipt and a newly paired child attestation", async () => {
