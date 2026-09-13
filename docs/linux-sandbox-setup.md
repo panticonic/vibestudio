@@ -28,6 +28,14 @@ their maintainer scripts (`build-resources/linux/after-install.sh`), so an
 installed Vibestudio needs nothing further. Uninstalling withdraws them; an
 upgrade keeps them.
 
+Those scripts replace electron-builder's own templates rather than adding to
+them — `FpmTarget` falls back to its default only when no script is configured
+— so they have to reproduce everything the defaults do: the binary link in
+`/usr/bin`, the `chrome-sandbox` mode, the mime and desktop databases, and
+electron-builder's generated AppArmor profile, alongside the workspace
+runtime's profile they were added for. They are templated the same way, so
+`${executable}` and `${sanitizedProductName}` are substituted at package time.
+
 `npm` cannot install an AppArmor profile, so prefer a package manager on a host
 that restricts user namespaces. `vibestudio remote doctor` reports what this
 host permits.
