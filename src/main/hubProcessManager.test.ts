@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
@@ -10,8 +12,12 @@ vi.mock("./paths.js", () => ({
   getEsbuildBinaryPath: () => null,
 }));
 
+// A fixed absolute path would be shared by every concurrent run and outlive
+// all of them. The run-owned temporary root is swept when the run ends.
+const CENTRAL_DATA_PATH = path.join(os.tmpdir(), "vibestudio-hub-manager-test");
+
 vi.mock("@vibestudio/env-paths", () => ({
-  getCentralDataPath: () => "/tmp/vibestudio-hub-manager-test",
+  getCentralDataPath: () => CENTRAL_DATA_PATH,
 }));
 
 const credentialStore = {
@@ -207,7 +213,7 @@ afterEach(() => {
 
 describe("HubProcessManager", () => {
   it("exposes the detached hub's canonical captured-output path", () => {
-    expect(getLocalHubLogPath()).toBe("/tmp/vibestudio-hub-manager-test/logs/hub.log");
+    expect(getLocalHubLogPath()).toBe(path.join(CENTRAL_DATA_PATH, "logs", "hub.log"));
   });
 
   it("accepts only the canonical secret-free ready contract", () => {
@@ -495,7 +501,7 @@ describe("HubProcessManager", () => {
       "--max-old-space-size=4096",
       "/tmp/server-entry.js",
       "--ready-file",
-      "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json",
+      path.join(CENTRAL_DATA_PATH, "server-auth", "hub-ready.json"),
       "--bootstrap-workspace",
       "alpha",
     ]);
@@ -553,7 +559,7 @@ describe("HubProcessManager", () => {
   });
 
   it("stops a newly spawned hub when workspace routing fails", async () => {
-    const readyFile = "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json";
+    const readyFile = path.join(CENTRAL_DATA_PATH, "server-auth", "hub-ready.json");
     fs.rmSync(readyFile, { force: true });
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
       serverId: SERVER_ID,
@@ -662,7 +668,7 @@ describe("HubProcessManager", () => {
   });
 
   it("terminates a spawned hub and deletes its ready file when the ready contract is invalid", async () => {
-    const readyFile = "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json";
+    const readyFile = path.join(CENTRAL_DATA_PATH, "server-auth", "hub-ready.json");
     let childAlive = true;
     const killMock = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
       expect(pid).toBe(42);

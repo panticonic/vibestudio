@@ -55,7 +55,10 @@ export const vitestSharedConfig = {
       // export during tests because the package dist tree is not built first.
       {
         find: /^@vibestudio\/process-adapter\/native-launch$/,
-        replacement: path.resolve(__dirname, "packages/process-adapter/src/isolation/native-launch.ts"),
+        replacement: path.resolve(
+          __dirname,
+          "packages/process-adapter/src/isolation/native-launch.ts"
+        ),
       },
     ],
     dedupe: ["react", "react-dom"],
@@ -72,6 +75,7 @@ export const vitestSharedConfig = {
       "**/*.browser.test.tsx",
     ],
     setupFiles: [path.resolve(__dirname, "tests/setup/vitest.setup.ts")],
+    globalSetup: [path.resolve(__dirname, "tests/setup/vitestTempRoot.ts")],
     server: {
       deps: {
         inline: [
