@@ -112,6 +112,7 @@ function fixture() {
     manager,
     unregister,
     generationId,
+    sourceRoot,
     options: () => supervisorOptions,
   };
 }
@@ -229,6 +230,15 @@ describe("IsolatedDevelopmentHostExecutor", () => {
       VIBESTUDIO_DEVELOPMENT_PARENT_RUN: run.runId,
     });
     const isolatedEnv = f.options()?.env ?? {};
+    // A host refuses to start without the generation its artifacts come from,
+    // and a compiled server entry names its own directory.
+    expect(isolatedEnv["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe(path.join(f.sourceRoot, "dist"));
+    // Its own toolchain wins for node, but a workspace runtime resolves
+    // bubblewrap through PATH: a PATH holding only the toolchain fails every
+    // workspace the isolated host starts.
+    const isolatedPath = (isolatedEnv["PATH"] ?? "").split(path.delimiter);
+    expect(isolatedPath[0]).toBe(path.dirname(process.execPath));
+    expect(isolatedPath.length).toBeGreaterThan(1);
     for (const forbidden of [
       "VIBESTUDIO_ADMIN_TOKEN",
       "VIBESTUDIO_WORKERD_GATEWAY_TOKEN",

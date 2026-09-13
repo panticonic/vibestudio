@@ -627,8 +627,17 @@ function isolatedEnvironment(
     TMPDIR: temp,
     TEMP: temp,
     TMP: temp,
-    PATH: path.dirname(launch.nodePath),
+    // The isolated host's own toolchain must win for node, but it still has to
+    // find the sandbox prerequisites the parent host can: a workspace runtime
+    // resolves bubblewrap through PATH, and a PATH holding only the toolchain
+    // fails every workspace it starts with "bwrap is unavailable".
+    PATH: [path.dirname(launch.nodePath), process.env["PATH"]]
+      .filter((entry): entry is string => Boolean(entry))
+      .join(path.delimiter),
     VIBESTUDIO_APP_ROOT: launch.sourceRoot,
+    // A host refuses to start without the generation its compiled artifacts
+    // come from, and a compiled server entry names its own directory.
+    VIBESTUDIO_HOST_ARTIFACT_ROOT: path.dirname(launch.serverEntryPath),
     VIBESTUDIO_INSTANCE_ROOT: instanceRoot,
     VIBESTUDIO_INSTANCE: instanceId,
     VIBESTUDIO_DEVELOPMENT_INSTANCE_GENERATION: generationId,
