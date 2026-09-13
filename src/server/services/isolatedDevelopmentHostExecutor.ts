@@ -508,13 +508,22 @@ export class IsolatedDevelopmentHostExecutor {
     return active as ActiveIsolatedHost & { manager: IsolatedDevelopmentManager };
   }
 
+  /**
+   * Refuse to operate on a generation other than the one this run owns.
+   *
+   * A run learns its instance identity from the readiness callback, so calls
+   * made from inside that callback legitimately carry `instance: null` — they
+   * are the calls that produce the identity. The run-keyed active record is
+   * the binding in that window; once the caller has observed a generation,
+   * both coordinates must still agree, which is what keeps a later call from
+   * addressing a restarted host.
+   */
   private assertExactActive(run: DevelopmentRun, active: ActiveIsolatedHost | undefined): void {
-    if (
-      !run.instance ||
-      !active ||
-      active.instance.id !== run.instance.instanceId ||
-      active.instance.generationId !== run.instance.generationId
-    ) {
+    const drifted =
+      run.instance !== null &&
+      (active?.instance.id !== run.instance.instanceId ||
+        active?.instance.generationId !== run.instance.generationId);
+    if (!active || drifted) {
       throw Object.assign(new Error("Exact isolated instance generation is not active"), {
         code: "EOWNERSHIP",
       });

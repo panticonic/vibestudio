@@ -323,4 +323,28 @@ describe("IsolatedDevelopmentHostExecutor", () => {
     });
     expect(foreign.unregister).not.toHaveBeenCalled();
   });
+
+  it("serves the readiness callback, which runs before the run has an instance", async () => {
+    const f = fixture();
+    const { run, plan } = runAndPlan();
+    // The attached-host publication and the client invite are both minted from
+    // inside onReady, so the run they name still carries instance: null — that
+    // callback is what produces the identity.
+    let duringReady: string | undefined;
+    await f.executor.start(run, plan, {
+      onRegistered: vi.fn(),
+      async onReady() {
+        duringReady = await f.executor.mintClientInvite(run);
+      },
+      onExit: vi.fn(),
+    });
+    expect(run.instance).toBeNull();
+    expect(duringReady).toBe("vibestudio://connect?child");
+
+    // A run this executor never started owns no generation at all.
+    const unstarted = fixture();
+    await expect(unstarted.executor.mintClientInvite(run)).rejects.toMatchObject({
+      code: "EOWNERSHIP",
+    });
+  });
 });
