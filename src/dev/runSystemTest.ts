@@ -64,55 +64,25 @@ function runCli(instanceId: string, command: readonly string[]): Promise<number>
   });
 }
 
-function prepareFreshInstance(instanceId: string, expectedWorkspaceId: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        tsxCli,
-        "src/dev/runCli.ts",
-        "--instance",
-        instanceId,
-        "system-test",
-        "doctor",
-        "--approve-startup",
-        "--json",
-      ],
-      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] }
+async function prepareFreshInstance(
+  instanceId: string,
+  expectedWorkspaceId: string
+): Promise<void> {
+  const prepared = await captureCli(instanceId, [
+    "system-test",
+    "doctor",
+    "--approve-startup",
+    "--json",
+  ]);
+  if (prepared.code !== 0) {
+    throw new Error(
+      `system-test startup preparation failed:\n${systemTestPreparationFailureDetail(
+        prepared.stdout,
+        prepared.stderr
+      )}`
     );
-    let output = "";
-    let diagnostics = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      output += chunk;
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      diagnostics += chunk;
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        reject(new Error(`system-test startup preparation exited from signal ${signal}`));
-      } else if (code !== 0) {
-        reject(
-          new Error(
-            `system-test startup preparation failed:\n${systemTestPreparationFailureDetail(
-              output,
-              diagnostics
-            )}`
-          )
-        );
-      } else {
-        try {
-          assertSystemTestPreparationResult(output, expectedWorkspaceId);
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      }
-    });
-  });
+  }
+  assertSystemTestPreparationResult(prepared.stdout, expectedWorkspaceId);
 }
 
 /** Run one ordinary CLI command and capture what it reported. */
