@@ -182,8 +182,6 @@ export interface AdoptedSelfDevelopmentProject {
   url: string;
   /** True when this run performed the adoption rather than finding it done. */
   adopted: boolean;
-  contextId?: string;
-  eventId?: string;
 }
 
 /** An import refuses a second adoption; that refusal is the idempotent answer. */
@@ -248,13 +246,7 @@ export async function adoptSelfDevelopmentProjects(input: {
           `${published.stderr.trim() || published.stdout.trim()}`
       );
     }
-    adopted.push({
-      repoPath: project.repoPath,
-      url: project.url,
-      adopted: true,
-      contextId: candidate.contextId,
-      eventId: candidate.eventId,
-    });
+    adopted.push({ repoPath: project.repoPath, url: project.url, adopted: true });
   }
   return adopted;
 }

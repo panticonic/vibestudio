@@ -158,13 +158,9 @@ export interface LocalGitMirrorTransport {
 
 export function createLocalGitMirrorTransport(input: {
   mirrors: readonly LocalGitMirror[];
-  run?: (
-    args: readonly string[],
-    options: { cwd: string; input?: Uint8Array | undefined }
-  ) => Promise<Buffer>;
 }): LocalGitMirrorTransport | null {
   if (input.mirrors.length === 0) return null;
-  const run = input.run ?? runGit;
+  const run = runGit;
   return {
     async request(request) {
       const route = resolveLocalGitMirrorRoute(input.mirrors, request);
