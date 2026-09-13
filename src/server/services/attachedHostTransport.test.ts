@@ -277,15 +277,19 @@ describe("attached-host HTTP routed connectivity", () => {
       events.push("revoke");
       return { revoked: true, closedSessions: 0 };
     });
-    const port = new CliAttachedHostBootstrapPort("/private/bootstrap.json", {
-      load: () => credentials,
-      createClient: () => ({ call, close }) as never,
-      revoke: revoke as never,
-      exists: () => exists,
-      unlink: () => {
-        exists = false;
-      },
-    });
+    const port = new CliAttachedHostBootstrapPort(
+      "/private/bootstrap.json",
+      "http://127.0.0.1:4311",
+      {
+        load: () => credentials,
+        createClient: () => ({ call, close }) as never,
+        revoke: revoke as never,
+        exists: () => exists,
+        unlink: () => {
+          exists = false;
+        },
+      }
+    );
     const acceptance = await port.exchange(hello);
     await port.confirm(parent.confirmParent(acceptance));
     await port.revoke();
@@ -294,7 +298,12 @@ describe("attached-host HTTP routed connectivity", () => {
       code: "EATTACHED_BOOTSTRAP_REVOKED",
     });
     expect(close).toHaveBeenCalledOnce();
-    expect(revoke).toHaveBeenCalledWith(credentials, credentials.deviceId);
+    // Revocation addresses the child's own hub control plane, not the
+    // workspace its paired credential names.
+    expect(revoke).toHaveBeenCalledWith(
+      { ...credentials, url: "http://127.0.0.1:4311" },
+      credentials.deviceId
+    );
     expect(events).toEqual([
       "attachedHosts.bootstrapExchange",
       "attachedHosts.bootstrapConfirm",

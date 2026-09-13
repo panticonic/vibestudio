@@ -40,6 +40,15 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
 
   constructor(
     private readonly credentialFile: string,
+    /**
+     * The child's hub control plane.
+     *
+     * A paired credential addresses its workspace, and the control plane is
+     * normally recovered from the machine-wide hub lease — which names this
+     * host, never the isolated child. Revocation would otherwise be asked of
+     * the child's workspace, which does not implement it.
+     */
+    private readonly childGatewayUrl: string,
     private readonly operations: {
       load: typeof loadCliCredentials;
       createClient: (credentials: CliDeviceCredentials) => Pick<RpcClient, "call" | "close">;
@@ -90,7 +99,10 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     try {
       // Server-side revocation is the security boundary. Closing the bootstrap
       // transport is cleanup and must not be allowed to prevent the revocation.
-      result = await this.operations.revoke(credentials, credentials.deviceId);
+      result = await this.operations.revoke(
+        { ...credentials, url: this.childGatewayUrl },
+        credentials.deviceId
+      );
     } finally {
       await client?.close().catch(() => undefined);
     }
@@ -158,7 +170,7 @@ export function createAttachedHostPublicationPorts(input: {
   route: AttachedHostRoutePort;
 } {
   return {
-    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile),
+    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile, input.childGatewayUrl),
     route: new HttpAttachedHostRoutePort({
       gatewayUrl: input.childGatewayUrl,
       childGenerationId: input.childGenerationId,
