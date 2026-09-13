@@ -265,6 +265,18 @@ async function ensureWorkspaceProfile(
   return profile;
 }
 
+/**
+ * `runs` lists the records this CLI profile already holds and takes no scope,
+ * so naming a session there is a usage error rather than a narrower listing.
+ * Every other system-test command accepts one.
+ */
+const UNSCOPED_SYSTEM_TEST_COMMANDS = new Set(["runs"]);
+
+function commandTakesScope(command: readonly string[]): boolean {
+  const subcommand = command[0];
+  return subcommand !== undefined && !UNSCOPED_SYSTEM_TEST_COMMANDS.has(subcommand);
+}
+
 function pairedWorkspaceId(instanceRoot: string): string {
   const credentialsPath = path.join(instanceRoot, "cli-credentials.json");
   const value = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as Record<string, unknown>;
@@ -389,7 +401,9 @@ async function main(): Promise<void> {
     ? `system-tests-${parsed.workspaceRole}`
     : managedTestSessionName(ensured.instance);
   const scopedCommand =
-    session && !command.includes("--session") ? [...command, "--session", session] : command;
+    session && commandTakesScope(command) && !command.includes("--session")
+      ? [...command, "--session", session]
+      : command;
   process.exitCode = await runCli(ensured.instance.id, scopedCommand, profile?.root);
 }
 
