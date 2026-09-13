@@ -101,7 +101,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   const pairedRef: {
     current: {
       credential: { deviceId: string; refreshToken: string };
-      workspaceId: string;
+      workspaceId?: string;
     } | null;
   } = {
     current: null,
@@ -114,8 +114,9 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
     onPaired: (credential, context) => {
-      if (!context) throw new AuthError("pairing did not return its target workspace");
-      pairedRef.current = { credential, workspaceId: context.workspaceId };
+      // A pairing need not name a workspace: the account's own pair is the
+      // fallback, which is how the desktop reads it too.
+      pairedRef.current = { credential, ...(context ? { workspaceId: context.workspaceId } : {}) };
     },
   });
   let pairedCredential: DeviceCredential | null = null;
@@ -124,10 +125,19 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     await client.ready();
     const paired = pairedRef.current;
     if (!paired) throw new AuthError("pairing did not return a device credential");
+    // Prepare the account's own workspaces before opening one, exactly as a
+    // desktop and a phone do when they pair. The invite's workspace is a
+    // preference rather than the shape of the account, so Personal is what a
+    // pairing that asked for nothing in particular opens.
+    const pair = await client.call<{
+      personal: { workspaceId: string };
+      system: { workspaceId: string };
+    }>("hubControl.ensureUserWorkspaces", []);
+    const targetWorkspaceId = paired.workspaceId ?? pair.personal.workspaceId;
     const route = await client.call<HubWorkspaceRoute>("hubControl.routeWorkspace", [
-      { workspaceId: paired.workspaceId },
+      { workspaceId: targetWorkspaceId },
     ]);
-    if (route.workspaceId !== paired.workspaceId) {
+    if (route.workspaceId !== targetWorkspaceId) {
       throw new AuthError("workspace route changed the pairing target");
     }
     const { code: _code, ...stableHubReach } = pairing;

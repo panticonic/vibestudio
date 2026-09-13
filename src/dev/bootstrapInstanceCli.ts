@@ -129,6 +129,43 @@ async function routeWorkspace(
   throw new Error("Development CLI could not route its workspace");
 }
 
+/**
+ * Prepare the account's private workspaces, exactly as a desktop or mobile
+ * client does when it pairs.
+ *
+ * A pairing invite names a workspace, but that name is a preference rather
+ * than the account's shape: the desktop routes to `issued.workspaceId ??
+ * pair.system.workspaceId`, and mobile selects Personal by default. A CLI that
+ * only ever opened the invite's workspace was the one client whose setup
+ * differed, which is how headless work ended up somewhere no user runs.
+ */
+async function ensureUserWorkspaces(
+  input: { gatewayUrl: string; deviceId: string; refreshToken: string },
+  deps: BootstrapDeps
+): Promise<{ personal: { workspaceId: string }; system: { workspaceId: string } }> {
+  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
+  // A cold hub can refuse the first call while it is still starting, which is
+  // why routing already retries once; preparing the account is no different.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const rpc = createRpc({
+      url: input.gatewayUrl,
+      deviceId: input.deviceId,
+      refreshToken: input.refreshToken,
+    });
+    try {
+      return (await rpc.call("hubControl.ensureUserWorkspaces", [])) as {
+        personal: { workspaceId: string };
+        system: { workspaceId: string };
+      };
+    } catch (error) {
+      if (!(error instanceof ConnectionError) || attempt > 0) throw error;
+    } finally {
+      await rpc.close();
+    }
+  }
+  throw new Error("Development CLI could not prepare its account workspaces");
+}
+
 async function reconcileExistingCredential(
   input: { gatewayUrl: string; serverId: string; workspaceId: string },
   existing: CliCredentials,
@@ -168,6 +205,8 @@ async function pairWithInvite(
     gatewayUrl: string;
     serverId: string;
     invite: HubPairingInvite;
+    /** Workspace this bootstrap was asked for, when it named one. */
+    requestedWorkspaceId?: string;
   },
   credentialFile: string | undefined,
   deps: BootstrapDeps = {}
@@ -176,16 +215,28 @@ async function pairWithInvite(
     throw new Error("Development CLI invite targets a different hub");
   }
   const device = await postPairing(input.gatewayUrl, input.invite, deps.fetch);
+  const pair = await ensureUserWorkspaces(
+    {
+      gatewayUrl: input.gatewayUrl,
+      deviceId: device.deviceId,
+      refreshToken: device.refreshToken,
+    },
+    deps
+  );
+  // Personal is where the account's own work lives, which is what mobile
+  // selects by default and what a headless client should open too. The
+  // invite's workspace still wins when one was requested for it.
+  const workspaceId = input.requestedWorkspaceId ?? pair.personal.workspaceId;
   const route = await routeWorkspace(
     {
       gatewayUrl: input.gatewayUrl,
       deviceId: device.deviceId,
       refreshToken: device.refreshToken,
-      workspaceId: device.workspaceId,
+      workspaceId,
     },
     deps
   );
-  if (route.serverId !== input.serverId || route.workspaceId !== device.workspaceId) {
+  if (route.serverId !== input.serverId || route.workspaceId !== workspaceId) {
     throw new Error("Development hub routed a different workspace than the pairing selected");
   }
 

@@ -172,11 +172,17 @@ describe("bootstrapInstanceCliFromDevice", () => {
         if (method === "hubControl.pairDevice") {
           return { pairing: invite };
         }
+        if (method === "hubControl.ensureUserWorkspaces") {
+          return {
+            personal: { workspaceId: "ws_personal" },
+            system: { workspaceId: "ws_system" },
+          };
+        }
         return {
-          workspace: "dev",
-          workspaceId: "ws_dev",
+          workspace: "personal-ws_personal",
+          workspaceId: "ws_personal",
           running: true,
-          serverUrl: "http://127.0.0.1:5000/_r/ws/dev",
+          serverUrl: "http://127.0.0.1:5000/_r/ws/personal-ws_personal",
           workspaceReach: reach("bb"),
           serverId,
           serverBootId,
@@ -208,8 +214,11 @@ describe("bootstrapInstanceCliFromDevice", () => {
         },
         { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
       )
-    ).resolves.toEqual({ status: "paired", workspaceName: "dev" });
+    ).resolves.toEqual({ status: "paired", workspaceName: "personal-ws_personal" });
 
+    // The account's own workspaces are prepared first and Personal is opened,
+    // which is the sequence a desktop and a phone already follow. The invite's
+    // workspace is a preference, not the shape of the account.
     expect(calls).toEqual([
       {
         deviceId: `dev_${"A".repeat(24)}`,
@@ -218,15 +227,20 @@ describe("bootstrapInstanceCliFromDevice", () => {
       },
       {
         deviceId: `dev_${"C".repeat(24)}`,
+        method: "hubControl.ensureUserWorkspaces",
+        args: [],
+      },
+      {
+        deviceId: `dev_${"C".repeat(24)}`,
         method: "hubControl.routeWorkspace",
-        args: [{ workspaceId: "ws_dev" }],
+        args: [{ workspaceId: "ws_personal" }],
       },
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(loadCliCredentials(credentialFile)).toMatchObject({
       serverId,
-      workspaceId: "ws_dev",
-      workspaceName: "dev",
+      workspaceId: "ws_personal",
+      workspaceName: "personal-ws_personal",
       deviceId: `dev_${"C".repeat(24)}`,
       transport: "local",
     });
@@ -256,6 +270,12 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const rpcClient = vi.fn((credential: { deviceId: string }) => ({
       call: vi.fn(async (method: string) => {
         if (method === "hubControl.pairDevice") return { pairing: invite };
+        if (method === "hubControl.ensureUserWorkspaces") {
+          return {
+            personal: { workspaceId: "ws_dev" },
+            system: { workspaceId: "ws_system" },
+          };
+        }
         routedDeviceIds.push(credential.deviceId);
         routeAttempts += 1;
         if (routeAttempts === 1) throw new ConnectionError("workspace is still starting");
