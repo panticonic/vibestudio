@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { getProfileDataPath } from "@vibestudio/env-paths";
+import { removeSealedTree } from "@vibestudio/shared/removeSealedTree";
 import { writeFileAtomicSync } from "../atomicFile.js";
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -150,15 +151,12 @@ export function removeEphemeralInstanceRoot(
   } = {}
 ): Error | null {
   try {
-    (deps.rmSync ?? fs.rmSync)(root, {
-      recursive: true,
-      force: true,
-      // A workspace child can still be closing SQLite files or renaming its
-      // final diagnostics after the hub process exits. Node only retries
-      // ENOTEMPTY/EBUSY/EPERM when maxRetries is explicitly non-zero.
-      maxRetries: 20,
-      retryDelay: 100,
-    });
+    // A workspace child can still be closing SQLite files or renaming its
+    // final diagnostics after the hub process exits, and a native session
+    // killed rather than retired leaves its projected toolchain sealed
+    // against writes. Both are removable; neither is removable by a plain
+    // recursive delete.
+    removeSealedTree(root, { ...(deps.rmSync ? { rmSync: deps.rmSync } : {}) });
     return null;
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));

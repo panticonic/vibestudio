@@ -101,6 +101,7 @@
     "./protectedPublicationEvents": "./src/protectedPublicationEvents.ts",
     "./providerConnect": "./src/providerConnect.ts",
     "./redact": "./src/redact.ts",
+    "./removeSealedTree": "./src/removeSealedTree.ts",
     "./residentSession": "./src/residentSession.ts",
     "./runtime/*": "./src/runtime/*.ts",
     "./runtimePaths": "./src/runtimePaths.ts",

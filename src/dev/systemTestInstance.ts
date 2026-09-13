@@ -254,7 +254,22 @@ function reclaimStaleManagedInstance(repoRoot: string, instanceId: string): bool
     );
   }
   unregisterDevInstance(repoRoot, instanceId);
+  removeSelfDevelopmentMirrors(repoRoot, instanceId);
   return true;
+}
+
+/**
+ * The adoption mirrors are keyed by instance and sit beside its root rather
+ * than inside it, so removing the root leaves them behind. Nothing else ever
+ * reads them once their instance is gone.
+ */
+function removeSelfDevelopmentMirrors(repoRoot: string, instanceId: string): void {
+  fs.rmSync(selfDevelopmentMirrorRoot(repoRoot, instanceId), {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  });
 }
 
 function spawnManagedInstance(
@@ -453,5 +468,6 @@ export async function stopManagedSystemTestInstance(
   }
   process.kill(instance.supervisorPid, "SIGTERM");
   await waitForStopped(instance, timeoutMs);
+  removeSelfDevelopmentMirrors(repoRoot, instanceId);
   return true;
 }

@@ -16,12 +16,37 @@ import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources"
 
 // The write-granted directory is a mount root on Linux. Delete its children in
 // confinement; only the owner can remove that now-empty anchor afterward.
+//
+// A native session seals its projected toolchain directory against writes and
+// unseals it on retirement, so a discarded workspace can still hold one. This
+// mirrors `removeSealedTree`, which the confined job cannot import: grant the
+// refusing directory write permission and retry, never twice for the same one.
 const CLEANUP_SCRIPT = `
   const fs = require('node:fs');
   const path = require('node:path');
   const root = process.cwd();
+  const unsealed = new Set();
   for (const name of fs.readdirSync(root)) {
-    fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    const target = path.join(root, name);
+    for (;;) {
+      try {
+        fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+        break;
+      } catch (error) {
+        if (error.code !== 'EACCES' && error.code !== 'EPERM') throw error;
+        if (typeof error.path !== 'string' || error.path.length === 0) throw error;
+        let refused = error.path;
+        try {
+          if (!fs.lstatSync(refused).isDirectory()) refused = path.dirname(refused);
+        } catch {
+          refused = path.dirname(refused);
+        }
+        if (refused === error.path && refused === path.dirname(refused)) throw error;
+        if (unsealed.has(refused)) throw error;
+        unsealed.add(refused);
+        fs.chmodSync(refused, 0o700);
+      }
+    }
   }
 `;
 
