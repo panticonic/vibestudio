@@ -1617,20 +1617,8 @@ async function main() {
       return new Map();
     }
   };
-  const launchGateBatchKeyFor = (
-    config: typeof workspaceConfig,
-    unit: ReviewedUnit
-  ): string | undefined => {
-    if (unit.unitKind === "app") return unit.target ?? "shared";
-    if (unit.unitKind !== "extension") return "shared";
-    const targets = (["electron", "react-native", "terminal"] as const).filter((target) =>
-      resolveHostTargetDecl(config, target)?.requiresExtensions.includes(unit.source.repo)
-    );
-    return targets.length === 1 ? targets[0] : "shared";
-  };
   const enqueueLaunchGateReview = async (input: {
     review: { units: ReviewedUnit[]; identityKeys: string[] };
-    config: typeof workspaceConfig;
     applyApproved(
       units: ReviewedUnit[],
       identityKeys: string[],
@@ -1638,39 +1626,25 @@ async function main() {
     ): Promise<void> | void;
     label: string;
   }): Promise<void> => {
-    const groups = new Map<string, { units: ReviewedUnit[]; identityKeys: string[] }>();
-    input.review.units.forEach((unit, index) => {
-      const key = launchGateBatchKeyFor(input.config, unit) ?? "shared";
-      const group = groups.get(key) ?? { units: [], identityKeys: [] };
-      group.units.push(unit);
-      group.identityKeys.push(input.review.identityKeys[index] ?? "");
-      groups.set(key, group);
-    });
-
     // Staging must complete before the startup barrier publishes, otherwise a
     // late launch-gate request can be split away from the app/extension review
     // that is meant to approve it. The returned enqueue promises settle only
     // after a human decision and are intentionally not awaited here: startup
     // must remain responsive while the gate is visible.
-    await Promise.all(
-      [...groups.entries()].map(async ([batchKey, group]) => {
-        const origins = await resolveUnitOrigins(group.units.map((unit) => unit.source.repo));
-        void unitInstallReviewCoordinator
-          .enqueue({
-            entries: group.units,
-            trigger: "startup",
-            batchKey,
-            origins,
-            applyApproved: async () => {
-              await input.applyApproved(group.units, group.identityKeys, origins);
-            },
-            applyDenied: () => undefined,
-          })
-          .catch((err: unknown) =>
-            console.warn(`[Units] Failed to apply reviewed ${input.label} trust:`, err)
-          );
+    const origins = await resolveUnitOrigins(input.review.units.map((unit) => unit.source.repo));
+    void unitInstallReviewCoordinator
+      .enqueue({
+        entries: input.review.units,
+        trigger: "startup",
+        origins,
+        applyApproved: async () => {
+          await input.applyApproved(input.review.units, input.review.identityKeys, origins);
+        },
+        applyDenied: () => undefined,
       })
-    );
+      .catch((err: unknown) =>
+        console.warn(`[Units] Failed to apply reviewed ${input.label} trust:`, err)
+      );
   };
   // Create ContextFolderManager before core services. Context folders are
   // disposable projections of GAD-owned semantic contexts.
@@ -1802,7 +1776,6 @@ async function main() {
               tasks.push(
                 enqueueLaunchGateReview({
                   review,
-                  config: nextConfig,
                   label: "extension",
                   applyApproved: (units, identityKeys, sourceOrigins) => {
                     // Activation trust says this build may run; admission says
@@ -1889,7 +1862,6 @@ async function main() {
                 tasks.push(
                   enqueueLaunchGateReview({
                     review,
-                    config: nextConfig,
                     label: "app",
                     applyApproved: (units, identityKeys, sourceOrigins) => {
                       // Activation trust says this build may run; admission says
@@ -5619,7 +5591,6 @@ async function main() {
         approvalQueue,
         openUnitReviewFor: unitReviewLookup.forUnavailableCode,
         approvalCoordinator: unitInstallReviewCoordinator,
-        approvalBatchKeyFor: (entry) => launchGateBatchKeyFor(workspaceConfig, entry),
         // The gate asks whose code this is, so it is answered from workspace
         // state the server reads rather than from anything under review.
         resolveUnitOrigins,
@@ -7185,66 +7156,35 @@ async function main() {
         );
         const rootOrigin =
           [...origins.values()].find((origin) => origin.isWorkspaceRoot === true) ?? null;
-        const decisionPromise = approvalQueue.request({
-          kind: "unit-install-review",
-          callerId: "system:workspace-creation",
-          callerKind: "system",
-          repoPath: "meta",
-          effectiveVersion: "",
-          dedupKey: "workspace-creation-review",
-          mode: "adopt-root",
-          title: HOST_APPROVAL_COPY.installReview.heading["adopt-root"],
-          description:
-            !rootOrigin || rootOrigin.isHostBuild
-              ? "These are the parts your workspace starts with."
-              : `This workspace is built from code at ${rootOrigin.url}.`,
-          units: creationReview.units,
-          origins,
-          reportsLanding: true,
-          ...(creationReview.identityKeysByRepo
-            ? { identityKeys: creationReview.identityKeysByRepo }
-            : {}),
-        });
-        // Capture the approval id while the review is still pending. An
-        // install review that reports landing deliberately keeps its resolver
-        // open until this startup reconciliation publishes the outcome; the
-        // entry is removed before `request()` resolves, so looking it up after
-        // the await would deadlock the resolver and leave every dependent
-        // panel stuck behind the creation review.
-        const creationApproval = approvalQueue
-          .listPending()
-          .find(
-            (approval) =>
-              approval.kind === "unit-install-review" &&
-              approval.callerId === "system:workspace-creation"
-          );
-        if (creationApproval?.kind !== "unit-install-review") {
-          throw new Error("Workspace creation review was not published to the approval queue");
-        }
-        workspaceCreationReviewState = {
-          status: "pending",
-          approvalId: creationApproval.approvalId,
-          partCount: creationApproval.parts.length,
-        };
-
-        // Publication is the startup barrier. Settlement remains interactive
-        // and continues independently after the host has exposed the exact
-        // pending approval id.
-        void decisionPromise
-          .then((decision) => {
-            if (decision === "deny" || decision === "dismiss") {
-              // Nothing was accepted, so nothing is admitted and the marker
-              // stays: the question is re-offered rather than silently dropped.
-              workspaceCreationReviewState = { status: "unresolved" };
-              console.info("[Units] Creation review left unresolved; it will be offered again.");
-              return;
-            }
-
-            // Accepting admits every part the creation publication landed —
-            // selected or not — and mints clearance only for what the user
-            // allowed now. The selection rides the store keyed by exact
-            // identity, so it can only apply to the versions it was made about.
-            try {
+        // Creation is one participant in the workspace-wide startup review.
+        // Apps and extensions have their own activation owners, while panels
+        // and workers have this publication owner; the person still makes one
+        // decision about the complete workspace.
+        void unitInstallReviewCoordinator
+          .enqueue({
+            entries: creationReview.units,
+            trigger: "startup",
+            origins,
+            ...(creationReview.identityKeysByRepo
+              ? { identityKeys: creationReview.identityKeysByRepo }
+              : {}),
+            presentation: {
+              callerId: "system:workspace-creation",
+              dedupKey: "workspace-creation-review",
+              title: HOST_APPROVAL_COPY.installReview.heading["adopt-root"],
+              description:
+                !rootOrigin || rootOrigin.isHostBuild
+                  ? "These are the parts your workspace starts with."
+                  : `This workspace is built from code at ${rootOrigin.url}.`,
+              onPublished: ({ approvalId, partCount }) => {
+                workspaceCreationReviewState = { status: "pending", approvalId, partCount };
+              },
+            },
+            applyApproved: async () => {
+              // Accepting admits every part the creation publication landed —
+              // selected or not — and mints clearance only for what the user
+              // allowed now. App/extension participants commit their own trust
+              // from this same decision.
               buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
                 creationReview.identityKeys,
                 "workspace-creation",
@@ -7255,22 +7195,13 @@ async function main() {
               creationReviewOwed = false;
               workspaceCreationReview.resolve();
               workspaceCreationReviewState = { status: "resolved" };
-              approvalQueue.reportInstallLanding?.(creationApproval.approvalId, {
-                landed: creationApproval.parts.map((part) => part.identityKey),
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              workspaceCreationReviewState = { status: "failed", error: message };
-              approvalQueue.reportInstallLanding?.(creationApproval.approvalId, {
-                landed: [],
-                failed: creationApproval.parts.map((part) => ({
-                  identityKey: part.identityKey,
-                  reason: message,
-                })),
-                workspaceUnchanged: false,
-              });
-              console.warn("[Units] Failed to resolve the workspace creation review:", error);
-            }
+            },
+            applyDenied: () => {
+              // Nothing was accepted, so nothing is admitted and the marker
+              // stays: the question is re-offered rather than silently dropped.
+              workspaceCreationReviewState = { status: "unresolved" };
+              console.info("[Units] Creation review left unresolved; it will be offered again.");
+            },
           })
           .catch((err: unknown) => {
             const error = err instanceof Error ? err.message : String(err);
@@ -7323,10 +7254,10 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await Promise.resolve(startupExtensionStaging);
+      await prepareWorkspaceCreationReview();
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
-      await prepareWorkspaceCreationReview();
     });
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>

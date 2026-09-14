@@ -310,8 +310,6 @@ export interface ExtensionHostDeps {
     title: string;
   } | null;
   approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
-  /** Stable launch-gate group for an extension (shared or one host target). */
-  approvalBatchKeyFor?: (entry: ReviewedUnit) => string | undefined;
   /**
    * Where these units' bytes came from, derived by the server from workspace
    * state it reads itself.
@@ -535,7 +533,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
       approvalOrigins: (entries) =>
         this.resolveOriginsFor(entries.map((entry) => entry.source.repo)),
-      approvalBatchKey: (entry) => deps.approvalBatchKeyFor?.(entry),
       requestApproval: async (entries, trigger) => {
         // Whose code this is, resolved before the question is asked.
         const origins = await this.resolveOriginsFor(entries.map((entry) => entry.source.repo));

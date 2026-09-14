@@ -424,8 +424,6 @@ export interface UnitHostOptions<
   approvalOrigins?(
     entries: readonly ApprovalEntry[]
   ): Promise<ReadonlyMap<string, InstallReviewOrigin> | undefined>;
-  /** Partition centralized reviews when the same workspace declares multiple host targets. */
-  approvalBatchKey?(entry: ApprovalEntry): string | undefined;
   requestApproval(
     entries: ApprovalEntry[],
     trigger: UnitReconcileTrigger
@@ -456,8 +454,15 @@ export interface UnitApprovalCoordinator<ApprovalEntry> {
   enqueue(request: {
     entries: ApprovalEntry[];
     trigger: UnitReconcileTrigger;
-    batchKey?: string;
     origins?: ReadonlyMap<string, InstallReviewOrigin>;
+    identityKeys?: ReadonlyMap<string, string>;
+    presentation?: {
+      callerId: string;
+      title: string;
+      description: string;
+      dedupKey?: string;
+      onPublished?(review: { approvalId: string; partCount: number }): void;
+    };
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void>;
@@ -817,7 +822,10 @@ export class UnitHost<
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
         }
         if ((!entry || !entry.activeBundleKey) && opts.deferBuild?.(node, decl)) {
-          this.opts.registry.patch(node.name, { status: "available", lastError: null } as Partial<Entry>);
+          this.opts.registry.patch(node.name, {
+            status: "available",
+            lastError: null,
+          } as Partial<Entry>);
           return;
         }
         await opts.buildAndActivate(node, decl);
@@ -1037,42 +1045,22 @@ export class UnitHost<
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number
   ): Promise<void> {
-    const grouped = new Map<
-      string,
-      Array<{ item: ResolvedUnitDeclaration<Decl, Node>; entry: ApprovalEntry }>
-    >();
-    for (const item of items) {
-      const entry = this.opts.approvalEntry(item.node, item.decl);
-      const key = this.opts.approvalBatchKey?.(entry) ?? "";
-      const group = grouped.get(key) ?? [];
-      group.push({ item, entry });
-      grouped.set(key, group);
-    }
     if (this.opts.approvalCoordinator) {
-      await Promise.all(
-        [...grouped.entries()].map(async ([batchKey, group]) => {
-          const groupItems = group.map(({ item }) => item);
-          const entries = group.map(({ entry }) => entry);
-          const origins = await this.opts.approvalOrigins?.(entries);
-          await this.opts.approvalCoordinator!.enqueue({
-            entries,
-            trigger,
-            ...(batchKey ? { batchKey } : {}),
-            ...(origins ? { origins } : {}),
-            applyApproved: async () => {
-              // Acceptance is the state transition from "waiting for a human"
-              // to "work is in flight". Publish it for the whole accepted
-              // batch before any member waits for an apply/build slot. Demand
-              // paths use `building` to join that exact activation; leaving
-              // queued members as `pending-approval` makes them fail as absent
-              // even though the user has already accepted them.
-              this.markAcceptedItemsBuilding(groupItems);
-              await this.applyTrustedInGroups(groupItems, maxConcurrentApplies);
-            },
-            applyDenied: () => this.opts.onApprovalDenied(groupItems),
-          });
-        })
-      );
+      const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
+      const origins = await this.opts.approvalOrigins?.(entries);
+      await this.opts.approvalCoordinator.enqueue({
+        entries,
+        trigger,
+        ...(origins ? { origins } : {}),
+        applyApproved: async () => {
+          // Acceptance is the state transition from "waiting for a human"
+          // to "work is in flight". Publish it for the whole accepted batch
+          // before any member waits for an apply/build slot.
+          this.markAcceptedItemsBuilding(items);
+          await this.applyTrustedInGroups(items, maxConcurrentApplies);
+        },
+        applyDenied: () => this.opts.onApprovalDenied(items),
+      });
       return;
     }
     const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
@@ -1085,9 +1073,7 @@ export class UnitHost<
     await this.applyTrustedInGroups(items, maxConcurrentApplies);
   }
 
-  private markAcceptedItemsBuilding(
-    items: Array<ResolvedUnitDeclaration<Decl, Node>>
-  ): void {
+  private markAcceptedItemsBuilding(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void {
     for (const { node, decl } of items) {
       if (this.opts.registry.has(node.name)) {
         this.opts.registry.patch(node.name, {

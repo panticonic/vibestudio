@@ -100,7 +100,38 @@ describe("UnitInstallReviewCoordinator", () => {
     expect(applyApp).toHaveBeenCalledOnce();
   });
 
-  it("keeps explicitly partitioned host targets in separate reviews", async () => {
+  it("shows an exact unit only once when multiple activation paths join the review", async () => {
+    const approvalQueue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(approvalQueue),
+      delayMs: 1,
+    });
+    const extension = unit("extension", "image-service");
+
+    await Promise.all([
+      coordinator.enqueue({
+        trigger: "startup",
+        entries: [extension],
+        applyApproved: vi.fn(async () => undefined),
+        applyDenied: vi.fn(),
+      }),
+      coordinator.enqueue({
+        trigger: "startup",
+        entries: [{ ...extension }],
+        applyApproved: vi.fn(async () => undefined),
+        applyDenied: vi.fn(),
+      }),
+    ]);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: "Vibestudio needs to run 1 program on this computer.",
+        units: [expect.objectContaining({ unitName: "image-service" })],
+      })
+    );
+  });
+
+  it("keeps every host target in the workspace-wide review", async () => {
     const approvalQueue = {
       request: vi.fn(async () => "accepted" as const),
     };
@@ -112,27 +143,89 @@ describe("UnitInstallReviewCoordinator", () => {
     await Promise.all([
       coordinator.enqueue({
         trigger: "startup",
-        batchKey: "electron",
         entries: [unit("app", "desktop")],
         applyApproved: vi.fn(async () => undefined),
         applyDenied: vi.fn(),
       }),
       coordinator.enqueue({
         trigger: "startup",
-        batchKey: "react-native",
         entries: [{ ...unit("app", "mobile"), target: "react-native" }],
         applyApproved: vi.fn(async () => undefined),
         applyDenied: vi.fn(),
       }),
     ]);
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ units: [expect.objectContaining({ unitName: "desktop" })] })
+      expect.objectContaining({
+        units: [
+          expect.objectContaining({ unitName: "desktop" }),
+          expect.objectContaining({ unitName: "mobile" }),
+        ],
+      })
     );
+  });
+
+  it("uses the creation presentation for one review containing every unit kind", async () => {
+    const onPublished = vi.fn();
+    const identityKeys = new Map([["panels/chat", "workspace-unit:chat"]]);
+    const approvalQueue = {
+      request: vi.fn(async () => "accepted" as const),
+      listPending: vi.fn(() => [
+        {
+          approvalId: "workspace-review",
+          kind: "unit-install-review" as const,
+          parts: [
+            { identityKey: "workspace-unit:chat" },
+            { identityKey: "extensions/files@files-ev" },
+          ],
+        } as never,
+      ]),
+    };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(approvalQueue, "workspace-review"),
+      delayMs: 10_000,
+      autoPublishStartup: false,
+    });
+
+    const creation = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("panel", "chat")],
+      identityKeys,
+      presentation: {
+        callerId: "system:workspace-creation",
+        dedupKey: "workspace-creation-review",
+        title: "Welcome — here's what's in your workspace",
+        description: "This workspace is built from one source.",
+        onPublished,
+      },
+      applyApproved: vi.fn(async () => undefined),
+      applyDenied: vi.fn(),
+    });
+    const extension = coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("extension", "files")],
+      applyApproved: vi.fn(async () => undefined),
+      applyDenied: vi.fn(),
+    });
+
+    await coordinator.publishPending("startup");
+    await Promise.all([creation, extension]);
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ units: [expect.objectContaining({ unitName: "mobile" })] })
+      expect.objectContaining({
+        callerId: "system:workspace-creation",
+        dedupKey: "workspace-creation-review",
+        title: "Welcome — here's what's in your workspace",
+        identityKeys,
+        units: [
+          expect.objectContaining({ unitKind: "panel" }),
+          expect.objectContaining({ unitKind: "extension" }),
+        ],
+      })
     );
+    expect(onPublished).toHaveBeenCalledWith({ approvalId: "workspace-review", partCount: 2 });
   });
 
   it("applies approved requests concurrently, starting extensions first", async () => {

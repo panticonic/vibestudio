@@ -20,6 +20,7 @@ export interface UnitApprovalQueueLike {
     description: string;
     units: ReviewedUnit[];
     origins?: ReadonlyMap<string, InstallReviewOrigin>;
+    identityKeys?: ReadonlyMap<string, string>;
     reportsLanding?: boolean;
     configWrite?: PendingUnitInstallReviewApproval["configWrite"];
   }): { approvalId: string; decision: Promise<ApprovalQueueDecision> };
@@ -29,12 +30,21 @@ export interface UnitApprovalQueueLike {
 
 interface PendingRequest {
   entries: ReviewedUnit[];
-  batchKey?: string;
   origins?: ReadonlyMap<string, InstallReviewOrigin>;
+  identityKeys?: ReadonlyMap<string, string>;
+  presentation?: ReviewPresentation;
   applyApproved(): Promise<void>;
   applyDenied(): void;
   resolve(): void;
   reject(error: unknown): void;
+}
+
+interface ReviewPresentation {
+  callerId: string;
+  title: string;
+  description: string;
+  dedupKey?: string;
+  onPublished?(review: { approvalId: string; partCount: number }): void;
 }
 
 interface PendingBatch {
@@ -77,8 +87,9 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
   enqueue(request: {
     entries: ReviewedUnit[];
     trigger: "startup" | "meta-change";
-    batchKey?: string;
     origins?: ReadonlyMap<string, InstallReviewOrigin>;
+    identityKeys?: ReadonlyMap<string, string>;
+    presentation?: ReviewPresentation;
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void> {
@@ -91,7 +102,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         `Cannot offer install review for ${versionless.source.repo} without an effective version`
       );
     }
-    const key = batchKey(request.trigger, request.batchKey);
+    const key = batchKey(request.trigger);
     let batch = this.pending.get(key);
     if (!batch) {
       batch = { trigger: request.trigger, requests: [], timer: null };
@@ -102,7 +113,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         this.released.has(request.trigger)
       ) {
         batch.timer = setTimeout(() => {
-          void this.publishPending(request.trigger, undefined, request.batchKey).catch(() => {
+          void this.publishPending(request.trigger).catch(() => {
             // Every enqueued request receives the same error through its own
             // promise. Avoid a second unhandled rejection from the timer-owned
             // publication promise.
@@ -110,6 +121,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         }, this.deps.delayMs ?? 0);
       }
     }
+    assertCompatiblePresentation(batch.requests, request.presentation);
     return new Promise<void>((resolve, reject) => {
       batch.requests.push({ ...request, resolve, reject });
     });
@@ -117,15 +129,10 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
 
   publishPending(
     trigger?: "startup" | "meta-change",
-    matches?: UnitApprovalEntrySelector,
-    requestedBatchKey?: string
+    matches?: UnitApprovalEntrySelector
   ): Promise<void> {
     const keys = trigger
-      ? requestedBatchKey !== undefined
-        ? [batchKey(trigger, requestedBatchKey)]
-        : [...this.pending.keys(), ...this.active.keys()].filter((key) =>
-            key.startsWith(`${trigger}\0`)
-          )
+      ? [...this.pending.keys(), ...this.active.keys()].filter((key) => key === batchKey(trigger))
       : Array.from(new Set([...this.pending.keys(), ...this.active.keys()]));
 
     // Starting a batch is deliberately synchronous through approvalQueue.request:
@@ -153,8 +160,10 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     if (batch.timer) clearTimeout(batch.timer);
     const trigger = batch.trigger;
     const requests = batch.requests;
-    const units = requests.flatMap((request) => request.entries);
+    const units = distinctUnits(requests.flatMap((request) => request.entries));
     const origins = mergeOrigins(requests);
+    const identityKeys = mergeIdentityKeys(requests);
+    const presentation = mergePresentation(requests);
     let decision: Promise<ApprovalQueueDecision>;
     let approvalId: string | undefined;
     let approvalParts: PendingUnitInstallReviewApproval["parts"] | undefined;
@@ -184,17 +193,19 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     try {
       const handle = this.deps.approvalQueue.requestWithHandle({
         kind: "unit-install-review",
-        callerId: "system:units",
+        callerId: presentation?.callerId ?? "system:units",
         callerKind: "system",
         repoPath: "meta",
         effectiveVersion: "",
+        ...(presentation?.dedupKey ? { dedupKey: presentation.dedupKey } : {}),
         // Reconciling declared units is an arrival of code like any other; the
         // heading and rows come from the parts themselves, not from a trigger.
         mode: trigger === "startup" ? "adopt-root" : "install",
-        title: reviewTitle(units),
-        description: reviewDescription(units),
+        title: presentation?.title ?? reviewTitle(units),
+        description: presentation?.description ?? reviewDescription(units),
         units,
         ...(origins.size > 0 ? { origins } : {}),
+        ...(identityKeys.size > 0 ? { identityKeys } : {}),
         ...(this.canReportLanding() ? { reportsLanding: true } : {}),
         configWrite: null,
       });
@@ -204,6 +215,10 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         .listPending()
         .find((entry) => entry.approvalId === approvalId);
       if (pending?.kind === "unit-install-review") approvalParts = pending.parts;
+      presentation?.onPublished?.({
+        approvalId: handle.approvalId,
+        partCount: pending?.kind === "unit-install-review" ? pending.parts.length : units.length,
+      });
     } catch (error) {
       decision = Promise.reject(error);
     }
@@ -304,12 +319,12 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
   }
 }
 
-function batchKey(trigger: "startup" | "meta-change", key?: string): string {
-  return `${trigger}\0${key ?? "default"}`;
+function batchKey(trigger: "startup" | "meta-change"): string {
+  return trigger;
 }
 
 function triggerForBatchKey(key: string): "startup" | "meta-change" {
-  return key.startsWith("startup\0") ? "startup" : "meta-change";
+  return key === "startup" ? "startup" : "meta-change";
 }
 
 function mergeOrigins(
@@ -320,6 +335,54 @@ function mergeOrigins(
     for (const [repo, origin] of request.origins ?? []) merged.set(repo, origin);
   }
   return merged;
+}
+
+function distinctUnits(units: readonly ReviewedUnit[]): ReviewedUnit[] {
+  const distinct = new Map<string, ReviewedUnit>();
+  for (const unit of units) {
+    const key = `${unit.source.repo}\0${unit.ev ?? ""}`;
+    if (!distinct.has(key)) distinct.set(key, unit);
+  }
+  return [...distinct.values()];
+}
+
+function mergeIdentityKeys(requests: readonly PendingRequest[]): ReadonlyMap<string, string> {
+  const merged = new Map<string, string>();
+  for (const request of requests) {
+    for (const [repo, identity] of request.identityKeys ?? []) merged.set(repo, identity);
+  }
+  return merged;
+}
+
+function mergePresentation(requests: readonly PendingRequest[]): ReviewPresentation | undefined {
+  const presentations = requests.flatMap((request) =>
+    request.presentation ? [request.presentation] : []
+  );
+  if (presentations.length === 0) return undefined;
+  const first = presentations[0]!;
+  return {
+    ...first,
+    onPublished: (review) => {
+      for (const presentation of presentations) presentation.onPublished?.(review);
+    },
+  };
+}
+
+function assertCompatiblePresentation(
+  requests: readonly PendingRequest[],
+  candidate?: ReviewPresentation
+): void {
+  if (!candidate) return;
+  const existing = requests.find((request) => request.presentation)?.presentation;
+  if (
+    existing &&
+    (candidate.callerId !== existing.callerId ||
+      candidate.title !== existing.title ||
+      candidate.description !== existing.description ||
+      candidate.dedupKey !== existing.dedupKey)
+  ) {
+    throw new Error("A workspace unit review cannot have conflicting presentations");
+  }
 }
 
 function applyOrder(requests: PendingRequest[]): PendingRequest[] {

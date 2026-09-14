@@ -477,7 +477,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         this.emitStatus(node.name, "error", message),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl),
       approvalOrigins: (entries) => this.resolveOriginsFor(entries),
-      approvalBatchKey: (entry) => entry.target ?? undefined,
       requestApproval: async (entries, trigger) => {
         // Whose code this is, resolved before the question is asked.
         const origins = await this.resolveOriginsFor(entries);
