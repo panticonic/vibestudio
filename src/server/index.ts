@@ -719,7 +719,8 @@ async function main() {
   // ===========================================================================
 
   const tokenManager = new TokenManager();
-  const { EntityCache } = await import("@vibestudio/shared/runtime/entityCache");
+  const { EntityCache, callerRuntimeContextId } =
+    await import("@vibestudio/shared/runtime/entityCache");
   const { ConnectionGrantService } = await import("@vibestudio/shared/connectionGrants");
   const { RuntimeDiagnosticsStore } = await import("./runtimeDiagnosticsStore.js");
   const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
@@ -6180,7 +6181,15 @@ async function main() {
           buildSystem: buildSystemInst,
           workspaceDecls,
           workspaceId,
-          getCallerContextId: (callerId) => entityCache.resolveContext(callerId),
+          // A runtime that relays an agent's work carries that agent's binding
+          // on its entity record, and the binding's context is the one the
+          // relayed work belongs to. `vcsService.callerContextId` already
+          // resolves a caller this way; without it here, an extension invoked
+          // from an agent — launching a Claude Code subagent, say — has no
+          // context of its own and resolving a creator-context service fails
+          // outright. Kept as a fallback rather than a preference, so a caller
+          // that already resolves keeps resolving exactly as before.
+          getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
           loadContextDeclarations: async (contextId) => {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
             const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);

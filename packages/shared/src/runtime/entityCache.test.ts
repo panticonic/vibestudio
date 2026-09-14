@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { EntityCache } from "./entityCache.js";
+import { EntityCache, callerRuntimeContextId } from "./entityCache.js";
 import type { EntityRecord } from "./entitySpec.js";
 
 function makeRecord(overrides: Partial<EntityRecord> = {}): EntityRecord {
@@ -173,5 +173,35 @@ describe("EntityCache", () => {
       cache._onActivate(b);
       expect(cache.listActive().map((r) => r.id)).toEqual(["panel:a"]);
     });
+  });
+});
+
+describe("callerRuntimeContextId", () => {
+  it("prefers a runtime's own context", () => {
+    const cache = new EntityCache();
+    cache._onActivate(makeRecord({ id: "panel:own", contextId: "ctx-own" }));
+    expect(callerRuntimeContextId(cache, "panel:own")).toBe("ctx-own");
+  });
+
+  it("falls back to the agent binding a relaying runtime carries", () => {
+    const cache = new EntityCache();
+    // An extension invoked from an agent's eval: no context of its own, but it
+    // carries the binding of the agent whose work it relays.
+    // Built directly: makeRecord always supplies a contextId, and the case
+    // under test is a runtime that has none.
+    cache._onActivate({
+      ...makeRecord({ id: "do:extensions/claude-code", kind: "do" }),
+      contextId: undefined,
+      agentBinding: {
+        entityId: "agent:chat",
+        contextId: "ctx-agent",
+        channelId: "channel:chat",
+      },
+    } as unknown as EntityRecord);
+    expect(callerRuntimeContextId(cache, "do:extensions/claude-code")).toBe("ctx-agent");
+  });
+
+  it("returns null when neither is known, rather than inventing one", () => {
+    expect(callerRuntimeContextId(new EntityCache(), "extension:absent")).toBeNull();
   });
 });

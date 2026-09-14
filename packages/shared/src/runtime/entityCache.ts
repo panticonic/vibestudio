@@ -189,3 +189,24 @@ export class EntityCache {
     for (const listener of this.listeners) listener(id, change);
   }
 }
+
+/**
+ * The context a caller's work belongs to.
+ *
+ * An entity's own context comes first: a runtime that owns one is doing its
+ * own work. A runtime that relays an agent's work — an extension invoked from
+ * an agent's eval, for instance — has no context of its own but carries that
+ * agent's binding on its record, and the binding names the context the relayed
+ * work belongs to. Resolving only the first leaves such a caller with no
+ * context at all, which a creator-context service resolution refuses outright.
+ *
+ * `vcsService` resolves a caller the same way; this is that rule, shared.
+ */
+export function callerRuntimeContextId(
+  cache: Pick<EntityCache, "resolveContext" | "resolveActive">,
+  callerId: string
+): string | null {
+  return (
+    cache.resolveContext(callerId) ?? cache.resolveActive(callerId)?.agentBinding?.contextId ?? null
+  );
+}
