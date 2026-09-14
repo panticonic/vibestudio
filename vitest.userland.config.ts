@@ -5,7 +5,10 @@ import { vitestSharedConfig } from "./vitest.sharedConfig";
 import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
-import { exactPairTests } from "./vitest.exactPairTests";
+import {
+  exactPairTestsFor,
+  excludedIntegrationTestsFor,
+} from "./vitest.exactPairTests";
 import { requireDevelopmentTemplateCheckouts } from "./src/dev/developmentTemplateConfig";
 import { tsImport } from "tsx/esm/api";
 
@@ -23,6 +26,21 @@ function userlandJsxTransform(appRoot: string): { jsx: "automatic" | "transform"
     );
   }
   return { jsx: "automatic" };
+}
+
+/**
+ * React, its renderer, and the JSX runtimes they share.
+ *
+ * Anything that reads or arms React's dispatcher has to come from one copy, so
+ * these specifiers are resolved by the host aliases rather than the checkout's
+ * dependency projection.
+ */
+const REACT_RUNTIME_SPECIFIER = /^react(-dom)?($|\/)/u;
+
+function isReactRuntimeAlias(alias: { find: string | RegExp }): boolean {
+  return typeof alias.find === "string"
+    ? REACT_RUNTIME_SPECIFIER.test(alias.find)
+    : REACT_RUNTIME_SPECIFIER.test(alias.find.source.replace(/^\^/u, "").replace(/\\/gu, ""));
 }
 
 export default defineConfig(async () => {
@@ -109,7 +127,14 @@ export default defineConfig(async () => {
           find: /^@exact-userland\/(.+)$/,
           replacement: `${workspaceRoot}/$1`,
         },
-        ...vitestSharedConfig.resolve.alias,
+        // The host's own React is deliberately absent here. A renderer arms the
+        // dispatcher on the React copy it imports, and the two renderers in play
+        // disagree about where that is: `@testing-library/react` ships only with
+        // the host, `react-reconciler` (Ink's) only in the checkout's
+        // projection. Leaving the host's React aliases in place sent components
+        // to one copy and a renderer to the other, and every hook read a null
+        // dispatcher. The projection declares React, so it is the one copy.
+        ...vitestSharedConfig.resolve.alias.filter((alias) => !isReactRuntimeAlias(alias)),
         {
           find: /^fast-xml-parser$/,
           replacement: path.resolve(__dirname, "node_modules/fast-xml-parser/src/fxp.js"),
@@ -179,9 +204,10 @@ export default defineConfig(async () => {
         `${workspaceGlob}/**/*.test.tsx`,
         "tests/workspace-integration/**/*.test.ts",
         "tests/workspace-integration/**/*.test.tsx",
-        ...(template === "base" ? exactPairTests : []),
+        ...exactPairTestsFor(template),
       ],
       exclude: [
+        ...excludedIntegrationTestsFor(template),
         ...vitestSharedConfig.test.exclude,
         `${workspaceGlob}/apps/mobile/**`,
         `${workspaceGlob}/**/*.browser.test.ts`,

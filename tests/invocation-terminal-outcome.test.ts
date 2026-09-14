@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
-import { exactUserlandRoot } from "./exactUserlandRoot";
+import { exactTemplateRoots, exactUnitRoots } from "./exactUserlandRoot";
 
 const ROOTS = [
   "packages/harness/src",
@@ -115,7 +115,9 @@ describe("invocation terminal event literals", () => {
   // suite can exceed Vitest's 5s default.
   it("carry a typed terminal outcome matching their exact event kind", () => {
     const misses: string[] = [];
-    const sources = ROOTS.flatMap((root) => tsFiles(join(exactUserlandRoot, root))).map((fileName) => ({
+    // `workers/test-agent` ships in the system-testing template, the rest in
+    // Base: the contract covers whichever repository supplies the unit.
+    const sources = ROOTS.flatMap((root) => exactUnitRoots(root).flatMap(tsFiles)).map((fileName) => ({
       fileName,
       content: readFileSync(fileName, "utf8"),
     }));
@@ -136,7 +138,7 @@ describe("invocation terminal event literals", () => {
                 const line = sourceFile.getLineAndCharacterOfPosition(
                   node.getStart(sourceFile)
                 ).line;
-                misses.push(`${relative(exactUserlandRoot, file)}:${line + 1}`);
+                misses.push(`${relative(exactTemplateRoots.base, file)}:${line + 1}`);
               }
             }
           }

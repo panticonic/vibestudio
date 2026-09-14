@@ -8,6 +8,15 @@ import {
 export interface DevelopmentTemplateEnvironmentSelection {
   pins: DefaultWorkspaceTemplates;
   checkouts: Record<keyof DefaultWorkspaceTemplates, string>;
+  /**
+   * Templates the roots declare but no release pins.
+   *
+   * They are selected sources like any other: without them the workspace would
+   * have to fetch a dependency the developer already has checked out, which is
+   * the arrangement's whole point -- and impossible for a template that is not
+   * published yet.
+   */
+  dependencies?: ReadonlyArray<import("@vibestudio/workspace/workspaceSources").WorkspaceSource>;
 }
 
 /** Closed developer launch environment: ambient Base selectors never survive. */
@@ -26,12 +35,15 @@ export function developmentInstanceEnvironment(input: {
   const env = { ...input.parent };
   const selectedTemplates = input.defaultTemplates;
   const defaultSources = selectedTemplates
-    ? (Object.keys(selectedTemplates.pins) as Array<keyof DefaultWorkspaceTemplates>).map(
-        (name) => ({
-          pin: selectedTemplates.pins[name],
-          checkout: selectedTemplates.checkouts[name],
-        })
-      )
+    ? [
+        ...(Object.keys(selectedTemplates.pins) as Array<keyof DefaultWorkspaceTemplates>).map(
+          (name) => ({
+            pin: selectedTemplates.pins[name],
+            checkout: selectedTemplates.checkouts[name],
+          })
+        ),
+        ...(selectedTemplates.dependencies ?? []),
+      ]
     : [];
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { exactUserlandRoot } from "./exactUserlandRoot";
+import { exactUnitRoots } from "./exactUserlandRoot";
 
 const repoRoot = process.cwd();
 
@@ -56,7 +56,11 @@ describe("typed service client guard", () => {
     const violations: string[] = [];
 
     for (const root of migrationRoots) {
-      const sourceRoot = root.startsWith("apps/") ? exactUserlandRoot : repoRoot;
+      // Apps ship in the System template; host surfaces stay in this repository.
+      const sourceRoots = root.startsWith("apps/")
+        ? exactUnitRoots(root).map((unitRoot) => unitRoot.slice(0, -root.length - 1))
+        : [repoRoot];
+      for (const sourceRoot of sourceRoots)
       for (const file of walk(join(sourceRoot, root))) {
         const rel = relative(sourceRoot, file);
         const text = readFileSync(file, "utf8");

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { exactUserlandRoot } from "./exactUserlandRoot";
+import { exactTemplateRoots } from "./exactUserlandRoot";
 import { join } from "node:path";
 
 const android = readFileSync(
@@ -19,11 +19,11 @@ const tcpPatch = readFileSync(
   "utf8"
 );
 const facade = readFileSync(
-  join(exactUserlandRoot, "apps/mobile/src/services/panelAssetFacade.ts"),
+  join(exactTemplateRoots.system, "apps/mobile/src/services/panelAssetFacade.ts"),
   "utf8"
 );
 const store = readFileSync(
-  join(exactUserlandRoot, "apps/mobile/src/services/mobileAssetStore.ts"),
+  join(exactTemplateRoots.system, "apps/mobile/src/services/mobileAssetStore.ts"),
   "utf8"
 );
 
