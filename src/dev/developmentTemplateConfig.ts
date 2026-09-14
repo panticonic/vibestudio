@@ -4,12 +4,18 @@ import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRe
 export interface DevelopmentTemplateCheckouts {
   root: string;
   checkouts: Record<keyof DefaultWorkspaceTemplates, string>;
+  /** Templates present to be depended on rather than installed as a root. */
+  dependencies: Partial<Record<DependencyTemplateName, string>>;
 }
+
+export type DependencyTemplateName = "system-testing";
 
 const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs") as {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY: string;
   DEVELOPMENT_TEMPLATE_ROOT_ENV: string;
   TEMPLATE_NAMES: readonly (keyof DefaultWorkspaceTemplates)[];
+  DEPENDENCY_TEMPLATE_NAMES: readonly DependencyTemplateName[];
+  DEPENDENCY_TEMPLATE_URLS: Record<DependencyTemplateName, string>;
   configuredDevelopmentTemplateRoot(repoRoot: string, env?: NodeJS.ProcessEnv): string | undefined;
   requireDevelopmentTemplateCheckouts(
     repoRoot: string,
@@ -36,6 +42,8 @@ export const {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
   TEMPLATE_NAMES,
+  DEPENDENCY_TEMPLATE_NAMES,
+  DEPENDENCY_TEMPLATE_URLS,
   configuredDevelopmentTemplateRoot,
   requireDevelopmentTemplateCheckouts,
   requireDevelopmentTemplateCheckout,

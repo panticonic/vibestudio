@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const vitest = path.join(root, "node_modules", "vitest", "vitest.mjs");
 
-for (const template of ["base", "personal", "system"]) {
+for (const template of ["base", "personal", "system", "system-testing"]) {
   const result = spawnSync(
     process.execPath,
     [vitest, "run", "--config", path.join(root, "vitest.userland.config.ts")],

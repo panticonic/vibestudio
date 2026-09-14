@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   clearDevelopmentTemplateRoot,
   configuredDevelopmentTemplateRoot,
+  DEPENDENCY_TEMPLATE_NAMES,
+  DEPENDENCY_TEMPLATE_URLS,
   developmentTemplateHead,
   requireDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
@@ -46,11 +48,19 @@ if (command === "setup") {
   const root = path.resolve(args[0] ?? path.join(repoRoot, "..", "vibestudio-templates"));
   fs.mkdirSync(root, { recursive: true });
   const urls = releasedUrls();
-  for (const name of TEMPLATE_NAMES) {
+  // Dependency templates are nobody's root, so no release pins them; their
+  // canonical URL is the one the development tooling declares.
+  const cloning: Array<[string, string]> = [
+    ...TEMPLATE_NAMES.map((name) => [name, urls[name]] as [string, string]),
+    ...DEPENDENCY_TEMPLATE_NAMES.map(
+      (name) => [name, DEPENDENCY_TEMPLATE_URLS[name]] as [string, string]
+    ),
+  ];
+  for (const [name, url] of cloning) {
     const checkout = path.join(root, name);
     if (fs.existsSync(checkout)) continue;
     console.log(`Cloning ${name} template into ${checkout}`);
-    const status = run("git", ["clone", urls[name], checkout]);
+    const status = run("git", ["clone", url, checkout]);
     if (status !== 0) process.exit(status);
   }
   const selected = setDevelopmentTemplateRoot(repoRoot, root);
@@ -81,15 +91,27 @@ if (command === "setup") {
       const head = developmentTemplateHead(selected.checkouts[name]);
       console.log(`  ${name}: ${head.commit}${head.dirty ? " (worktree has changes)" : ""}`);
     }
+    for (const [name, checkout] of Object.entries(selected.dependencies)) {
+      const head = developmentTemplateHead(checkout);
+      console.log(
+        `  ${name} (dependency): ${head.commit}${head.dirty ? " (worktree has changes)" : ""}`
+      );
+    }
   }
 } else if (command === "exec") {
   const name = args[0] as (typeof TEMPLATE_NAMES)[number] | undefined;
   const separator = args[1] === "--" ? 2 : 1;
   const executable = args[separator];
-  if (!name || !TEMPLATE_NAMES.includes(name) || !executable) {
-    throw new Error("usage: pnpm dev:templates exec base|personal|system -- <command> [args...]");
+  const selected = requireDevelopmentTemplateCheckouts(repoRoot);
+  const checkout = name
+    ? ((selected.checkouts as Record<string, string | undefined>)[name] ??
+      (selected.dependencies as Record<string, string | undefined>)[name])
+    : undefined;
+  if (!checkout || !executable) {
+    throw new Error(
+      "usage: pnpm dev:templates exec base|personal|system|system-testing -- <command> [args...]"
+    );
   }
-  const checkout = requireDevelopmentTemplateCheckouts(repoRoot).checkouts[name];
   process.exitCode = run(executable, args.slice(separator + 1), checkout);
 } else {
   throw new Error(

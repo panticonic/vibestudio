@@ -16,10 +16,20 @@ import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
 if (workspaceArgumentIndex < 0) {
-  const checkouts = requireDevelopmentTemplateCheckouts(appRoot).checkouts;
-  for (const name of ["base", "personal", "system"] as const) {
+  const selected = requireDevelopmentTemplateCheckouts(appRoot);
+  const checkouts = selected.checkouts;
+  // Dependency templates compile against base like any other template.
+  const templates: Array<[string, string]> = [
+    ...(["base", "personal", "system"] as const).map(
+      (name) => [name, checkouts[name]] as [string, string]
+    ),
+    ...Object.entries(selected.dependencies).map(
+      ([name, checkout]) => [name, checkout] as [string, string]
+    ),
+  ];
+  for (const [name, checkout] of templates) {
     const composition = composeDevelopmentTemplateCheckouts(
-      name === "base" ? [checkouts.base] : [checkouts.base, checkouts[name]]
+      name === "base" ? [checkouts.base] : [checkouts.base, checkout]
     );
     try {
       execFileSync(

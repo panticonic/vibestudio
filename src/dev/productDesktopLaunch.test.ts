@@ -25,6 +25,7 @@ const defaultTemplates = {
     personal: "/visible/personal",
     system: "/visible/system",
   },
+  dependencies: [],
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 

@@ -33,18 +33,20 @@ export default defineConfig(async () => {
     typeof import("./src/dev/developmentTemplateComposition.js")
   >("./src/dev/developmentTemplateComposition.ts", import.meta.url);
   const template = process.env["VIBESTUDIO_USERLAND_TEMPLATE"] ?? "base";
-  if (!new Set(["base", "personal", "system"]).has(template)) {
+  const selected = requireDevelopmentTemplateCheckouts(__dirname);
+  // A dependency template is composed on base exactly like a root one: it is
+  // still a template, it just is not anybody's workspace.
+  const testSourceRoot =
+    (selected.checkouts as Record<string, string | undefined>)[template] ??
+    (selected.dependencies as Record<string, string | undefined>)[template];
+  if (!testSourceRoot) {
     throw new Error(`Unknown VIBESTUDIO_USERLAND_TEMPLATE ${JSON.stringify(template)}`);
   }
-  const checkouts = requireDevelopmentTemplateCheckouts(__dirname).checkouts;
   const composition = composeDevelopmentTemplateCheckouts(
-    template === "base"
-      ? [checkouts.base]
-      : [checkouts.base, checkouts[template as "personal" | "system"]]
+    template === "base" ? [selected.checkouts.base] : [selected.checkouts.base, testSourceRoot]
   );
   process.once("exit", composition.release);
   const workspaceRoot = composition.root;
-  const testSourceRoot = checkouts[template as "base" | "personal" | "system"];
   const workspaceGlob = path.relative(__dirname, testSourceRoot).replaceAll(path.sep, "/");
   const projectedDependencies = await userlandDependencyAliases(__dirname, workspaceRoot);
   const dependencyProjection = await prepareUserlandDependencyProjection({

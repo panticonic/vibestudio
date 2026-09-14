@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import YAML from "yaml";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { GitClient, readExactGitSnapshot } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -43,9 +44,52 @@ export function canonicalTemplateUrlFromCheckout(checkout: string): string {
   }
 }
 
+/**
+ * Declare one more template dependency on a checkpointed checkout.
+ *
+ * A checkpoint is already an instance-owned commit of the developer's live
+ * worktree, so composing there keeps the developer's own repository clean: the
+ * acceptance harness is a dependency of the workspace a development instance
+ * installs, and of nothing that ships.
+ */
+function declareCheckpointDependency(checkout: string, url: string): void {
+  const manifestPath = path.join(checkout, "meta", "vibestudio.yml");
+  const manifest = fs.readFileSync(manifestPath, "utf8");
+  const document = YAML.parse(manifest) as {
+    template?: { dependencies?: Array<{ url?: string }> };
+  };
+  const template = document.template;
+  if (!template) {
+    throw new Error(`Template checkpoint ${checkout} has no template block to extend`);
+  }
+  const dependencies = template.dependencies ?? [];
+  if (dependencies.some((dependency) => dependency?.url === url)) return;
+  template.dependencies = [...dependencies, { url }];
+  fs.writeFileSync(manifestPath, YAML.stringify(document));
+  execFileSync("git", ["-C", checkout, "add", "meta/vibestudio.yml"], { stdio: "ignore" });
+  execFileSync(
+    "git",
+    ["-C", checkout, "commit", "--no-gpg-sign", "-m", "Declare development template dependency"],
+    {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Vibestudio Development",
+        GIT_AUTHOR_EMAIL: "development@vibestudio.invalid",
+        GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+        GIT_COMMITTER_NAME: "Vibestudio Development",
+        GIT_COMMITTER_EMAIL: "development@vibestudio.invalid",
+        GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+      },
+    }
+  );
+}
+
 export async function inspectWorkspaceSources(input: {
   checkouts: readonly string[];
   checkpointRoot: string;
+  /** Template URLs to declare as dependencies of the named source checkouts. */
+  declareDependencies?: ReadonlyMap<string, readonly string[]>;
 }): Promise<WorkspaceSourceInspection[]> {
   const gitClient = new GitClient();
   const selections: WorkspaceSourceInspection[] = [];
@@ -61,6 +105,9 @@ export async function inspectWorkspaceSources(input: {
       checkout: sourceCheckout,
       target: path.join(input.checkpointRoot, String(index)),
     });
+    for (const dependencyUrl of input.declareDependencies?.get(sourceCheckout) ?? []) {
+      declareCheckpointDependency(checkpoint.checkout, dependencyUrl);
+    }
     const status = await gitClient.status(checkpoint.checkout);
     if (!status.commit || !status.branch) {
       throw new Error(`Development template checkpoint ${checkpoint.checkout} has no named commit`);

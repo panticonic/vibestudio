@@ -6,6 +6,20 @@ const DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY = "vibestudio.templateCheckouts";
 const DEVELOPMENT_TEMPLATE_ROOT_ENV = "VIBESTUDIO_TEMPLATE_CHECKOUTS";
 const TEMPLATE_NAMES = ["base", "personal", "system"];
 
+/**
+ * Templates a development workspace may depend on without being one.
+ *
+ * The acceptance harness is a template like any other, but it is nobody's root:
+ * a workspace runs the suite by declaring it alongside Personal or System. It
+ * therefore never appears in the release pins, only in a development checkout
+ * set, and its absence is ordinary rather than an error.
+ */
+const DEPENDENCY_TEMPLATE_NAMES = ["system-testing"];
+
+const DEPENDENCY_TEMPLATE_URLS = {
+  "system-testing": "https://github.com/panticonic/vibestudio-system-testing.git",
+};
+
 function git(repoRoot, args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
     encoding: "utf8",
@@ -45,7 +59,14 @@ function templateCheckouts(root) {
       return [name, fs.realpathSync(checkout)];
     })
   );
-  return { root: canonical, checkouts };
+  const dependencies = {};
+  for (const name of DEPENDENCY_TEMPLATE_NAMES) {
+    const checkout = path.join(canonical, name);
+    if (!fs.existsSync(checkout)) continue;
+    assertGitCheckout(checkout, name);
+    dependencies[name] = fs.realpathSync(checkout);
+  }
+  return { root: canonical, checkouts, dependencies };
 }
 
 function configuredDevelopmentTemplateRoot(repoRoot, env = process.env) {
@@ -121,6 +142,8 @@ module.exports = {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
   TEMPLATE_NAMES,
+  DEPENDENCY_TEMPLATE_NAMES,
+  DEPENDENCY_TEMPLATE_URLS,
   configuredDevelopmentTemplateRoot,
   requireDevelopmentTemplateCheckouts,
   requireDevelopmentTemplateCheckout,
