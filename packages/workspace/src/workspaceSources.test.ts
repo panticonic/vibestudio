@@ -20,12 +20,12 @@ describe("host-selected workspace sources", () => {
     }
   );
 
-  it("accepts distinct exact snapshots from one distribution repository", () => {
+  it("accepts distinct exact snapshots from one template repository", () => {
     const next = {
       ...source,
       pin: {
         ...source.pin,
-        ref: "refs/heads/distributions/personal",
+        ref: "refs/heads/personal",
         commit: "c".repeat(40),
       },
       checkout: "/private/personal",

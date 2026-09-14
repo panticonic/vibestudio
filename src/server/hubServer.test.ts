@@ -34,7 +34,6 @@ import {
   isHubControlHttpPath,
   selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
-  selectDevelopmentWritebackWorkspaceId,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
   waitForWorkspaceReadyFile,
@@ -67,45 +66,6 @@ describe("hub internal runtime snapshot", () => {
 });
 
 describe("hub bootstrap workspace selection", () => {
-  it("assigns source writeback to root System once available and never to another member's pair", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-writeback-owner-"));
-    const databasePath = path.join(directory, "identity.db");
-    const centralData = new CentralDataManager({ databasePath });
-    const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
-    const userStore = new UserStore(identityDb);
-    const state = { bootstrapWorkspaceId: null, centralData, identityDb, userStore };
-    const pin = {
-      url: "git+https://example.test/base.git",
-      ref: "refs/heads/main",
-      commit: "a".repeat(40),
-    };
-    const templates = { personal: pin, system: pin };
-    try {
-      expect(selectDevelopmentWritebackWorkspaceId(state)).toBeNull();
-      const root = userStore.createRoot({ handle: "root", displayName: "Root" });
-      identityDb.insertUser({
-        id: "usr_member",
-        handle: "member",
-        displayName: "Member",
-        role: "member",
-        createdAt: 1,
-      });
-      centralData.ensurePrivateWorkspaces("usr_member", templates);
-      expect(selectDevelopmentWritebackWorkspaceId(state)).toBeNull();
-      const rootPair = centralData.ensurePrivateWorkspaces(root.id, templates);
-      expect(selectDevelopmentWritebackWorkspaceId(state)).toBe(rootPair.system.workspaceId);
-      centralData.ensurePrivateWorkspaces("usr_member", templates);
-      expect(selectDevelopmentWritebackWorkspaceId(state)).toBe(rootPair.system.workspaceId);
-      const project = centralData.addWorkspace("explicit");
-      const projectState = { ...state, bootstrapWorkspaceId: project.workspaceId };
-      expect(selectDevelopmentWritebackWorkspaceId(projectState)).toBe(rootPair.system.workspaceId);
-    } finally {
-      identityDb.close();
-      centralData.close();
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it("leaves workspace selection to the authenticated user when no project was requested", () => {
     expect(selectBootstrapWorkspace({}, [{ name: "active" }, { name: "older" }])).toBeNull();
   });
@@ -136,8 +96,8 @@ describe("hub workspace creation template selection", () => {
   };
   const defaultTemplates = {
     base: developmentPin,
-    personal: { ...developmentPin, ref: "refs/heads/distributions/personal" },
-    system: { ...developmentPin, ref: "refs/heads/distributions/system" },
+    personal: { ...developmentPin, ref: "refs/heads/personal" },
+    system: { ...developmentPin, ref: "refs/heads/system" },
   };
 
   it("uses the minimal Base for ordinary creation", () => {
@@ -679,37 +639,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
-  });
-
-  it("passes source write-back only to the supervisor-designated workspace", () => {
-    const writeback = JSON.stringify({ root: "/source/base", repositories: ["meta"] });
-    const designated = buildWorkspaceChildEnv({
-      ...base,
-      baseEnv: {
-        ...base.baseEnv,
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: writeback,
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
-      },
-      workspaceName: "base",
-    });
-    const other = buildWorkspaceChildEnv({
-      ...base,
-      baseEnv: {
-        ...base.baseEnv,
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: writeback,
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
-      },
-      workspaceId: "ws_other",
-      workspaceName: "other",
-    });
-
-    expect(JSON.parse(designated["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
-      root: "/source/base",
-      repositories: ["meta"],
-      workspaceId: "ws_base",
-    });
-    expect(other["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
-    expect(designated["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID"]).toBeUndefined();
   });
 
   it("does not inherit an unrecognized startup approval value", () => {

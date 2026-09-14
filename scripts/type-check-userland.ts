@@ -7,21 +7,43 @@ import {
   requiresNativeHost,
   type UserlandDependencyProjection,
 } from "./lib/userland-dependency-projection.js";
-import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
+import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.js";
+import { composeDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateComposition.js";
 import { buildNativeIsolation } from "./build-native-isolation.mjs";
 import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
+if (workspaceArgumentIndex < 0) {
+  const checkouts = requireDevelopmentTemplateCheckouts(appRoot).checkouts;
+  for (const name of ["base", "personal", "system"] as const) {
+    const composition = composeDevelopmentTemplateCheckouts(
+      name === "base" ? [checkouts.base] : [checkouts.base, checkouts[name]]
+    );
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          fileURLToPath(import.meta.url),
+          "--workspace-root",
+          composition.root,
+          ...(name === "base" ? ["--host-integration"] : []),
+        ],
+        { cwd: appRoot, stdio: "inherit" }
+      );
+    } finally {
+      composition.release();
+    }
+  }
+  process.exit(0);
+}
 if (workspaceArgumentIndex >= 0 && !process.argv[workspaceArgumentIndex + 1]) {
   throw new Error("--workspace-root requires a directory");
 }
-const workspaceRoot = path.resolve(
-  workspaceArgumentIndex >= 0
-    ? process.argv[workspaceArgumentIndex + 1]!
-    : requireDevelopmentBaseCheckout(appRoot)
-);
+const workspaceRoot = path.resolve(process.argv[workspaceArgumentIndex + 1]!);
 const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 // This checkout command installs workspace-declared dependencies before a host
 // build exists. Prepare the same installed toolchain used by runtime installs.
@@ -52,7 +74,7 @@ try {
   // Host integration tests validate the configured Base pair. An explicit
   // workspace target validates only the units it actually contains.
   const configs = ["tsconfig.json"];
-  if (workspaceArgumentIndex < 0) configs.push("tsconfig.integration.json");
+  if (process.argv.includes("--host-integration")) configs.push("tsconfig.integration.json");
   if (projection.units.some((unit) => requiresNativeHost(unit, projection.graph))) {
     configs.push("tsconfig.integration.mobile.json");
   }
@@ -102,7 +124,10 @@ function projectCheckoutSource(
     const target = path.join(projectedWorkspace, name);
     fs.copyFileSync(path.join(appRoot, "scripts/config/userland", name), target);
     if (name.endsWith(".json")) {
-      if (name === "tsconfig.integration.mobile.json" && workspaceArgumentIndex < 0) {
+      if (
+        name === "tsconfig.integration.mobile.json" &&
+        process.argv.includes("--host-integration")
+      ) {
         const config = JSON.parse(fs.readFileSync(target, "utf8"));
         config.include.unshift("../tests/workspace-integration/mobile-appUpdatePrompt.test.ts");
         fs.writeFileSync(target, JSON.stringify(config));

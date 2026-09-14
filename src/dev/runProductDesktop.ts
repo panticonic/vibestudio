@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
-import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
+import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import {
   assertProductDesktopArguments,
   productDesktopEnvironment,
@@ -48,14 +48,14 @@ async function main(): Promise<void> {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-start-"));
   try {
     const needsInitialWorkspace = !profileHasWorkspace();
-    const distributions =
-      (await resolveDevelopmentBaseSelection({
+    const defaultTemplates =
+      (await resolveDevelopmentTemplateSet({
         repoRoot,
-        checkpointTarget: path.join(temporaryRoot, "workspace-distributions"),
+        checkpointRoot: path.join(temporaryRoot, "default-template-checkpoints"),
       })) ?? undefined;
-    if (!distributions) {
+    if (!defaultTemplates) {
       throw new Error(
-        "A source product launch needs the linked development Base. Run `pnpm dev:base setup`."
+        "A source product launch needs the canonical template checkouts. Run `pnpm dev:templates setup`."
       );
     }
     const developmentTemplates = await inspectWorkspaceSources({
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     const env = productDesktopEnvironment({
       parent: process.env,
       repoRoot,
-      distributions,
+      defaultTemplates,
       bootstrapSystem: needsInitialWorkspace,
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });

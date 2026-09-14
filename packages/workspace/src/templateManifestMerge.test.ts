@@ -100,6 +100,20 @@ describe("mergeTemplateManifests", () => {
     });
   });
 
+  it("retains the top template's direct dependencies for later authoring", () => {
+    const dependency = { url: "https://example.test/base.git" };
+    const merged = mergeTemplateManifests([
+      layer("base", { name: "Base", repositories: ["meta"] }),
+      layer("personal", {
+        name: "Personal",
+        dependencies: [dependency],
+        repositories: ["meta"],
+      }),
+    ]);
+
+    expect(merged.document["template"]).toMatchObject({ dependencies: [dependency] });
+  });
+
   it("refuses to compose nothing", () => {
     expect(() => mergeTemplateManifests([])).toThrow(/at least one manifest/u);
   });

@@ -20,7 +20,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { currentContextProjectionsPath } from "./contextProjections.js";
-import { readBaseTemplateRelease } from "./baseTemplateRelease.js";
+import { readTemplateRelease } from "./templateRelease.js";
 export {
   resolveDeclaredApps,
   resolveDeclaredExtensions,
@@ -520,13 +520,14 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
     if (!opts.appRoot) {
       throw new Error("External-root workspace creation requires the host app root");
     }
-    const baseTemplate = opts.rootTemplate ?? readBaseTemplateRelease(opts.appRoot).baseTemplate;
+    const exactBaseTemplate =
+      opts.rootTemplate ?? readTemplateRelease(opts.appRoot).workspaceTemplates.base;
     initWorkspace(name, {
-      rootTemplate: baseTemplate,
+      rootTemplate: exactBaseTemplate,
       workspaceId: opts.workspaceId ?? createWorkspaceId(),
     });
     created = true;
-    log.info(`[Workspace] Created "${name}" from exact external Base ${baseTemplate.commit}`);
+    log.info(`[Workspace] Created "${name}" from exact Base template ${exactBaseTemplate.commit}`);
   }
 
   const workspace = createWorkspace(wsDir);

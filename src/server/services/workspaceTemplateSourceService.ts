@@ -68,6 +68,7 @@ export function createWorkspaceTemplateSourceService(deps: {
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
           repositories: manifest.inventory.repositories,
           files: manifest.inventory.files,
+          dependencies: manifest.dependencies,
         };
       },
     }),

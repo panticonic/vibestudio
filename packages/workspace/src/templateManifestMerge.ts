@@ -163,6 +163,11 @@ export function mergeTemplateManifests(
   document["template"] = {
     ...(presentation?.name === undefined ? {} : { name: presentation.name }),
     ...(presentation?.description === undefined ? {} : { description: presentation.description }),
+    // Keep the top template's direct dependencies in the materialized source.
+    // They are authoring provenance, not runtime settings, but a workspace
+    // created from this tree must still know which repositories came from an
+    // upstream when it later publishes itself as a template.
+    ...(top.manifest.dependencies.length > 0 ? { dependencies: top.manifest.dependencies } : {}),
     repositories: [...repositories].sort(compareUtf16CodeUnits),
     files: [...files].sort(compareUtf16CodeUnits),
   };

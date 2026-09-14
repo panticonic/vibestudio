@@ -24,9 +24,9 @@ import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallRevie
 import type { PanelSlotObservation } from "@vibestudio/shared/panel/observation";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
-  developmentBaseSelectionEnv,
-  resolveDevelopmentBaseSelection,
-} from "../src/dev/developmentBaseSelection.js";
+  developmentTemplateSetEnv,
+  resolveDevelopmentTemplateSet,
+} from "../src/dev/developmentTemplateSet.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -113,9 +113,9 @@ maybeDescribe("headless browser panel integration", () => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-headless-panel-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const fixture = await startFixtureServer();
-    const developmentBase = await resolveDevelopmentBaseSelection({
+    const developmentTemplates = await resolveDevelopmentTemplateSet({
       repoRoot: process.cwd(),
-      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
     });
 
     serverProc = spawn(
@@ -133,7 +133,7 @@ maybeDescribe("headless browser panel integration", () => {
           VIBESTUDIO_CHROMIUM_PATH: chromium.executablePath(),
           VIBESTUDIO_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
           VIBESTUDIO_HEADLESS_IDLE_EXIT_MS: "1000",
-          ...(developmentBase ? developmentBaseSelectionEnv(developmentBase) : {}),
+          ...(developmentTemplates ? developmentTemplateSetEnv(developmentTemplates) : {}),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }

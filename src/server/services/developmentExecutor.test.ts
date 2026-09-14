@@ -289,7 +289,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       planSource.mock.calls.map(([input]) => [input.repositoryId, input.requiredFiles])
     );
     expect(required["repository:vibestudio"]).toEqual(["pnpm-lock.yaml"]);
-    // A workspace source distribution has no root lockfile — its dependencies
+    // A workspace template has no root lockfile — its dependencies
     // come from the host's semantic projection — so requiring one refused
     // every build of an adopted Base.
     expect(required["repository:base"]).toEqual(["meta/vibestudio.yml"]);

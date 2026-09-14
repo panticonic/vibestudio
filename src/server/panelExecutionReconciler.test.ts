@@ -21,7 +21,7 @@ it.each([
     },
   },
 ])(
-  "activates durable $source distribution seeds through ordinary preparing-panel recovery",
+  "activates durable $source template seeds through ordinary preparing-panel recovery",
   async (initialPanel) => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     const [seed] = instance.initializePanels([initialPanel]);

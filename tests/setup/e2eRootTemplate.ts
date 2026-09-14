@@ -25,10 +25,10 @@ import {
 } from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
-  developmentBaseSelectionSources,
-  resolveDevelopmentBaseSelection,
-} from "../../src/dev/developmentBaseSelection.js";
-import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/baseTemplateRelease";
+  developmentTemplateSetSources,
+  resolveDevelopmentTemplateSet,
+} from "../../src/dev/developmentTemplateSet.js";
+import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
 import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import {
   inspectRootTemplateCheckout,
@@ -40,7 +40,6 @@ export const E2E_ROOT_TEMPLATE_ENV = "VIBESTUDIO_E2E_ROOT_TEMPLATE";
 export const DEFAULT_WORKSPACE_TEMPLATES_ENV = "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES";
 export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE";
 export const DEV_TEMPLATE_SOURCES_ENV = "VIBESTUDIO_WORKSPACE_SOURCES";
-export const DEV_ROOT_TEMPLATE_WRITEBACK_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK";
 
 export const WORKSPACE_CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
 export const WORKSPACE_MATERIALIZATION_RECEIPT_PATH = "workspace-creation/materialization-v1.json";
@@ -77,13 +76,13 @@ export async function prepareE2eRootTemplate(input: {
   projectRoot: string;
   runTempRoot: string;
 }): Promise<E2eRootTemplate> {
-  const selection = await resolveDevelopmentBaseSelection({
+  const selection = await resolveDevelopmentTemplateSet({
     repoRoot: input.projectRoot,
-    checkpointTarget: path.join(input.runTempRoot, "base-checkpoint"),
+    checkpointRoot: path.join(input.runTempRoot, "default-template-checkpoints"),
   });
   if (!selection) {
     throw new Error(
-      "The Electron E2E suite needs a development Base checkout; select one with `vibestudio base use <path>`"
+      "The Electron E2E suite needs canonical template checkouts; run `pnpm dev:templates setup`"
     );
   }
   const pin = selection.pins.base;
@@ -104,7 +103,7 @@ export async function prepareE2eRootTemplate(input: {
     checkout,
     materializedSource: sourcePath,
     defaultTemplates: selection.pins,
-    sources: developmentBaseSelectionSources(selection),
+    sources: developmentTemplateSetSources(selection),
   };
 }
 
@@ -115,6 +114,7 @@ export async function prepareE2eRootTemplate(input: {
 async function materializeRootTemplateSource(input: {
   pin: WorkspaceTemplatePin;
   checkout: string;
+  sources?: readonly WorkspaceSource[];
   templateRoot: string;
   gitClient: GitClient;
 }): Promise<string> {
@@ -128,14 +128,27 @@ async function materializeRootTemplateSource(input: {
     sourcePath,
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: hashOnlySink,
-    acquire: (requested) =>
-      seedRootTemplateSnapshotFromCheckout({
+    acquire: (requested) => {
+      const source = input.sources?.find(
+        (candidate) =>
+          candidate.pin.url === requested.url && candidate.pin.commit === requested.commit
+      ) ?? { pin: input.pin, checkout: input.checkout };
+      if (!source.checkout || source.pin.commit !== requested.commit) {
+        throw new Error(`No E2E checkout supplies ${requested.url} at ${requested.commit}`);
+      }
+      return seedRootTemplateSnapshotFromCheckout({
         statePath,
-        checkout: input.checkout,
+        checkout: source.checkout,
         pin: requested,
         git: input.gitClient,
         sink: hashOnlySink,
-      }),
+      });
+    },
+    resolveTrack: async (dependency) => {
+      const source = input.sources?.find((candidate) => candidate.pin.url === dependency.url);
+      if (!source) throw new Error(`No E2E template supplies dependency ${dependency.url}`);
+      return source.pin;
+    },
   });
   await bootstrap.prepareSource();
   return sourcePath;
@@ -160,6 +173,7 @@ function regenerateRootRuntimeManifest(checkout: string): void {
       ...manifest.top,
       template: {
         ...(manifest.presentation ?? {}),
+        ...(manifest.dependencies.length ? { dependencies: manifest.dependencies } : {}),
         repositories: manifest.inventory.repositories,
         files: manifest.inventory.files,
       },
@@ -183,10 +197,10 @@ export async function deriveE2eRootTemplate(input: {
   base: E2eRootTemplate;
   workRoot: string;
   configureSource: (sourceRoot: string) => void;
-  distribution?: keyof DefaultWorkspaceTemplates;
+  template?: keyof DefaultWorkspaceTemplates;
 }): Promise<E2eRootTemplate> {
-  const selectedPin = input.distribution
-    ? input.base.defaultTemplates[input.distribution]
+  const selectedPin = input.template
+    ? input.base.defaultTemplates[input.template]
     : input.base.defaultTemplates.base;
   const selectedSource = input.base.sources.find(
     (source) =>
@@ -194,7 +208,7 @@ export async function deriveE2eRootTemplate(input: {
       source.pin.commit === selectedPin.commit &&
       source.pin.snapshot === selectedPin.snapshot
   );
-  if (!selectedSource) throw new Error("Selected E2E distribution has no exact source checkout");
+  if (!selectedSource) throw new Error("Selected E2E template has no exact source checkout");
   const checkout = path.join(input.workRoot, "checkout");
   fs.mkdirSync(path.dirname(checkout), { recursive: true, mode: 0o700 });
   execFileSync("git", ["clone", "--local", "--no-checkout", selectedSource.checkout, checkout], {
@@ -230,6 +244,7 @@ export async function deriveE2eRootTemplate(input: {
   const materializedSource = await materializeRootTemplateSource({
     pin,
     checkout,
+    sources: [...input.base.sources, { pin, checkout }],
     templateRoot: path.join(input.workRoot, "root-template"),
     gitClient,
   });
@@ -238,8 +253,8 @@ export async function deriveE2eRootTemplate(input: {
     pin,
     checkout,
     materializedSource,
-    defaultTemplates: input.distribution
-      ? { ...input.base.defaultTemplates, [input.distribution]: pin }
+    defaultTemplates: input.template
+      ? { ...input.base.defaultTemplates, [input.template]: pin }
       : input.base.defaultTemplates,
     sources: [
       ...input.base.sources,
@@ -269,7 +284,6 @@ export function publishE2eRootTemplate(template: E2eRootTemplate): void {
   process.env[DEV_TEMPLATE_SOURCES_ENV] = JSON.stringify(template.sources);
   // Write-back belongs to the source development instance alone; an E2E run
   // must never publish back into the developer's Base checkout.
-  delete process.env[DEV_ROOT_TEMPLATE_WRITEBACK_ENV];
 }
 
 export function requireE2eRootTemplate(): E2eRootTemplate {

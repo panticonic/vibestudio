@@ -3,18 +3,16 @@ import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment
 
 const pin = (name: string) => ({
   url: `git+https://example.test/${name}.git`,
-  ref: `refs/heads/distributions/${name}`,
+  ref: "refs/heads/main",
   commit: name[0]!.repeat(40),
 });
-const base = {
+const defaultTemplates = {
   pins: { base: pin("base"), personal: pin("personal"), system: pin("system") },
   checkouts: {
     base: "/private/base",
     personal: "/private/personal",
     system: "/private/system",
   },
-  sourceCheckout: "/visible/base",
-  writebackRepositories: ["meta", "packages/base"],
 };
 const templates = [
   {
@@ -29,7 +27,7 @@ const templates = [
 ];
 
 describe("development instance environment", () => {
-  it("gives only the source-coupled instance the visible checkout write-back target", () => {
+  it("uses the three canonical template repositories", () => {
     const env = developmentInstanceEnvironment({
       parent: {},
       repoRoot: "/host",
@@ -37,16 +35,12 @@ describe("development instance environment", () => {
       instanceId: "source",
       sourceCoupled: true,
       disposable: false,
-      base,
+      defaultTemplates,
     });
     expect(env).toMatchObject({
       VIBESTUDIO_SOURCE_INSTANCE: "1",
-      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(base.pins),
-      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(base.pins.system),
-      VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
-        root: "/visible/base",
-        repositories: ["meta", "packages/base"],
-      }),
+      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates.pins),
+      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(defaultTemplates.pins.system),
     });
   });
 
@@ -71,32 +65,26 @@ describe("development instance environment", () => {
       instanceId: "source",
       sourceCoupled: true,
       disposable: false,
-      base,
+      defaultTemplates,
       templates,
     });
 
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual([
-      { pin: base.pins.base, checkout: base.checkouts.base },
-      { pin: base.pins.personal, checkout: base.checkouts.personal },
-      { pin: base.pins.system, checkout: base.checkouts.system },
+      { pin: defaultTemplates.pins.base, checkout: defaultTemplates.checkouts.base },
+      { pin: defaultTemplates.pins.personal, checkout: defaultTemplates.checkouts.personal },
+      { pin: defaultTemplates.pins.system, checkout: defaultTemplates.checkouts.system },
       ...templates,
     ]);
-    expect(JSON.parse(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
-      root: "/visible/base",
-      repositories: ["meta", "packages/base"],
-    });
   });
 
   it.each([
     ["named development", true],
     ["disposable development", true],
     ["production selection", false],
-  ])("strips hostile ambient Base selection for %s", (_label, hasBase) => {
+  ])("strips hostile ambient template selection for %s", (_label, hasTemplates) => {
     const env = developmentInstanceEnvironment({
       parent: {
-        VIBESTUDIO_DEV_ROOT_TEMPLATE: "stale",
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: "/stale/checkpoint",
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: "/stale/writeback",
+        VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: "stale",
         VIBESTUDIO_SOURCE_INSTANCE: "1",
       },
       repoRoot: "/host",
@@ -104,13 +92,11 @@ describe("development instance environment", () => {
       instanceId: "isolated",
       sourceCoupled: false,
       disposable: false,
-      ...(hasBase ? { base } : {}),
+      ...(hasTemplates ? { defaultTemplates } : {}),
     });
     expect(env["VIBESTUDIO_SOURCE_INSTANCE"]).toBe("0");
-    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
-    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]).toBeUndefined();
     expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBe(
-      hasBase ? JSON.stringify(base.pins) : undefined
+      hasTemplates ? JSON.stringify(defaultTemplates.pins) : undefined
     );
   });
 });
@@ -123,11 +109,11 @@ it("selects an exact additional checkout without changing the private workspace 
     instanceId: "test",
     sourceCoupled: false,
     disposable: false,
-    base,
+    defaultTemplates,
     templates,
     initialWorkspaceTemplate: templates[0]!.pin,
   });
   expect(JSON.parse(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]!)).toEqual(templates[0]!.pin);
-  expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(base.pins);
+  expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(defaultTemplates.pins);
   expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toContainEqual(templates[0]);
 });

@@ -37,13 +37,25 @@ function writeConfig(sourceRoot: string, content: string): void {
 function writeBaseRelease(appRoot: string): void {
   fs.mkdirSync(path.join(appRoot, "build-resources"), { recursive: true });
   fs.writeFileSync(
-    path.join(appRoot, "build-resources", "base-template-release.json"),
+    path.join(appRoot, "build-resources", "workspace-template-release.json"),
     JSON.stringify({
-      format: "vibestudio-base-release/1",
-      baseTemplate: {
-        url: "git+https://example.test/base.git",
-        ref: "refs/tags/v1",
-        commit: "a".repeat(40),
+      format: "vibestudio-template-release/1",
+      workspaceTemplates: {
+        base: {
+          url: "git+https://example.test/base.git",
+          ref: "refs/tags/v1",
+          commit: "a".repeat(40),
+        },
+        personal: {
+          url: "git+https://example.test/personal.git",
+          ref: "refs/tags/v1",
+          commit: "b".repeat(40),
+        },
+        system: {
+          url: "git+https://example.test/system.git",
+          ref: "refs/tags/v1",
+          commit: "c".repeat(40),
+        },
       },
     })
   );
@@ -415,9 +427,7 @@ describe("initWorkspace", () => {
 
     expect(() =>
       deleteAndUnregisterWorkspace("delete-failure", centralData, removeWorkspaceTreeForTest)
-    ).toThrow(
-      /injected registry deletion failure/
-    );
+    ).toThrow(/injected registry deletion failure/);
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
     expect(
       fs

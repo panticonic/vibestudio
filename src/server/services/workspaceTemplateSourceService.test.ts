@@ -113,6 +113,7 @@ describe("workspaceTemplateSource", () => {
       presentation: { name: "Dirty source" },
       repositories: ["panels/example"],
       files: ["package.json"],
+      dependencies: [],
     });
     expect(two).toMatchObject({ pin: second });
     expect(one).not.toHaveProperty("checkout");

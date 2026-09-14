@@ -254,7 +254,7 @@ export async function createManagedTestWorkspace(
           base: runRootTemplate,
           workRoot: path.join(testRoot, "case-root-template"),
           configureSource: options.configureSource ?? (() => {}),
-          distribution: privateRole,
+          template: privateRole,
         })
       : runRootTemplate;
   if (rootTemplate !== runRootTemplate) {

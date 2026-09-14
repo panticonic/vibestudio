@@ -1,17 +1,16 @@
 #!/usr/bin/env node
-/** Adopt exact publication receipts for the authoring source and three runtime distributions. */
+/** Adopt exact publication receipts for the three canonical workspace templates. */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  parseBaseTemplateReleaseArtifact,
+  parseTemplateReleaseArtifact,
   DefaultWorkspaceTemplatesSchema,
-} from "../packages/workspace/src/baseTemplateRelease.ts";
+} from "../packages/workspace/src/templateRelease.ts";
 import { templatePublicationSchema } from "../packages/service-schemas/src/templates.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const destination = path.join(root, "build-resources", "base-template-release.json");
-const canonicalSourceUrl = "git+https://github.com/panticonic/vibestudio-workspace-base.git";
+const destination = path.join(root, "build-resources", "workspace-template-release.json");
 const roles = ["base", "personal", "system"];
 
 function pinFromReceipt(receipt) {
@@ -23,32 +22,18 @@ function pinFromReceipt(receipt) {
   };
 }
 
-/** Source checkout identity and runtime distribution identities serve different consumers. */
-export function adoptWorkspaceReleaseReceipts({ current, source, distributions }) {
+export function adoptWorkspaceReleaseReceipts({ current, templates }) {
   const artifact = current
-    ? parseBaseTemplateReleaseArtifact(current)
-    : { format: "vibestudio-base-release/1" };
-  if (source) {
-    const pin = pinFromReceipt(source);
-    if (pin.url !== canonicalSourceUrl)
-      throw new Error(
-        `Source publication receipt targets ${pin.url}; expected ${canonicalSourceUrl}`
-      );
-    artifact.baseTemplate = pin;
-  }
-  if (distributions) {
-    if (roles.some((role) => !distributions[role]))
+    ? parseTemplateReleaseArtifact(current)
+    : { format: "vibestudio-template-release/1" };
+  if (templates) {
+    if (roles.some((role) => !templates[role]))
       throw new Error("Adopt Base, Personal and System receipts together");
     artifact.workspaceTemplates = DefaultWorkspaceTemplatesSchema.parse(
-      Object.fromEntries(roles.map((role) => [role, pinFromReceipt(distributions[role])]))
+      Object.fromEntries(roles.map((role) => [role, pinFromReceipt(templates[role])]))
     );
   }
-  const parsed = parseBaseTemplateReleaseArtifact(artifact);
-  if (!parsed.workspaceTemplates)
-    throw new Error(
-      "Missing exact Base, Personal and System distribution pins; provide --base-receipt, --personal-receipt and --system-receipt before packaging"
-    );
-  return parsed;
+  return parseTemplateReleaseArtifact(artifact);
 }
 
 export function generateWorkspaceRelease(args, output = destination) {
@@ -60,7 +45,7 @@ export function generateWorkspaceRelease(args, output = destination) {
       check = true;
       continue;
     }
-    if (!["--receipt", ...roles.map((role) => `--${role}-receipt`)].includes(flag))
+    if (!roles.map((role) => `--${role}-receipt`).includes(flag))
       throw new Error(`Unknown argument: ${flag}`);
     const input = args[++index];
     if (!input || input.startsWith("--"))
@@ -68,13 +53,12 @@ export function generateWorkspaceRelease(args, output = destination) {
     if (receipts[flag]) throw new Error(`Duplicate argument: ${flag}`);
     receipts[flag] = JSON.parse(fs.readFileSync(path.resolve(input), "utf8"));
   }
-  const hasDistribution = roles.some((role) => receipts[`--${role}-receipt`]);
+  const hasTemplates = roles.some((role) => receipts[`--${role}-receipt`]);
   const hasReceipts = Object.keys(receipts).length > 0;
   if (check && hasReceipts) throw new Error("--check cannot adopt publication receipts");
   const artifact = adoptWorkspaceReleaseReceipts({
     current: fs.existsSync(output) ? JSON.parse(fs.readFileSync(output, "utf8")) : undefined,
-    source: receipts["--receipt"],
-    distributions: hasDistribution
+    templates: hasTemplates
       ? Object.fromEntries(roles.map((role) => [role, receipts[`--${role}-receipt`]]))
       : undefined,
   });

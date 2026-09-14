@@ -189,7 +189,7 @@ Identity lives in one hub-owned database (`server-auth/identity.db`); the flow i
    are members of; inside a workspace, all members are mutually trusted.
 
 See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
-[Base remote-access skill](https://github.com/panticonic/vibestudio-workspace-base/blob/main/skills/remote-access/SKILL.md)
+[System remote-access skill](https://github.com/panticonic/vibestudio-system/blob/main/skills/remote-access/SKILL.md)
 for the operational runbook.
 
 The remote-transport suite uses real native Iroh endpoints and the current
@@ -219,63 +219,53 @@ mode concurrently with other native-input work.
 
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
-pnpm dev:base setup   # clone and remember the external Base checkout (one time)
+pnpm dev:templates setup # clone and remember the Base, Personal and System templates
 pnpm start           # build + start Electron with normal desktop semantics
 pnpm dev             # launch a fresh disposable development workspace
-pnpm dev:production  # fresh disposable instance using the pinned production Base
+pnpm dev:production  # fresh disposable instance using the pinned production templates
 pnpm dev:iroh        # build + start a local hub, then connect through Iroh
 pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
 
-#### Host and Base co-development
+#### Host and workspace-template co-development
 
-Base is an external repository because it is independently publishable userland,
-but normal development does not require repeatedly passing its path or publishing
-it. Configure it once per host clone:
+Base, Personal and System are independent, publishable workspace-template
+repositories. Personal and System each declare Base as a normal template
+dependency. Configure their sibling checkouts once per host clone:
 
 ```bash
-pnpm dev:base setup
+pnpm dev:templates setup
 ```
 
-The command clones the canonical Base repository into the sibling
-`../vibestudio-workspace-base` directory when it is absent, then records its
-canonical path in this repository's local Git configuration under
-`vibestudio.baseCheckout`. The setting is untracked and shared by this clone's
-Git worktrees. Base-aware developer commands resolve it when they need
-unpublished Base input: `pnpm dev`, `pnpm server:live`, userland and browser
-tests, type checks, generators, Metro, smoke tests, and commit checks, plus
-`pnpm start` when the ordinary desktop profile needs its first workspace. It is
-deliberately not an ambient `.env` file. Once setup has completed, no command or
-commit requires the checkout path again.
+The command creates a collection root containing `base/`, `personal/`, and
+`system/`, then records that root in local Git configuration as
+`vibestudio.templateCheckouts`. Developer launchers checkpoint each repository
+as authored. They do not build role projections or read a shared superset.
 
-When a command needs that unpublished input, it snapshots the checkout's
-visible worktree into a privately owned checkpoint. Tracked and untracked
-non-ignored edits are included; you do not need to commit, push, tag, or publish
-Base before launching. The developer checkout itself is never staged or
-committed by this process.
+Tracked and untracked non-ignored edits are included in those checkpoints, so
+local template work can be launched before it is published.
 
-The persistent `source` server instance is a two-way co-development session.
-Its initial semantic workspace comes from that worktree checkpoint, and every
-reviewed publication to protected `main` is projected back to the configured
-Base checkout. `pnpm start` is deliberately not a source instance: it uses the
-ordinary desktop profile and never writes workspace publications into Base.
+Publishing a workspace template is an explicit Templates operation inside
+Vibestudio. The workspace's `meta/vibestudio.yml` records its dependencies;
+publication retains those declarations and excludes repositories supplied by
+them. No server writes a composed workspace back into a source checkout.
 
 To exercise the shipped experience instead, run `pnpm dev:production`. It
 ignores (but does not change) the local development selection, creates a fresh
-disposable instance, and acquires the exact Base release pinned by the host.
+disposable instance, and acquires the exact template pins packaged with the host.
 `pnpm server:production` provides the corresponding headless server workflow.
 
 Useful configuration commands:
 
 ```bash
-pnpm dev:base status             # show the configured checkout, HEAD, and cleanliness
-pnpm dev:base use /other/base    # select an existing Base checkout
-pnpm dev:base path               # print the selected checkout for scripts/editors
-pnpm dev:base clear              # require setup again; use dev:production for the published Base
+pnpm dev:templates status                 # show all three checkouts
+pnpm dev:templates use /other/templates   # select a root containing base/personal/system
+pnpm dev:templates path                   # print the selected collection root
+pnpm dev:templates clear                  # require setup again
 ```
 
-`--base-checkout PATH` and `VIBESTUDIO_USERLAND_ROOT=PATH` remain explicit,
+`--template-checkouts PATH` and `VIBESTUDIO_TEMPLATE_CHECKOUTS=PATH` are
 single-command overrides. They do not change the stored selection.
 
 Optional workspace templates can likewise be tested from unpublished local
@@ -299,8 +289,7 @@ The target uses the same exact snapshot and normal workspace creation approval.
 It does not import code into Personal or System. A changed snapshot selects a
 new workspace; an unchanged snapshot can reopen its existing workspace in a
 persistent instance. The target checkout is read-only to the running instance.
-Base write-back remains owned by System. `pnpm dev` uses a disposable instance
-root by default.
+`pnpm dev` uses a disposable instance root by default.
 
 The launcher derives the template's canonical identity from its `origin`,
 snapshots tracked and untracked non-ignored worktree changes into a private
@@ -314,9 +303,9 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 
 `pnpm start` builds the unpublished checkout with production runtime semantics
 and launches it against the ordinary desktop profile. It reopens the most
-recently used registered workspace, creating `default` from the linked
-development Base only when the profile has no workspace yet. It does not expose
-developer instances or Base write-back. `pnpm dev` launches into a disposable
+recently used registered workspace, creating `default` from the selected Base
+template only when the profile has no workspace yet. It does not expose
+developer instances. `pnpm dev` launches into a disposable
 instance root — its own identity, catalog and workspaces under a temporary
 directory — and always stops its hub on quit, so the whole instance is removed
 with it. Persistent and disposable launches therefore exercise the same

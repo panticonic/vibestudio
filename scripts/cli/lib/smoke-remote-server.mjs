@@ -24,29 +24,29 @@ function runCommandBuffer(command, args, options = {}) {
   });
 }
 
-export async function resolveDevelopmentBase({
+export async function resolveDevelopmentTemplates({
   repoRoot,
-  checkpointTarget,
-  productionBase = false,
-  explicitCheckout = null,
+  checkpointRoot,
+  productionTemplates = false,
+  explicitRoot = null,
 }) {
   const stdout = await runCommandBuffer(
     process.execPath,
     [
       "--import",
       "tsx",
-      path.join(repoRoot, "scripts", "resolve-development-base.ts"),
-      "--checkpoint-target",
-      checkpointTarget,
-      ...(explicitCheckout ? ["--checkout", explicitCheckout] : []),
-      ...(productionBase ? ["--production-base"] : []),
+      path.join(repoRoot, "scripts", "resolve-development-templates.ts"),
+      "--checkpoint-root",
+      checkpointRoot,
+      ...(explicitRoot ? ["--root", explicitRoot] : []),
+      ...(productionTemplates ? ["--production-templates"] : []),
     ],
     { cwd: repoRoot }
   );
   return JSON.parse(stdout.toString().trim());
 }
 
-export async function assertBaseCheckoutBootable({ repoRoot, checkout }) {
+export async function assertTemplateCheckoutBootable({ repoRoot, checkout }) {
   let failure = null;
   try {
     await runCommandBuffer(
@@ -69,10 +69,10 @@ export async function assertBaseCheckoutBootable({ repoRoot, checkout }) {
     .filter((line) => line.trim() && !/^\s+at /.test(line))
     .join("\n");
   throw new Error(
-    `Base checkout at ${checkout} cannot boot a workspace:\n${detail}\n\n` +
+    `Template checkout at ${checkout} cannot boot a workspace:\n${detail}\n\n` +
       `Fix the source manifest or inventory, then validate with ` +
       `npx tsx scripts/validate-template-repository.ts ${checkout}, ` +
-      `or point this run elsewhere with --base-checkout <dir>.`
+      `or point this run elsewhere with --template-checkouts <dir>.`
   );
 }
 

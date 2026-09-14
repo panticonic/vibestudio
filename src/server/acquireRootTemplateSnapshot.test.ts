@@ -73,7 +73,7 @@ describe("acquireRootTemplateSnapshot", () => {
     expect(afterRestart).toMatchObject({ commit });
     // The checkout is keyed by URL and commit under profile-level derived data,
     // not under any workspace's state, so a second workspace built on the same
-    // template — the ordinary case for a distribution with dependencies — reads
+    // template — the ordinary case for a template with dependencies — reads
     // the published copy instead of cloning it again.
     expect(clone).toHaveBeenCalledTimes(1);
     const cached = await fsp.readdir(

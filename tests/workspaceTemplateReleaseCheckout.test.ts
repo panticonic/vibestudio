@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkoutPinnedBaseRelease,
   readPinnedBaseRelease,
-} from "../scripts/checkout-base-template-release.mjs";
+} from "../scripts/checkout-workspace-template-release.mjs";
 
 describe("pinned Base release checkout", () => {
   it("reads release coordinates from the artifact without duplicating the current pin", () => {
@@ -14,14 +14,22 @@ describe("pinned Base release checkout", () => {
     try {
       fs.mkdirSync(path.join(root, "build-resources"));
       fs.writeFileSync(
-        path.join(root, "build-resources", "base-template-release.json"),
+        path.join(root, "build-resources", "workspace-template-release.json"),
         JSON.stringify({
-          format: "vibestudio-base-release/1",
-          baseTemplate: {
-            url: "git+https://example.test/base.git",
-            ref: "refs/tags/v1.2.3",
-            commit,
-            snapshot: `v1-sha256:${"b".repeat(64)}`,
+          format: "vibestudio-template-release/1",
+          workspaceTemplates: {
+            base: {
+              url: "git+https://example.test/base.git",
+              ref: "refs/tags/v1.2.3",
+              commit,
+              snapshot: `v1-sha256:${"b".repeat(64)}`,
+            },
+            personal: {
+              url: "git+https://example.test/personal.git",
+              ref: "refs/tags/v1.2.3",
+              commit,
+            },
+            system: { url: "git+https://example.test/system.git", ref: "refs/tags/v1.2.3", commit },
           },
         })
       );

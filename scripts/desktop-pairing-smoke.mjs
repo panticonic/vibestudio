@@ -30,9 +30,9 @@ import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { createConnectDeepLink, parseConnectLink } from "./cli/lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import {
-  assertBaseCheckoutBootable,
+  assertTemplateCheckoutBootable,
   createRemoteServeArgs,
-  resolveDevelopmentBase,
+  resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "./owned-process-tree.mjs";
@@ -356,11 +356,11 @@ function parseArgs(argv) {
     // System stopped carrying a copy of Base and started acquiring it.
     launchTimeoutMs: 420_000,
     readyFile: null,
-    productionBase: false,
+    productionTemplates: false,
     sharedMemberRevocation: false,
     browserImportApproval: false,
     local: false,
-    baseCheckout: null,
+    templateCheckouts: null,
     help: false,
   };
 
@@ -374,10 +374,10 @@ function parseArgs(argv) {
       options.launchTimeoutMs = parsePositiveInt(argv[++i], "--launch-timeout-ms");
     } else if (arg === "--ready-file") {
       options.readyFile = path.resolve(argv[++i] ?? "");
-    } else if (arg === "--base-checkout") {
-      options.baseCheckout = path.resolve(argv[++i] ?? "");
-    } else if (arg === "--production-base") {
-      options.productionBase = true;
+    } else if (arg === "--template-checkouts") {
+      options.templateCheckouts = path.resolve(argv[++i] ?? "");
+    } else if (arg === "--production-templates") {
+      options.productionTemplates = true;
     } else if (arg === "--local") {
       options.local = true;
     } else if (arg === "--shared-member-revocation") {
@@ -413,9 +413,8 @@ Runner options:
   --launch-timeout-ms <ms>  Time to wait for Electron launch and shell load.
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
-  --base-checkout <dir>     Use this Base checkout for this run only.
-  --production-base        Use the canonical pinned production Base instead of
-                            the selected development checkout.
+  --template-checkouts <dir> Use Base, Personal and System checkouts from this root.
+  --production-templates    Use the canonical pinned production templates instead.
   --local                  Verify account-only local startup instead of remote pairing.
   --shared-member-revocation Also exercise a second member with an open approval.
   --browser-import-approval Import fixture bookmarks after visible native approval.
@@ -2003,34 +2002,32 @@ async function main() {
     };
     delete serverEnv.VIBESTUDIO_INSTANCE_ROOT;
     delete serverEnv.VIBESTUDIO_WORKSPACE;
-    const developmentBase = await resolveDevelopmentBase({
+    const developmentTemplates = await resolveDevelopmentTemplates({
       repoRoot,
-      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
-      productionBase: options.productionBase,
-      explicitCheckout: options.baseCheckout,
+      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
+      productionTemplates: options.productionTemplates,
+      explicitRoot: options.templateCheckouts,
     });
-    if (developmentBase) {
-      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
-      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.system);
+    if (developmentTemplates) {
+      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentTemplates.pins);
+      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(
+        developmentTemplates.pins.system
+      );
       serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
-        Object.keys(developmentBase.pins).map((name) => ({
-          pin: developmentBase.pins[name],
-          checkout: developmentBase.checkouts[name],
+        Object.keys(developmentTemplates.pins).map((name) => ({
+          pin: developmentTemplates.pins[name],
+          checkout: developmentTemplates.checkouts[name],
         }))
       );
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
-      await assertBaseCheckoutBootable({
+      await assertTemplateCheckoutBootable({
         repoRoot,
-        checkout: developmentBase.checkouts.system,
+        checkout: developmentTemplates.checkouts.system,
       });
       console.log(
-        `[desktop-smoke] System: ${developmentBase.pins.system.commit} from ${developmentBase.sourceCheckout}`
+        `[desktop-smoke] System: ${developmentTemplates.pins.system.commit} from ${developmentTemplates.sourceCheckouts.system}`
       );
     } else {
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
-      console.log("[desktop-smoke] Base: canonical pinned production release");
+      console.log("[desktop-smoke] Templates: canonical pinned production release");
     }
     if (options.local) {
       const sourceEnvironment = Object.fromEntries(

@@ -11,8 +11,8 @@ What you must NEVER do is patch around the wall to comply with my words: a flag,
 ## Performance investigations
 
 For Vibestudio panel, app, worker, build, startup, and agent-workflow performance,
-use the native profiling system documented in the exact Base checkout at
-`$VIBESTUDIO_USERLAND_ROOT/skills/performance/SKILL.md`. It measures the real panel lifecycle,
+use the native profiling system documented in the exact System template checkout at
+`$VIBESTUDIO_TEMPLATE_CHECKOUTS/system/skills/performance/SKILL.md`. It measures the real panel lifecycle,
 runtime builds, Electron/CDP pages, services, and managed system-test instances.
 Do not use the generic `web-perf` skill for these tasks: its conventional website
 and Chrome DevTools MCP workflow does not model Vibestudio's materialization and
@@ -92,8 +92,8 @@ another. Adopting costs a few thousand files of semantic import, so do not pass
 the flag for unrelated tests.
 
 Tests run in the instance's System workspace. That is where the account's
-tooling lives — `workers/system-test-runner` is part of the System
-distribution, not Personal — and it is the workspace a desktop client routes
+tooling lives — `workers/system-test-runner` is part of the System template,
+not Personal — and it is the workspace a desktop client routes
 its own connection to, so a client-device executor a client registers is
 visible to every run without any extra scoping. Attach such a client with
 `node scripts/development-client-executor.mjs --instance ID`, which pairs a

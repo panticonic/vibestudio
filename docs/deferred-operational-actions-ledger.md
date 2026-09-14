@@ -1,5 +1,9 @@
 # Deferred operational actions ledger
 
+> Historical ledger. The Base paths, release artifact names, and publication
+> steps recorded here belong to the superseded external-Base cutover. It is
+> retained as an audit record, not as the current release checklist.
+
 This ledger records operational actions that remain after implementation. The
 owner has returned and lifted the temporary deletion hold. Destructive cleanup
 is now permitted when its exact target has been verified, while publication,

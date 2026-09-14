@@ -3,7 +3,7 @@ import path from "node:path";
 import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
-import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
+import { requireDevelopmentTemplateCheckout } from "./src/dev/developmentTemplateConfig";
 
 // Browser-mode test project. Opened Radix overlays (Dialog/DropdownMenu/Popover/
 // HoverCard) exercise externalized CJS sidecars that do not faithfully model a
@@ -11,7 +11,7 @@ import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig"
 // these tests run here; the jsdom suite excludes *.browser.test.tsx.
 
 export default defineConfig(async () => {
-  const workspaceRoot = requireDevelopmentBaseCheckout(__dirname);
+  const workspaceRoot = requireDevelopmentTemplateCheckout(__dirname, "base");
   const dependencyProjection = await prepareUserlandDependencyProjection({
     appRoot: __dirname,
     workspaceRoot,

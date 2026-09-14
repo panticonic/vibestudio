@@ -13,12 +13,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // Loopback host the co-located gateway binds. Remote reach is the Iroh endpoint.
 const LOOPBACK_HOST = "127.0.0.1";
 
-const BASE_TEMPLATE_RELEASE_ARTIFACT = "base-template-release.json";
+const TEMPLATE_RELEASE_ARTIFACT = "workspace-template-release.json";
 
-/** True when this host build already carries exact Base/Personal/System pins. */
+/** True when this host build already carries exact Base/Personal/System template pins. */
 export function hostBuildHasWorkspaceTemplatePins(appRoot) {
   for (const dir of ["resources", "build-resources"]) {
-    const candidate = path.join(appRoot, dir, BASE_TEMPLATE_RELEASE_ARTIFACT);
+    const candidate = path.join(appRoot, dir, TEMPLATE_RELEASE_ARTIFACT);
     if (!fs.existsSync(candidate)) continue;
     try {
       if (JSON.parse(fs.readFileSync(candidate, "utf8")).workspaceTemplates) return true;
@@ -31,34 +31,34 @@ export function hostBuildHasWorkspaceTemplatePins(appRoot) {
 }
 
 /**
- * Name the exact distributions a workspace is created from.
+ * Name the exact templates a workspace is created from.
  *
  * A packaged app carries them in its release artifact. A source checkout does
  * not, so pairing would succeed and then the first `hubControl.ensureUserWorkspaces`
- * would fail with "This host build has no exact Base, Personal and System
- * distribution pins" — after the one-time invite was already spent. Resolve the
- * configured development Base instead, exactly as the desktop dev launcher does,
+ * would fail before workspace creation—after the one-time invite was already
+ * spent. Resolve the
+ * configured development templates instead, exactly as the desktop dev launcher does,
  * so `remote serve` works the same way in both.
  */
 function developmentWorkspaceTemplateEnv(appRoot, checkpointTarget) {
   if (process.env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]) return {};
   if (hostBuildHasWorkspaceTemplatePins(appRoot)) return {};
-  const resolver = path.join(repoRoot, "scripts", "resolve-development-base.ts");
+  const resolver = path.join(repoRoot, "scripts", "resolve-development-templates.ts");
   if (!fs.existsSync(resolver)) return {};
   const resolved = spawnSync(
     process.execPath,
-    ["--import", "tsx", resolver, "--checkpoint-target", checkpointTarget],
+    ["--import", "tsx", resolver, "--checkpoint-root", checkpointTarget],
     { cwd: repoRoot, encoding: "utf8" }
   );
   if (resolved.error) throw resolved.error;
   if (resolved.status !== 0) {
     throw new Error(
-      `Could not resolve a development Base for pairing (exit ${resolved.status ?? "unknown"}).` +
+      `Could not resolve development templates for pairing (exit ${resolved.status ?? "unknown"}).` +
         `${resolved.stderr ? `\n${resolved.stderr}` : ""}`
     );
   }
   const selection = JSON.parse(resolved.stdout.trim());
-  // No development Base is selected; the workspace runtime uses its pinned release.
+  // No development templates are selected; the workspace runtime uses its pinned release.
   if (!selection) return {};
   return {
     VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(selection.pins),

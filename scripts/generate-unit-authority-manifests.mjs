@@ -15,7 +15,7 @@ import {
   inferUnitTransportCapabilities,
   inferWorkspacePackageReferences,
 } from "@vibestudio/unit-authority-inference";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const syntaxServices = new Map();
@@ -32,7 +32,7 @@ function parseSource(file, source) {
   if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
   return parsed;
 }
-const workspaceRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
+const workspaceRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "base");
 const matrix = mergeHostServiceAuthorityMatrices(loadHostServiceAuthorityMatrices(root));
 const methodTiers = new Map();
 const methodCapabilities = new Map();

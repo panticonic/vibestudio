@@ -23,7 +23,7 @@ import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
  * Profile-level derived data rather than workspace state, which is what this
  * content is: keyed by URL and commit, and every hit validated by reading that
  * exact commit's tree. Two workspaces built on one template — the ordinary
- * case now that a distribution declares its dependencies instead of copying
+ * case now that a template declares its dependencies instead of copying
  * them — clone it once between them rather than once each. Supervisors and
  * tests point VIBESTUDIO_SHARED_DERIVED_CACHE_DIR somewhere private to stay
  * hermetic.

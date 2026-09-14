@@ -6,7 +6,8 @@ import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sou
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { exactPairTests } from "./vitest.exactPairTests";
-import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
+import { requireDevelopmentTemplateCheckouts } from "./src/dev/developmentTemplateConfig";
+import { tsImport } from "tsx/esm/api";
 
 /** The compiler options `scripts/config/userland/tsconfig.json` states are the
  * userland contract; the typecheck projects that exact file. Vitest transforms
@@ -25,8 +26,26 @@ function userlandJsxTransform(appRoot: string): { jsx: "automatic" | "transform"
 }
 
 export default defineConfig(async () => {
-  const workspaceRoot = requireDevelopmentBaseCheckout(__dirname);
-  const workspaceGlob = path.relative(__dirname, workspaceRoot).replaceAll(path.sep, "/");
+  // Vite externalizes workspace packages while bundling its config. Load this
+  // source module through the same TypeScript resolver used by host scripts so
+  // its package-export graph retains normal `.js`-to-`.ts` resolution.
+  const { composeDevelopmentTemplateCheckouts } = await tsImport<
+    typeof import("./src/dev/developmentTemplateComposition.js")
+  >("./src/dev/developmentTemplateComposition.ts", import.meta.url);
+  const template = process.env["VIBESTUDIO_USERLAND_TEMPLATE"] ?? "base";
+  if (!new Set(["base", "personal", "system"]).has(template)) {
+    throw new Error(`Unknown VIBESTUDIO_USERLAND_TEMPLATE ${JSON.stringify(template)}`);
+  }
+  const checkouts = requireDevelopmentTemplateCheckouts(__dirname).checkouts;
+  const composition = composeDevelopmentTemplateCheckouts(
+    template === "base"
+      ? [checkouts.base]
+      : [checkouts.base, checkouts[template as "personal" | "system"]]
+  );
+  process.once("exit", composition.release);
+  const workspaceRoot = composition.root;
+  const testSourceRoot = checkouts[template as "base" | "personal" | "system"];
+  const workspaceGlob = path.relative(__dirname, testSourceRoot).replaceAll(path.sep, "/");
   const projectedDependencies = await userlandDependencyAliases(__dirname, workspaceRoot);
   const dependencyProjection = await prepareUserlandDependencyProjection({
     appRoot: __dirname,
@@ -59,7 +78,7 @@ export default defineConfig(async () => {
       ...vitestSharedConfig.server,
       fs: {
         ...vitestSharedConfig.server?.fs,
-        allow: [__dirname, workspaceRoot],
+        allow: [__dirname, workspaceRoot, testSourceRoot],
       },
     },
     resolve: {
@@ -129,7 +148,7 @@ export default defineConfig(async () => {
     },
     test: {
       ...vitestSharedConfig.test,
-      name: "userland",
+      name: `userland-${template}`,
       reporters: [
         "default",
         [
@@ -158,7 +177,7 @@ export default defineConfig(async () => {
         `${workspaceGlob}/**/*.test.tsx`,
         "tests/workspace-integration/**/*.test.ts",
         "tests/workspace-integration/**/*.test.tsx",
-        ...exactPairTests,
+        ...(template === "base" ? exactPairTests : []),
       ],
       exclude: [
         ...vitestSharedConfig.test.exclude,

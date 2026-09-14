@@ -15,9 +15,9 @@ import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { createConnectDeepLink, parseConnectLink } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import {
-  assertBaseCheckoutBootable,
+  assertTemplateCheckoutBootable,
   createRemoteServeArgs,
-  resolveDevelopmentBase,
+  resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
@@ -62,8 +62,8 @@ function parseArgs(argv) {
     noReset: false,
     noTap: false,
     realModel: false,
-    productionBase: false,
-    baseCheckout: null,
+    productionTemplates: false,
+    templateCheckouts: null,
     timeoutMs: 420_000,
     pairingTimeoutMs: 180_000,
     agentTimeoutMs: 300_000,
@@ -96,10 +96,10 @@ function parseArgs(argv) {
       options.noTap = true;
     } else if (arg === "--real-model") {
       options.realModel = true;
-    } else if (arg === "--base-checkout") {
-      options.baseCheckout = argv[++i] ?? null;
-    } else if (arg === "--production-base") {
-      options.productionBase = true;
+    } else if (arg === "--template-checkouts") {
+      options.templateCheckouts = argv[++i] ?? null;
+    } else if (arg === "--production-templates") {
+      options.productionTemplates = true;
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
     } else if (arg === "--pairing-timeout-ms") {
@@ -153,13 +153,10 @@ Runner options:
   --no-tap            Do not automate the Pair button tap.
   --real-model        Use the real model provider/credential path instead of
                        the deterministic E2E model stub.
-  --production-base   Create the workspace from the canonical pinned Base
-                       release instead of the selected development checkout.
-  --base-checkout <dir>
-                       Use this Base checkout for THIS RUN only. Prefer it over
-                       the shared git config vibestudio.baseCheckout, which every
-                       process in the repo reads — repointing that redirects
-                       other agents workspace write-back into your checkout.
+  --production-templates
+                       Use the canonical pinned templates instead of development checkouts.
+  --template-checkouts <dir>
+                       Use Base, Personal and System checkouts from this root for this run.
   --timeout-ms <ms>   Time to wait for Android boot, build/install, and server
                        readiness. Defaults to 420000.
   --pairing-timeout-ms <ms>
@@ -2105,35 +2102,31 @@ async function main() {
       VIBESTUDIO_SHARED_BUILD_CACHE_DIR: sharedBuildResultCacheDir,
       VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR: sharedBuildArtifactPoolDir,
     };
-    const developmentBase = await resolveDevelopmentBase({
+    const developmentTemplates = await resolveDevelopmentTemplates({
       repoRoot,
-      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
-      productionBase: options.productionBase,
-      explicitCheckout: options.baseCheckout,
+      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
+      productionTemplates: options.productionTemplates,
+      explicitRoot: options.templateCheckouts,
     });
-    if (developmentBase) {
-      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
-      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.base);
+    if (developmentTemplates) {
+      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentTemplates.pins);
+      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(
+        developmentTemplates.pins.base
+      );
       serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
-        Object.keys(developmentBase.pins).map((name) => ({
-          pin: developmentBase.pins[name],
-          checkout: developmentBase.checkouts[name],
+        Object.keys(developmentTemplates.pins).map((name) => ({
+          pin: developmentTemplates.pins[name],
+          checkout: developmentTemplates.checkouts[name],
         }))
       );
-      // Write-back belongs to the source development instance alone; a smoke
-      // must never publish back into the developer's Base checkout.
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
       console.log(
-        `[mobile-smoke] System:    ${developmentBase.pins.system.commit} from ${developmentBase.sourceCheckout}`
+        `[mobile-smoke] System:    ${developmentTemplates.pins.system.commit} from ${developmentTemplates.sourceCheckouts.system}`
       );
-      await assertBaseCheckoutBootable({
+      await assertTemplateCheckoutBootable({
         repoRoot,
-        checkout: developmentBase.checkouts.base,
+        checkout: developmentTemplates.checkouts.base,
       });
     } else {
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
-      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
       console.log("[mobile-smoke] Base:      canonical pinned production release");
     }
     if (options.realModel) {
@@ -2258,7 +2251,7 @@ async function main() {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, managedPanelDeadlineMs);
     }
 
-    // The shipped Personal distribution must seed and start onboarding itself.
+    // The shipped Personal template must seed and start onboarding itself.
     // Neither --no-tap nor --skip-agent-turn substitutes a manually created chat.
     const onboarding = await waitForOnboardingChatRendered(
       options.device,

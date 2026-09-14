@@ -92,7 +92,7 @@ function activateAlarmKey(
   );
 }
 
-describe("workspace distribution panel initialization", () => {
+describe("workspace template panel initialization", () => {
   const seeds = [{ source: SOURCE, stateArgs: { mode: "initial" } }, { source: "panels/second" }];
 
   it("commits one durable set of preparing roots and resumes after restart without duplicates", async () => {
@@ -132,7 +132,6 @@ describe("workspace distribution panel initialization", () => {
     const sharedSeed = shared.initializePanels([{ source: "panels/chat" }]);
     expect(sharedSeed[0]?.entity.ownerUserId).toBeUndefined();
   });
-
 
   it("seeds and migrates a private workspace into one durable owner tree", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
@@ -174,7 +173,7 @@ describe("workspace distribution panel initialization", () => {
     expect(instance.panelTreeRootGroups({ limit: 10 }).revision).toBe(settledRevision);
   });
 
-  it("assigns private ownership while creating distribution roots", async () => {
+  it("assigns private ownership while creating template roots", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     const initialized = instance.initializePanels(seeds, "alice");
     expect(initialized).toHaveLength(2);
@@ -220,7 +219,7 @@ describe("workspace distribution panel initialization", () => {
     expect(instance.entityListPreparingByKind("panel")).toEqual([]);
   });
 
-  it("records an empty distribution as initialized", async () => {
+  it("records an empty template as initialized", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     expect(instance.initializePanels([])).toEqual([]);
     expect(instance.initializePanels(seeds)).toEqual([]);

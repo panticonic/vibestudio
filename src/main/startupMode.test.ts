@@ -33,7 +33,7 @@ vi.mock("@vibestudio/workspace/loader", () => ({
   },
 }));
 
-vi.mock("@vibestudio/workspace/baseTemplateRelease", () => ({
+vi.mock("@vibestudio/workspace/templateRelease", () => ({
   readWorkspaceCreationTemplate: () => ({
     url: "https://example.test/base.git",
     ref: "v1",

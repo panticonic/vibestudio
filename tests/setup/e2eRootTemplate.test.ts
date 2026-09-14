@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import YAML from "yaml";
-import { buildWorkspaceDistribution } from "../../src/dev/workspaceDistributionBuilder.js";
+import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
 import { deriveE2eRootTemplate } from "./e2eRootTemplate.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
@@ -26,62 +26,66 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-it("derives explicit Personal and ordinary project roots from their exact distributions", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-private-distributions-"));
+it("derives explicit Personal and ordinary project roots from canonical templates", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-private-templates-"));
   roots.push(root);
-  const sourceRoot = path.join(root, "authoring");
-  fs.mkdirSync(path.join(sourceRoot, "meta"), { recursive: true });
-  fs.writeFileSync(
-    path.join(sourceRoot, "package.json"),
-    '{"name":"@workspace/root","private":true}'
-  );
+  const sourceRoots: Record<string, string> = {};
   for (const [role, source] of [
     ["base", "panels/base"],
     ["personal", "panels/chat"],
     ["system", "about/new"],
   ]) {
+    const sourceRoot = path.join(root, `source-${role}`);
+    sourceRoots[role!] = sourceRoot;
+    fs.mkdirSync(path.join(sourceRoot, "meta"), { recursive: true });
     fs.mkdirSync(path.join(sourceRoot, source!), { recursive: true });
     fs.writeFileSync(
       path.join(sourceRoot, source!, "package.json"),
       JSON.stringify({ name: `@workspace-${source!.split("/")[0]}/${source!.split("/")[1]}` })
     );
     fs.writeFileSync(
-      path.join(sourceRoot, "meta", `${role}.yml`),
+      path.join(sourceRoot, "meta", "vibestudio.yml"),
       YAML.stringify({
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        template: { name: role, repositories: [source], files: ["package.json"] },
+        template: {
+          name: role,
+          ...(role === "base"
+            ? {}
+            : { dependencies: [{ url: "git+https://example.test/base.git" }] }),
+          repositories: [source],
+          files: [],
+        },
         initPanels: [{ source }],
       })
     );
+    execFileSync("git", ["init", "-b", "main", sourceRoot], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourceRoot, "add", "-A"], { stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-C",
+        sourceRoot,
+        "-c",
+        "user.name=E2E fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "commit",
+        "-m",
+        "Fixture source",
+      ],
+      { stdio: "ignore" }
+    );
+    execFileSync(
+      "git",
+      ["-C", sourceRoot, "remote", "add", "origin", `https://example.test/${role}.git`],
+      { stdio: "ignore" }
+    );
   }
-  execFileSync("git", ["init", "-b", "main", sourceRoot], { stdio: "ignore" });
-  execFileSync("git", ["-C", sourceRoot, "add", "-A"], { stdio: "ignore" });
-  execFileSync(
-    "git",
-    [
-      "-C",
-      sourceRoot,
-      "-c",
-      "user.name=E2E fixture",
-      "-c",
-      "user.email=fixture@example.test",
-      "commit",
-      "-m",
-      "Fixture source",
-    ],
-    { stdio: "ignore" }
-  );
-  const build = (role: string) =>
-    buildWorkspaceDistribution({
-      sourceRoot,
-      manifestPath: `meta/${role}.yml`,
-      outputRoot: path.join(root, role),
-      url: "git+https://example.test/defaults.git",
-      ref: `refs/heads/${role}`,
-    });
-  const base = await build("base");
-  const personal = await build("personal");
-  const system = await build("system");
+  const [base, personal, system] = await inspectWorkspaceSources({
+    checkouts: [sourceRoots.base!, sourceRoots.personal!, sourceRoots.system!],
+    checkpointRoot: path.join(root, "checkpoints"),
+  });
+  if (!base || !personal || !system) throw new Error("Template fixture inspection failed");
   const derived = await deriveE2eRootTemplate({
     base: {
       ...system,
@@ -90,7 +94,7 @@ it("derives explicit Personal and ordinary project roots from their exact distri
       sources: [base, personal, system],
     },
     workRoot: path.join(root, "case"),
-    distribution: "personal",
+    template: "personal",
     configureSource: (checkout) => {
       const file = path.join(checkout, "meta/vibestudio.yml");
       const config = YAML.parse(fs.readFileSync(file, "utf8"));
@@ -111,7 +115,7 @@ it("derives explicit Personal and ordinary project roots from their exact distri
   expect(derived.sources.at(-1)?.review).toEqual({
     presentation: { name: "personal" },
     repositories: ["panels/chat"],
-    files: ["package.json"],
+    files: [],
   });
   const runtime = YAML.parse(
     fs.readFileSync(path.join(derived.materializedSource, "meta/vibestudio.yml"), "utf8")

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -194,9 +194,10 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-brand-"));
 try {
   const brandDir = path.join(repoRoot, "build-resources", "brand");
   const linuxDir = path.join(repoRoot, "build-resources", "icons");
-  const exactUserlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
-  const workspaceUiAssetsDir = path.join(exactUserlandRoot, "packages", "ui", "src", "assets");
-  const mobileWorkspaceAssets = path.join(exactUserlandRoot, "apps", "mobile", "src", "assets");
+  const templateRoots =
+    developmentTemplateConfig.requireDevelopmentTemplateCheckouts(repoRoot).checkouts;
+  const workspaceUiAssetsDir = path.join(templateRoots.base, "packages", "ui", "src", "assets");
+  const mobileWorkspaceAssets = path.join(templateRoots.system, "apps", "mobile", "src", "assets");
   const mobileHostAssets = path.join(repoRoot, "apps", "mobile", "assets");
   const androidRes = path.join(repoRoot, "apps", "mobile", "android", "app", "src", "main", "res");
   const iosIconDir = path.join(

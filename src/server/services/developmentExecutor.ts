@@ -153,7 +153,7 @@ export class DevelopmentExecutor {
       this.deps.planSource({
         contextId: input.session.contextId,
         repositoryId: input.pair.baseRepositoryId,
-        // The workspace source distribution declares its units in the manifest
+        // The workspace template declares its units in the manifest
         // and carries no root lockfile: its dependencies are resolved by the
         // host's semantic projection, not by a pnpm install at its root.
         // Requiring one here refused every build of an adopted Base.

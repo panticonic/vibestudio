@@ -9,10 +9,10 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function readPinnedBaseRelease(root = repoRoot) {
-  const releasePath = path.join(root, "build-resources", "base-template-release.json");
+  const releasePath = path.join(root, "build-resources", "workspace-template-release.json");
   const document = JSON.parse(fs.readFileSync(releasePath, "utf8"));
-  const release = document?.baseTemplate;
-  if (document?.format !== "vibestudio-base-release/1") {
+  const release = document?.workspaceTemplates?.base;
+  if (document?.format !== "vibestudio-template-release/1") {
     throw new Error(`Unsupported Base release document: ${releasePath}`);
   }
   if (
@@ -68,7 +68,7 @@ function defaultRunGit(args) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const destination = process.argv[2];
   if (!destination || process.argv.length !== 3) {
-    throw new Error("usage: node scripts/checkout-base-template-release.mjs <destination>");
+    throw new Error("usage: node scripts/checkout-workspace-template-release.mjs <destination>");
   }
   const release = readPinnedBaseRelease();
   const checkout = checkoutPinnedBaseRelease({ destination, release });

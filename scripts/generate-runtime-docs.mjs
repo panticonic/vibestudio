@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
+const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(repoRoot, "base");
 const gadCatalogPath = path.join(
   repoRoot,
   "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json"

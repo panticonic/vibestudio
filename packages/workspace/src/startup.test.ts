@@ -21,13 +21,25 @@ function setup() {
   process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
   fs.mkdirSync(path.join(root, "build-resources"), { recursive: true });
   fs.writeFileSync(
-    path.join(root, "build-resources", "base-template-release.json"),
+    path.join(root, "build-resources", "workspace-template-release.json"),
     JSON.stringify({
-      format: "vibestudio-base-release/1",
-      baseTemplate: {
-        url: "git+https://example.test/base.git",
-        ref: "refs/tags/v1",
-        commit: "a".repeat(40),
+      format: "vibestudio-template-release/1",
+      workspaceTemplates: {
+        base: {
+          url: "git+https://example.test/base.git",
+          ref: "refs/tags/v1",
+          commit: "a".repeat(40),
+        },
+        personal: {
+          url: "git+https://example.test/personal.git",
+          ref: "refs/tags/v1",
+          commit: "b".repeat(40),
+        },
+        system: {
+          url: "git+https://example.test/system.git",
+          ref: "refs/tags/v1",
+          commit: "c".repeat(40),
+        },
       },
     })
   );

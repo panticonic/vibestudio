@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import { parseUnitAuthorityManifest } from "../packages/shared/src/authorityManifest.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const workspaceRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
+const workspaceRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "base");
 const executableRoots = new Set(["about", "apps", "extensions", "panels", "workers"]);
 const failures = [];
 

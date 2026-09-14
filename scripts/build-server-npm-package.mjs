@@ -104,7 +104,7 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
     defaultSkip
   );
 
-  stageBaseTemplateRelease(root);
+  stageTemplateRelease(root);
 
   // Bin shims.
   copyWorkerdWindowsMetadata(root);
@@ -151,7 +151,10 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
 }
 
 function copyWorkerdWindowsMetadata(root) {
-  copyFile("scripts/workerd-windows-metadata.mjs", path.join(root, "scripts/workerd-windows-metadata.mjs"));
+  copyFile(
+    "scripts/workerd-windows-metadata.mjs",
+    path.join(root, "scripts/workerd-windows-metadata.mjs")
+  );
   copyFile("scripts/workerd.exe.manifest", path.join(root, "scripts/workerd.exe.manifest"));
 }
 
@@ -232,10 +235,10 @@ function normalizeVendoredManifest(manifestPath) {
   return pkg.version ?? VERSION;
 }
 
-export function stageBaseTemplateRelease(pkgRoot) {
+export function stageTemplateRelease(pkgRoot) {
   copyFile(
-    "build-resources/base-template-release.json",
-    path.join(pkgRoot, "build-resources/base-template-release.json")
+    "build-resources/workspace-template-release.json",
+    path.join(pkgRoot, "build-resources/workspace-template-release.json")
   );
 }
 

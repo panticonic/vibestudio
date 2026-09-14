@@ -4,11 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
+const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "system");
 const sourceDir = path.join(path.resolve(userlandRoot), "panels/terminal");
 const outDir = path.join(root, ".tmp/terminal-input-jig-smoke");
 const mainPath = path.join(outDir, "electron-main.mjs");

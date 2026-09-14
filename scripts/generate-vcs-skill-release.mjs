@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 import {
   vcsErrorSchema,
@@ -298,7 +298,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       userlandRoot:
         rootFlag >= 0
           ? process.argv[rootFlag + 1]
-          : developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot),
+          : developmentTemplateConfig.requireDevelopmentTemplateCheckout(repoRoot, "base"),
       checkOnly: process.argv.includes("--check"),
     });
   } catch (error) {

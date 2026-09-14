@@ -13,10 +13,12 @@ import {
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
 } from "@vibestudio/unit-authority-inference";
+import developmentTemplateConfig from "../../src/dev/developmentTemplateConfig.cjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const userlandRoot = path.resolve(
-  process.env.VIBESTUDIO_USERLAND_ROOT ?? path.join(repositoryRoot, "../vibestudio-workspace-base")
+const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(
+  repositoryRoot,
+  "base"
 );
 
 describe("inferWorkspaceServiceCapabilities", () => {

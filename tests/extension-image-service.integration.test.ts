@@ -7,9 +7,9 @@ import { envelopeFromMessage } from "@vibestudio/rpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import {
-  developmentBaseSelectionEnv,
-  resolveDevelopmentBaseSelection,
-} from "../src/dev/developmentBaseSelection.js";
+  developmentTemplateSetEnv,
+  resolveDevelopmentTemplateSet,
+} from "../src/dev/developmentTemplateSet.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -48,9 +48,9 @@ maybeDescribe("image-service extension server smoke", () => {
   it("builds the declared extension then invokes it through the server RPC surface", async () => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-server-smoke-"));
     const readyFile = path.join(tempRoot, "ready.json");
-    const developmentBase = await resolveDevelopmentBaseSelection({
+    const developmentTemplates = await resolveDevelopmentTemplateSet({
       repoRoot: process.cwd(),
-      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
     });
     proc = spawn(
       process.execPath,
@@ -62,7 +62,7 @@ maybeDescribe("image-service extension server smoke", () => {
           NODE_ENV: "development",
           HOME: tempRoot,
           XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
-          ...(developmentBase ? developmentBaseSelectionEnv(developmentBase) : {}),
+          ...(developmentTemplates ? developmentTemplateSetEnv(developmentTemplates) : {}),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }

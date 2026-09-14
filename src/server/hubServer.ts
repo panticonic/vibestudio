@@ -21,7 +21,7 @@ import {
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
   readDefaultWorkspaceTemplates,
-} from "@vibestudio/workspace/baseTemplateRelease";
+} from "@vibestudio/workspace/templateRelease";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceCreationDescriptor,
@@ -243,9 +243,6 @@ interface HubControlTransport {
 }
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-const DEVELOPMENT_WRITEBACK_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK";
-const DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV =
-  "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID";
 
 const HubPairingCredentialBodySchema = z
   .object({
@@ -969,33 +966,6 @@ export function selectBootstrapWorkspace(
   return null;
 }
 
-/** One source checkout has one writeback owner, independent of which member connects next. */
-export function selectDevelopmentWritebackWorkspaceId(
-  state: Pick<HubRuntimeState, "centralData" | "identityDb" | "userStore">
-): string | null {
-  const root = state.userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
-  if (!root) return null;
-  return (
-    state.centralData
-      .listWorkspaces()
-      .find(
-        (workspace) =>
-          workspace.privateRole === "system" &&
-          state.identityDb.getPrivateWorkspaceOwner(workspace.workspaceId)?.userId === root.id
-      )?.workspaceId ?? null
-  );
-}
-
-function bindDevelopmentWritebackWorkspace(
-  state: Pick<HubRuntimeState, "centralData" | "identityDb" | "userStore">
-): void {
-  const owner = process.env[DEVELOPMENT_WRITEBACK_ENV]
-    ? selectDevelopmentWritebackWorkspaceId(state)
-    : null;
-  if (owner) process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV] = owner;
-  else delete process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
-}
-
 /**
  * Re-establish every independently durable workspace reach contract without
  * coupling hub availability to any one child. A failed child remains absent
@@ -1438,9 +1408,6 @@ async function handleInternalRoute(
         // hub must no longer depend on the launcher's temporary checkpoint or
         // offer it as the template for later workspace creation.
         delete process.env[INITIAL_WORKSPACE_TEMPLATE_ENV];
-        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"];
-        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"];
-        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"];
       }
       sendJson(res, 200, {
         completed,
@@ -1568,7 +1535,6 @@ export async function executeHubControl(
       listHubWorkspaces(state, subject).map((workspace) => workspace.workspaceId)
     );
     const pair = state.centralData.ensurePrivateWorkspaces(subject.userId, templates);
-    bindDevelopmentWritebackWorkspace(state);
     if (!before.has(pair.personal.workspaceId) || !before.has(pair.system.workspaceId))
       emitWorkspaceCatalogChanged(state);
     respond({
@@ -2511,17 +2477,6 @@ export function buildWorkspaceChildEnv(input: {
   }
   delete env["VIBESTUDIO_REQUIRE_ELECTRON_READY"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
-  const rawWriteback = env[DEVELOPMENT_WRITEBACK_ENV]?.trim();
-  const writebackWorkspaceId = env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV]?.trim();
-  delete env[DEVELOPMENT_WRITEBACK_ENV];
-  delete env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
-  if (rawWriteback && writebackWorkspaceId === input.workspaceId) {
-    const descriptor = JSON.parse(rawWriteback) as Record<string, unknown>;
-    env[DEVELOPMENT_WRITEBACK_ENV] = JSON.stringify({
-      ...descriptor,
-      workspaceId: input.workspaceId,
-    });
-  }
   if (input.creationIntent) {
     env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"] = JSON.stringify(input.creationIntent);
   } else {
@@ -3199,7 +3154,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     const creator = userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
     if (creator) membershipStore.add(creator.id, bootstrapWorkspaceId, creator.id);
   }
-  bindDevelopmentWritebackWorkspace({ centralData, identityDb, userStore });
   // Membership-governance records land in the host governance log (WP5 §5.1),
   // the same SQLite governance database that carries approval provenance.
   const governanceLog = new GovernanceLog();

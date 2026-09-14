@@ -51,8 +51,8 @@ extraResources:
       - "missions/*.json"
   # Exact external Base release pointer. The Base source itself is never
   # packaged; first-run acquisition uses only this immutable coordinate.
-  - from: "build-resources/base-template-release.json"
-    to: "base-template-release.json"
+  - from: "build-resources/workspace-template-release.json"
+    to: "workspace-template-release.json"
   # Pre-built shipped panels
   - from: "dist/shipped-panels"
     to: "shipped-panels"

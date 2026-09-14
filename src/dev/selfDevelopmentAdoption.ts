@@ -7,7 +7,7 @@ import {
   LOCAL_GIT_MIRRORS_ENV,
   type LocalGitMirror,
 } from "../server/services/localGitMirrors.js";
-import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
+import { selectDevelopmentTemplateCheckouts } from "./developmentTemplateConfig.js";
 
 /**
  * Adoption of the Vibestudio source as ordinary workspace projects.
@@ -69,11 +69,12 @@ export function selfDevelopmentProjects(repoRoot: string): SelfDevelopmentProjec
       checkout: fs.realpathSync(path.resolve(repoRoot)),
     },
   ];
-  const base = selectDevelopmentBaseCheckout(repoRoot, { productionBase: false });
-  if (base) {
-    const checkout = fs.realpathSync(path.resolve(base));
+  const templates = selectDevelopmentTemplateCheckouts(repoRoot);
+  for (const name of ["base", "personal", "system"] as const) {
+    const checkout = templates?.checkouts[name];
+    if (!checkout) continue;
     projects.push({
-      repoPath: "projects/vibestudio-workspace-base",
+      repoPath: `projects/vibestudio-${name}`,
       url: canonicalUpstreamUrl(checkout),
       checkout,
     });

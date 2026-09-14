@@ -2232,7 +2232,7 @@ export class WorkspaceDO extends DurableObjectBase {
     privateOwnerUserId?: string
   ): WorkspacePanelDetail[] {
     return this.ctx.storage.transactionSync(() => {
-      // A private workspace has one immutable human owner. Older distribution
+      // A private workspace has one immutable human owner. Older template
       // seeds predate authenticated panel creation and were stored ownerless;
       // normalize the durable tree here, before any client can page or mutate
       // it, so private workspaces have one real root group rather than a UI-only
@@ -2291,7 +2291,7 @@ export class WorkspaceDO extends DurableObjectBase {
         slotIds = JSON.parse(String(prior["value"])) as string[];
       } else {
         slotIds = [];
-        // Earlier clients owned distribution seeding. Any durable tree use,
+        // Earlier clients owned template seeding. Any durable tree use,
         // including closed slots, means that presentation is already adopted.
         // An empty live tree is never permission to recreate deleted panels.
         if (

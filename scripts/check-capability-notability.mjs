@@ -14,10 +14,10 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
+const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "base");
 
 const { reviewedCapabilityNotability } = await import(
   path.join(root, "packages/shared/src/authority/capabilityNotability.ts")

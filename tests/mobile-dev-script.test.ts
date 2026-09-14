@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,7 +10,7 @@ describe("mobile dev process composition", () => {
   it("delegates ephemeral server ownership to the developer-instance supervisor", () => {
     const args = mobileDevServerArgs({
       instanceId: "mobile-dev-test",
-      mobileSourceRoot: "/checkouts/Base",
+      templateCheckoutRoot: "/checkouts/templates",
       readyFilePath: "/private/ready.json",
     });
 
@@ -24,8 +21,8 @@ describe("mobile dev process composition", () => {
       "server",
       "--instance",
       "mobile-dev-test",
-      "--base-checkout",
-      "/checkouts/Base",
+      "--template-checkouts",
+      "/checkouts/templates",
       "--ready-file",
       "/private/ready.json",
       "--ephemeral",
@@ -34,7 +31,7 @@ describe("mobile dev process composition", () => {
     expect(args).not.toContain("src/server/index.ts");
   });
 
-  it("keeps native tooling in Host while Metro reads workspace UI from Base", () => {
+  it("keeps native tooling in Host while Metro reads workspace UI from System", () => {
     const android = mobileDevInstallArgs({
       platform: "android",
       device: "emulator-5554",
@@ -52,30 +49,14 @@ describe("mobile dev process composition", () => {
     );
     expect(android).not.toContain("--app-root");
 
-    const metro = mobileDevMetroEnvironment("/checkouts/Base", { HOST_ONLY: "retained" });
+    const metro = mobileDevMetroEnvironment("/checkouts/System", { HOST_ONLY: "retained" });
     expect(metro).toMatchObject({
       HOST_ONLY: "retained",
       REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-      VIBESTUDIO_USERLAND_ROOT: "/checkouts/Base",
-      VIBESTUDIO_WORKSPACE_APP_ROOT: path.join("/checkouts/Base", "apps", "mobile"),
-      VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join("/checkouts/Base", "node_modules"),
+      VIBESTUDIO_USERLAND_ROOT: "/checkouts/System",
+      VIBESTUDIO_WORKSPACE_APP_ROOT: path.join("/checkouts/System", "apps", "mobile"),
+      VIBESTUDIO_WORKSPACE_NODE_MODULES: path.resolve("node_modules"),
     });
-
-    const require = createRequire(import.meta.url);
-    const { requireDevelopmentBaseCheckout } = require("../src/dev/developmentBaseConfig.cjs") as {
-      requireDevelopmentBaseCheckout(repoRoot: string, env: Record<string, string>): string;
-    };
-    const selected = fs.mkdtempSync(path.join(os.tmpdir(), "mobile-dev-base-"));
-    try {
-      expect(
-        requireDevelopmentBaseCheckout(process.cwd(), {
-          ...metro,
-          VIBESTUDIO_USERLAND_ROOT: selected,
-        })
-      ).toBe(selected);
-    } finally {
-      fs.rmSync(selected, { recursive: true, force: true });
-    }
 
     const ios = mobileDevInstallArgs({
       platform: "ios",

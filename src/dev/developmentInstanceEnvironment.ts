@@ -3,13 +3,11 @@ import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
   type DefaultWorkspaceTemplates,
-} from "@vibestudio/workspace/baseTemplateRelease";
+} from "@vibestudio/workspace/templateRelease";
 
-export interface DevelopmentBaseEnvironmentSelection {
+export interface DevelopmentTemplateEnvironmentSelection {
   pins: DefaultWorkspaceTemplates;
   checkouts: Record<keyof DefaultWorkspaceTemplates, string>;
-  sourceCheckout: string;
-  writebackRepositories: readonly string[];
 }
 
 /** Closed developer launch environment: ambient Base selectors never survive. */
@@ -21,21 +19,20 @@ export function developmentInstanceEnvironment(input: {
   sourceCoupled: boolean;
   /** True when the instance root is a temporary directory removed on exit. */
   disposable: boolean;
-  base?: DevelopmentBaseEnvironmentSelection;
+  defaultTemplates?: DevelopmentTemplateEnvironmentSelection;
   initialWorkspaceTemplate?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
   templates?: ReadonlyArray<import("@vibestudio/workspace/workspaceSources").WorkspaceSource>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
-  const selectedBase = input.base;
-  const baseSources = selectedBase
-    ? (Object.keys(selectedBase.pins) as Array<keyof DefaultWorkspaceTemplates>).map((name) => ({
-        pin: selectedBase.pins[name],
-        checkout: selectedBase.checkouts[name],
-      }))
+  const selectedTemplates = input.defaultTemplates;
+  const defaultSources = selectedTemplates
+    ? (Object.keys(selectedTemplates.pins) as Array<keyof DefaultWorkspaceTemplates>).map(
+        (name) => ({
+          pin: selectedTemplates.pins[name],
+          checkout: selectedTemplates.checkouts[name],
+        })
+      )
     : [];
-  delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE"];
-  delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"];
-  delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"];
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   delete env[WORKSPACE_SOURCES_ENV];
@@ -48,10 +45,10 @@ export function developmentInstanceEnvironment(input: {
     // A disposable instance root is deleted when the supervisor exits, so
     // nothing it started may be left running behind an interactive prompt.
     VIBESTUDIO_INSTANCE_LIFECYCLE: input.disposable ? "ephemeral" : "persistent",
-    ...(selectedBase || input.templates?.length
+    ...(selectedTemplates || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(
-            [...baseSources, ...(input.templates ?? [])].map((source) => ({
+            [...defaultSources, ...(input.templates ?? [])].map((source) => ({
               pin: source.pin,
               checkout: source.checkout,
               ...("review" in source && source.review ? { review: source.review } : {}),
@@ -59,18 +56,10 @@ export function developmentInstanceEnvironment(input: {
           ),
         }
       : {}),
-    ...(selectedBase
+    ...(selectedTemplates
       ? {
-          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selectedBase.pins),
-          [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selectedBase.pins.system),
-          ...(input.sourceCoupled
-            ? {
-                VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
-                  root: selectedBase.sourceCheckout,
-                  repositories: selectedBase.writebackRepositories,
-                }),
-              }
-            : {}),
+          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selectedTemplates.pins),
+          [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selectedTemplates.pins.system),
         }
       : {}),
   });

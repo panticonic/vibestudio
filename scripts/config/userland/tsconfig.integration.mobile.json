@@ -2,8 +2,8 @@
   "//": "React Native integration tests use a separate program because React Native ambient globals conflict with Node globals.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2022"],
-    "types": ["jest"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node", "jest"],
     "allowImportingTsExtensions": true,
     "isolatedModules": true
   },

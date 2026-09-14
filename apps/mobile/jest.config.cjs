@@ -1,5 +1,5 @@
 /**
- * The React Native app's tests live in Base; its test runner lives here.
+ * The React Native app's tests live in the System template; its test runner lives here.
  *
  * The host keeps the native shell and the only React Native jest preset in the
  * repository, while `apps/mobile/src` and its 39 test files are userland. So
@@ -60,33 +60,46 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  * imports are ordinary userland units, and their npm dependencies have to be
  * resolvable or the RN runner cannot load them at all.
  */
-function userlandDependencyModules(baseRoot) {
+function userlandDependencyModules(templateRoots) {
   const { register } = require(require.resolve("tsx/cjs/api", { paths: [repoRoot] }));
   const unregister = register();
   try {
     const { prepareUserlandDependencyProjection } = require(
       path.join(repoRoot, "scripts/lib/userland-dependency-projection.ts")
     );
+    const { composeDevelopmentTemplateCheckouts } = require(
+      path.join(repoRoot, "src/dev/developmentTemplateComposition.ts")
+    );
+    const composition = composeDevelopmentTemplateCheckouts([
+      templateRoots.base,
+      templateRoots.system,
+    ]);
     return prepareUserlandDependencyProjection({
       appRoot: repoRoot,
-      workspaceRoot: baseRoot,
+      workspaceRoot: composition.root,
       includeDevelopmentDependencies: true,
-    });
+    }).then((projection) => ({
+      ...projection,
+      release() {
+        projection.release();
+        composition.release();
+      },
+    }));
   } finally {
     unregister();
   }
 }
-const { requireDevelopmentBaseCheckout } = require(
-  path.join(repoRoot, "src/dev/developmentBaseConfig.cjs")
+const { requireDevelopmentTemplateCheckouts } = require(
+  path.join(repoRoot, "src/dev/developmentTemplateConfig.cjs")
 );
 
-const baseRoot = requireDevelopmentBaseCheckout(repoRoot);
-const mobileRoot = path.join(baseRoot, "apps", "mobile");
+const templateRoots = requireDevelopmentTemplateCheckouts(repoRoot).checkouts;
+const mobileRoot = path.join(templateRoots.system, "apps", "mobile");
 const hostModules = path.join(repoRoot, "node_modules");
 const packageSource = (name) => path.join(repoRoot, "packages", name, "src");
 
 module.exports = (async () => {
-  const projection = await userlandDependencyModules(baseRoot);
+  const projection = await userlandDependencyModules(templateRoots);
   // The projection is a lease on the content-addressed cache, recorded durably.
   // Holding it for the run is the point; keeping it after the run would pin the
   // entry against pruning forever.
@@ -136,7 +149,8 @@ module.exports = (async () => {
       "^@vibestudio/service-schemas/(.*)$": path.join(packageSource("service-schemas"), "$1"),
       "^@vibestudio/browser-data$": path.join(packageSource("browser-data"), "index.ts"),
       "^@vibestudio/browser-data/(.*)$": path.join(packageSource("browser-data"), "$1"),
-      ...workspacePackageAliases(baseRoot),
+      ...workspacePackageAliases(templateRoots.base),
+      ...workspacePackageAliases(templateRoots.system),
       "^(\\.{1,2}/.*)\\.js$": "$1",
     },
     modulePaths: [hostModules, projection.nodeModulesDir],

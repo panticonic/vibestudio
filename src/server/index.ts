@@ -59,7 +59,6 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
-import { createDevelopmentCheckoutPublicationObserver } from "./developmentCheckoutProjection.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
@@ -76,7 +75,7 @@ import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import { hostDesignatedTemplateUrls } from "@vibestudio/workspace/baseTemplateRelease";
+import { hostDesignatedTemplateUrls } from "@vibestudio/workspace/templateRelease";
 import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
@@ -103,53 +102,6 @@ console.log(`[Perf] server module evaluated at ${Math.round(process.uptime() * 1
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
-
-function developmentCheckoutWriteback(
-  workspaceId: string
-): { root: string; repositories: string[] } | null {
-  const rawWriteback = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]?.trim();
-  if (!rawWriteback) return null;
-  if (
-    process.env["NODE_ENV"] !== "development" ||
-    process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1"
-  ) {
-    throw new Error("Base checkout write-back is restricted to the source development instance");
-  }
-  const descriptor = JSON.parse(rawWriteback) as unknown;
-  const descriptorRecord =
-    descriptor !== null && typeof descriptor === "object" && !Array.isArray(descriptor)
-      ? (descriptor as Record<string, unknown>)
-      : null;
-  const rawRepositories = descriptorRecord?.["repositories"];
-  if (
-    descriptorRecord === null ||
-    descriptorRecord["workspaceId"] !== workspaceId ||
-    typeof descriptorRecord["root"] !== "string" ||
-    !Array.isArray(rawRepositories) ||
-    !rawRepositories.every(
-      (repository: unknown): repository is string =>
-        typeof repository === "string" && repository.length > 0
-    )
-  ) {
-    throw new Error("Base checkout write-back descriptor is invalid for this workspace");
-  }
-  const repositories = rawRepositories;
-  if (new Set(repositories).size !== repositories.length) {
-    throw new Error("Base checkout write-back descriptor contains duplicate repositories");
-  }
-  const root = fs.realpathSync(path.resolve(descriptorRecord["root"]));
-  const gitMarker = path.join(root, ".git");
-  let marker: fs.Stats;
-  try {
-    marker = fs.lstatSync(gitMarker);
-  } catch {
-    throw new Error(`Base checkout write-back target is not a Git checkout: ${root}`);
-  }
-  if (!marker.isDirectory() && !marker.isFile()) {
-    throw new Error(`Base checkout write-back target has invalid Git metadata: ${root}`);
-  }
-  return { root, repositories: [...repositories] };
-}
 
 // =============================================================================
 // Phase A: Synchronous preamble — parse CLI args OR inherit env vars
@@ -469,7 +421,6 @@ async function main() {
     ...source,
     checkout: fs.realpathSync(path.resolve(source.checkout)),
   }));
-  const developmentWriteback = developmentCheckoutWriteback(workspaceId);
   const rawCreationIntent = process.env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]?.trim();
   const creationIntent = rawCreationIntent
     ? WorkspaceCreationDescriptorSchema.parse(JSON.parse(rawCreationIntent))
@@ -1425,7 +1376,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, getBytes, mirrorWorktreeTree, putBootstrapBytes } =
+  const { collectTreeReachableDigests, mirrorWorktreeTree, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -1504,7 +1455,7 @@ async function main() {
    * Resolve what a dependency's track selects, preferring a designated local
    * source.
    *
-   * A development instance builds its distributions from the developer's
+   * A development instance checkpoints its templates from the developer's
    * checkout and hands them over as workspace sources. If a dependency on one
    * of those addresses went to the network instead, the whole point of that
    * arrangement would be lost: the loop would compose against a released
@@ -1515,7 +1466,7 @@ async function main() {
     track: string;
     credential?: string;
   }): Promise<{ ref: string; commit: string }> => {
-    // One repository per distribution, so its URL identifies it outright.
+    // One repository per template, so its URL identifies it outright.
     const canonical = normalizeTemplateGitUrl(address.url);
     const local = workspaceSources.find(
       (source) => normalizeTemplateGitUrl(source.pin.url) === canonical
@@ -2028,51 +1979,10 @@ async function main() {
       })
     );
   };
-  // Protected workspace publications drive source-side reactions:
+  // Protected workspace publications drive runtime reactions:
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
-  //  - the default pnpm dev instance persists Base-owned publications back to
-  //    its configured checkout through an exact previous-state guard; imported
-  //    templates and workspace-created repositories remain outside that mirror
-  const developmentWritebackRoot = developmentWriteback?.root;
-  const developmentCheckoutObserver =
-    developmentWritebackRoot && developmentWriteback
-      ? createDevelopmentCheckoutPublicationObserver({
-          destinationRoot: developmentWritebackRoot,
-          ownedRepositories: developmentWriteback.repositories,
-          inspectRepository: async (repoPath) => {
-            const repositoryRoot = path.join(developmentWritebackRoot, ...repoPath.split("/"));
-            try {
-              const stat = await fs.promises.lstat(repositoryRoot);
-              if (!stat.isDirectory()) return { files: [], skippedPaths: [repoPath] };
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-                return { files: [], skippedPaths: [] };
-              }
-              throw error;
-            }
-            const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
-              exact: true,
-            });
-            return {
-              files: inspected.files.map((file) => ({
-                path: file.path,
-                contentHash: file.contentHash,
-                executable: (file.mode & 0o111) !== 0,
-              })),
-              skippedPaths: inspected.skipped.map((entry) => entry.path),
-            };
-          },
-          readState: async (stateHash) =>
-            (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
-              path: file.path,
-              contentHash: file.content_hash,
-              executable: (file.mode & 0o111) !== 0,
-            })),
-          readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
-        })
-      : null;
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -2134,40 +2044,6 @@ async function main() {
           }
         })();
       });
-    }
-    if (developmentCheckoutObserver) {
-      try {
-        const result = await developmentCheckoutObserver.observe(event);
-        if (result.rejectedRepositories.length > 0) {
-          console.warn(
-            "[DevelopmentCheckout] Publication spans Base-owned and non-Base repositories; " +
-              "no part was written back:",
-            {
-              baseRepositories: result.rejectedRepositories,
-              outsideRepositories: result.excludedRepositories,
-            }
-          );
-        } else if (result.conflicts.length > 0) {
-          console.warn(
-            "[DevelopmentCheckout] Publication was not written back because the Base checkout has overlapping edits:",
-            result.conflicts
-          );
-        } else if (result.changedPathCount > 0) {
-          console.log(
-            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentWritebackRoot}`
-          );
-        } else if (result.excludedRepositories.length > 0) {
-          console.log(
-            "[DevelopmentCheckout] Kept non-Base publication out of Base write-back:",
-            result.excludedRepositories
-          );
-        }
-      } catch (error) {
-        console.warn(
-          "[DevelopmentCheckout] Publication write-back failed:",
-          error instanceof Error ? error.message : String(error)
-        );
-      }
     }
   });
   // ===========================================================================
@@ -5834,7 +5710,7 @@ async function main() {
           // by its operator, and the hub passes that flag down for the
           // bootstrap workspace alone. Without this a hermetic launch — one
           // with no account to own a designation — provisions the System
-          // distribution and then refuses to host the shell it just installed.
+          // template and then refuses to host the shell it just installed.
           if (requireElectronReady) return true;
           const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
           return owner?.role === "system" && membershipStore.has(owner.userId, workspaceId);
@@ -7028,7 +6904,7 @@ async function main() {
   console.log(
     `[Perf] workspace service container started at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
-  // Distribution panel intent is a workspace fact, committed once together
+  // Template panel intent is a workspace fact, committed once together
   // with its reservations and slots. Native clients only observe that tree.
   const initialPanelDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
   const privateWorkspaceOwner = identityDb.getPrivateWorkspaceOwner(workspaceId);

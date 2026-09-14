@@ -1,16 +1,16 @@
-import type { DevelopmentBaseSelection } from "./developmentBaseSelection.js";
+import type { DevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
-} from "@vibestudio/workspace/baseTemplateRelease";
+} from "@vibestudio/workspace/templateRelease";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 
 const DEVELOPMENT_ONLY_ARGUMENTS = new Set([
   "--ephemeral",
   "--instance",
-  "--base-checkout",
+  "--template-checkouts",
   "--workspace-checkout",
-  "--production-base",
+  "--production-templates",
   "--dev-iroh-remote",
 ]);
 
@@ -34,25 +34,22 @@ export function assertProductDesktopArguments(argv: readonly string[]): void {
 export function productDesktopEnvironment(input: {
   parent: NodeJS.ProcessEnv;
   repoRoot: string;
-  distributions?: DevelopmentBaseSelection;
+  defaultTemplates?: DevelopmentTemplateSet;
   bootstrapSystem?: boolean;
   templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
-  const distributions = input.distributions;
-  const distributionSources = distributions
+  const defaultTemplates = input.defaultTemplates;
+  const defaultSources = defaultTemplates
     ? (["base", "personal", "system"] as const).map((name) => ({
-        pin: distributions.pins[name],
-        checkout: distributions.checkouts[name],
+        pin: defaultTemplates.pins[name],
+        checkout: defaultTemplates.checkouts[name],
       }))
     : [];
   for (const key of [
     "VIBESTUDIO_INSTANCE_ROOT",
     "VIBESTUDIO_INSTANCE",
     "VIBESTUDIO_SOURCE_INSTANCE",
-    "VIBESTUDIO_DEV_ROOT_TEMPLATE",
-    "VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT",
-    "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK",
     DEFAULT_WORKSPACE_TEMPLATES_ENV,
     INITIAL_WORKSPACE_TEMPLATE_ENV,
     WORKSPACE_SOURCES_ENV,
@@ -62,22 +59,22 @@ export function productDesktopEnvironment(input: {
   Object.assign(env, {
     NODE_ENV: "production",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
-    ...(distributions || input.templates?.length
+    ...(defaultTemplates || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(
-            [...distributionSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
+            [...defaultSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
               pin,
               checkout,
             }))
           ),
         }
       : {}),
-    ...(distributions
+    ...(defaultTemplates
       ? {
-          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(distributions.pins),
+          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(defaultTemplates.pins),
           ...(input.bootstrapSystem
             ? {
-                [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(distributions.pins.system),
+                [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(defaultTemplates.pins.system),
               }
             : {}),
         }

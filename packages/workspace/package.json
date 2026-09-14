@@ -7,10 +7,9 @@
     "buildProfile": "source-only"
   },
   "exports": {
-    "./baseTemplateRelease": "./src/baseTemplateRelease.ts",
+    "./templateRelease": "./src/templateRelease.ts",
     "./configParser": "./src/configParser.ts",
     "./contextProjections": "./src/contextProjections.ts",
-    "./distribution": "./src/distribution.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./hostLaunchRecord": "./src/hostLaunchRecord.ts",
     "./loader": "./src/loader.ts",

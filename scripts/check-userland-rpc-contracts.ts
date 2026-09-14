@@ -13,9 +13,9 @@ import {
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { collectWorkspaceRpcCatalog } from "../src/server/buildV2/workspaceRpcCatalog.js";
 import { workspaceRpcSchema } from "../src/server/buildV2/workspaceRpcSchemas.js";
-import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
+import { requireDevelopmentTemplateCheckout } from "../src/dev/developmentTemplateConfig.js";
 
-const userlandRoot = requireDevelopmentBaseCheckout(process.cwd());
+const userlandRoot = requireDevelopmentTemplateCheckout(process.cwd(), "base");
 const rootRealPath = fs.realpathSync(userlandRoot);
 
 interface DurableClassDeclaration {

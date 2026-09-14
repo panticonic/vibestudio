@@ -5,8 +5,8 @@ import {
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import {
-  WorkspaceGitCommitSchema,
   WorkspaceTemplateDependencySchema,
+  WorkspaceGitCommitSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -35,20 +35,13 @@ export const templateInspectionSchema = z
       .optional(),
     repositories: z.array(z.string()),
     files: z.array(z.string()),
+    dependencies: z.array(WorkspaceTemplateDependencySchema),
   })
   .strict();
 const authoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
     description: z.string().trim().min(1),
-    /**
-     * Templates this one is built on.
-     *
-     * Their repositories are excluded from the snapshot rather than copied
-     * into it, and the published manifest declares them so an installation
-     * acquires them itself.
-     */
-    dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
     parts: z.array(z.string()).min(1),
   })
   .strict();
@@ -102,8 +95,7 @@ export const templatesMethods = defineServiceMethods({
       rationale:
         "The exact extension method contract requires permission to disclose inspected source metadata; installation is a separate operation.",
     } as const,
-    description:
-      "Resolve, acquire, and verify one exact self-contained upstream workspace snapshot.",
+    description: "Resolve, acquire, and verify one exact workspace template snapshot.",
     args: z.tuple([templateLocatorSchema]),
     returns: templateInspectionSchema,
     access: READ,
@@ -115,7 +107,7 @@ export const templatesMethods = defineServiceMethods({
         "The templates receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
     description:
-      "Build a reviewed self-contained snapshot plan from protected-main workspace source.",
+      "Build a reviewed dependency-aware template plan from protected-main workspace source.",
     args: z.tuple([authoringIntentSchema]),
     returns: templateAuthoringInspectionSchema,
     access: READ,
@@ -139,7 +131,7 @@ export const templatesMethods = defineServiceMethods({
       reason:
         "The templates receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
-    description: "Revalidate and publish a reviewed self-contained workspace snapshot.",
+    description: "Revalidate and publish a reviewed workspace template snapshot.",
     args: z.tuple([
       z
         .object({

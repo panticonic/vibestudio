@@ -4,7 +4,7 @@ import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
  * The repositories a template needs, given the ones it declares.
  *
  * A declared repository drags in whatever it depends on, so both producers of
- * a template snapshot — the distribution builder reading a checkout, and
+ * a template snapshot — publishing a workspace checkout, and
  * publication reading a workspace's reviewed VCS state — have to compute the
  * same closure over the same two kinds of edge. They did, separately, and that
  * cost a bug twice over: excluding a dependency's repositories was implemented

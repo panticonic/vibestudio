@@ -1,5 +1,10 @@
 # External Base cutover and host/system self-development
 
+> Historical plan. Superseded on 2026-09-14 by the independent
+> `vibestudio-base`, `vibestudio-personal`, and `vibestudio-system` template
+> repositories documented in the root README. Names, paths, and operational
+> instructions below describe the earlier cutover and are not current commands.
+
 > Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Source-development behavior remains subject to the newer bundle/Base ownership model. Confined builds and selected host source effects are owned by U2–U5.
 
 Status: implementation and cutover checklist, updated 2026-08-13. The code

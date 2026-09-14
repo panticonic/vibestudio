@@ -186,7 +186,7 @@ describe("pair-server runner", () => {
 });
 
 describe("host build workspace template pins", () => {
-  // A packaged app names its distributions in the release artifact; a source
+  // A packaged app names its templates in the release artifact; a source
   // checkout ships the same artifact WITHOUT them. That difference is the only
   // signal `remote serve` has for whether it must resolve a development Base,
   // and getting it wrong either overrides a real release or pairs a device into
@@ -195,13 +195,13 @@ describe("host build workspace template pins", () => {
     const root = mkdtempSync(join(tmpdir(), "pair-pins-"));
     mkdirSync(join(root, "build-resources"), { recursive: true });
     writeFileSync(
-      join(root, "build-resources", "base-template-release.json"),
+      join(root, "build-resources", "workspace-template-release.json"),
       JSON.stringify(contents)
     );
     return root;
   }
 
-  it("reports pins when the release artifact names the distributions", () => {
+  it("reports pins when the release artifact names the templates", () => {
     const root = artifactRoot({
       format: 1,
       workspaceTemplates: { base: {}, personal: {}, system: {} },
@@ -210,11 +210,13 @@ describe("host build workspace template pins", () => {
   });
 
   it("reports none for a source checkout artifact that omits them", () => {
-    const root = artifactRoot({ format: 1, baseTemplate: {} });
+    const root = artifactRoot({ format: 1, legacySource: {} });
     expect(hostBuildHasWorkspaceTemplatePins(root)).toBe(false);
   });
 
   it("reports none when the host build ships no artifact at all", () => {
-    expect(hostBuildHasWorkspaceTemplatePins(mkdtempSync(join(tmpdir(), "pair-pins-")))).toBe(false);
+    expect(hostBuildHasWorkspaceTemplatePins(mkdtempSync(join(tmpdir(), "pair-pins-")))).toBe(
+      false
+    );
   });
 });

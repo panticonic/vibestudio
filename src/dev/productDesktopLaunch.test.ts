@@ -6,13 +6,13 @@ import {
 
 const systemPin = {
   url: "git+https://example.test/base.git",
-  ref: "refs/heads/distributions/system",
+  ref: "refs/heads/main",
   commit: "a".repeat(40),
 };
-const base = {
+const defaultTemplates = {
   pins: {
-    base: { ...systemPin, ref: "refs/heads/distributions/base" },
-    personal: { ...systemPin, ref: "refs/heads/distributions/personal" },
+    base: { ...systemPin, url: "git+https://example.test/base.git" },
+    personal: { ...systemPin, url: "git+https://example.test/personal.git" },
     system: systemPin,
   },
   checkouts: {
@@ -20,8 +20,11 @@ const base = {
     personal: "/temporary/personal",
     system: "/temporary/system",
   },
-  sourceCheckout: "/visible/base",
-  writebackRepositories: ["meta", "packages/base"],
+  sourceCheckouts: {
+    base: "/visible/base",
+    personal: "/visible/personal",
+    system: "/visible/system",
+  },
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 
@@ -29,10 +32,10 @@ describe("product desktop source launch", () => {
   it.each([
     "--ephemeral",
     "--instance=other",
-    "--base-checkout=/tmp/base",
+    "--template-checkouts=/tmp/templates",
     "--workspace-checkout=/tmp/app",
     "--workspace-checkout",
-    "--production-base",
+    "--production-templates",
     "--dev-iroh-remote",
   ])("rejects developer-only option %s", (option) => {
     expect(() => assertProductDesktopArguments([option])).toThrow(/not supported by pnpm start/);
@@ -44,42 +47,40 @@ describe("product desktop source launch", () => {
     ).not.toThrow();
   });
 
-  it("uses production behavior and the ordinary profile without Base write-back", () => {
+  it("uses production behavior and the ordinary profile", () => {
     const env = productDesktopEnvironment({
       parent: {
         NODE_ENV: "development",
         VIBESTUDIO_INSTANCE_ROOT: "/instance",
         VIBESTUDIO_INSTANCE: "source",
         VIBESTUDIO_SOURCE_INSTANCE: "1",
-        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: "/visible/base",
       },
       repoRoot: "/host",
-      distributions: base,
+      defaultTemplates,
       bootstrapSystem: true,
     });
 
     expect(env).toMatchObject({
       NODE_ENV: "production",
       VIBESTUDIO_APP_ROOT: "/host",
-      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(base.pins.system),
-      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(base.pins),
+      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(defaultTemplates.pins.system),
+      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates.pins),
     });
     expect(env["VIBESTUDIO_INSTANCE_ROOT"]).toBeUndefined();
     expect(env["VIBESTUDIO_INSTANCE"]).toBeUndefined();
     expect(env["VIBESTUDIO_SOURCE_INSTANCE"]).toBeUndefined();
-    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
   });
 
-  it("clears ambient selectors when no source distributions are provided", () => {
+  it("clears ambient selectors when no development templates are provided", () => {
     const env = productDesktopEnvironment({
       parent: {
         VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: "stale",
-        VIBESTUDIO_DEV_ROOT_TEMPLATE: "stale",
+        VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: "stale",
       },
       repoRoot: "/host",
     });
     expect(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]).toBeUndefined();
-    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]).toBeUndefined();
+    expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBeUndefined();
   });
 
   it("keeps production runtime semantics while explicitly enabling local template acquisition", () => {

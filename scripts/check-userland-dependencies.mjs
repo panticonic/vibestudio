@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
-import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
+import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const defaultAppRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEPENDENCY_SECTIONS = [
@@ -249,7 +249,10 @@ export async function collectUserlandDependencyFindings(appRoot, userlandRoot) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(defaultAppRoot);
+  const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(
+    defaultAppRoot,
+    "base"
+  );
   const findings = await collectUserlandDependencyFindings(defaultAppRoot, userlandRoot);
   const exactPins = collectExactUserlandDependencyPins(userlandRoot);
   const reuseRanges = collectHostReuseRangeFindings(defaultAppRoot, userlandRoot);

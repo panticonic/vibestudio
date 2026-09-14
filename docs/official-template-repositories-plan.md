@@ -1,5 +1,10 @@
 # Official template repositories: overlapping contributions with agentic composition
 
+> Historical plan. Its `vibestudio-workspace-base` naming and bundled-source
+> workflow were superseded on 2026-09-14. Current development uses independent
+> `vibestudio-base`, `vibestudio-personal`, and `vibestudio-system` repositories;
+> Personal and System declare Base through ordinary template dependencies.
+
 Status: updated 2026-08-10. Examples, News, and Spectrolite have been published
 and updated through the running app; their outcome-specific source units have
 been removed from the base `workspace/`. Google Workspace is the fourth

@@ -18,7 +18,7 @@ import {
   unregisterDevInstance,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
-import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
+import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
@@ -92,14 +92,14 @@ function pruneUnreferencedInstanceCas(root: string): {
 
 function extractInstance(argv: string[]): {
   instanceId?: string;
-  baseCheckout?: string;
-  productionBase: boolean;
+  templateCheckouts?: string;
+  productionTemplates: boolean;
   forwarded: string[];
 } {
   const forwarded: string[] = [];
   let instanceId: string | undefined;
-  let baseCheckout: string | undefined;
-  let productionBase = false;
+  let templateCheckouts: string | undefined;
+  let productionTemplates = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--instance") {
@@ -116,31 +116,31 @@ function extractInstance(argv: string[]): {
       if (!instanceId) throw new Error("--instance requires an id");
       continue;
     }
-    if (arg === "--base-checkout") {
+    if (arg === "--template-checkouts") {
       const value = argv[index + 1];
-      if (!value) throw new Error("--base-checkout requires a path");
-      if (baseCheckout) throw new Error("--base-checkout may only be specified once");
-      baseCheckout = value;
+      if (!value) throw new Error("--template-checkouts requires a path");
+      if (templateCheckouts) throw new Error("--template-checkouts may only be specified once");
+      templateCheckouts = value;
       index += 1;
       continue;
     }
-    if (arg.startsWith("--base-checkout=")) {
-      if (baseCheckout) throw new Error("--base-checkout may only be specified once");
-      baseCheckout = arg.slice("--base-checkout=".length);
-      if (!baseCheckout) throw new Error("--base-checkout requires a path");
+    if (arg.startsWith("--template-checkouts=")) {
+      if (templateCheckouts) throw new Error("--template-checkouts may only be specified once");
+      templateCheckouts = arg.slice("--template-checkouts=".length);
+      if (!templateCheckouts) throw new Error("--template-checkouts requires a path");
       continue;
     }
-    if (arg === "--production-base") {
-      if (productionBase) throw new Error("--production-base may only be specified once");
-      productionBase = true;
+    if (arg === "--production-templates") {
+      if (productionTemplates) throw new Error("--production-templates may only be specified once");
+      productionTemplates = true;
       continue;
     }
     forwarded.push(arg);
   }
   return {
     ...(instanceId ? { instanceId } : {}),
-    ...(baseCheckout ? { baseCheckout } : {}),
-    productionBase,
+    ...(templateCheckouts ? { templateCheckouts } : {}),
+    productionTemplates,
     forwarded,
   };
 }
@@ -269,13 +269,13 @@ async function main(): Promise<void> {
   --instance <id>  Use a named persistent isolated instance (default: source)
   --ephemeral      Use an isolated temporary instance root; combine with
                    --instance to give parallel CLI commands a stable target
-  --base-checkout <path>
-                   Boot from the checkout's visible worktree via a private checkpoint
+  --template-checkouts <path>
+                   Root containing base/, personal/, and system/ Git checkouts
   --template-checkout <path>
                    Use an optional template's visible worktree (repeatable)
   --workspace-checkout <path>
                    Open this checkout as an additional workspace
-  --production-base Ignore the configured checkout and boot the pinned Base release
+  --production-templates Ignore configured checkouts and boot the pinned releases
 `);
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
     await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
@@ -304,27 +304,23 @@ async function main(): Promise<void> {
     lifecycle: disposable ? "ephemeral" : "persistent",
     startedAt: Date.now(),
   });
-  const checkpointTarget = path.join(
-    root,
-    "development-workspace-distributions",
-    instance.generationId
-  );
+  const checkpointTarget = path.join(root, "default-template-checkpoints", instance.generationId);
   const templateCheckpointRoot = path.join(
     root,
     "development-template-checkpoints",
     instance.generationId
   );
   try {
-    const developmentBase =
-      (await resolveDevelopmentBaseSelection({
+    const defaultTemplates =
+      (await resolveDevelopmentTemplateSet({
         repoRoot,
-        checkpointTarget,
-        ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
-        productionBase: parsed.productionBase,
+        checkpointRoot: checkpointTarget,
+        ...(parsed.templateCheckouts ? { explicitRoot: parsed.templateCheckouts } : {}),
+        productionTemplates: parsed.productionTemplates,
       })) ?? undefined;
-    if (!parsed.productionBase && !developmentBase) {
+    if (!parsed.productionTemplates && !defaultTemplates) {
       throw new Error(
-        "No development Base checkout is configured. Run `pnpm dev:base setup`, " +
+        "No development template checkouts are configured. Run `pnpm dev:templates setup`, " +
           "or select the shipped release explicitly with `pnpm dev:production`."
       );
     }
@@ -384,7 +380,7 @@ async function main(): Promise<void> {
       instanceId: id,
       sourceCoupled,
       disposable,
-      ...(developmentBase ? { base: developmentBase } : {}),
+      ...(defaultTemplates ? { defaultTemplates } : {}),
       ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
@@ -396,20 +392,15 @@ async function main(): Promise<void> {
     if (mode === "server") clearDevInstanceReady(instance);
     console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
     console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
-    if (parsed.productionBase) {
-      console.log(`[instance:${id}] Base: canonical pinned production release`);
+    if (parsed.productionTemplates) {
+      console.log(`[instance:${id}] Templates: canonical pinned production releases`);
     }
-    if (developmentBase) {
+    if (defaultTemplates) {
       console.log(
-        `[instance:${id}] Workspace distributions: ${Object.entries(developmentBase.pins)
+        `[instance:${id}] Default templates: ${Object.entries(defaultTemplates.pins)
           .map(([name, pin]) => `${name}@${pin.commit}`)
-          .join(", ")} from ${developmentBase.sourceCheckout}`
+          .join(", ")}`
       );
-      if (id === "source" && !disposable) {
-        console.log(
-          `[instance:${id}] Base write-back: ${developmentBase.writebackRepositories.length} Base-owned repositories -> ${developmentBase.sourceCheckout}; imported templates are read-only`
-        );
-      }
     }
     if (targetWorkspace) {
       console.log(

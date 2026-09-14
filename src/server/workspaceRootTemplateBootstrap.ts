@@ -77,7 +77,7 @@ export interface ComposeDeclaredTemplateLayersInput {
  * changing it.
  *
  * This is the composition a workspace install performs, exposed on its own so
- * that anything reasoning about what a distribution actually runs — including
+ * that anything reasoning about what a template actually runs — including
  * product trust decisions about its units — resolves the same tree rather than
  * a bare snapshot whose dependency closure is missing.
  */

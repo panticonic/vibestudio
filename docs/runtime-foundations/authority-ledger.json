@@ -3566,8 +3566,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "host-owned-once-only-distribution-panel-initialization",
-        "change": "Adds a host-only workspace.runtime-state.manage write that reserves distribution initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
+        "review": "host-owned-once-only-template-panel-initialization",
+        "change": "Adds a host-only workspace.runtime-state.manage write that reserves template initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
       },
       "parityAssertion": "generated-census:direct-authority"
     },

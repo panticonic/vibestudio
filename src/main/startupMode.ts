@@ -11,7 +11,7 @@ import * as fs from "fs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { resolveWorkspaceName } from "@vibestudio/workspace/loader";
-import { readWorkspaceCreationTemplate } from "@vibestudio/workspace/baseTemplateRelease";
+import { readWorkspaceCreationTemplate } from "@vibestudio/workspace/templateRelease";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";

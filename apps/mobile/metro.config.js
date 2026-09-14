@@ -2,17 +2,33 @@ const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
 const fs = require("fs");
 const path = require("path");
 const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
-const developmentBaseConfig = require("../../src/dev/developmentBaseConfig.cjs");
+const developmentTemplateConfig = require("../../src/dev/developmentTemplateConfig.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
-const exactUserlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(monorepoRoot);
+const templateRoots =
+  developmentTemplateConfig.requireDevelopmentTemplateCheckouts(monorepoRoot).checkouts;
 const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
-  : path.resolve(exactUserlandRoot, "apps", "mobile");
+  : path.resolve(templateRoots.system, "apps", "mobile");
 const workspaceNodeModules = process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES)
-  : path.resolve(exactUserlandRoot, "node_modules");
+  : path.resolve(monorepoRoot, "node_modules");
+const workspacePackages = new Map();
+for (const templateRoot of [templateRoots.base, templateRoots.system]) {
+  for (const category of ["packages", "apps", "extensions", "panels", "workers"]) {
+    const directory = path.join(templateRoot, category);
+    if (!fs.existsSync(directory)) continue;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const unit = path.join(directory, entry.name);
+      const manifest = path.join(unit, "package.json");
+      if (!fs.existsSync(manifest)) continue;
+      const name = JSON.parse(fs.readFileSync(manifest, "utf8")).name;
+      if (typeof name === "string") workspacePackages.set(name, unit);
+    }
+  }
+}
 const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**
@@ -42,6 +58,8 @@ const config = {
     path.resolve(monorepoRoot, "packages"),
     // Workspace-owned RN app JS loaded by the native host
     workspaceAppRoot,
+    templateRoots.base,
+    templateRoots.system,
     // Root node_modules for hoisted dependencies
     path.resolve(monorepoRoot, "node_modules"),
     // Userland workspace dependencies for transitive @workspace/* packages.
@@ -104,6 +122,21 @@ const config = {
         // Bare import like @vibestudio/rpc -> packages/rpc/src/index.ts
         const srcEntry = path.resolve(pkgDir, "src", "index.ts");
         return { type: "sourceFile", filePath: srcEntry };
+      }
+
+      if (moduleName.startsWith("@workspace")) {
+        const packageName = [...workspacePackages.keys()]
+          .sort((left, right) => right.length - left.length)
+          .find((name) => moduleName === name || moduleName.startsWith(`${name}/`));
+        if (packageName) {
+          const packageRoot = workspacePackages.get(packageName);
+          const subpath = moduleName.slice(packageName.length).replace(/^\//, "");
+          return context.resolveRequest(
+            context,
+            subpath ? path.join(packageRoot, subpath) : packageRoot,
+            platform
+          );
+        }
       }
 
       // 0b. Resolve react-native-screens via pre-built lib/ output.

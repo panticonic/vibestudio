@@ -11,14 +11,18 @@ import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
-const developmentBaseResolver = path.join(repoRoot, "scripts", "resolve-development-base.ts");
+const developmentTemplateResolver = path.join(
+  repoRoot,
+  "scripts",
+  "resolve-development-templates.ts"
+);
 const runInstanceEntry = path.join(repoRoot, "src", "dev", "runInstance.ts");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
 const appPackage = INTERNAL_ANDROID_PACKAGE;
 const appActivity = `${appPackage}/app.vibestudio.mobile.MainActivity`;
 const metroPort = 8081;
 
-export function mobileDevServerArgs({ instanceId, mobileSourceRoot, readyFilePath }) {
+export function mobileDevServerArgs({ instanceId, templateCheckoutRoot, readyFilePath }) {
   return [
     "--import",
     "tsx",
@@ -26,21 +30,21 @@ export function mobileDevServerArgs({ instanceId, mobileSourceRoot, readyFilePat
     "server",
     "--instance",
     instanceId,
-    "--base-checkout",
-    mobileSourceRoot,
+    "--template-checkouts",
+    templateCheckoutRoot,
     "--ready-file",
     readyFilePath,
     "--ephemeral",
   ];
 }
 
-export function mobileDevMetroEnvironment(baseCheckout, env = process.env) {
+export function mobileDevMetroEnvironment(systemCheckout, env = process.env) {
   return {
     ...env,
     REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-    VIBESTUDIO_USERLAND_ROOT: baseCheckout,
-    VIBESTUDIO_WORKSPACE_APP_ROOT: path.join(baseCheckout, "apps", "mobile"),
-    VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(baseCheckout, "node_modules"),
+    VIBESTUDIO_USERLAND_ROOT: systemCheckout,
+    VIBESTUDIO_WORKSPACE_APP_ROOT: path.join(systemCheckout, "apps", "mobile"),
+    VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(repoRoot, "node_modules"),
   };
 }
 
@@ -83,7 +87,7 @@ function parseArgs(argv) {
     noMetro: false,
     noInstall: false,
     noLaunch: false,
-    baseCheckout: null,
+    templateCheckouts: null,
     help: false,
   };
 
@@ -105,8 +109,8 @@ function parseArgs(argv) {
       options.noInstall = true;
     } else if (arg === "--no-launch") {
       options.noLaunch = true;
-    } else if (arg === "--base-checkout") {
-      options.baseCheckout = argv[++i] ?? null;
+    } else if (arg === "--template-checkouts") {
+      options.templateCheckouts = argv[++i] ?? null;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -134,8 +138,8 @@ Runner options:
   --no-metro        Do not start Metro
   --no-install      Do not build/install the Android app
   --no-launch       Do not launch the Android app after setup
-  --base-checkout <dir>
-                     Use this Base authoring checkout for mobile source and workspaces
+  --template-checkouts <dir>
+                     Use Base, Personal and System checkouts from this root
   --help            Show this help message
 `);
 }
@@ -346,23 +350,24 @@ async function main() {
     printHelp();
     return;
   }
-  const resolvedBase = await runCommand(
+  const resolvedTemplates = await runCommand(
     process.execPath,
     [
       "--import",
       "tsx",
-      developmentBaseResolver,
+      developmentTemplateResolver,
       "--source-only",
-      ...(options.baseCheckout ? ["--checkout", options.baseCheckout] : []),
+      ...(options.templateCheckouts ? ["--root", options.templateCheckouts] : []),
     ],
     { cwd: repoRoot }
   );
-  const mobileSourceRoot = JSON.parse(resolvedBase.stdout.trim());
-  if (typeof mobileSourceRoot !== "string" || !mobileSourceRoot) {
+  const selectedTemplates = JSON.parse(resolvedTemplates.stdout.trim());
+  if (!selectedTemplates?.root || !selectedTemplates?.checkouts?.system) {
     throw new Error(
-      "mobile dev requires a development Base checkout. Configure one with `pnpm dev:base setup` or pass --base-checkout <dir>."
+      "mobile dev requires development template checkouts. Configure them with `pnpm dev:templates setup` or pass --template-checkouts <dir>."
     );
   }
+  const mobileSourceRoot = selectedTemplates.checkouts.system;
   if (
     !(await fsp
       .stat(mobileDir)
@@ -508,7 +513,11 @@ async function main() {
     // The server publishes one complete root invitation fact through its strict
     // ready-file handoff. Mobile consumes its deep-link presentation directly.
     const instanceId = `mobile-dev-${process.pid}`;
-    const serverArgs = mobileDevServerArgs({ instanceId, mobileSourceRoot, readyFilePath });
+    const serverArgs = mobileDevServerArgs({
+      instanceId,
+      templateCheckoutRoot: selectedTemplates.root,
+      readyFilePath,
+    });
     const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
       env: process.env,

@@ -19,7 +19,7 @@ describe("packaged host/userland boundary", () => {
         [
           "dist/server.mjs",
           "packages/workspace/dist/index.js",
-          "build-resources/base-template-release.json",
+          "build-resources/workspace-template-release.json",
         ],
         "test package"
       )
