@@ -3079,6 +3079,12 @@ export class EvalDO extends DurableObjectBase {
       truncated: true,
       reason: "eval return value exceeded result transport/storage limit",
       originalChars: text.length,
+      // Report the budget, not just the overage. Without it a caller has no
+      // way to size a second attempt: one that returned 200 projected records
+      // and got this envelope came back with 260, because nothing said how
+      // much was too much. Both numbers measure the indented rendering.
+      limitChars: EVAL_RESULT_RETURN_PREVIEW_CHARS,
+      measuredAs: "json-indent-2",
       scopeKey,
       preview: this.windowText(text, EVAL_RESULT_RETURN_PREVIEW_CHARS, scopeKey),
     };
