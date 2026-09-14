@@ -155,6 +155,17 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  // The `finally` below is the ordinary path, but an uncaught error in a child
+  // process callback exits without unwinding this function — which is how a
+  // failed pairing left a user-data tree in /tmp. `exit` runs for those too, so
+  // the tree goes back synchronously before the process is gone.
+  process.once("exit", () => {
+    try {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    } catch {
+      // Exiting; a tree we cannot remove here is not worth failing the exit.
+    }
+  });
 
   try {
     const workspace = parsed.workspace ?? (await resolveSystemWorkspace(parsed.instanceId));
