@@ -3735,13 +3735,29 @@ export class EvalDO extends DurableObjectBase {
         );
       }
     };
+    // `db.exec(query, ...params)` and `db.run(query, ...params)` are variadic.
+    // Passing one array instead is the habit every other SQLite binding
+    // teaches, and underneath it surfaces as "Wrong number of parameter
+    // bindings for SQL query" — which names no shape and no convention, so a
+    // caller cannot tell what to do differently. Name it once, here, and keep
+    // one calling convention rather than quietly accepting two.
+    const assertVariadicBindings = (bindings: unknown[]): void => {
+      if (bindings.length === 1 && Array.isArray(bindings[0])) {
+        throw new Error(
+          `db: pass bindings as separate arguments, not an array — db.run(query, ...params). ` +
+            `Received a single array of ${bindings[0].length}.`
+        );
+      }
+    };
     return {
       exec(query: string, ...bindings: unknown[]): unknown[] {
         guard(query);
+        assertVariadicBindings(bindings);
         return sql.exec(query, ...bindings).toArray();
       },
       run(query: string, ...bindings: unknown[]): void {
         guard(query);
+        assertVariadicBindings(bindings);
         sql.exec(query, ...bindings);
       },
     };
