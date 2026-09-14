@@ -12,6 +12,7 @@ import {
   prepareWorkspaceDistribution,
   type PreparedWorkspaceDistribution,
 } from "@vibestudio/workspace/distribution";
+import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
 import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import {
   normalizeTemplateGitUrl,
@@ -165,7 +166,91 @@ export async function buildWorkspaceDistribution(input: {
   }
 }
 
-/** Build the three development root distributions from one sealed source state. */
+type DependencyGraph = Record<
+  DevelopmentWorkspaceDistribution,
+  readonly DevelopmentWorkspaceDistribution[]
+>;
+
+/**
+ * Which development distribution each manifest's declared dependencies name.
+ *
+ * Dependencies are declared by URL, and a development build stands in for the
+ * published address, so the same `urls` mapping that names where each
+ * distribution publishes is what resolves a declaration back to a sibling.
+ * A dependency on something outside this build is a mistake worth naming: the
+ * whole point of building together is that every edge resolves locally.
+ */
+function dependencyGraph(
+  checkout: string,
+  urls: Record<DevelopmentWorkspaceDistribution, string>
+): DependencyGraph {
+  const byUrl = new Map<string, DevelopmentWorkspaceDistribution>(
+    DEVELOPMENT_WORKSPACE_DISTRIBUTIONS.map((name) => [normalizeTemplateGitUrl(urls[name]), name])
+  );
+  const graph = {} as Record<DevelopmentWorkspaceDistribution, DevelopmentWorkspaceDistribution[]>;
+  for (const name of DEVELOPMENT_WORKSPACE_DISTRIBUTIONS) {
+    const manifest = parseTemplateManifestContent(
+      readManifest(checkout, `meta/distributions/${name}.yml`),
+      WORKSPACE_SYSTEM_EPOCH
+    );
+    graph[name] = manifest.dependencies.map((dependency) => {
+      const resolved = byUrl.get(normalizeTemplateGitUrl(dependency.url));
+      if (!resolved) {
+        throw new Error(
+          `Distribution ${name} depends on ${dependency.url}, which no development distribution publishes`
+        );
+      }
+      if (resolved === name) throw new Error(`Distribution ${name} depends on itself`);
+      return resolved;
+    });
+  }
+  return graph;
+}
+
+/** Dependencies before dependents, so every upstream is built when it is needed. */
+function buildOrder(graph: DependencyGraph): DevelopmentWorkspaceDistribution[] {
+  const ordered: DevelopmentWorkspaceDistribution[] = [];
+  const settled = new Set<DevelopmentWorkspaceDistribution>();
+  const visiting = new Set<DevelopmentWorkspaceDistribution>();
+  const visit = (name: DevelopmentWorkspaceDistribution): void => {
+    if (settled.has(name)) return;
+    if (visiting.has(name)) {
+      throw new Error(`Distribution dependencies form a cycle through ${name}`);
+    }
+    visiting.add(name);
+    for (const dependency of graph[name]) visit(dependency);
+    visiting.delete(name);
+    settled.add(name);
+    ordered.push(name);
+  };
+  for (const name of DEVELOPMENT_WORKSPACE_DISTRIBUTIONS) visit(name);
+  return ordered;
+}
+
+/**
+ * Everything one dependency supplies: its own repositories and its upstreams'.
+ *
+ * A dependency's built repositories are only the ones it added, because its own
+ * closure already stopped where its upstream began. Anything built on it
+ * therefore has to walk the chain, or a template two edges from Base would be
+ * handed Base's repositories to carry a second copy of.
+ */
+function suppliedRepositories(
+  name: DevelopmentWorkspaceDistribution,
+  graph: DependencyGraph,
+  built: Partial<Record<DevelopmentWorkspaceDistribution, BuiltWorkspaceDistribution>>
+): string[] {
+  const distribution = built[name];
+  if (!distribution) {
+    throw new Error(`Distribution ${name} was needed before it was built`);
+  }
+  return [
+    ...distribution.repositories,
+    ...graph[name].flatMap((dependency) => suppliedRepositories(dependency, graph, built)),
+  ];
+}
+
+/** Build the development root distributions from one sealed source state. */
 export async function prepareDevelopmentWorkspaceDistributions(input: {
   sourceRoot: string;
   outputRoot: string;
@@ -202,22 +287,29 @@ export async function prepareDevelopmentWorkspaceDistributions(input: {
     });
     fs.mkdirSync(stagedOutput);
     const built = {} as Record<DevelopmentWorkspaceDistribution, BuiltWorkspaceDistribution>;
-    // Base is first because the other two are built on it: a distribution that
-    // declares a dependency gets Base's repositories as already provided, so
-    // its own closure stops where Base's begins. Development resolves every
-    // declared dependency to the Base it just built from this same checkout,
-    // which is the point of building all three from one sealed state.
-    for (const name of DEVELOPMENT_WORKSPACE_DISTRIBUTIONS) {
-      const declaresDependency = /^\s*(-\s*)?dependencies:/mu.test(
-        fs.readFileSync(
-          path.join(checkpoint.checkout, "meta", "distributions", `${name}.yml`),
-          "utf8"
-        )
-      );
-      const provided =
-        declaresDependency && built.base
-          ? new Set(built.base.repositories.filter((repoPath) => repoPath !== "meta"))
-          : undefined;
+    // A distribution that declares a dependency gets that dependency's
+    // repositories as already provided, so its own closure stops where the
+    // upstream's begins. Development resolves every declared dependency to the
+    // template it just built from this same sealed state, which is the point of
+    // building them together.
+    //
+    // Read which dependencies each manifest actually declares rather than
+    // assuming Base. The declaration is a list, and a template may name more
+    // than one — a testing overlay composed onto Personal is two — so guessing
+    // one upstream would hand the wrong `provided` set to anything that is not
+    // exactly the shape we happened to ship.
+    const declaredDependencies = dependencyGraph(checkpoint.checkout, input.urls);
+    for (const name of buildOrder(declaredDependencies)) {
+      const upstream = declaredDependencies[name];
+      const provided = upstream.length
+        ? new Set(
+            upstream
+              .flatMap((dependency) =>
+                suppliedRepositories(dependency, declaredDependencies, built)
+              )
+              .filter((repoPath) => repoPath !== "meta")
+          )
+        : undefined;
       built[name] = await buildWorkspaceDistribution({
         sourceRoot: checkpoint.checkout,
         ...(provided ? { providedRepositories: provided } : {}),

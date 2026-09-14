@@ -187,6 +187,116 @@ describe("buildWorkspaceDistribution", () => {
     }
   });
 
+  const URLS = {
+    base: "git+https://example.test/base.git",
+    personal: "git+https://example.test/personal.git",
+    system: "git+https://example.test/system.git",
+  };
+
+  /** Rewrite one fixture manifest with an explicit dependency list. */
+  function manifest(
+    root: string,
+    name: string,
+    repositories: readonly string[],
+    dependencies: readonly string[] = []
+  ): void {
+    write(
+      root,
+      `meta/distributions/${name}.yml`,
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` +
+        "template:\n" +
+        `  name: ${name}\n` +
+        (dependencies.length
+          ? "  dependencies:\n" + dependencies.map((url) => `    - url: ${url}\n`).join("")
+          : "") +
+        `  repositories: [${repositories.join(", ")}]\n` +
+        "  files: [package.json]\n"
+    );
+  }
+
+  it("builds a dependency chain in order and stops each closure at its upstream", async () => {
+    const fixture = sourceFixture();
+    manifest(fixture.root, "base", ["packages/runtime"]);
+    manifest(fixture.root, "personal", ["panels/chat"], [URLS.base]);
+    // Two edges from Base, which is the case a hardcoded base-as-provider got
+    // wrong: it would hand this only Base's repositories.
+    manifest(fixture.root, "system", ["packages/test-runtime"], [URLS.personal]);
+
+    const prepared = await prepareDevelopmentWorkspaceDistributions({
+      sourceRoot: fixture.root,
+      outputRoot: fixture.output,
+      urls: URLS,
+    });
+
+    // Each carries its own repositories and none of its upstreams'.
+    expect(fs.existsSync(path.join(prepared.checkouts.system, "packages/test-runtime"))).toBe(true);
+    expect(fs.existsSync(path.join(prepared.checkouts.system, "panels/chat"))).toBe(false);
+    expect(fs.existsSync(path.join(prepared.checkouts.system, "packages/runtime"))).toBe(false);
+    expect(fs.existsSync(path.join(prepared.checkouts.personal, "panels/chat"))).toBe(true);
+    expect(fs.existsSync(path.join(prepared.checkouts.personal, "packages/runtime"))).toBe(false);
+  });
+
+  it("counts what an indirect dependency supplies, not just the nearest one", async () => {
+    const fixture = sourceFixture();
+    manifest(fixture.root, "base", ["packages/runtime"]);
+    manifest(fixture.root, "personal", ["panels/chat"], [URLS.base]);
+    // `panels/chat` reaches system through personal. Carrying a second copy is
+    // exactly what the closure exists to prevent, so declaring it is refused.
+    manifest(fixture.root, "system", ["panels/chat"], [URLS.personal]);
+
+    await expect(
+      prepareDevelopmentWorkspaceDistributions({
+        sourceRoot: fixture.root,
+        outputRoot: fixture.output,
+        urls: URLS,
+      })
+    ).rejects.toThrow(/already provided by a declared dependency/u);
+  });
+
+  it("composes more than one upstream", async () => {
+    const fixture = sourceFixture();
+    manifest(fixture.root, "base", ["packages/runtime"]);
+    manifest(fixture.root, "personal", ["panels/chat"], [URLS.base]);
+    manifest(fixture.root, "system", ["packages/test-runtime"], [URLS.base, URLS.personal]);
+
+    const prepared = await prepareDevelopmentWorkspaceDistributions({
+      sourceRoot: fixture.root,
+      outputRoot: fixture.output,
+      urls: URLS,
+    });
+
+    expect(fs.existsSync(path.join(prepared.checkouts.system, "packages/test-runtime"))).toBe(true);
+    expect(fs.existsSync(path.join(prepared.checkouts.system, "packages/runtime"))).toBe(false);
+  });
+
+  it("refuses a dependency no distribution in this build publishes", async () => {
+    const fixture = sourceFixture();
+    manifest(fixture.root, "personal", ["panels/chat"], ["git+https://example.test/absent.git"]);
+
+    await expect(
+      prepareDevelopmentWorkspaceDistributions({
+        sourceRoot: fixture.root,
+        outputRoot: fixture.output,
+        urls: URLS,
+      })
+    ).rejects.toThrow(/which no development distribution publishes/u);
+  });
+
+  it("refuses a dependency cycle instead of looping", async () => {
+    const fixture = sourceFixture();
+    manifest(fixture.root, "base", ["packages/runtime"], [URLS.system]);
+    manifest(fixture.root, "personal", ["panels/chat"]);
+    manifest(fixture.root, "system", ["packages/test-runtime"], [URLS.base]);
+
+    await expect(
+      prepareDevelopmentWorkspaceDistributions({
+        sourceRoot: fixture.root,
+        outputRoot: fixture.output,
+        urls: URLS,
+      })
+    ).rejects.toThrow(/form a cycle/u);
+  });
+
   it("publishes no partial output when one distribution is invalid", async () => {
     const fixture = sourceFixture();
     write(
