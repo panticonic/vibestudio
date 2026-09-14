@@ -3,19 +3,24 @@ import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRe
 
 export interface DevelopmentTemplateCheckouts {
   root: string;
-  checkouts: Record<keyof DefaultWorkspaceTemplates, string>;
-  /** Templates present to be depended on rather than installed as a root. */
-  dependencies: Partial<Record<DependencyTemplateName, string>>;
+  registry: string;
+  sources: DevelopmentTemplateSource[];
+  checkouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
 }
 
-export type DependencyTemplateName = "system-testing";
+export interface DevelopmentTemplateSource {
+  id: string;
+  role: keyof DefaultWorkspaceTemplates | "development" | "optional";
+  url: string;
+  consumers?: Array<keyof DefaultWorkspaceTemplates>;
+}
 
 const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs") as {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY: string;
   DEVELOPMENT_TEMPLATE_ROOT_ENV: string;
-  TEMPLATE_NAMES: readonly (keyof DefaultWorkspaceTemplates)[];
-  DEPENDENCY_TEMPLATE_NAMES: readonly DependencyTemplateName[];
-  DEPENDENCY_TEMPLATE_URLS: Record<DependencyTemplateName, string>;
+  DEFAULT_TEMPLATE_NAMES: readonly (keyof DefaultWorkspaceTemplates)[];
+  TEMPLATE_REGISTRY_DIRECTORY: string;
+  TEMPLATE_REGISTRY_URL: string;
   configuredDevelopmentTemplateRoot(repoRoot: string, env?: NodeJS.ProcessEnv): string | undefined;
   requireDevelopmentTemplateCheckouts(
     repoRoot: string,
@@ -23,9 +28,13 @@ const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs")
   ): DevelopmentTemplateCheckouts;
   requireDevelopmentTemplateCheckout(
     repoRoot: string,
-    name: keyof DefaultWorkspaceTemplates,
+    name: string,
     env?: NodeJS.ProcessEnv
   ): string;
+  readOfficialTemplateCatalog(root: string): {
+    registry: string;
+    sources: DevelopmentTemplateSource[];
+  };
   selectDevelopmentTemplateCheckouts(
     repoRoot: string,
     options?: { explicitRoot?: string; productionTemplates?: boolean; env?: NodeJS.ProcessEnv }
@@ -41,10 +50,11 @@ const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs")
 export const {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
-  TEMPLATE_NAMES,
-  DEPENDENCY_TEMPLATE_NAMES,
-  DEPENDENCY_TEMPLATE_URLS,
+  DEFAULT_TEMPLATE_NAMES,
+  TEMPLATE_REGISTRY_DIRECTORY,
+  TEMPLATE_REGISTRY_URL,
   configuredDevelopmentTemplateRoot,
+  readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
   requireDevelopmentTemplateCheckout,
   selectDevelopmentTemplateCheckouts,

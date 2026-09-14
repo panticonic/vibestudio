@@ -27,7 +27,7 @@ const templates = [
 ];
 
 describe("development instance environment", () => {
-  it("uses the three canonical template repositories", () => {
+  it("retains the three foundation pins used for private workspace bootstrap", () => {
     const env = developmentInstanceEnvironment({
       parent: {},
       repoRoot: "/host",
@@ -42,6 +42,30 @@ describe("development instance environment", () => {
       VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates.pins),
       VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(defaultTemplates.pins.system),
     });
+  });
+
+  it("registers every source in a complete official development set", () => {
+    const complete = {
+      ...defaultTemplates,
+      sourcePins: { ...defaultTemplates.pins, examples: pin("examples") },
+      sources: [{ id: "base" }, { id: "personal" }, { id: "system" }, { id: "examples" }],
+      checkouts: { ...defaultTemplates.checkouts, examples: "/private/examples" },
+    };
+    const env = developmentInstanceEnvironment({
+      parent: {},
+      repoRoot: "/host",
+      instanceRoot: "/instance",
+      instanceId: "source",
+      sourceCoupled: true,
+      disposable: false,
+      defaultTemplates: complete,
+    });
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual([
+      { pin: complete.sourcePins.base, checkout: "/private/base" },
+      { pin: complete.sourcePins.personal, checkout: "/private/personal" },
+      { pin: complete.sourcePins.system, checkout: "/private/system" },
+      { pin: complete.sourcePins.examples, checkout: "/private/examples" },
+    ]);
   });
 
   it("passes exact optional-template acquisition sources and replaces ambient values", () => {

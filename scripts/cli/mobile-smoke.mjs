@@ -156,7 +156,7 @@ Runner options:
   --production-templates
                        Use the canonical pinned templates instead of development checkouts.
   --template-checkouts <dir>
-                       Use Base, Personal and System checkouts from this root for this run.
+                       Use the complete registry-defined local template set for this run.
   --timeout-ms <ms>   Time to wait for Android boot, build/install, and server
                        readiness. Defaults to 420000.
   --pairing-timeout-ms <ms>
@@ -2114,9 +2114,9 @@ async function main() {
         developmentTemplates.pins.base
       );
       serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
-        Object.keys(developmentTemplates.pins).map((name) => ({
-          pin: developmentTemplates.pins[name],
-          checkout: developmentTemplates.checkouts[name],
+        developmentTemplates.sources.map(({ id }) => ({
+          pin: developmentTemplates.sourcePins[id],
+          checkout: developmentTemplates.checkouts[id],
         }))
       );
       console.log(

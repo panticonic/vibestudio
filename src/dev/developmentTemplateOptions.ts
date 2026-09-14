@@ -16,18 +16,23 @@ export function extractDevelopmentTemplateCheckoutArguments(argv: readonly strin
       workspaceCheckout = value;
       continue;
     }
-    if (arg === "--template-checkout") {
+    if (arg === "--template-checkout" || arg.startsWith("--template-checkout=")) {
+      throw new Error(
+        "--template-checkout was removed: official templates come from the complete configured set; use --extra-template-checkout only for a non-official source"
+      );
+    }
+    if (arg === "--extra-template-checkout") {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) throw new Error("--template-checkout requires a path");
-      if (checkouts.length) throw new Error("--template-checkout may only be selected once");
+      if (!value || value.startsWith("--"))
+        throw new Error("--extra-template-checkout requires a path");
       checkouts.push(value);
       index += 1;
       continue;
     }
-    if (arg.startsWith("--template-checkout=")) {
-      const value = arg.slice("--template-checkout=".length);
-      if (!value || value.startsWith("--")) throw new Error("--template-checkout requires a path");
-      if (checkouts.length) throw new Error("--template-checkout may only be selected once");
+    if (arg.startsWith("--extra-template-checkout=")) {
+      const value = arg.slice("--extra-template-checkout=".length);
+      if (!value || value.startsWith("--"))
+        throw new Error("--extra-template-checkout requires a path");
       checkouts.push(value);
       continue;
     }

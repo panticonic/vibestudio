@@ -413,7 +413,7 @@ Runner options:
   --launch-timeout-ms <ms>  Time to wait for Electron launch and shell load.
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
-  --template-checkouts <dir> Use Base, Personal and System checkouts from this root.
+  --template-checkouts <dir> Use the complete registry-defined local template set.
   --production-templates    Use the canonical pinned production templates instead.
   --local                  Verify account-only local startup instead of remote pairing.
   --shared-member-revocation Also exercise a second member with an open approval.
@@ -2014,9 +2014,9 @@ async function main() {
         developmentTemplates.pins.system
       );
       serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
-        Object.keys(developmentTemplates.pins).map((name) => ({
-          pin: developmentTemplates.pins[name],
-          checkout: developmentTemplates.checkouts[name],
+        developmentTemplates.sources.map(({ id }) => ({
+          pin: developmentTemplates.sourcePins[id],
+          checkout: developmentTemplates.checkouts[id],
         }))
       );
       await assertTemplateCheckoutBootable({

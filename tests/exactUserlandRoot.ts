@@ -16,10 +16,9 @@ export const exactUserlandRoot = path.resolve(exactTemplateRoots.base);
  * a typed terminal outcome", say -- has to look in each repository that can
  * supply one, because which template owns a unit is not the contract's subject.
  */
-export const exactAllTemplateRoots: readonly string[] = [
-  ...Object.values(selected.checkouts),
-  ...Object.values(selected.dependencies),
-].map((checkout) => path.resolve(checkout));
+export const exactAllTemplateRoots: readonly string[] = Object.values(selected.checkouts).map(
+  (checkout) => path.resolve(checkout)
+);
 
 /** Every existing directory at `relativePath` across the configured templates. */
 export function exactUnitRoots(relativePath: string): string[] {

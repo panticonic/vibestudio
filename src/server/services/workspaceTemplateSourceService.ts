@@ -32,6 +32,7 @@ export async function acquireExactWorkspaceSource<T>(input: {
 export function createWorkspaceTemplateSourceService(deps: {
   systemEpoch: number;
   acquire(pin: WorkspaceTemplatePin): Promise<ExactSnapshot>;
+  resolveLocal(url: string): WorkspaceTemplatePin | null;
 }): ServiceDefinition {
   return {
     name: "workspaceTemplateSource",
@@ -39,18 +40,12 @@ export function createWorkspaceTemplateSourceService(deps: {
     authority: { principals: ["code", "host"] },
     methods: workspaceTemplateSourceMethods,
     handler: defineServiceHandler("workspaceTemplateSource", workspaceTemplateSourceMethods, {
+      resolveLocal: async (ctx, [url]) => {
+        requireReviewedSourceConsumer(ctx.caller);
+        return deps.resolveLocal(url);
+      },
       inspectExact: async (ctx, [pin]) => {
-        const caller = ctx.caller;
-        const isReviewedExtension =
-          caller.codeApproved === true &&
-          caller.code?.callerId === caller.runtime.id &&
-          caller.runtime.kind === "extension" &&
-          caller.runtime.id === "@workspace-extensions/templates" &&
-          caller.code.repoPath === "extensions/templates";
-        const isAuthenticatedShell =
-          caller.runtime.kind === "shell" && caller.runtime.id.startsWith("shell:");
-        if (!isReviewedExtension && !isAuthenticatedShell)
-          throw new Error("Exact source acquisition requires a reviewed source consumer");
+        requireReviewedSourceConsumer(ctx.caller);
         const snapshot = await deps.acquire(pin);
         const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
         if (!bytes) {
@@ -73,4 +68,21 @@ export function createWorkspaceTemplateSourceService(deps: {
       },
     }),
   };
+}
+
+function requireReviewedSourceConsumer(caller: {
+  codeApproved?: boolean;
+  code?: { callerId: string; repoPath: string };
+  runtime: { kind: string; id: string };
+}): void {
+  const isReviewedExtension =
+    caller.codeApproved === true &&
+    caller.code?.callerId === caller.runtime.id &&
+    caller.runtime.kind === "extension" &&
+    caller.runtime.id === "@workspace-extensions/templates" &&
+    caller.code.repoPath === "extensions/templates";
+  const isAuthenticatedShell =
+    caller.runtime.kind === "shell" && caller.runtime.id.startsWith("shell:");
+  if (!isReviewedExtension && !isAuthenticatedShell)
+    throw new Error("Exact source acquisition requires a reviewed source consumer");
 }

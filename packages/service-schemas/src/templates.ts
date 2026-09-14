@@ -155,6 +155,26 @@ export const templatesMethods = defineServiceMethods({
 
 /** Host-owned exact-source acquisition used by reviewed source consumers. */
 export const workspaceTemplateSourceMethods = defineServiceMethods({
+  resolveLocal: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "A trusted source consumer may prefer an instance-designated exact checkpoint without learning its host path.",
+    },
+    authority: { principals: ["user", "code"] },
+    website: {
+      kind: "closed",
+      reason: "Host-designated source selection is exposed through templates.inspect.",
+    } as const,
+    description:
+      "Resolve a canonical source URL to this instance's designated exact local pin, if present.",
+    args: z.tuple([z.string().url()]),
+    returns: WorkspaceTemplatePinSchema.nullable(),
+    access: READ,
+  },
   inspectExact: {
     tier: {
       tier: "open",

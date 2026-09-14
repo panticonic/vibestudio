@@ -75,9 +75,11 @@ describe("workspaceTemplateSource", () => {
       commit: "c".repeat(40),
     };
     const acquire = vi.fn(async (_pin: WorkspaceTemplatePin) => snapshot());
+    const resolveLocal = vi.fn((url: string) => (url === first.url ? first : null));
     const service = createWorkspaceTemplateSourceService({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
       acquire,
+      resolveLocal,
     });
     const id = "@workspace-extensions/templates";
     const ctx = {
@@ -117,6 +119,10 @@ describe("workspaceTemplateSource", () => {
     });
     expect(two).toMatchObject({ pin: second });
     expect(one).not.toHaveProperty("checkout");
+    await expect(service.handler(ctx, "resolveLocal", [first.url])).resolves.toEqual(first);
+    await expect(
+      service.handler(ctx, "resolveLocal", ["https://example.invalid/other.git"])
+    ).resolves.toBeNull();
 
     const shell = createVerifiedCaller("shell:user-1", "shell");
     await expect(

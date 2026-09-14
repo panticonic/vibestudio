@@ -699,4 +699,5 @@ Authority principals: `code`, `host`
 
 | Method | Description |
 |--------|-------------|
+| `workspaceTemplateSource.resolveLocal` | Resolve a canonical source URL to this instance's designated exact local pin, if present. |
 | `workspaceTemplateSource.inspectExact` | Acquire and verify one exact workspace source without exposing its host transport. |

@@ -139,7 +139,7 @@ Runner options:
   --no-install      Do not build/install the Android app
   --no-launch       Do not launch the Android app after setup
   --template-checkouts <dir>
-                     Use Base, Personal and System checkouts from this root
+                     Use the complete registry-defined local template set
   --help            Show this help message
 `);
 }

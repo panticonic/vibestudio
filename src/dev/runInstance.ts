@@ -285,9 +285,9 @@ async function main(): Promise<void> {
   --ephemeral      Use an isolated temporary instance root; combine with
                    --instance to give parallel CLI commands a stable target
   --template-checkouts <path>
-                   Root containing base/, personal/, and system/ Git checkouts
-  --template-checkout <path>
-                   Use an optional template's visible worktree (repeatable)
+                   Complete registry-defined official template source root
+  --extra-template-checkout <path>
+                   Add a non-official template checkout (repeatable)
   --workspace-checkout <path>
                    Open this checkout as an additional workspace
   --production-templates Ignore configured checkouts and boot the pinned releases
@@ -339,6 +339,11 @@ async function main(): Promise<void> {
           "or select the shipped release explicitly with `pnpm dev:production`."
       );
     }
+    console.log(
+      parsed.productionTemplates
+        ? `[instance:${id}] Template sources: published release set`
+        : `[instance:${id}] Template sources: complete local set (${defaultTemplates!.sources.length} official templates)`
+    );
     const developmentTemplates = await inspectWorkspaceSources({
       checkouts: [
         ...new Set(

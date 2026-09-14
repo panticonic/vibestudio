@@ -5,10 +5,7 @@ import { vitestSharedConfig } from "./vitest.sharedConfig";
 import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
-import {
-  exactPairTestsFor,
-  excludedIntegrationTestsFor,
-} from "./vitest.exactPairTests";
+import { exactPairTestsFor, excludedIntegrationTestsFor } from "./vitest.exactPairTests";
 import { requireDevelopmentTemplateCheckouts } from "./src/dev/developmentTemplateConfig";
 import { tsImport } from "tsx/esm/api";
 
@@ -52,11 +49,7 @@ export default defineConfig(async () => {
   >("./src/dev/developmentTemplateComposition.ts", import.meta.url);
   const template = process.env["VIBESTUDIO_USERLAND_TEMPLATE"] ?? "base";
   const selected = requireDevelopmentTemplateCheckouts(__dirname);
-  // A dependency template is composed on base exactly like a root one: it is
-  // still a template, it just is not anybody's workspace.
-  const testSourceRoot =
-    (selected.checkouts as Record<string, string | undefined>)[template] ??
-    (selected.dependencies as Record<string, string | undefined>)[template];
+  const testSourceRoot = (selected.checkouts as Record<string, string | undefined>)[template];
   if (!testSourceRoot) {
     throw new Error(`Unknown VIBESTUDIO_USERLAND_TEMPLATE ${JSON.stringify(template)}`);
   }

@@ -18,15 +18,8 @@ const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
 if (workspaceArgumentIndex < 0) {
   const selected = requireDevelopmentTemplateCheckouts(appRoot);
   const checkouts = selected.checkouts;
-  // Dependency templates compile against base like any other template.
-  const templates: Array<[string, string]> = [
-    ...(["base", "personal", "system"] as const).map(
-      (name) => [name, checkouts[name]] as [string, string]
-    ),
-    ...Object.entries(selected.dependencies).map(
-      ([name, checkout]) => [name, checkout] as [string, string]
-    ),
-  ];
+  // Every catalog source compiles against Base like any other template.
+  const templates = selected.sources.map(({ id }) => [id, checkouts[id]] as [string, string]);
   for (const [name, checkout] of templates) {
     const composition = composeDevelopmentTemplateCheckouts(
       name === "base" ? [checkouts.base] : [checkouts.base, checkout]

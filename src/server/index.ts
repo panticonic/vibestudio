@@ -2221,6 +2221,13 @@ async function main() {
     createWorkspaceTemplateSourceService({
       systemEpoch: workspaceConfig.systemEpoch,
       acquire: acquireWorkspaceTemplate,
+      resolveLocal: (url) => {
+        const canonical = normalizeTemplateGitUrl(url);
+        return (
+          workspaceSources.find((source) => normalizeTemplateGitUrl(source.pin.url) === canonical)
+            ?.pin ?? null
+        );
+      },
     })
   );
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>

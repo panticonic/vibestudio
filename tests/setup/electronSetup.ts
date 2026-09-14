@@ -116,7 +116,7 @@ export function hasElectronDisplay(): boolean {
 }
 
 export interface LaunchOptions {
-  /** Visible local sources, checkpointed exactly as by pnpm dev --template-checkout. */
+  /** Explicit non-official sources, checkpointed exactly as by --extra-template-checkout. */
   templateCheckouts?: readonly string[];
   /** Use an existing managed workspace directory instead of creating a new one */
   workspace?: string;

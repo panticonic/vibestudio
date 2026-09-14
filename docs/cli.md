@@ -52,15 +52,20 @@ pushed into the promoted base-template repository. The supervisor prints
 so identical names in different worktrees do not collide. Starting or stopping
 one instance never signals another.
 
-Use repeatable `--template-checkout PATH` options to test optional workspace
-templates from local Git worktrees before publication. The option is supported
-by `pnpm dev`, `pnpm server:live`, and `pnpm start`. Each checkout must have a
-canonicalizable `origin` and a valid contribution-template manifest. The
-launcher seals its visible tracked and untracked non-ignored files into an
-owned exact checkpoint; catalog or direct-URL installation of that template
-then follows the normal reviewed composition path using the checkpoint instead
-of fetching the promoted commit. No local filesystem path is recorded as
-workspace provenance.
+`pnpm dev` and `pnpm server:live` use one complete local template universe. Its
+configured root contains the official registry and every template that registry
+names, including Base, Personal, System, Examples, Google Workspace, News, and
+Spectrolite. Startup fails if any official checkout is absent or has the wrong
+origin; it never silently fetches one official template while reading another
+from disk. `pnpm dev:production` is the opposite global mode and uses published
+sources only.
+
+Use repeatable `--extra-template-checkout PATH` options only for non-official
+templates. Each checkout must have a canonicalizable `origin` and a valid
+contribution-template manifest. The launcher seals every selected worktree's
+tracked and untracked non-ignored files into an owned exact checkpoint. Normal
+reviewed composition then uses that checkpoint, and no local filesystem path is
+recorded as workspace provenance.
 
 For a server instance, the registry's process record is not readiness. The
 supervisor clears the prior lifecycle marker before launch and publishes a new

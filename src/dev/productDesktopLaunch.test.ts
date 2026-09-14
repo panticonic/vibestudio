@@ -25,7 +25,16 @@ const defaultTemplates = {
     personal: "/visible/personal",
     system: "/visible/system",
   },
-  dependencies: [],
+  sourcePins: {
+    base: { ...systemPin, url: "git+https://example.test/base.git" },
+    personal: { ...systemPin, url: "git+https://example.test/personal.git" },
+    system: systemPin,
+  },
+  sources: [
+    { id: "base", role: "base" as const, url: "git+https://example.test/base.git" },
+    { id: "personal", role: "personal" as const, url: "git+https://example.test/personal.git" },
+    { id: "system", role: "system" as const, url: "git+https://example.test/system.git" },
+  ],
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 

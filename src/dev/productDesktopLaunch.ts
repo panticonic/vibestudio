@@ -41,9 +41,9 @@ export function productDesktopEnvironment(input: {
   const env = { ...input.parent };
   const defaultTemplates = input.defaultTemplates;
   const defaultSources = defaultTemplates
-    ? (["base", "personal", "system"] as const).map((name) => ({
-        pin: defaultTemplates.pins[name],
-        checkout: defaultTemplates.checkouts[name],
+    ? defaultTemplates.sources.map(({ id }) => ({
+        pin: defaultTemplates.sourcePins[id]!,
+        checkout: defaultTemplates.checkouts[id],
       }))
     : [];
   for (const key of [

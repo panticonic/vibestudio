@@ -1,24 +1,13 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { parse } = require("yaml");
 
 const DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY = "vibestudio.templateCheckouts";
 const DEVELOPMENT_TEMPLATE_ROOT_ENV = "VIBESTUDIO_TEMPLATE_CHECKOUTS";
-const TEMPLATE_NAMES = ["base", "personal", "system"];
-
-/**
- * Templates a development workspace may depend on without being one.
- *
- * The acceptance harness is a template like any other, but it is nobody's root:
- * a workspace runs the suite by declaring it alongside Personal or System. It
- * therefore never appears in the release pins, only in a development checkout
- * set, and its absence is ordinary rather than an error.
- */
-const DEPENDENCY_TEMPLATE_NAMES = ["system-testing"];
-
-const DEPENDENCY_TEMPLATE_URLS = {
-  "system-testing": "https://github.com/panticonic/vibestudio-system-testing.git",
-};
+const DEFAULT_TEMPLATE_NAMES = ["base", "personal", "system"];
+const TEMPLATE_REGISTRY_DIRECTORY = "registry";
+const TEMPLATE_REGISTRY_URL = "https://github.com/panticonic/vibestudio-template-registry.git";
 
 function git(repoRoot, args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
@@ -50,23 +39,118 @@ function assertGitCheckout(checkout, name = "template") {
   }
 }
 
+function canonicalRemoteUrl(value) {
+  const remote = value.startsWith("git+") ? value.slice(4) : value;
+  const scp = /^git@([^:]+):(.+)$/u.exec(remote);
+  const ssh = /^ssh:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/u.exec(remote);
+  const transport = scp
+    ? `https://${scp[1]}/${scp[2]}`
+    : ssh
+      ? `https://${ssh[1]}/${ssh[2]}`
+      : remote;
+  const url = new URL(transport);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(`Template source URL must be HTTP(S): ${value}`);
+  }
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  return `${url.protocol}//${url.host.toLowerCase()}${url.pathname}`;
+}
+
+function catalogEntry(value, expectedRole) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Template registry entries must be objects");
+  }
+  const { id, role, url } = value;
+  if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(id)) {
+    throw new Error(`Template registry entry has an invalid id: ${String(id)}`);
+  }
+  if (role !== expectedRole) {
+    throw new Error(`Template registry entry ${id} must have role ${expectedRole}`);
+  }
+  if (typeof url !== "string") throw new Error(`Template registry entry ${id} has no URL`);
+  const consumers = value.consumers;
+  if (expectedRole === "development") {
+    if (
+      !Array.isArray(consumers) ||
+      consumers.length === 0 ||
+      consumers.some((consumer) => typeof consumer !== "string")
+    ) {
+      throw new Error(`Development template registry entry ${id} must declare its consumers`);
+    }
+  } else if (consumers !== undefined) {
+    throw new Error(`Template registry entry ${id} may not declare development consumers`);
+  }
+  return {
+    id,
+    role,
+    url: `git+${canonicalRemoteUrl(url)}`,
+    ...(expectedRole === "development" ? { consumers: [...new Set(consumers)] } : {}),
+  };
+}
+
+function readOfficialTemplateCatalog(root) {
+  const registry = path.join(canonicalRoot(root), TEMPLATE_REGISTRY_DIRECTORY);
+  assertGitCheckout(registry, "template registry");
+  const document = parse(fs.readFileSync(path.join(registry, "registry.yml"), "utf8"));
+  if (!document || document.version !== 1) {
+    throw new Error("Template registry must use version 1");
+  }
+  const foundations = Array.isArray(document.foundations)
+    ? document.foundations.map((entry) => catalogEntry(entry, entry?.role))
+    : [];
+  const byRole = new Map(foundations.map((entry) => [entry.role, entry]));
+  for (const role of DEFAULT_TEMPLATE_NAMES) {
+    if (!byRole.has(role)) throw new Error(`Template registry does not declare its ${role} source`);
+  }
+  if (foundations.some((entry) => !DEFAULT_TEMPLATE_NAMES.includes(entry.role))) {
+    throw new Error("Template registry foundations may only declare base, personal, and system");
+  }
+  const optional = Array.isArray(document.entries)
+    ? document.entries.map((entry) => catalogEntry({ ...entry, role: "optional" }, "optional"))
+    : [];
+  const development = Array.isArray(document.development)
+    ? document.development.map((entry) => catalogEntry(entry, "development"))
+    : [];
+  const sources = [...foundations, ...development, ...optional];
+  const ids = new Set();
+  const urls = new Set();
+  for (const source of sources) {
+    if (ids.has(source.id)) throw new Error(`Template registry repeats id ${source.id}`);
+    if (urls.has(source.url)) throw new Error(`Template registry repeats URL ${source.url}`);
+    ids.add(source.id);
+    urls.add(source.url);
+  }
+  for (const source of development) {
+    for (const consumer of source.consumers) {
+      if (!byRole.has(consumer)) {
+        throw new Error(`Development template ${source.id} names unknown consumer ${consumer}`);
+      }
+    }
+  }
+  return { registry, sources };
+}
+
 function templateCheckouts(root) {
   const canonical = canonicalRoot(root);
+  const catalog = readOfficialTemplateCatalog(canonical);
   const checkouts = Object.fromEntries(
-    TEMPLATE_NAMES.map((name) => {
-      const checkout = path.join(canonical, name);
-      assertGitCheckout(checkout, name);
-      return [name, fs.realpathSync(checkout)];
+    catalog.sources.map((source) => {
+      const checkout = path.join(canonical, source.id);
+      assertGitCheckout(checkout, source.id);
+      const actualUrl = canonicalRemoteUrl(git(checkout, ["remote", "get-url", "origin"]));
+      if (actualUrl !== canonicalRemoteUrl(source.url)) {
+        throw new Error(
+          `Configured ${source.id} checkout has origin ${actualUrl}; expected ${canonicalRemoteUrl(source.url)}`
+        );
+      }
+      return [source.id, fs.realpathSync(checkout)];
     })
   );
-  const dependencies = {};
-  for (const name of DEPENDENCY_TEMPLATE_NAMES) {
-    const checkout = path.join(canonical, name);
-    if (!fs.existsSync(checkout)) continue;
-    assertGitCheckout(checkout, name);
-    dependencies[name] = fs.realpathSync(checkout);
-  }
-  return { root: canonical, checkouts, dependencies };
+  return { root: canonical, registry: catalog.registry, sources: catalog.sources, checkouts };
 }
 
 function configuredDevelopmentTemplateRoot(repoRoot, env = process.env) {
@@ -99,8 +183,9 @@ function requireDevelopmentTemplateCheckouts(repoRoot, env = process.env) {
 }
 
 function requireDevelopmentTemplateCheckout(repoRoot, name, env = process.env) {
-  if (!TEMPLATE_NAMES.includes(name)) throw new Error(`Unknown workspace template: ${name}`);
-  return requireDevelopmentTemplateCheckouts(repoRoot, env).checkouts[name];
+  const selected = requireDevelopmentTemplateCheckouts(repoRoot, env);
+  if (!selected.checkouts[name]) throw new Error(`Unknown workspace template: ${name}`);
+  return selected.checkouts[name];
 }
 
 function selectDevelopmentTemplateCheckouts(
@@ -132,19 +217,25 @@ function clearDevelopmentTemplateRoot(repoRoot) {
 }
 
 function developmentTemplateHead(checkout) {
+  const visibleChanges = git(checkout, ["status", "--porcelain=v1", "-z"])
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => entry.slice(3))
+    .filter((relativePath) => !relativePath.split(/[\\/]/u).includes("node_modules"));
   return {
     commit: git(checkout, ["rev-parse", "HEAD"]),
-    dirty: git(checkout, ["status", "--porcelain"]).length > 0,
+    dirty: visibleChanges.length > 0,
   };
 }
 
 module.exports = {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
-  TEMPLATE_NAMES,
-  DEPENDENCY_TEMPLATE_NAMES,
-  DEPENDENCY_TEMPLATE_URLS,
+  DEFAULT_TEMPLATE_NAMES,
+  TEMPLATE_REGISTRY_DIRECTORY,
+  TEMPLATE_REGISTRY_URL,
   configuredDevelopmentTemplateRoot,
+  readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
   requireDevelopmentTemplateCheckout,
   selectDevelopmentTemplateCheckouts,

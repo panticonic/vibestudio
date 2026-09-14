@@ -24,7 +24,33 @@ function fixture(epoch: number) {
   roots.push(root);
   const templates = path.join(root, "templates");
   fs.mkdirSync(templates);
-  for (const name of ["base", "personal", "system"] as const) {
+  const registry = path.join(templates, "registry");
+  fs.mkdirSync(registry);
+  fs.writeFileSync(
+    path.join(registry, "registry.yml"),
+    [
+      "version: 1",
+      "foundations:",
+      ...["base", "personal", "system"].flatMap((name) => [
+        `  - id: ${name}`,
+        `    role: ${name}`,
+        `    url: git+https://example.test/${name}.git`,
+      ]),
+      "development:",
+      "  - id: system-testing",
+      "    role: development",
+      "    url: git+https://example.test/system-testing.git",
+      "    consumers: [personal, system]",
+      "entries:",
+      "  - id: examples",
+      "    url: git+https://example.test/examples.git",
+      "",
+    ].join("\n")
+  );
+  git(registry, "init", "-b", "main");
+  git(registry, "add", ".");
+  git(registry, "commit", "-m", "registry");
+  for (const name of ["base", "personal", "system", "system-testing", "examples"] as const) {
     const checkout = path.join(templates, name);
     fs.mkdirSync(path.join(checkout, "meta"), { recursive: true });
     fs.mkdirSync(path.join(checkout, "packages", name), { recursive: true });
@@ -48,7 +74,7 @@ afterEach(() => {
 });
 
 describe("resolveDevelopmentTemplateSet", () => {
-  it("snapshots each canonical template without projecting a source superset", async () => {
+  it("snapshots the complete official template universe without projecting a source superset", async () => {
     const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
     await expect(
       resolveDevelopmentTemplateSet({
@@ -61,6 +87,8 @@ describe("resolveDevelopmentTemplateSet", () => {
         base: path.join(templates, "base"),
         personal: path.join(templates, "personal"),
         system: path.join(templates, "system"),
+        "system-testing": path.join(templates, "system-testing"),
+        examples: path.join(templates, "examples"),
       },
       pins: {
         base: {
@@ -76,7 +104,22 @@ describe("resolveDevelopmentTemplateSet", () => {
           url: "git+https://example.test/system.git",
         },
       },
+      sourcePins: {
+        "system-testing": {
+          ref: "refs/heads/vibestudio-dev-checkpoint",
+          url: "git+https://example.test/system-testing.git",
+        },
+        examples: {
+          ref: "refs/heads/vibestudio-dev-checkpoint",
+          url: "git+https://example.test/examples.git",
+        },
+      },
     });
+    const personalManifest = fs.readFileSync(
+      path.join(checkpoint, "1", "meta", "vibestudio.yml"),
+      "utf8"
+    );
+    expect(personalManifest).toContain("git+https://example.test/system-testing.git");
   });
 
   it("rejects an incompatible template before startup", async () => {

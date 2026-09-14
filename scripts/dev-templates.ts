@@ -6,35 +6,17 @@ import { fileURLToPath } from "node:url";
 import {
   clearDevelopmentTemplateRoot,
   configuredDevelopmentTemplateRoot,
-  DEPENDENCY_TEMPLATE_NAMES,
-  DEPENDENCY_TEMPLATE_URLS,
   developmentTemplateHead,
+  readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
-  TEMPLATE_NAMES,
+  TEMPLATE_REGISTRY_DIRECTORY,
+  TEMPLATE_REGISTRY_URL,
 } from "../src/dev/developmentTemplateConfig.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2] ?? "status";
 const args = process.argv.slice(3);
-
-function releasedUrls(): Record<(typeof TEMPLATE_NAMES)[number], string> {
-  const release = JSON.parse(
-    fs.readFileSync(
-      path.join(repoRoot, "build-resources", "workspace-template-release.json"),
-      "utf8"
-    )
-  ) as { workspaceTemplates?: Record<string, { url?: unknown }> };
-  return Object.fromEntries(
-    TEMPLATE_NAMES.map((name) => {
-      const url = release.workspaceTemplates?.[name]?.url;
-      if (typeof url !== "string" || !url.startsWith("git+https://")) {
-        throw new Error(`The host release does not declare a canonical ${name} template URL`);
-      }
-      return [name, url.slice("git+".length)];
-    })
-  ) as Record<(typeof TEMPLATE_NAMES)[number], string>;
-}
 
 function run(executable: string, childArgs: string[], cwd = repoRoot): number {
   const result = spawnSync(executable, childArgs, { cwd, env: process.env, stdio: "inherit" });
@@ -47,24 +29,24 @@ if (command === "setup") {
   if (args.length > 1) throw new Error("usage: pnpm dev:templates setup [root]");
   const root = path.resolve(args[0] ?? path.join(repoRoot, "..", "vibestudio-templates"));
   fs.mkdirSync(root, { recursive: true });
-  const urls = releasedUrls();
-  // Dependency templates are nobody's root, so no release pins them; their
-  // canonical URL is the one the development tooling declares.
-  const cloning: Array<[string, string]> = [
-    ...TEMPLATE_NAMES.map((name) => [name, urls[name]] as [string, string]),
-    ...DEPENDENCY_TEMPLATE_NAMES.map(
-      (name) => [name, DEPENDENCY_TEMPLATE_URLS[name]] as [string, string]
-    ),
-  ];
-  for (const [name, url] of cloning) {
-    const checkout = path.join(root, name);
+  const registry = path.join(root, TEMPLATE_REGISTRY_DIRECTORY);
+  if (!fs.existsSync(registry)) {
+    console.log(`Cloning the official template registry into ${registry}`);
+    const status = run("git", ["clone", TEMPLATE_REGISTRY_URL, registry]);
+    if (status !== 0) process.exit(status);
+  }
+  const catalog = readOfficialTemplateCatalog(root);
+  for (const source of catalog.sources) {
+    const checkout = path.join(root, source.id);
     if (fs.existsSync(checkout)) continue;
-    console.log(`Cloning ${name} template into ${checkout}`);
-    const status = run("git", ["clone", url, checkout]);
+    console.log(`Cloning ${source.id} template into ${checkout}`);
+    const status = run("git", ["clone", source.url.slice("git+".length), checkout]);
     if (status !== 0) process.exit(status);
   }
   const selected = setDevelopmentTemplateRoot(repoRoot, root);
-  console.log(`Configured canonical template checkouts: ${selected.root}`);
+  console.log(
+    `Configured complete local template universe (${selected.sources.length} templates): ${selected.root}`
+  );
 } else if (command === "use") {
   if (args.length !== 1) throw new Error("usage: pnpm dev:templates use <root>");
   console.log(
@@ -86,35 +68,40 @@ if (command === "setup") {
     console.log("Development templates: not configured (run `pnpm dev:templates setup`)");
   } else {
     const selected = requireDevelopmentTemplateCheckouts(repoRoot);
-    console.log(`Development templates: ${selected.root}`);
-    for (const name of TEMPLATE_NAMES) {
-      const head = developmentTemplateHead(selected.checkouts[name]);
-      console.log(`  ${name}: ${head.commit}${head.dirty ? " (worktree has changes)" : ""}`);
-    }
-    for (const [name, checkout] of Object.entries(selected.dependencies)) {
-      const head = developmentTemplateHead(checkout);
+    console.log(`Template sources: complete local development set at ${selected.root}`);
+    for (const source of selected.sources) {
+      const head = developmentTemplateHead(selected.checkouts[source.id]);
       console.log(
-        `  ${name} (dependency): ${head.commit}${head.dirty ? " (worktree has changes)" : ""}`
+        `  ${source.id} (${source.role}): ${head.commit}${head.dirty ? " (worktree has changes)" : ""}`
       );
     }
   }
+} else if (command === "sync") {
+  if (args.length !== 0) throw new Error("usage: pnpm dev:templates sync");
+  const selected = requireDevelopmentTemplateCheckouts(repoRoot);
+  for (const checkout of [selected.registry, ...selected.sources.map((s) => selected.checkouts[s.id])]) {
+    const label = path.basename(checkout);
+    const head = developmentTemplateHead(checkout);
+    if (head.dirty) {
+      throw new Error(`Cannot synchronize ${label}: its worktree has local changes`);
+    }
+    console.log(`Synchronizing ${label}`);
+    let status = run("git", ["fetch", "origin"], checkout);
+    if (status === 0) status = run("git", ["merge", "--ff-only", "origin/main"], checkout);
+    if (status !== 0) process.exit(status);
+  }
 } else if (command === "exec") {
-  const name = args[0] as (typeof TEMPLATE_NAMES)[number] | undefined;
+  const name = args[0];
   const separator = args[1] === "--" ? 2 : 1;
   const executable = args[separator];
   const selected = requireDevelopmentTemplateCheckouts(repoRoot);
-  const checkout = name
-    ? ((selected.checkouts as Record<string, string | undefined>)[name] ??
-      (selected.dependencies as Record<string, string | undefined>)[name])
-    : undefined;
-  if (!checkout || !executable) {
-    throw new Error(
-      "usage: pnpm dev:templates exec base|personal|system|system-testing -- <command> [args...]"
-    );
+  if (!name || !selected.checkouts[name] || !executable) {
+    throw new Error("usage: pnpm dev:templates exec <template-id> -- <command> [args...]");
   }
+  const checkout = selected.checkouts[name];
   process.exitCode = run(executable, args.slice(separator + 1), checkout);
 } else {
   throw new Error(
-    "usage: pnpm dev:templates setup [root] | use <root> | status | path | clear | exec <name> -- <command> [args...]"
+    "usage: pnpm dev:templates setup [root] | use <root> | status | sync | path | clear | exec <name> -- <command> [args...]"
   );
 }
