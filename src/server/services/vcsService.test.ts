@@ -13,9 +13,7 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import { createVcsService } from "./vcsService.js";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
-const INTERNAL_AUTHORIZATION = {
-  contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
-} as unknown as NonNullable<ServiceContext["authorization"]>;
+const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 function workerContext(id = "worker:one"): ServiceContext {
   return {
@@ -132,7 +130,7 @@ describe("canonical vcsService", () => {
     await expect(definition.handler(agentContext(), "mainState", [])).resolves.toEqual(EVENT);
     expect(semanticCall).toHaveBeenCalledWith("vcsMainState", {
       input: undefined,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     await expect(
       definition.handler(agentContext(), "readFile", [
@@ -153,7 +151,6 @@ describe("canonical vcsService", () => {
       input: { contextId: "context:target" },
       ingress: {
         causalParent: null,
-        contextIntegrity: { class: "internal", externalKeys: [] },
       },
     });
   });
@@ -212,7 +209,6 @@ describe("canonical vcsService", () => {
       input: { contextId: "context:agent" },
       ingress: {
         causalParent: null,
-        contextIntegrity: { class: "internal", externalKeys: [] },
       },
     });
   });
@@ -371,8 +367,7 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
       null,
-      expect.any(Object),
-      { class: "internal", externalKeys: [] }
+      expect.any(Object)
     );
     expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
   });
@@ -872,8 +867,7 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
       null,
-      ctx.caller,
-      { class: "internal", externalKeys: [] }
+      ctx.caller
     );
   });
 });

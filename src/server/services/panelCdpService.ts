@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { browserUrlFromPanelSource } from "@vibestudio/shared/panelChrome";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -13,7 +12,6 @@ import type {
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
 import { approvalTargetForPanel, preparePanelAccessAuthority } from "./panelAccessPermission.js";
-import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { PanelEvaluateOptions, PanelEvaluateResult } from "@vibestudio/shared/panel/evaluate";
 
 export type { PanelEvaluateOptions, PanelEvaluateResult };
@@ -124,7 +122,6 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
   };
   logAccess?(event: PanelCdpAccessEvent): void;
   /** Advance an agent session's latch before inspected page bytes are returned. */
-  recordContextIngestion?: ContextIngestionRecorder;
 }
 
 export interface PanelCdpAccessEvent {
@@ -474,33 +471,6 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     return target;
   }
 
-  async function recordCdpIngestion(
-    ctx: ServiceContext,
-    target: PanelAccessPermissionTarget,
-    method: "getCdpEndpoint" | "consoleHistory" | "screenshot" | "evaluate"
-  ): Promise<void> {
-    const browserUrl =
-      typeof target.source === "string" ? browserUrlFromPanelSource(target.source) : null;
-    let key = `log:panel:${target.id}`;
-    if (browserUrl) {
-      try {
-        const url = new URL(browserUrl);
-        if (url.protocol === "http:" || url.protocol === "https:") {
-          key = `web:${url.hostname.toLowerCase()}`;
-        }
-      } catch {
-        // A stale browser source is still outside content. Keep panel-scoped
-        // lineage rather than turning an otherwise valid inspection into an
-        // agent-facing failure.
-      }
-    }
-    await deps.recordContextIngestion?.(ctx, {
-      key,
-      via: `panel-cdp:${method}`,
-      classification: "external",
-    });
-  }
-
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
@@ -558,32 +528,28 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         });
       },
       getCdpEndpoint: async (ctx, [panelId]) => {
-        const target = await recordCdpAccess(ctx, "getCdpEndpoint", panelId);
+        await recordCdpAccess(ctx, "getCdpEndpoint", panelId);
         const endpoint = await deps.getEndpoint(panelId, ctx.caller.runtime.id);
-        await recordCdpIngestion(ctx, target, "getCdpEndpoint");
         return endpoint;
       },
       consoleHistory: async (ctx, [panelId, options]) => {
-        const target = await recordCdpAccess(ctx, "consoleHistory", panelId);
+        await recordCdpAccess(ctx, "consoleHistory", panelId);
         if (!deps.consoleHistory) throw new Error("Panel console history is not available");
         const result = await deps.consoleHistory(panelId, ctx.caller.runtime.id, options);
-        await recordCdpIngestion(ctx, target, "consoleHistory");
         return result;
       },
       screenshot: async (ctx, [panelId, options]) => {
-        const target = await recordCdpAccess(ctx, "screenshot", panelId);
+        await recordCdpAccess(ctx, "screenshot", panelId);
         if (!deps.screenshot) throw new Error("Panel screenshot is not available");
         const result = await deps.screenshot(panelId, ctx.caller.runtime.id, options);
-        await recordCdpIngestion(ctx, target, "screenshot");
         return result;
       },
       evaluate: async (ctx, [panelId, expression, options]) => {
-        const target = await recordCdpAccess(ctx, "evaluate", panelId);
+        await recordCdpAccess(ctx, "evaluate", panelId);
         if (!deps.evaluate) throw new Error("Panel evaluation is not available");
         const result = await deps.evaluate(panelId, ctx.caller.runtime.id, expression, options);
         // An expression that threw still read the page to decide it should
         // throw, so the latch advances on the attempt, not on the outcome.
-        await recordCdpIngestion(ctx, target, "evaluate");
         return result;
       },
       reload: async (ctx, [panelId]) => {

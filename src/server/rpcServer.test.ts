@@ -42,11 +42,7 @@ import {
   type RpcEnvelope,
   type RpcMessage,
 } from "@vibestudio/rpc";
-import {
-  bindVerifiedExternalContext,
-  type AttestedCaller,
-  type InternalRpcRequest,
-} from "@vibestudio/rpc/internal";
+import { type AttestedCaller, type InternalRpcRequest } from "@vibestudio/rpc/internal";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -196,7 +192,6 @@ type TestRpcServer = {
     testPolicy: import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
     requested: readonly import("@vibestudio/rpc").CapabilityScope[] | null;
     authorizingCaller: ReturnType<typeof createVerifiedCaller> | null;
-    contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
   } | null;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
@@ -1171,7 +1166,6 @@ describe("RpcServer relay behavior", () => {
         envelope,
         caller,
         authorizingCaller: caller,
-        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
         operation: "calendar.suggest",
         purpose: "call",
       },
@@ -1189,7 +1183,6 @@ describe("RpcServer relay behavior", () => {
       expect.objectContaining({
         authenticatedCaller: caller,
         authorizingCaller: caller,
-        inheritedContextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
       })
     );
     expect(send).toHaveBeenCalledWith(
@@ -1238,7 +1231,6 @@ describe("RpcServer relay behavior", () => {
         },
         caller,
         authorizingCaller: caller,
-        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
         operation: "calendar.watch",
         purpose: "call",
       },
@@ -3660,7 +3652,7 @@ describe("RpcServer relay behavior", () => {
       declaredBy: "workers/development",
     };
     const denied = createServer({
-      isAttestedSystemTestHarness: () => false,
+      isSystemTestInstance: () => false,
       resolveWorkspaceDirectAuthority: async () => [workspaceAuthority],
     }).server;
     await expect(testServer(denied).directDOAuthorization(invocation)).rejects.toMatchObject({
@@ -3668,7 +3660,7 @@ describe("RpcServer relay behavior", () => {
     });
 
     const admitted = createServer({
-      isAttestedSystemTestHarness: () => true,
+      isSystemTestInstance: () => true,
       resolveWorkspaceDirectAuthority: async () => [workspaceAuthority],
     }).server;
     await expect(testServer(admitted).directDOAuthorization(invocation)).resolves.toMatchObject({
@@ -4083,177 +4075,6 @@ describe("RpcServer relay behavior", () => {
     await expect(invoke("host-minted-task-one")).rejects.toThrow(/not active/);
   });
 
-  it("retains sealed webhook lineage through the exact publisher invocation and nested channel call", async () => {
-    const { server, entityCache } = createServer();
-    const publisher = "do:workers/github:GithubDO:publisher";
-    const channel = "do:workers/pubsub-channel:PubSubChannel:channel-1";
-    entityCache._onActivate(
-      makeRecord(publisher, "do", { repoPath: "workers/github", contextId: "ctx-webhook" })
-    );
-    entityCache._onActivate(
-      makeRecord(channel, "do", {
-        repoPath: "workers/pubsub-channel",
-        contextId: "ctx-webhook",
-      })
-    );
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-
-    const envelopes: RpcEnvelope[] = [];
-    const serviceContexts: ServiceContext[] = [];
-    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
-      serviceContexts.push(ctx);
-      return { ok: true };
-    });
-    let publisherNonce = "";
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      const envelope = JSON.parse(String(init.body)) as RpcEnvelope;
-      envelopes.push(envelope);
-      const request = envelope.message as InternalRpcRequest;
-      const authorization = (envelope.delivery.caller as AttestedCaller).authorization!;
-      if (envelope.target === publisher && request.method === "onPush") {
-        publisherNonce = authorization.nonce;
-        const nested: InternalRpcRequest = {
-          type: "request",
-          requestId: "nested-channel-publish",
-          fromId: publisher,
-          method: "publish",
-          args: [{ contentClass: "internal", externalKeys: [] }],
-          authorityParentNonce: publisherNonce,
-        };
-        const nestedEnvelope = envelopeFromMessage({
-          selfId: publisher,
-          from: publisher,
-          target: channel,
-          callerKind: "do",
-          message: nested,
-        });
-        await testServer(server).handleEnvelopeRequest(
-          publisher,
-          "do",
-          undefined,
-          nestedEnvelope,
-          nested,
-          new AbortController().signal
-        );
-        const nestedService: InternalRpcRequest = {
-          type: "request",
-          requestId: "nested-host-service",
-          fromId: publisher,
-          method: "test.observe",
-          args: [],
-          authorityParentNonce: publisherNonce,
-        };
-        await testServer(server).handleEnvelopeRequest(
-          publisher,
-          "do",
-          undefined,
-          envelopeFromMessage({
-            selfId: publisher,
-            from: publisher,
-            target: "main",
-            callerKind: "do",
-            message: nestedService,
-          }),
-          nestedService,
-          new AbortController().signal
-        );
-      }
-      return new Response(
-        JSON.stringify(
-          responseEnvelopeFor(
-            envelope,
-            { callerId: envelope.target, callerKind: "do" },
-            { type: "response", requestId: request.requestId, result: { ok: true } }
-          )
-        ),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const externalKey = `api:webhook:${"a".repeat(64)}`;
-    await server.callTarget(
-      publisher,
-      "onPush",
-      [{ contextIntegrity: { class: "internal", externalKeys: [] } }],
-      bindVerifiedExternalContext(
-        {},
-        {
-          class: "external",
-          latchEpoch: 0,
-          externalKeys: [externalKey],
-        }
-      )
-    );
-
-    expect(envelopes).toHaveLength(2);
-    for (const envelope of envelopes) {
-      expect(
-        (envelope.delivery.caller as AttestedCaller).authorization?.context.contextIntegrity
-      ).toEqual({ class: "external", latchEpoch: 0, externalKeys: [externalKey] });
-    }
-    expect(serviceContexts).toHaveLength(1);
-    expect(serviceContexts[0]!.inheritedContextIntegrity).toEqual({
-      class: "external",
-      latchEpoch: 0,
-      externalKeys: [externalKey],
-    });
-    expect(envelopes[1]).toMatchObject({
-      target: channel,
-      message: { args: [{ contentClass: "internal", externalKeys: [] }] },
-    });
-
-    const staleNested: InternalRpcRequest = {
-      type: "request",
-      requestId: "stale-channel-publish",
-      fromId: publisher,
-      method: "publish",
-      args: [],
-      authorityParentNonce: publisherNonce,
-    };
-    await expect(
-      testServer(server).handleEnvelopeRequest(
-        publisher,
-        "do",
-        undefined,
-        envelopeFromMessage({
-          selfId: publisher,
-          from: publisher,
-          target: channel,
-          callerKind: "do",
-          message: staleNested,
-        }),
-        staleNested,
-        new AbortController().signal
-      )
-    ).rejects.toThrow(/not active/);
-
-    envelopes.length = 0;
-    await server.callTarget(publisher, "untrustedArgsOnly", [
-      { contentClass: "external", externalKeys: [externalKey] },
-    ]);
-    expect(
-      (envelopes[0]!.delivery.caller as AttestedCaller).authorization?.context.contextIntegrity
-    ).toEqual({ class: "not-applicable", latchEpoch: 0, externalKeys: [] });
-
-    await expect(
-      server.callTarget(
-        "panel:nav-a",
-        "onPush",
-        [],
-        bindVerifiedExternalContext(
-          {},
-          {
-            class: "external",
-            latchEpoch: 0,
-            externalKeys: [externalKey],
-          }
-        )
-      )
-    ).rejects.toThrow(/requires a direct Durable Object target/);
-  });
-
   it("binds a builtin's outbound request ceiling to the exact active method", () => {
     const { server } = createServer();
     const receiver = "do:vibestudio/internal:EvalDO:owner";
@@ -4391,55 +4212,6 @@ describe("RpcServer relay behavior", () => {
     }
 
     expect(testServer(server).verifiedCallerFor(receiver, "do").testPolicy).toBe(orchestrator);
-  });
-
-  it("keeps an agent binding as a relationship fact rather than inventing a session origin", async () => {
-    const contextIntegrity = {
-      class: "external" as const,
-      latchEpoch: 3,
-      externalKeys: ["web:models.example"],
-    };
-    const { server, entityCache } = createServer({
-      contextIntegrityFactForSession: (sessionId) => {
-        expect(sessionId).toBe("channel-stable");
-        return contextIntegrity;
-      },
-    });
-    const targetId = "do:workers/local-model:AiChatWorker:model-a";
-    entityCache._onActivate(makeRecord(targetId, "do", { repoPath: "workers/local-model" }));
-    server.setWorkerdUrl("http://127.0.0.1:1111");
-    server.setWorkerdGatewayToken("gateway-token");
-    const fetchMock = vi.fn().mockResolvedValue(new Response("streamed", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = createClient("agent:local-model");
-    client.caller = createVerifiedCaller(
-      "agent:local-model",
-      "agent",
-      null,
-      {
-        agentId: "agent:local-model",
-        entityId: "agent:local-model",
-        contextId: "ctx-model",
-        channelId: "channel-stable",
-      },
-      { userId: "user-1", handle: "user1" }
-    );
-    await handleRoute(server, client, targetId, {
-      type: "stream-request",
-      requestId: "transport-request-is-not-session",
-      fromId: "agent:local-model",
-      method: "chat",
-      args: [],
-    });
-
-    const [, init] = fetchMock.mock.calls[0]!;
-    const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
-    expect((relayed.delivery.caller as AttestedCaller).authorization?.context).toMatchObject({
-      authorizingOrigin: { kind: "user", principal: "user:user-1" },
-      session: { id: "channel-stable" },
-      contextIntegrity,
-    });
   });
 
   it("cancels a routed stream in the same caller-owned streaming relay", async () => {

@@ -51,7 +51,6 @@ describe("shellApproval service contract", () => {
         missionSubject: "-",
         snippetDigest: "-",
         codeLineage: { class: "unknown", chain: [] },
-        contextLineage: { class: "external", latchEpoch: 1, externalKeys: ["https://example.com"] },
         initiatorChain: [binding.subject],
         at: 1,
       }),

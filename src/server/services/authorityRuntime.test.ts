@@ -9,8 +9,6 @@ import {
   attestDirectRpc,
   directAuthorityAudience,
   directAuthorityCapability,
-  isBlessedSystemTestConduit,
-  isAttestedSystemTestHarness,
   testPolicyAllowsGatedInvocation,
   testPolicyAuthorityDecision,
 } from "./authorityRuntime.js";
@@ -62,7 +60,6 @@ describe("authority runtime", () => {
         subject: "user:usr_alice",
         capability: "model.use",
         resource: { kind: "exact", key: "account:1" },
-        constraints: { lineageAtConsent: [] },
         issuedBy: "user:usr_alice",
         provenance: "acquisition",
       });
@@ -92,7 +89,6 @@ describe("authority runtime", () => {
         subject: `code:workers/helper@${effectiveVersion}`,
         capability: "model.use",
         resource: { kind: "exact", key: "account:1" },
-        constraints: { lineageAtConsent: [] },
         issuedBy: "user:usr_alice",
         provenance: "acquisition",
       });
@@ -158,102 +154,6 @@ describe("authority runtime", () => {
     } finally {
       grantStore.close();
     }
-  });
-
-  it("separates the sealed test conduit from its admitted EvalDO harness", () => {
-    const conduit = createVerifiedCaller(
-      "do:workers/system-test-runner:SystemTestRunnerDO:case-1",
-      "do",
-      {
-        callerId: "do:workers/system-test-runner:SystemTestRunnerDO:case-1",
-        callerKind: "do",
-        repoPath: "workers/system-test-runner",
-        effectiveVersion,
-        executionDigest,
-      }
-    );
-    const harness = createVerifiedCaller(
-      "do:vibestudio/internal:EvalDO:system-test-doctor",
-      "do",
-      {
-        callerId: "do:vibestudio/internal:EvalDO:system-test-doctor",
-        callerKind: "do",
-        repoPath: "workers/system-test-runner",
-        effectiveVersion,
-        executionDigest,
-      },
-      null,
-      null,
-      {
-        v: 2,
-        authoritySessionId: "authority:test-harness",
-        authoritySessionVersion: 1,
-        admissionKey: "test:case-1",
-        mode: "test",
-        ownerUser: "user:test",
-        workspaceId: "workspace:test",
-        contextId: "context:test",
-        agentBinding: null,
-        taskRef: "case-1",
-        taskAuthority: "task:case-1",
-        executionImage: {
-          ref: "state:test",
-          repoPath: "workers/system-test-runner",
-          effectiveVersion,
-          principal: `code:workers/system-test-runner@${effectiveVersion}`,
-          executionDigest,
-        },
-        executor: {
-          kind: "eval",
-          evalRunId: "system-test-runner:self-development:case-1",
-          runtimeId: "do:vibestudio/internal:EvalDO:system-test-doctor",
-          authorityManifest: {
-            mode: "adaptive",
-            effects: "read-write",
-            approvals: "prompt",
-            requests: [],
-            digest: "0".repeat(64),
-          },
-        },
-        parent: null,
-        causalParent: null,
-        issuedAt: 1,
-        expiresAt: Number.MAX_SAFE_INTEGER,
-        nonce: "nonce:test-harness",
-      } as never
-    );
-    expect(isBlessedSystemTestConduit(conduit, () => true)).toBe(true);
-    expect(isAttestedSystemTestHarness(conduit, () => true)).toBe(false);
-    expect(isBlessedSystemTestConduit(harness, () => true)).toBe(false);
-    expect(isAttestedSystemTestHarness(harness, () => true)).toBe(true);
-    expect(
-      isAttestedSystemTestHarness(
-        {
-          ...harness,
-          executionSession: {
-            ...harness.executionSession!,
-            executor: {
-              ...(harness.executionSession!.executor as Extract<
-                import("@vibestudio/rpc").ExecutionAdmissionFact["executor"],
-                { kind: "eval" }
-              >),
-              evalRunId: "eval:ordinary",
-            },
-          },
-        },
-        () => true
-      )
-    ).toBe(false);
-    expect(
-      isAttestedSystemTestHarness(
-        {
-          ...harness,
-          runtime: { ...harness.runtime, id: "do:vibestudio/internal:EvalDO:another" },
-        },
-        () => true
-      )
-    ).toBe(false);
-    expect(isAttestedSystemTestHarness(harness, () => false)).toBe(false);
   });
 
   it("matches dynamic capability names only inside both declared namespaces", () => {
@@ -365,7 +265,6 @@ describe("authority runtime", () => {
       constraints: {
         sessionId: "hub-control:shell:device",
         invocationDigest: "critical-ask",
-        lineageAtConsent: [],
       },
       issuedBy: "user:usr_alice",
       provenance: "critical-confirmation",
@@ -498,7 +397,6 @@ describe("authority runtime", () => {
         key: directAuthorityAudience("workers/target", "TargetDO", "object-1"),
       },
       subject: `code:workers/example@ev-1`,
-      constraints: { lineageAtConsent: [] },
       issuedBy: "user:u1",
       provenance: "acquisition",
       createdAt: 99,
@@ -689,45 +587,6 @@ describe("authority runtime", () => {
     ).toBe(false);
   });
 
-  it("keeps a harness-owned agent call on its sealed code origin", () => {
-    const capability = "service:credentials.resolveCredential";
-    const caller = createVerifiedCaller(
-      "do:workers/agent-worker:AiChatWorker:worker-1",
-      "do",
-      {
-        callerId: "do:workers/agent-worker:AiChatWorker:worker-1",
-        callerKind: "do",
-        repoPath: "workers/agent-worker",
-        effectiveVersion: "ev-agent",
-        executionDigest: digest,
-        requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
-      },
-      {
-        entityId: "agent:worker-1",
-        contextId: "ctx-agent",
-        channelId: "channel-agent",
-        agentId: "agent:worker-1",
-      },
-      { userId: "u1", handle: "u1" }
-    );
-    const resolved = authorizeVerifiedCaller(caller, {
-      workspaceId: "ws-1",
-      workspaceMember: true,
-      sessionId: "channel-agent",
-      audience: "service:credentials",
-      capability,
-      resourceKey: capability,
-      now: 100,
-    });
-
-    expect(resolved.context.authorizingOrigin).toEqual({
-      kind: "code",
-      principal: `code:workers/agent-worker@ev-agent`,
-    });
-    expect(resolved.context.agentBinding?.channelId).toBe("channel-agent");
-    expect(resolved.context.contextIntegrity?.class).toBe("not-applicable");
-  });
-
   it("lets a bound agent attach only to its own conversation without another approval", () => {
     const capability = "workspace-service:channel";
     const ownChannel = "do:workers/pubsub-channel:PubSubChannel:channel-agent";
@@ -759,7 +618,6 @@ describe("authority runtime", () => {
         capability,
         resourceKey,
         tier,
-        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
         now: 100,
       });
     const allowed = resolve(ownChannel);

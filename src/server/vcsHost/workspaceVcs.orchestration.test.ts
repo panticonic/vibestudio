@@ -892,7 +892,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       { contextId: "context:aborted-publication" },
       null,
       caller,
-      { class: "internal", externalKeys: [] },
       controller.signal
     );
     await vi.waitFor(() => expect(updateMains).toHaveBeenCalledOnce());
@@ -907,7 +906,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         input: { contextId: "context:aborted-publication" },
         ingress: {
           causalParent: null,
-          contextIntegrity: { class: "internal", externalKeys: [] },
         },
       })
     ).resolves.toEqual({ recovered: true });
@@ -1154,7 +1152,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(
       vcs.semanticCall("vcsEdit", {
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       })
     ).resolves.toEqual({ ok: true });
     await expect(
@@ -1191,7 +1189,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       kind: "prepare-semantic-content",
       operation: "edit",
       input: { contextId: "context:semantic-only", commandId: "command:edit" },
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
       observed: [{ contentHash: sha256Hex(Buffer.from("old")), text: "old" }],
       blobs,
     };
@@ -1227,7 +1225,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         kind: "prepare-semantic-content",
         operation: "edit",
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
         blobs: [
           { contentHash: sha256Hex(valid), base64: valid.toString("base64") },
           { contentHash: "a".repeat(64), base64: Buffer.from("wrong digest").toString("base64") },
@@ -1265,7 +1263,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             input: {},
             ingress: {
               causalParent: null,
-              contextIntegrity: { class: "internal", externalKeys: [] },
             },
             blobs: [{ contentHash, base64: bytes.toString("base64") }],
           },
@@ -1402,7 +1399,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(
       vcs.semanticCall("vcsImportSnapshot", {
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       })
     ).resolves.toEqual({ eventId: "event:import" });
   });
@@ -1462,7 +1459,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(
       vcs.semanticCall("vcsEdit", {
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       })
     ).resolves.toEqual({ applicationId: "application:one" });
     expect(acknowledgements).toBe(2);
@@ -1525,7 +1522,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     await vcs.semanticCall("vcsMove", {
       input: {},
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
 
     await expect(
@@ -1624,7 +1621,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       "vcsPush",
       {
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       },
       {
         kind: "caller",
@@ -1665,7 +1662,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       "vcsPush",
       {
         input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       },
       {
         kind: "caller",

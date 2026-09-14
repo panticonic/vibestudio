@@ -141,7 +141,6 @@ function approvalSnapshot(index: number): InvocationSnapshot {
     missionSubject: "-",
     snippetDigest: "c".repeat(64),
     codeLineage: { class: "internal", chain: [] },
-    contextLineage: null,
     initiatorChain: [RUN.ownerRuntimeId],
     at: index,
   };

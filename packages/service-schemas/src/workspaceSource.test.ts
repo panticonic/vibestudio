@@ -11,7 +11,6 @@ describe("GAD runtime schema", () => {
   it("transports prepared content and edit observations through transient acknowledgements", () => {
     const ingress = {
       causalParent: null,
-      contextIntegrity: { class: "internal", externalKeys: [] },
     };
     const request = {
       kind: "prepare-semantic-content",
@@ -153,7 +152,7 @@ describe("GAD runtime schema", () => {
       authority: { principals: ["host", "code"] },
     });
     const request = {
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     };
     expect(gadWireMethods.vcsMainState.args.safeParse([request]).success).toBe(true);
     expect(gadWireMethods.vcsMainState.args.safeParse([{ ...request, input: {} }]).success).toBe(

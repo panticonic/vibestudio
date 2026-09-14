@@ -187,9 +187,6 @@ export interface NativeDevelopmentSemanticAdapter {
 
 export interface NativeDevelopmentSemanticIngress {
   causalParent: RpcCausalParent | null;
-  contextIntegrity:
-    | { class: "internal"; externalKeys: readonly [] }
-    | { class: "external"; externalKeys: readonly string[] };
 }
 
 export interface NativeDevelopmentSessionReceipt {

@@ -149,12 +149,6 @@ export interface WebsiteAuthorityFact {
   connected: boolean;
 }
 
-export interface ContextIntegrityFact {
-  class: "internal" | "external" | "not-applicable";
-  latchEpoch: number;
-  externalKeys: readonly string[];
-}
-
 export interface CodeLineageFact {
   class: "internal" | "external" | "unknown";
   externalKeys: readonly string[];
@@ -349,7 +343,6 @@ export interface AuthorizationContext {
     /** Host-attested task closure; never accepted from invocation payloads. */
     taskAuthority?: TaskGrantPrincipal;
   };
-  contextIntegrity: ContextIntegrityFact | null;
 }
 
 export interface AuthorityGrantConstraints {
@@ -488,7 +481,6 @@ export interface InvocationSnapshot {
   missionSubject: `mission:${string}@${string}` | "-";
   snippetDigest: string;
   codeLineage: { class: CodeLineageFact["class"]; chain: readonly string[] };
-  contextLineage: ContextIntegrityFact | null;
   initiatorChain: readonly string[];
   at: number;
 }

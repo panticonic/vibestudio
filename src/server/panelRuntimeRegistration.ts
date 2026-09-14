@@ -26,7 +26,6 @@ import {
 } from "@vibestudio/shared/panel/evaluate";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import {
   callerControlsContextTransition,
@@ -116,7 +115,6 @@ export interface CommonDeps {
       summary: string;
     }
   ) => Promise<{ changed: boolean; resultDigest: string; config: WorkspaceConfig }>;
-  recordContextIngestion?: ContextIngestionRecorder;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
   hostConfig: HostConfig;
@@ -326,7 +324,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             );
           },
         },
-        recordContextIngestion: deps.recordContextIngestion,
         hasAppCapability: deps.hasAppCapability,
         ensureContextFolder: deps.ensureContextFolder,
       })
@@ -437,7 +434,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           ...panelGateDeps,
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
-          recordContextIngestion: deps.recordContextIngestion,
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
             await ensureCdpTargetReady(panelId);

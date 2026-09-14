@@ -34,7 +34,6 @@ const context: AuthorizationContext = {
   testPolicy: null,
   workspace: { workspaceId: "ws", member: true, role: "member", revision: "1" },
   session: { id: "s", audience: "do:x", version: "1", expiresAt: 10_000 },
-  contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
 };
 
 function attestation(
@@ -616,7 +615,6 @@ describe("directRpcDenial", () => {
       ...base.grants[0]!,
       scope: "version" as const,
       constraints: {
-        lineageAtConsent: [],
         providerExecutionDigest: "b".repeat(64),
       },
     };

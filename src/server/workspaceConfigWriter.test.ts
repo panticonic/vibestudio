@@ -9,9 +9,7 @@ import {
 } from "./workspaceConfigWriter.js";
 
 const WORKSPACE_ID = "ws_opaque_test";
-const INTERNAL_AUTHORIZATION = {
-  contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
-} as unknown as NonNullable<ServiceContext["authorization"]>;
+const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 const mainState = { kind: "event" as const, eventId: "event:main" };
 const editedState = { kind: "application" as const, applicationId: "application:config" };
@@ -188,8 +186,7 @@ describe("workspaceConfigWriter", () => {
       null,
       expect.objectContaining({
         runtime: expect.objectContaining({ id: "shell:dev", kind: "shell" }),
-      }),
-      { class: "internal", externalKeys: [] }
+      })
     );
   });
 
@@ -240,8 +237,7 @@ describe("workspaceConfigWriter", () => {
     expect(semanticPublishCall).toHaveBeenCalledWith(
       expect.objectContaining({ contextId: "context:agent-task" }),
       null,
-      expect.anything(),
-      { class: "internal", externalKeys: [] }
+      expect.anything()
     );
   });
 
@@ -293,8 +289,7 @@ describe("workspaceConfigWriter", () => {
     expect(semanticPublishCall).toHaveBeenCalledWith(
       expect.objectContaining({ contextId: "context:paired-shell" }),
       null,
-      authorizingCaller,
-      { class: "internal", externalKeys: [] }
+      authorizingCaller
     );
   });
 
@@ -350,8 +345,7 @@ describe("workspaceConfigWriter", () => {
     expect(vcs.semanticPublishCall).toHaveBeenCalledWith(
       expect.objectContaining({ contextId: isolatedContextId }),
       null,
-      ctx.caller,
-      { class: "internal", externalKeys: [] }
+      ctx.caller
     );
   });
 

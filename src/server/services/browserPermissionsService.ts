@@ -102,7 +102,6 @@ export class BrowserPermissionGrantProjection {
           key: browserPermissionResourceKey(environmentKey, epoch, grant.origin),
         },
         subject,
-        constraints: { lineageAtConsent: [] },
         issuedBy: subject,
         provenance: "acquisition",
         createdAt: grant.updatedAt,

@@ -64,10 +64,6 @@ type CausalRequest<T> = {
   input: T;
   ingress: {
     causalParent: RpcCausalParent | null;
-    contextIntegrity: {
-      class: "internal" | "external";
-      externalKeys: readonly string[];
-    };
   };
 };
 
@@ -276,22 +272,7 @@ async function reachableContextAuthorities(
 }
 
 function ingressFor(ctx: ServiceContext): CausalRequest<never>["ingress"] {
-  const fact = ctx.authorization?.contextIntegrity;
-  if (!fact) {
-    throw new ServiceError(
-      "vcs",
-      "ingress",
-      "Semantic VCS ingress requires resolved context-integrity authority",
-      "EACCES"
-    );
-  }
-  return {
-    causalParent: ctx.causalParent ?? null,
-    contextIntegrity:
-      fact.class === "external"
-        ? { class: "external", externalKeys: [...fact.externalKeys] }
-        : { class: "internal", externalKeys: [] },
-  };
+  return { causalParent: ctx.causalParent ?? null };
 }
 
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
@@ -308,15 +289,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             input,
             ingress.causalParent,
             effectCaller,
-            ingress.contextIntegrity,
             ctx.signal
           )
-        : deps.workspaceVcs.semanticPublishCall<T>(
-            input,
-            ingress.causalParent,
-            effectCaller,
-            ingress.contextIntegrity
-          );
+        : deps.workspaceVcs.semanticPublishCall<T>(input, ingress.causalParent, effectCaller);
     }
     if (method === "vcsPushEpochTransition") {
       return ctx.signal
@@ -324,14 +299,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             input,
             ingress.causalParent,
             effectCaller,
-            ingress.contextIntegrity,
             ctx.signal
           )
         : deps.workspaceVcs.semanticEpochTransitionPublishCall<T>(
             input,
             ingress.causalParent,
-            effectCaller,
-            ingress.contextIntegrity
+            effectCaller
           );
     }
     return deps.workspaceVcs.semanticCall<T>(method, {

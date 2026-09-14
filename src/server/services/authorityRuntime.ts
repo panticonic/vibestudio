@@ -8,7 +8,6 @@ import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
 import {
   evaluateAuthority,
-  lineageClasses,
   requirementForPrincipals,
   scopeCovers,
 } from "@vibestudio/shared/authorization";
@@ -82,7 +81,6 @@ export interface AuthorityFacts {
   capability: string;
   resourceKey: string;
   tier?: "open" | "gated" | "critical";
-  contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   incarnationId?: string | null;
   grantStore?: CapabilityGrantStore;
   now?: number;
@@ -299,11 +297,6 @@ export function authorizeVerifiedCaller(
       ...(executionSession ? { taskRef: executionSession.taskRef } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
     },
-    contextIntegrity:
-      facts.contextIntegrity ??
-      (sessionOrigin
-        ? { class: "internal", latchEpoch: 0, externalKeys: [] }
-        : { class: "not-applicable", latchEpoch: 0, externalKeys: [] }),
   };
   // A call may carry several authenticated facts, but exactly one principal
   // authorizes it. In particular, a code-originated call retains the acting
@@ -353,15 +346,6 @@ export function authorizeVerifiedCaller(
       issuedBy: product.hostPrincipal,
       createdAt: now,
       provenance: "authenticated-agent-channel-binding-v1",
-      // This is recomputed from a live host relationship on every call; it is
-      // not historical user consent. Stamp the caller's current lineage so the
-      // generic consent-latch check cannot turn that relationship back into a
-      // prompt merely because the bound conversation carries context.
-      constraints: {
-        lineageAtConsent: facts.contextIntegrity
-          ? lineageClasses(facts.contextIntegrity)
-          : ["none"],
-      },
     });
   }
   if (facts.grantStore) {
@@ -430,7 +414,6 @@ export function attestDirectRpc(input: {
   sessionId: string;
   incarnationId?: string | null;
   grantStore?: CapabilityGrantStore;
-  contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   /** Live workspace service capability selected from the exact declarations. */
   capability?: string;
   /** Exact sealed receiver declaration selected from the active build. */
@@ -469,7 +452,6 @@ export function attestDirectRpc(input: {
     resourceKey,
     incarnationId: input.incarnationId,
     grantStore: input.grantStore,
-    contextIntegrity: input.contextIntegrity,
     tier: input.tier ?? productPolicy?.tier,
     now,
   });

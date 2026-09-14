@@ -424,11 +424,6 @@ export type FsVcsEditOp =
   | { kind: "delete"; path: string }
   | { kind: "chmod"; path: string; mode: number };
 
-export interface FsVcsMutationIntegrity {
-  class: "internal" | "external";
-  externalKeys: readonly string[];
-}
-
 /**
  * Bridge from the fs service to the workspace semantic VCS. When a sandboxed
  * context caller mutates a managed path, `edit` advances the working state and
@@ -445,21 +440,9 @@ export interface FsVcsBridge {
   /** True iff `relPath` passes the VCS content-path policy (safe and not
    *  platform-ignored). FsService separately checks workspace repo taxonomy. */
   isTracked(relPath: string): Promise<boolean>;
-  edit(
-    input: VcsEditInput,
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<unknown>;
-  move(
-    input: VcsMoveInput,
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<unknown>;
-  copy(
-    input: VcsCopyInput,
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<unknown>;
+  edit(input: VcsEditInput, causalParent: RpcCausalParent | null): Promise<unknown>;
+  move(input: VcsMoveInput, causalParent: RpcCausalParent | null): Promise<unknown>;
+  copy(input: VcsCopyInput, causalParent: RpcCausalParent | null): Promise<unknown>;
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
   resolveRepository(input: VcsResolveRepositoryInput): Promise<VcsResolveRepositoryResult>;
   readFile(input: VcsReadFileInput): Promise<VcsReadFileResult>;
@@ -1257,18 +1240,7 @@ export class FsService {
     const contextId = scope.contextId;
     const commandId = `fs:${ctx.idempotencyKey ?? ctx.requestId ?? randomBytes(16).toString("hex")}:${method}`;
     const causalParent = ctx.causalParent ?? null;
-    const mutationIntegrity = (): FsVcsMutationIntegrity => {
-      const fact = ctx.authorization?.contextIntegrity;
-      if (!fact) {
-        throw codedError(
-          "EACCES",
-          "Managed filesystem mutation requires resolved context-integrity authority"
-        );
-      }
-      return fact.class === "external"
-        ? { class: "external", externalKeys: [...fact.externalKeys] }
-        : { class: "internal", externalKeys: [] };
-    };
+
     const agentBinding =
       ctx.caller.agentBinding ??
       this.entityCache.resolveActive(ctx.caller.runtime.id)?.agentBinding ??
@@ -1288,15 +1260,7 @@ export class FsService {
     // Author one workspace-wide edit on the exact working state.
     const commit = (edits: FsVcsEditOp[]) => {
       requireManagedCause();
-      return this.commitRoutedEdits(
-        bridge,
-        router,
-        contextId,
-        commandId,
-        edits,
-        causalParent,
-        mutationIntegrity()
-      );
+      return this.commitRoutedEdits(bridge, router, contextId, commandId, edits, causalParent);
     };
     const importFile = async (sourceRel: string, destinationRel: string) => {
       requireManagedCause();
@@ -1335,13 +1299,7 @@ export class FsService {
             },
           ],
         },
-        causalParent,
-        {
-          class: "external",
-          externalKeys: [
-            ...new Set([...mutationIntegrity().externalKeys, `session:native-fs:${contextId}`]),
-          ],
-        }
+        causalParent
       );
     };
     const readWsFile = async (
@@ -1613,8 +1571,7 @@ export class FsService {
                 },
               ],
             },
-            causalParent,
-            mutationIntegrity()
+            causalParent
           );
           return { handled: true };
         }
@@ -1675,8 +1632,7 @@ export class FsService {
               intentSummary: `Move ${srcRel} to ${dstRel}`,
               moves,
             },
-            causalParent,
-            mutationIntegrity()
+            causalParent
           );
           return { handled: true };
         }
@@ -1757,8 +1713,7 @@ export class FsService {
     contextId: string,
     commandId: string,
     edits: FsVcsEditOp[],
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: FsVcsMutationIntegrity
+    causalParent: RpcCausalParent | null
   ): Promise<void> {
     if (edits.length === 0) return;
     const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
@@ -1864,8 +1819,7 @@ export class FsService {
         expectedWorkingHead: snapshot.state,
         changes: scoped,
       },
-      causalParent,
-      contextIntegrity
+      causalParent
     );
   }
 

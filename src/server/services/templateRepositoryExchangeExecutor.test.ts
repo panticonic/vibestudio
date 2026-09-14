@@ -103,7 +103,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: baseline.plan.operationId,
       intentDigest: baseline.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     fx.setSemantic("semantic update\n");
     const prepared = await fx.executor.prepare({
@@ -121,7 +121,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: prepared.plan.operationId,
       intentDigest: prepared.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     expect(receipt.direction).toBe("export");
     expect(fs.readFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "utf8")).toBe(
@@ -135,7 +135,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: prepared.plan.operationId,
       intentDigest: prepared.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     expect(replayed).toEqual(receipt);
   });
@@ -154,7 +154,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: baseline.plan.operationId,
       intentDigest: baseline.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     fs.writeFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "checkout edit\n");
     const prepared = await fx.executor.prepare({
@@ -169,7 +169,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: prepared.plan.operationId,
       intentDigest: prepared.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     expect(receipt.direction).toBe("import");
     expect(fx.semanticImport).toHaveBeenCalledOnce();
@@ -182,7 +182,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       operationId: prepared.plan.operationId,
       intentDigest: prepared.intentDigest,
       checkout: fx.checkout,
-      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      ingress: { causalParent: null },
     });
     expect(replayed).toEqual(receipt);
     expect(fx.semanticImport).toHaveBeenCalledOnce();
@@ -208,7 +208,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
         operationId: prepared.plan.operationId,
         intentDigest: prepared.intentDigest,
         checkout: other,
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        ingress: { causalParent: null },
       })
     ).rejects.toMatchObject({ code: "EIDEMPOTENCYDRIFT" });
   });

@@ -571,20 +571,7 @@ export function createDevelopmentNativeService(deps: {
 }
 
 function semanticIngress(ctx: ServiceContext): NativeDevelopmentSemanticIngress {
-  const integrity = ctx.authorization?.contextIntegrity;
-  if (!integrity) {
-    throw Object.assign(
-      new Error("Native development mutation requires verified context-integrity ingress"),
-      { code: "EACCES" }
-    );
-  }
-  return {
-    causalParent: ctx.causalParent ?? null,
-    contextIntegrity:
-      integrity.class === "external"
-        ? { class: "external", externalKeys: [...integrity.externalKeys] }
-        : { class: "internal", externalKeys: [] },
-  };
+  return { causalParent: ctx.causalParent ?? null };
 }
 
 function needsClientExecutor(target: DevelopmentRun["target"]): boolean {

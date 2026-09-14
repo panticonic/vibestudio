@@ -13,7 +13,6 @@ import {
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import { NativeTerminalRegistry } from "./nativeTerminal.js";
-import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import { randomUUID } from "node:crypto";
 
 /** Installed native-effect receiver. Its launch configuration is host-owned;
@@ -25,7 +24,6 @@ export function createHostTerminalService(deps: {
   args: readonly string[];
   cwd: string;
   environment: NodeJS.ProcessEnv;
-  recordContextIngestion: ContextIngestionRecorder;
 }): ServiceDefinition & { stop(): Promise<void> } {
   const terminals = new NativeTerminalRegistry();
   const sessions = new Map<string, { owner: string; connection: AbortSignal }>();
@@ -165,13 +163,7 @@ export function createHostTerminalService(deps: {
       read: async (ctx, [input]) => {
         requireSession(ctx, input.terminalSessionId);
         const result = terminals.read(input);
-        if (result.text)
-          await deps.recordContextIngestion(ctx, {
-            key: `session:host-terminal:${input.terminalSessionId}`,
-            via: "host-terminal-read",
-            classification: "external",
-          });
-        requireSession(ctx, input.terminalSessionId);
+        if (result.text) requireSession(ctx, input.terminalSessionId);
         return result;
       },
       write: (ctx, [input]) => {

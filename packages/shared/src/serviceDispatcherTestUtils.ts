@@ -8,7 +8,7 @@ import {
   type VerifiedCaller,
 } from "./serviceDispatcher.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
-import { evaluateAuthority, lineageClasses, type AuthorityRequirement } from "./authorization.js";
+import { evaluateAuthority, type AuthorityRequirement } from "./authorization.js";
 
 const TEST_DIGEST = "0".repeat(64);
 const TEST_HOST = "host:test" as const;
@@ -407,9 +407,6 @@ export function testAuthority(
       version: "1.0.0",
       expiresAt: now + 60_000,
     },
-    contextIntegrity: caller.executionSession
-      ? { class: "internal", latchEpoch: 0, externalKeys: [] }
-      : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
   const subjects: Principal[] = [];
   if (host) subjects.push(host);
@@ -427,11 +424,6 @@ export function testAuthority(
       createdAt: now,
       expiresAt: now + 60_000,
       provenance: "test-fixture",
-      constraints: {
-        lineageAtConsent: context.contextIntegrity
-          ? lineageClasses(context.contextIntegrity)
-          : ["none"],
-      },
     })),
   };
 }

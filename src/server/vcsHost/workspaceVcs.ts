@@ -207,18 +207,10 @@ interface SemanticRequest {
   input: unknown;
   ingress: {
     causalParent: import("@vibestudio/rpc").RpcCausalParent | null;
-    contextIntegrity: {
-      class: "internal" | "external";
-      externalKeys: readonly string[];
-    };
   };
 }
 
 /** Host lifecycle/source operations are not model cognition. */
-const HOST_SEMANTIC_INTEGRITY = Object.freeze({
-  class: "internal" as const,
-  externalKeys: Object.freeze([]) as readonly string[],
-});
 
 function semanticRequestContextId(request: unknown): string | null {
   if (!request || typeof request !== "object") return null;
@@ -553,7 +545,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {
     return this.semanticCall<T>(method, {
       input,
-      ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
+      ingress: { causalParent: null },
     } satisfies SemanticRequest);
   }
 
@@ -563,7 +555,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         "vcsPush",
         {
           input,
-          ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
+          ingress: { causalParent: null },
         } satisfies SemanticRequest,
         { kind: "workspace-initialization" }
       )
@@ -574,12 +566,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticCausalCall<T>(
     method: string,
     input: unknown,
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"]
+    causalParent: RpcCausalParent | null
   ): Promise<T> {
     return this.semanticCall<T>(method, {
       input,
-      ingress: { causalParent, contextIntegrity },
+      ingress: { causalParent },
     } satisfies SemanticRequest);
   }
 
@@ -589,7 +580,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     input: unknown,
     causalParent: RpcCausalParent | null,
     caller: VerifiedCaller,
-    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"],
     signal?: AbortSignal
   ): Promise<T> {
     return this.withProtectedMainMutation(() =>
@@ -597,7 +587,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         "vcsPush",
         {
           input,
-          ingress: { causalParent, contextIntegrity },
+          ingress: { causalParent },
         } satisfies SemanticRequest,
         { kind: "caller", caller, ...(signal ? { signal } : {}) }
       )
@@ -608,7 +598,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     input: unknown,
     causalParent: RpcCausalParent | null,
     caller: VerifiedCaller,
-    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"],
     signal?: AbortSignal
   ): Promise<T> {
     return this.withProtectedMainMutation(() =>
@@ -616,7 +605,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         "vcsPush",
         {
           input,
-          ingress: { causalParent, contextIntegrity },
+          ingress: { causalParent },
         } satisfies SemanticRequest,
         { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
       )
@@ -1092,7 +1081,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       contextId,
       commandId,
       ...(projection === "deferred" ? { projection } : {}),
-      ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
+      ingress: { causalParent: null },
     });
     const context = await this.drainSemanticResult<{
       working: { ref: VcsStateNodeRef };
@@ -1479,7 +1468,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         sourceContextId,
         targetContextId,
         commandId,
-        ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
+        ingress: { causalParent: null },
       });
       const context = await this.drainSemanticResult<{
         working: { ref: VcsStateNodeRef };

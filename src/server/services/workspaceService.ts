@@ -21,7 +21,6 @@ import {
   WORKSPACE_PREPARED_CONFIG_CAPABILITY,
 } from "@vibestudio/service-schemas/workspace";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
-import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { parseSkillFrontmatter } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
@@ -64,7 +63,6 @@ export interface WorkspaceServiceDeps {
     ) => Promise<Array<{ path: string; content: string }>>;
   };
   /** Durably advance a model session's content latch before read bytes are returned. */
-  recordContextIngestion?: ContextIngestionRecorder;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Materialize a context's working folder (idempotent) and return its absolute

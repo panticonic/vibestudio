@@ -71,23 +71,6 @@ function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
 }
 
 const SYSTEM_CAUSE: RpcCausalParent | null = null;
-const SYSTEM_INTEGRITY = Object.freeze({
-  class: "internal" as const,
-  externalKeys: Object.freeze([]) as readonly string[],
-});
-
-function integrityFor(ctx: ServiceContext): {
-  class: "internal" | "external";
-  externalKeys: readonly string[];
-} {
-  const fact = ctx.authorization?.contextIntegrity;
-  if (!fact) {
-    throw new Error("Workspace config mutation requires resolved context-integrity authority");
-  }
-  return fact.class === "external"
-    ? { class: "external", externalKeys: [...fact.externalKeys] }
-    : { class: "internal", externalKeys: [] };
-}
 
 function errorDetail(error: unknown): {
   message: string;
@@ -154,11 +137,10 @@ export function createWorkspaceConfigMainWriter(deps: {
   const readConfig = async (
     contextId: string,
     causalParent: RpcCausalParent | null,
-    contextIntegrity: { class: "internal" | "external"; externalKeys: readonly string[] },
     knownStatus?: VcsStatusResult
   ): Promise<WorkspaceConfigAtState> => {
     const call = <T>(method: string, input: unknown): Promise<T> =>
-      deps.vcs.semanticCausalCall<T>(method, input, causalParent, contextIntegrity);
+      deps.vcs.semanticCausalCall<T>(method, input, causalParent);
     const status = knownStatus ?? (await call<VcsStatusResult>("vcsStatus", { contextId }));
     const state = status.workingHead;
     const repositoryRefs = new Map<
@@ -308,25 +290,19 @@ export function createWorkspaceConfigMainWriter(deps: {
     borrowed: boolean
   ): Promise<WorkspaceConfigMutationResult> => {
     const causalParent = input.ctx.causalParent ?? null;
-    const contextIntegrity = integrityFor(input.ctx);
     // Borrowing a clean caller context keeps it aligned with the config
     // publication. A dirty or behind context may contain unrelated work, so
     // preserve the established isolated-context behavior instead of either
     // publishing that work or refusing a previously valid config mutation.
     const borrowedStatus = borrowed
-      ? await deps.vcs.semanticCausalCall<VcsStatusResult>(
-          "vcsStatus",
-          { contextId },
-          causalParent,
-          contextIntegrity
-        )
+      ? await deps.vcs.semanticCausalCall<VcsStatusResult>("vcsStatus", { contextId }, causalParent)
       : undefined;
     if (borrowedStatus && (!borrowedStatus.clean || borrowedStatus.mainRelation !== "at")) {
       return withFreshContext((freshContextId) =>
         applyMutationInContext(input, freshContextId, false)
       );
     }
-    const current = await readConfig(contextId, causalParent, contextIntegrity, borrowedStatus);
+    const current = await readConfig(contextId, causalParent, borrowedStatus);
     const rendered = render(current, input.mutate);
     if (rendered.nextContent === current.text) {
       return { changed: false, nextConfig: rendered.nextConfig };
@@ -349,8 +325,7 @@ export function createWorkspaceConfigMainWriter(deps: {
           },
         ],
       },
-      causalParent,
-      contextIntegrity
+      causalParent
     );
     const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
       "vcsCommit",
@@ -360,8 +335,7 @@ export function createWorkspaceConfigMainWriter(deps: {
         expectedWorkingHead: edit.workingHead,
         message: input.summary,
       },
-      causalParent,
-      contextIntegrity
+      causalParent
     );
     if (committed.event.kind !== "event") {
       throw new Error("Workspace config commit did not produce an event");
@@ -383,16 +357,10 @@ export function createWorkspaceConfigMainWriter(deps: {
         pushInput,
         causalParent,
         publishingCaller,
-        contextIntegrity,
         input.ctx.signal
       );
     } else {
-      await deps.vcs.semanticPublishCall<VcsPushResult>(
-        pushInput,
-        causalParent,
-        publishingCaller,
-        contextIntegrity
-      );
+      await deps.vcs.semanticPublishCall<VcsPushResult>(pushInput, causalParent, publishingCaller);
     }
     return { changed: true, nextConfig: rendered.nextConfig };
   };
@@ -409,7 +377,7 @@ export function createWorkspaceConfigMainWriter(deps: {
   return {
     wouldMutate: (mutate) =>
       withFreshContext(async (contextId) => {
-        const current = await readConfig(contextId, SYSTEM_CAUSE, SYSTEM_INTEGRITY);
+        const current = await readConfig(contextId, SYSTEM_CAUSE);
         return render(current, mutate).nextContent !== current.text;
       }),
     applyMutation,

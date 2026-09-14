@@ -52,10 +52,6 @@ export interface WorkspaceSemanticRequest {
   input: unknown;
   ingress: {
     causalParent: RpcCausalParent | null;
-    contextIntegrity: {
-      class: "internal" | "external";
-      externalKeys: readonly string[];
-    };
   };
 }
 

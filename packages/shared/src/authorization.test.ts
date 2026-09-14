@@ -50,7 +50,6 @@ describe("website authority continuity", () => {
       constraints: {
         subjectGeneration: 0,
         sourceWorkspaceId: "ws-1",
-        lineageAtConsent: [],
         ...(documentId ? { documentId } : {}),
       },
     };
@@ -104,7 +103,7 @@ describe("website authority continuity", () => {
     ctx.session.taskAuthority = "task:borrowed";
     for (const subject of [user, code, "session:s1", "task:borrowed"] as const) {
       expect(
-        evaluate(ctx, [{ ...grant(), subject, constraints: { lineageAtConsent: [] } }]).allowed
+        evaluate(ctx, [{ ...grant(), subject }]).allowed
       ).toBe(false);
     }
   });
@@ -186,11 +185,10 @@ function codeContext(): AuthorizationContext {
     testPolicy: null,
     workspace: { workspaceId: "ws-1", member: true, role: "member", revision: "7" },
     session: { id: "s1", audience: "host", version: "2.1", expiresAt: 10_000 },
-    contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
 }
 
-function sessionContext(externalKeys: readonly string[] = []): AuthorizationContext {
+function sessionContext(): AuthorizationContext {
   return {
     ...codeContext(),
     authorizingOrigin: { kind: "session", principal: session },
@@ -249,11 +247,6 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       version: "2.1",
       expiresAt: 10_000,
     },
-    contextIntegrity: {
-      class: externalKeys.length > 0 ? "external" : "internal",
-      latchEpoch: externalKeys.length,
-      externalKeys,
-    },
   };
 }
 
@@ -275,7 +268,7 @@ function grant(
 ): AuthorityGrant {
   const sessionLineage =
     subject.startsWith("session:") || subject.startsWith("mission:")
-      ? { lineageAtConsent: ["none"], ...constraints }
+      ? { ...constraints }
       : constraints;
   return {
     id: `${effect}-${subject}`,
@@ -484,37 +477,11 @@ describe("compositional authority", () => {
     ).toMatchObject({ allowed: false, code: "receiver-rejected" });
   });
 
-  it("requires lineageAtConsent to cover every current outside source", () => {
-    const ctx = sessionContext(["web:example.com", "api:github"]);
-    expect(
-      evaluateAuthority({
-        context: ctx,
-        requirement: capability("session", "fs.write"),
-        resourceKey: RESOURCE,
-        grants: [grant(session, "fs.write", "allow", { lineageAtConsent: ["web"] })],
-        now: 100,
-      })
-    ).toMatchObject({ allowed: false, code: "approval-required" });
-    expect(
-      evaluateAuthority({
-        context: ctx,
-        requirement: capability("session", "fs.write"),
-        resourceKey: RESOURCE,
-        grants: [
-          grant(session, "fs.write", "allow", {
-            lineageAtConsent: ["web", "external", "source:web:example.com", "source:api:github"],
-          }),
-        ],
-        now: 100,
-      }).allowed
-    ).toBe(true);
-  });
 
   it("binds once grants and critical confirmations to the exact invocation", () => {
     const once = {
       ...grant(session, "fs.write", "allow", {
         invocationDigest: "ask-1",
-        lineageAtConsent: ["none"],
       }),
       provenance: "critical-confirmation",
     } satisfies AuthorityGrant;
@@ -538,7 +505,6 @@ describe("compositional authority", () => {
     const consumed = {
       ...grant(session, "fs.write", "allow", {
         invocationDigest: "ask-1",
-        lineageAtConsent: ["none"],
       }),
       consumedAt: 50,
     } satisfies AuthorityGrant;
@@ -627,7 +593,6 @@ describe("compositional authority", () => {
   it("binds standing agent grants to the host-attested agent binding", () => {
     const standing = grant("agent:binding:example", "fs.write", "allow", {
       agentBindingId: "binding:example",
-      lineageAtConsent: ["none"],
     });
     expect(
       evaluateAuthority({

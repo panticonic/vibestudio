@@ -117,7 +117,6 @@ export function mintUnitClearanceGrants(input: MintUnitClearanceInput): Authorit
             resource: request.resource,
             subject,
             scope: "version",
-            constraints: { lineageAtConsent: [] },
             issuedBy: input.issuedBy,
             provenance: "install",
             decidedBy: input.decidedBy,

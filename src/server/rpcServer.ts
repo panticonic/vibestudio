@@ -52,7 +52,6 @@ import type {
   InternalRpcRequest,
   InternalRpcStreamRequest,
 } from "@vibestudio/rpc/internal";
-import { verifiedExternalContextFor } from "@vibestudio/rpc/internal";
 import {
   createSessionServerTransport,
   type SessionServerTransportInternal,
@@ -191,8 +190,6 @@ import {
 } from "./rpcServer/httpRpcHandler.js";
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
-import { lineageClasses } from "@vibestudio/shared/authorization";
-import { joinContextIntegrity } from "@vibestudio/shared/authority/contextIntegrity";
 import {
   receiverAuthorityPolicy,
   standingAgentScopeEligible,
@@ -431,7 +428,6 @@ type RelayCallerScope = {
   /** Host-resolved initiator whose verified account subject authorizes the operation. */
   authorizingCaller: VerifiedCaller;
   /** Exact outside lineage retained by the host's active invocation parent. */
-  inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
 };
 
 type ResolvedExtensionParent = {
@@ -619,7 +615,6 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
-      contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
     }
   >();
   private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
@@ -717,12 +712,8 @@ export class RpcServer {
         invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
       };
       /** Durable server-observed context latch for direct userland calls. */
-      contextIntegrityFactForSession?: (
-        sessionId: string,
-        caller: VerifiedCaller
-      ) => import("@vibestudio/rpc").ContextIntegrityFact;
-      /** Authenticate schema-declared hidden system-test receiver seams. */
-      isAttestedSystemTestHarness?: (caller: VerifiedCaller) => boolean;
+      /** Admit schema-declared hidden system-test receiver seams. */
+      isSystemTestInstance?: () => boolean;
       /**
        * Resolve an exact live workspace service declaration for a direct DO
        * target. This is deliberately runtime data: context-scoped/user-created
@@ -993,9 +984,6 @@ export class RpcServer {
         return this.relayTargetStream(caller, envelope, request, causalParent, signal, {
           authenticatedCaller: caller,
           authorizingCaller: parent?.authorizingCaller ?? caller,
-          ...(parent?.contextIntegrity
-            ? { inheritedContextIntegrity: parent.contextIntegrity }
-            : {}),
         });
       },
     });
@@ -1143,7 +1131,6 @@ export class RpcServer {
     testPolicy: AgentExecutionTestPolicy | null;
     requested: readonly CapabilityScope[] | null;
     authorizingCaller: VerifiedCaller | null;
-    contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
   } | null {
     if (authorityParentNonce === undefined) return null;
     if (
@@ -1215,19 +1202,11 @@ export class RpcServer {
     const requested = productBuiltinByIdentity(ref.source, ref.className)
       ? productBuiltinMethodRequests(ref.source, ref.className, authorization.method)
       : null;
-    const inheritedContextIntegrity = authorization.context.contextIntegrity;
-    const contextIntegrity = inheritedContextIntegrity
-      ? Object.freeze({
-          ...inheritedContextIntegrity,
-          externalKeys: Object.freeze([...inheritedContextIntegrity.externalKeys]),
-        })
-      : null;
     return this.retainAuthorityParent(authorization.nonce, {
       receiverRuntimeId,
       testPolicy,
       requested,
       authorizingCaller,
-      contextIntegrity,
     });
   }
 
@@ -1238,7 +1217,6 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
-      contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
     }
   ): () => void {
     if (this.activeAuthorityParents.has(nonce))
@@ -1261,7 +1239,6 @@ export class RpcServer {
         scope.authenticatedCaller.testPolicy ??
         scope.authenticatedCaller.executionSession?.testPolicy ??
         null,
-      contextIntegrity: scope.inheritedContextIntegrity ?? null,
     });
     return { nonce, release };
   }
@@ -1389,9 +1366,6 @@ export class RpcServer {
       caller: this.callerWithAuthorityParent(caller, authorityParent),
       ...(authorityParent?.authorizingCaller
         ? { authorizingCaller: authorityParent.authorizingCaller }
-        : {}),
-      ...(authorityParent?.contextIntegrity
-        ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
         : {}),
       ...extras,
     };
@@ -1555,9 +1529,6 @@ export class RpcServer {
       authenticatedCaller,
       authorizingCaller:
         parent?.authorizingCaller ?? authorityParent?.authorizingCaller ?? authenticatedCaller,
-      ...(authorityParent?.contextIntegrity
-        ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
-        : {}),
     };
   }
 
@@ -2850,11 +2821,6 @@ export class RpcServer {
             envelope,
             caller,
             authorizingCaller: scope.authorizingCaller,
-            contextIntegrity:
-              this.deps.contextIntegrityFactForSession?.(
-                caller.agentBinding?.channelId ?? caller.runtime.id,
-                caller
-              ) ?? null,
             operation: message.method,
             purpose,
           },
@@ -3714,9 +3680,6 @@ export class RpcServer {
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
-        ...(authorityParent?.contextIntegrity
-          ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
-          : {}),
         signal,
       };
       const dispatched = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
@@ -3751,9 +3714,6 @@ export class RpcServer {
       {
         authenticatedCaller,
         authorizingCaller,
-        ...(authorityParent?.contextIntegrity
-          ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
-          : {}),
       }
     );
   }
@@ -3895,13 +3855,7 @@ export class RpcServer {
     args: unknown[] = [],
     options?: RpcCallOptions
   ): Promise<T> {
-    const inheritedContextIntegrity = verifiedExternalContextFor(options);
-    if (inheritedContextIntegrity && !targetId.startsWith("do:")) {
-      throw new Error("Verified external context requires a direct Durable Object target");
-    }
-    const hostCaller = inheritedContextIntegrity
-      ? createHostCaller("main", "server", SYSTEM_SUBJECT)
-      : null;
+    const hostCaller = null;
     return this.relayCall(
       "main",
       "server",
@@ -3910,13 +3864,7 @@ export class RpcServer {
       args,
       undefined,
       options,
-      hostCaller
-        ? {
-            authenticatedCaller: hostCaller,
-            authorizingCaller: hostCaller,
-            inheritedContextIntegrity,
-          }
-        : undefined
+      hostCaller ? { authenticatedCaller: hostCaller, authorizingCaller: hostCaller } : undefined
     ) as Promise<T>;
   }
 
@@ -4075,7 +4023,6 @@ export class RpcServer {
     waitForAuthority?: boolean;
     signal?: AbortSignal;
     /** Host-retained outside lineage; never accepted from call args or wire metadata. */
-    inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
     /** Number of exact inline retries already performed after preauthorization. */
     preauthorizedRetries?: number;
   }): Promise<DirectAuthorityAttestation> {
@@ -4122,9 +4069,9 @@ export class RpcServer {
     if (
       (productPolicy?.execution?.harness === "attested-system-test" ||
         workspaceAuthority?.methodExecution?.harness === "attested-system-test") &&
-      !this.deps.isAttestedSystemTestHarness?.(input.caller)
+      !this.deps.isSystemTestInstance?.()
     ) {
-      throw createRelayError(`${input.method} requires an attested system-test harness`, "EACCES");
+      throw createRelayError(`${input.method} requires a system-test instance`, "EACCES");
     }
     const initiatingWebsite = input.initiatingWebsite ?? input.caller.website;
     if (
@@ -4184,11 +4131,6 @@ export class RpcServer {
           ? workspaceAuthority.presentation
           : undefined
       );
-    const residentContextIntegrity =
-      this.deps.contextIntegrityFactForSession?.(sessionId, input.caller) ??
-      (input.caller.agentBinding
-        ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
-        : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] });
     const authorityFacts = {
       ...(initiatingWebsite ? { initiatingWebsite } : {}),
       caller: input.caller,
@@ -4204,9 +4146,6 @@ export class RpcServer {
       workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
       sessionId,
       grantStore: this.deps.capabilityGrantStore,
-      contextIntegrity:
-        joinContextIntegrity(residentContextIntegrity, input.inheritedContextIntegrity ?? null) ??
-        residentContextIntegrity,
       ...(receiverResourceKey ? { resourceKey: receiverResourceKey } : {}),
     } as const;
     const attestation = workspaceAuthority
@@ -4391,7 +4330,6 @@ export class RpcServer {
         capability: selection.capability,
         resourceKey: selection.resourceKey,
         grantStore: this.deps.capabilityGrantStore,
-        contextIntegrity: authorityFacts.contextIntegrity,
         tier,
       });
       return {
@@ -4460,9 +4398,6 @@ export class RpcServer {
               agentName: leaf.context.executionSession.agentBinding.entityId,
             }
           : {}),
-        lineageClasses: leaf.context.contextIntegrity
-          ? lineageClasses(leaf.context.contextIntegrity)
-          : ["none"],
         irreversible: policyFor(leaf.capability).irreversible,
         agentScopeEligible: standingAgentScopeEligible({
           capability: leaf.capability,
@@ -4492,7 +4427,6 @@ export class RpcServer {
               chain: leaf.context.executingCode.sourceLineage.externalKeys,
             }
           : { class: "unknown", chain: [] },
-        contextLineage: leaf.context.contextIntegrity,
         initiatorChain: leaf.context.initiatorChain,
       });
     const decisions = leaves.map((leaf) => {
@@ -4781,9 +4715,6 @@ export class RpcServer {
         ref,
         method,
         args,
-        ...(relayCallerScope?.inheritedContextIntegrity !== undefined
-          ? { inheritedContextIntegrity: relayCallerScope.inheritedContextIntegrity }
-          : {}),
         readOnly: meta?.readOnly,
         signal: meta?.signal,
       });
@@ -4935,9 +4866,6 @@ export class RpcServer {
       readOnly: envelope.delivery.readOnly,
       waitForAuthority: true,
       signal,
-      ...(relayCallerScope?.inheritedContextIntegrity !== undefined
-        ? { inheritedContextIntegrity: relayCallerScope.inheritedContextIntegrity }
-        : {}),
     });
     if (authorization.handleProduction) {
       throw createRelayError("Handle-producing RPC methods cannot stream responses", "EACCES");
@@ -5859,7 +5787,6 @@ export class RpcServer {
     const relayScope: RelayCallerScope = {
       authenticatedCaller: invocation.caller,
       authorizingCaller: invocation.authorizingCaller,
-      inheritedContextIntegrity: invocation.contextIntegrity,
     };
     if (message.type === "stream-request") {
       try {

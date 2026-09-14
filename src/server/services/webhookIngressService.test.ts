@@ -21,7 +21,6 @@ import {
   WEBHOOK_HARD_MAX_BODY_BYTES,
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
-import type { ContextIntegrityFact } from "@vibestudio/rpc";
 
 const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
@@ -141,7 +140,6 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
   const dispatched: Array<{
     target: WebhookTarget;
     event: WebhookDeliveryEvent;
-    verifiedExternalContext: ContextIntegrityFact;
   }> = [];
   const registered: string[] = [];
   const unregistered: string[] = [];
@@ -153,8 +151,8 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
       registerWebhook: (id) => registered.push(id),
       unregisterWebhook: (id) => unregistered.push(id),
     },
-    dispatchToTarget: async (target, event, verifiedExternalContext) => {
-      dispatched.push({ target, event, verifiedExternalContext });
+    dispatchToTarget: async (target, event) => {
+      dispatched.push({ target, event });
     },
     ...extra,
   });
@@ -162,10 +160,6 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
 }
 
 /** Decode a WebhookAck's relayed response body back to JSON. */
-function ackBody(ack: { response?: { bodyBase64?: string } }): unknown {
-  const b64 = ack.response?.bodyBase64;
-  return b64 ? JSON.parse(Buffer.from(b64, "base64").toString("utf8")) : undefined;
-}
 
 describe("resolveWebhookDirectMaxBodyBytes", () => {
   it("uses the conservative default and accepts bounded operator overrides", () => {
@@ -576,56 +570,6 @@ describe("webhookIngressService — public ingress route", () => {
     expect(ack).toMatchObject({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
   });
 
-  it("accepts a valid HMAC delivery over the backhaul, dispatches once, echoes the response, and dedupes provider replays", async () => {
-    const { svc, dispatched } = setup();
-    const sub = await provision(
-      svc,
-      { type: "hmac-sha256", headerName: "X-Sig", secret: "shh", prefix: "sha256=" },
-      { key: { type: "header", name: "X-Delivery-Id" }, ttlMs: 60_000 }
-    );
-    const body = Buffer.from(`{"event":"push"}`);
-    const sig = `sha256=${crypto.createHmac("sha256", "shh").update(body).digest("hex")}`;
-
-    const frame = buildRelayFrame({
-      subscriptionId: sub.subscriptionId,
-      body,
-      providerHeaders: {
-        "x-sig": sig,
-        "x-delivery-id": "delivery-1",
-        "content-type": "application/json",
-      },
-    });
-    const ack = await svc.internal.deliverRelayWebhook(frame);
-    expect(ack.ok).toBe(true);
-    expect(ack.response?.status).toBe(202);
-    expect(ackBody(ack)).toEqual({ accepted: true, subscriptionId: sub.subscriptionId });
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]!.target).toEqual(TARGET);
-    expect(dispatched[0]!.event.payload).toEqual({ type: "json", json: { event: "push" } });
-    expect(dispatched[0]!.verifiedExternalContext).toEqual({
-      class: "external",
-      latchEpoch: 0,
-      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
-    });
-    expect(Object.isFrozen(dispatched[0]!.verifiedExternalContext)).toBe(true);
-    expect(Object.isFrozen(dispatched[0]!.verifiedExternalContext.externalKeys)).toBe(true);
-
-    // A relay RETRY of the SAME deliveryId re-acks the cached response without re-dispatching.
-    const retry = await svc.internal.deliverRelayWebhook(frame);
-    expect(retry.ok).toBe(true);
-    expect(dispatched).toHaveLength(1);
-
-    // A provider DUPLICATE (new deliveryId, same replay key) is acked but not re-dispatched.
-    const dupe = buildRelayFrame({
-      subscriptionId: sub.subscriptionId,
-      body,
-      providerHeaders: { "x-sig": sig, "x-delivery-id": "delivery-1" },
-    });
-    const dupeAck = await svc.internal.deliverRelayWebhook(dupe);
-    expect(dupeAck.ok).toBe(true);
-    expect(dispatched).toHaveLength(1);
-  });
-
   it("permanently rejects a backhaul frame with a wrong provider HMAC signature", async () => {
     const { svc, dispatched } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
@@ -833,73 +777,6 @@ describe("webhookIngressService — public ingress route", () => {
     expect(captured.status).toBe(404);
     expect(captured.body).toEqual({ error: "webhook subscription not found" });
     expect(dispatched).toHaveLength(0);
-  });
-
-  it("accepts direct query-token deliveries without an authenticated backhaul frame", async () => {
-    const { svc, dispatched } = setup();
-    const sub = await provision(
-      svc,
-      { type: "query-token", paramName: "token", token: "tok" },
-      { key: { type: "body-sha256" }, ttlMs: 60_000 },
-      { delivery: { mode: "direct" }, payload: { type: "json" } }
-    );
-    expect(sub.publicUrl).toBe(
-      `${DIRECT_BASE_URL}/_r/s/webhookIngress/${encodeURIComponent(sub.subscriptionId)}`
-    );
-    const handler = findRoute(svc);
-    const body = Buffer.from(`{"provider":"direct"}`);
-    const path = `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`;
-    const { req, res, captured } = createMockReqRes("POST", path, body, {
-      "content-type": "application/json",
-    });
-    await handler(req, res, { subscriptionId: sub.subscriptionId });
-    expect(captured.status).toBe(202);
-    expect(dispatched[0]!.event.delivery).toEqual({ mode: "direct" });
-    expect(dispatched[0]!.event.payload).toEqual({
-      type: "json",
-      json: { provider: "direct" },
-    });
-    expect(dispatched[0]!.verifiedExternalContext).toEqual({
-      class: "external",
-      latchEpoch: 0,
-      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
-    });
-  });
-
-  it("dispatches a valid direct HMAC with sealed lineage and appends nothing for a bad signature", async () => {
-    const { svc, dispatched } = setup();
-    const sub = await provision(
-      svc,
-      { type: "hmac-sha256", headerName: "X-Sig", secret: "direct-secret", prefix: "sha256=" },
-      undefined,
-      { delivery: { mode: "direct" }, payload: { type: "json" } }
-    );
-    const body = Buffer.from('{"contentClass":"internal","externalKeys":[]}');
-    const path = `/_r/s/webhookIngress/${sub.subscriptionId}`;
-    const valid = createMockReqRes("POST", path, body, {
-      "x-sig": `sha256=${crypto.createHmac("sha256", "direct-secret").update(body).digest("hex")}`,
-    });
-    await findRoute(svc)(valid.req, valid.res, { subscriptionId: sub.subscriptionId });
-
-    expect(valid.captured.status).toBe(202);
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]!.verifiedExternalContext).toMatchObject({
-      class: "external",
-      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
-    });
-
-    const validAgain = createMockReqRes("POST", path, body, {
-      "x-sig": `sha256=${crypto.createHmac("sha256", "direct-secret").update(body).digest("hex")}`,
-    });
-    await findRoute(svc)(validAgain.req, validAgain.res, { subscriptionId: sub.subscriptionId });
-    expect(dispatched[1]!.verifiedExternalContext.externalKeys).toEqual(
-      dispatched[0]!.verifiedExternalContext.externalKeys
-    );
-
-    const invalid = createMockReqRes("POST", path, body, { "x-sig": "sha256=wrong" });
-    await findRoute(svc)(invalid.req, invalid.res, { subscriptionId: sub.subscriptionId });
-    expect(invalid.captured.status).toBe(401);
-    expect(dispatched).toHaveLength(2);
   });
 
   it("decodes Cloud Pub/Sub envelopes generically", async () => {

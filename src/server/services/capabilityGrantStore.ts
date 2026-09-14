@@ -11,7 +11,6 @@ import type {
 } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 import { scopeCovers } from "@vibestudio/shared/authorization";
-import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { capabilityDomain } from "@vibestudio/shared/authority/authorityDomains";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
 import { isCodePrincipal } from "@vibestudio/shared/authority/codePrincipal";
@@ -337,10 +336,10 @@ export class CapabilityGrantStore {
           id, effect, capability, capability_definition_digest,
           resource_key, resource_scope, subject,
           session_id, invocation_digest, provider_execution_digest, mission_subject,
-          agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
+          agent_binding_id, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
           decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -355,7 +354,6 @@ export class CapabilityGrantStore {
         constraints.providerExecutionDigest ?? null,
         constraints.missionSubject ?? null,
         constraints.agentBindingId ?? null,
-        canonicalJson([...(constraints.lineageAtConsent ?? [])].sort()),
         input.issuedBy,
         input.provenance,
         createdAt,
@@ -903,10 +901,6 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
   if (!/^(host|user|code|session|mission|agent|task|website|installation):/.test(subject))
     throw new Error(`Invalid grant subject ${subject}`);
-  const lineage = JSON.parse(String(row["lineage_at_consent"])) as unknown;
-  if (!Array.isArray(lineage) || !lineage.every((value) => typeof value === "string")) {
-    throw new Error(`Grant ${String(row["id"])} has invalid lineage_at_consent`);
-  }
   const constraints = {
     ...(row["requesting_code_principal"] === null
       ? {}
@@ -934,7 +928,6 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
       ? {}
       : { agentBindingId: String(row["agent_binding_id"]) }),
     ...(row["task_ref"] === null ? {} : { taskRef: String(row["task_ref"]) }),
-    lineageAtConsent: lineage,
   };
   return {
     id: String(row["id"]),
@@ -1022,9 +1015,6 @@ function validateGrantInput(input: IssueAuthorityGrantInput): void {
         "Critical confirmation must be a session allow bound to an invocation digest"
       );
     }
-  }
-  if (input.effect === "allow" && input.constraints?.lineageAtConsent === undefined) {
-    throw new Error("Every allow grant must record lineageAtConsent");
   }
 }
 

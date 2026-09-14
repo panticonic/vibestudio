@@ -19,10 +19,6 @@ const roots: string[] = [];
 const baseEvent = { kind: "event", eventId: "event:child-base" } as const;
 const ingress = {
   causalParent: null,
-  contextIntegrity: {
-    class: "external" as const,
-    externalKeys: ["development-native-test"],
-  },
 };
 
 afterEach(async () => {
