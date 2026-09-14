@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "base",
+      "role": "base",
+      "name": "Base",
+      "description": "The shared foundation for Vibestudio workspaces.",
+      "url": "git+https://github.com/panticonic/vibestudio-base.git"
+    },
+    {
+      "id": "personal",
+      "role": "personal",
+      "name": "Personal",
+      "description": "The private personal workspace.",
+      "url": "git+https://github.com/panticonic/vibestudio-personal.git"
+    },
+    {
+      "id": "system",
+      "role": "system",
+      "name": "System",
+      "description": "The private system workspace.",
+      "url": "git+https://github.com/panticonic/vibestudio-system.git"
+    },
+    {
+      "id": "system-testing",
+      "role": "development",
+      "name": "System testing",
+      "description": "The agentic acceptance harness for development workspaces.",
+      "url": "git+https://github.com/panticonic/vibestudio-system-testing.git",
+      "consumers": ["personal", "system"]
+    },
+    {
+      "id": "examples",
+      "role": "catalog",
+      "name": "Examples",
+      "description": "Explore sample panels, agents, tools, and playable worlds.",
+      "url": "git+https://github.com/panticonic/vibestudio-template-examples.git",
+      "tags": ["examples", "learning", "panels", "workers"],
+      "recommended": true
+    },
+    {
+      "id": "google-workspace",
+      "role": "catalog",
+      "name": "Google Workspace",
+      "description": "Connect Google Workspace and work with a Gmail agent.",
+      "url": "git+https://github.com/panticonic/vibestudio-template-google-workspace.git",
+      "tags": ["gmail", "google", "integration"],
+      "recommended": true
+    },
+    {
+      "id": "news",
+      "role": "catalog",
+      "name": "News",
+      "description": "Collect feeds and brief the news.",
+      "url": "git+https://github.com/panticonic/vibestudio-template-news.git",
+      "tags": ["agent", "feeds", "news", "panel"],
+      "recommended": true
+    },
+    {
+      "id": "spectrolite",
+      "role": "catalog",
+      "name": "Spectrolite",
+      "description": "Write and edit MDX with collaborative agent tooling.",
+      "url": "git+https://github.com/panticonic/vibestudio-template-spectrolite.git",
+      "tags": ["editor", "mdx", "writing"],
+      "recommended": true
+    }
+  ]
+}

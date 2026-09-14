@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { workspaceTemplateSourceMethods } from "@vibestudio/service-schemas/templates";
+import type { TemplateRegistry } from "@vibestudio/service-schemas/templates";
 import {
   parseTemplateManifestContent,
   rootRuntimeFromTemplateManifest,
@@ -33,6 +34,7 @@ export function createWorkspaceTemplateSourceService(deps: {
   systemEpoch: number;
   acquire(pin: WorkspaceTemplatePin): Promise<ExactSnapshot>;
   resolveLocal(url: string): WorkspaceTemplatePin | null;
+  localRegistry(): TemplateRegistry | null;
 }): ServiceDefinition {
   return {
     name: "workspaceTemplateSource",
@@ -40,6 +42,10 @@ export function createWorkspaceTemplateSourceService(deps: {
     authority: { principals: ["code", "host"] },
     methods: workspaceTemplateSourceMethods,
     handler: defineServiceHandler("workspaceTemplateSource", workspaceTemplateSourceMethods, {
+      localRegistry: async (ctx) => {
+        requireReviewedSourceConsumer(ctx.caller);
+        return deps.localRegistry();
+      },
       resolveLocal: async (ctx, [url]) => {
         requireReviewedSourceConsumer(ctx.caller);
         return deps.resolveLocal(url);

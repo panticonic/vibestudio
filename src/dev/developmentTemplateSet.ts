@@ -12,7 +12,7 @@ export interface DevelopmentTemplateSet {
   sourcePins: Record<string, WorkspaceTemplatePin>;
   sources: Array<{
     id: string;
-    role: keyof DefaultWorkspaceTemplates | "development" | "optional";
+    role: keyof DefaultWorkspaceTemplates | "development" | "catalog";
     url: string;
     consumers?: Array<keyof DefaultWorkspaceTemplates>;
   }>;

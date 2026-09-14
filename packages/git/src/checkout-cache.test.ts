@@ -20,8 +20,8 @@ describe("Git checkout isolation", () => {
   it("removes an observational checkout after returning its in-memory result", async () => {
     const root = await temporaryRoot();
     const result = await withTemporaryGitCheckout(fsp, root, "registry", async (directory) => {
-      await fsp.writeFile(path.join(directory, "registry.yml"), "version: 1\n");
-      return await fsp.readFile(path.join(directory, "registry.yml"), "utf8");
+      await fsp.writeFile(path.join(directory, "payload.yml"), "version: 1\n");
+      return await fsp.readFile(path.join(directory, "payload.yml"), "utf8");
     });
     expect(result).toBe("version: 1\n");
     expect(await fsp.readdir(root)).toEqual([]);

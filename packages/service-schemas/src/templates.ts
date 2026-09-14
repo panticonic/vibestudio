@@ -16,6 +16,64 @@ const WRITE: MethodAccessDescriptor = { sensitivity: "write" };
 const commandId = z.string().trim().min(1);
 const digest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 
+export const DEFAULT_TEMPLATE_REGISTRY_URL =
+  "https://raw.githubusercontent.com/panticonic/vibestudio/main/templates/registry.json";
+export const TEMPLATE_REGISTRY_FILE_ENV = "VIBESTUDIO_TEMPLATE_REGISTRY_FILE";
+export const templateRegistryEntrySchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+    role: z.enum(["base", "personal", "system", "development", "catalog"]),
+    name: z.string().trim().min(1),
+    description: z.string().trim().min(1),
+    url: z.string().url(),
+    tags: z.array(z.string().trim().min(1)).optional(),
+    recommended: z.boolean().optional(),
+    consumers: z
+      .array(z.enum(["base", "personal", "system"]))
+      .min(1)
+      .optional(),
+  })
+  .strict();
+export const templateRegistrySchema = z
+  .object({
+    version: z.literal(1),
+    templates: z.array(templateRegistryEntrySchema),
+  })
+  .strict()
+  .superRefine((registry, ctx) => {
+    const ids = new Set<string>();
+    const urls = new Set<string>();
+    for (const [index, entry] of registry.templates.entries()) {
+      if (ids.has(entry.id)) {
+        ctx.addIssue({ code: "custom", path: ["templates", index, "id"], message: "duplicate id" });
+      }
+      if (urls.has(entry.url)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["templates", index, "url"],
+          message: "duplicate URL",
+        });
+      }
+      if (entry.role === "development" && !entry.consumers) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["templates", index, "consumers"],
+          message: "development templates require consumers",
+        });
+      }
+      if (entry.role !== "development" && entry.consumers) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["templates", index, "consumers"],
+          message: "only development templates have consumers",
+        });
+      }
+      ids.add(entry.id);
+      urls.add(entry.url);
+    }
+  });
+export type TemplateRegistry = z.infer<typeof templateRegistrySchema>;
+
 export const templateLocatorSchema = z.union([
   z.object({ pin: WorkspaceTemplatePinSchema }).strict(),
   z.object({ url: z.string().url(), credential: z.string().trim().min(1).optional() }).strict(),
@@ -79,6 +137,16 @@ export const templatePublicationSchema = z
   })
   .strict();
 export const templatesMethods = defineServiceMethods({
+  registry: {
+    website: {
+      kind: "eligible",
+      rationale: "Returns public catalog metadata from the requested registry address.",
+    } as const,
+    description: "Load the default template registry or a registry URL selected by the user.",
+    args: z.tuple([z.object({ url: z.string().url().optional() }).strict()]),
+    returns: templateRegistrySchema,
+    access: READ,
+  },
   resolveSource: {
     website: {
       kind: "closed",
@@ -155,6 +223,24 @@ export const templatesMethods = defineServiceMethods({
 
 /** Host-owned exact-source acquisition used by reviewed source consumers. */
 export const workspaceTemplateSourceMethods = defineServiceMethods({
+  localRegistry: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale: "Trusted template consumers may read the instance-designated development catalog.",
+    },
+    authority: { principals: ["user", "code"] },
+    website: {
+      kind: "closed",
+      reason: "The local development registry is exposed through templates.registry.",
+    } as const,
+    description: "Read the instance-designated local template registry, if one is configured.",
+    args: z.tuple([]),
+    returns: templateRegistrySchema.nullable(),
+    access: READ,
+  },
   resolveLocal: {
     tier: {
       tier: "open",

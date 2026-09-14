@@ -4,6 +4,8 @@ import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
 } from "@vibestudio/workspace/templateRelease";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
+import * as path from "node:path";
+import { TEMPLATE_REGISTRY_FILE_ENV } from "@vibestudio/service-schemas/templates";
 
 const DEVELOPMENT_ONLY_ARGUMENTS = new Set([
   "--ephemeral",
@@ -53,12 +55,16 @@ export function productDesktopEnvironment(input: {
     DEFAULT_WORKSPACE_TEMPLATES_ENV,
     INITIAL_WORKSPACE_TEMPLATE_ENV,
     WORKSPACE_SOURCES_ENV,
+    TEMPLATE_REGISTRY_FILE_ENV,
   ]) {
     delete env[key];
   }
   Object.assign(env, {
     NODE_ENV: "production",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
+    ...(defaultTemplates
+      ? { [TEMPLATE_REGISTRY_FILE_ENV]: path.join(input.repoRoot, "templates", "registry.json") }
+      : {}),
     ...(defaultTemplates || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(

@@ -10,8 +10,7 @@ import {
   readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
-  TEMPLATE_REGISTRY_DIRECTORY,
-  TEMPLATE_REGISTRY_URL,
+  TEMPLATE_REGISTRY_RELATIVE_PATH,
 } from "../src/dev/developmentTemplateConfig.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,13 +28,7 @@ if (command === "setup") {
   if (args.length > 1) throw new Error("usage: pnpm dev:templates setup [root]");
   const root = path.resolve(args[0] ?? path.join(repoRoot, "..", "vibestudio-templates"));
   fs.mkdirSync(root, { recursive: true });
-  const registry = path.join(root, TEMPLATE_REGISTRY_DIRECTORY);
-  if (!fs.existsSync(registry)) {
-    console.log(`Cloning the official template registry into ${registry}`);
-    const status = run("git", ["clone", TEMPLATE_REGISTRY_URL, registry]);
-    if (status !== 0) process.exit(status);
-  }
-  const catalog = readOfficialTemplateCatalog(root);
+  const catalog = readOfficialTemplateCatalog(path.join(repoRoot, TEMPLATE_REGISTRY_RELATIVE_PATH));
   for (const source of catalog.sources) {
     const checkout = path.join(root, source.id);
     if (fs.existsSync(checkout)) continue;
@@ -79,7 +72,7 @@ if (command === "setup") {
 } else if (command === "sync") {
   if (args.length !== 0) throw new Error("usage: pnpm dev:templates sync");
   const selected = requireDevelopmentTemplateCheckouts(repoRoot);
-  for (const checkout of [selected.registry, ...selected.sources.map((s) => selected.checkouts[s.id])]) {
+  for (const checkout of selected.sources.map((source) => selected.checkouts[source.id])) {
     const label = path.basename(checkout);
     const head = developmentTemplateHead(checkout);
     if (head.dirty) {

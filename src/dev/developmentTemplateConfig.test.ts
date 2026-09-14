@@ -24,29 +24,36 @@ function collection(): { host: string; root: string } {
   const host = repo("host");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-templates-"));
   roots.push(root);
-  const registry = path.join(root, "registry");
-  fs.mkdirSync(registry);
-  git(registry, "init");
+  fs.mkdirSync(path.join(host, "templates"));
   fs.writeFileSync(
-    path.join(registry, "registry.yml"),
-    [
-      "version: 1",
-      "foundations:",
-      ...["base", "personal", "system"].flatMap((name) => [
-        `  - id: ${name}`,
-        `    role: ${name}`,
-        `    url: git+https://example.test/${name}.git`,
-      ]),
-      "development:",
-      "  - id: system-testing",
-      "    role: development",
-      "    url: git+https://example.test/system-testing.git",
-      "    consumers: [personal, system]",
-      "entries:",
-      "  - id: examples",
-      "    url: git+https://example.test/examples.git",
-      "",
-    ].join("\n")
+    path.join(host, "templates", "registry.json"),
+    JSON.stringify({
+      version: 1,
+      templates: [
+        ...["base", "personal", "system"].map((name) => ({
+          id: name,
+          role: name,
+          name,
+          description: `${name} template`,
+          url: `git+https://example.test/${name}.git`,
+        })),
+        {
+          id: "system-testing",
+          role: "development",
+          name: "System testing",
+          description: "Acceptance harness",
+          url: "git+https://example.test/system-testing.git",
+          consumers: ["personal", "system"],
+        },
+        {
+          id: "examples",
+          role: "catalog",
+          name: "Examples",
+          description: "Examples template",
+          url: "git+https://example.test/examples.git",
+        },
+      ],
+    })
   );
   for (const name of ["base", "personal", "system", "system-testing", "examples"]) {
     const checkout = path.join(root, name);
@@ -74,7 +81,7 @@ describe("development template configuration", () => {
           role: "development",
           consumers: ["personal", "system"],
         }),
-        expect.objectContaining({ id: "examples", role: "optional" }),
+        expect.objectContaining({ id: "examples", role: "catalog" }),
       ],
     });
     expect(configuredDevelopmentTemplateRoot(host, {})).toBe(root);

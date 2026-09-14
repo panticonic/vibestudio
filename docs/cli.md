@@ -110,6 +110,24 @@ From a source checkout, run the built CLI directly without a global install:
 node dist/cli/client.mjs --help     # or: pnpm cli --help
 ```
 
+## Workspace template registry
+
+The workspace chooser reads the versioned JSON catalog at
+`templates/registry.json`. A packaged build loads the canonical copy directly
+from `panticonic/vibestudio` on GitHub. The chooser's registry-address field can
+load another HTTP(S) URL instead.
+
+Registry entries name moving Git repository URLs. They deliberately contain no
+commit, snapshot, release, or promotion coordinates: choosing a template means
+installing from that repository, not coupling the catalog to one publication.
+Each template's own `meta/vibestudio.yml` declares its dependencies.
+
+Development uses that same catalog, but reads the file from the current host
+checkout and maps every entry to a sibling local checkout. Configure the set
+once with `pnpm dev:templates setup [root]`; inspect or update all of it with
+`pnpm dev:templates status` and `pnpm dev:templates sync`. There is no separate
+registry checkout.
+
 ## Remote Pairing
 
 Start a phone/laptop pairing server:

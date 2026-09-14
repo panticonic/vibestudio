@@ -10,8 +10,12 @@ export interface DevelopmentTemplateCheckouts {
 
 export interface DevelopmentTemplateSource {
   id: string;
-  role: keyof DefaultWorkspaceTemplates | "development" | "optional";
+  role: keyof DefaultWorkspaceTemplates | "development" | "catalog";
+  name: string;
+  description: string;
   url: string;
+  tags?: string[];
+  recommended?: boolean;
   consumers?: Array<keyof DefaultWorkspaceTemplates>;
 }
 
@@ -19,8 +23,7 @@ const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs")
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY: string;
   DEVELOPMENT_TEMPLATE_ROOT_ENV: string;
   DEFAULT_TEMPLATE_NAMES: readonly (keyof DefaultWorkspaceTemplates)[];
-  TEMPLATE_REGISTRY_DIRECTORY: string;
-  TEMPLATE_REGISTRY_URL: string;
+  TEMPLATE_REGISTRY_RELATIVE_PATH: string;
   configuredDevelopmentTemplateRoot(repoRoot: string, env?: NodeJS.ProcessEnv): string | undefined;
   requireDevelopmentTemplateCheckouts(
     repoRoot: string,
@@ -31,7 +34,7 @@ const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs")
     name: string,
     env?: NodeJS.ProcessEnv
   ): string;
-  readOfficialTemplateCatalog(root: string): {
+  readOfficialTemplateCatalog(registryFile: string): {
     registry: string;
     sources: DevelopmentTemplateSource[];
   };
@@ -41,7 +44,7 @@ const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs")
   ): DevelopmentTemplateCheckouts | undefined;
   setDevelopmentTemplateRoot(repoRoot: string, root: string): DevelopmentTemplateCheckouts;
   clearDevelopmentTemplateRoot(repoRoot: string): void;
-  templateCheckouts(root: string): DevelopmentTemplateCheckouts;
+  templateCheckoutsForRepo(repoRoot: string, root: string): DevelopmentTemplateCheckouts;
   canonicalRoot(root: string): string;
   assertGitCheckout(checkout: string, name?: string): void;
   developmentTemplateHead(checkout: string): { commit: string; dirty: boolean };
@@ -51,8 +54,7 @@ export const {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
   DEFAULT_TEMPLATE_NAMES,
-  TEMPLATE_REGISTRY_DIRECTORY,
-  TEMPLATE_REGISTRY_URL,
+  TEMPLATE_REGISTRY_RELATIVE_PATH,
   configuredDevelopmentTemplateRoot,
   readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
@@ -60,7 +62,7 @@ export const {
   selectDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
   clearDevelopmentTemplateRoot,
-  templateCheckouts,
+  templateCheckoutsForRepo,
   canonicalRoot,
   assertGitCheckout,
   developmentTemplateHead,

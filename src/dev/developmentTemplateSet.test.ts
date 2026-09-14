@@ -24,32 +24,36 @@ function fixture(epoch: number) {
   roots.push(root);
   const templates = path.join(root, "templates");
   fs.mkdirSync(templates);
-  const registry = path.join(templates, "registry");
-  fs.mkdirSync(registry);
   fs.writeFileSync(
-    path.join(registry, "registry.yml"),
-    [
-      "version: 1",
-      "foundations:",
-      ...["base", "personal", "system"].flatMap((name) => [
-        `  - id: ${name}`,
-        `    role: ${name}`,
-        `    url: git+https://example.test/${name}.git`,
-      ]),
-      "development:",
-      "  - id: system-testing",
-      "    role: development",
-      "    url: git+https://example.test/system-testing.git",
-      "    consumers: [personal, system]",
-      "entries:",
-      "  - id: examples",
-      "    url: git+https://example.test/examples.git",
-      "",
-    ].join("\n")
+    path.join(templates, "registry.json"),
+    JSON.stringify({
+      version: 1,
+      templates: [
+        ...["base", "personal", "system"].map((name) => ({
+          id: name,
+          role: name,
+          name,
+          description: `${name} template`,
+          url: `git+https://example.test/${name}.git`,
+        })),
+        {
+          id: "system-testing",
+          role: "development",
+          name: "System testing",
+          description: "Acceptance harness",
+          url: "git+https://example.test/system-testing.git",
+          consumers: ["personal", "system"],
+        },
+        {
+          id: "examples",
+          role: "catalog",
+          name: "Examples",
+          description: "Examples template",
+          url: "git+https://example.test/examples.git",
+        },
+      ],
+    })
   );
-  git(registry, "init", "-b", "main");
-  git(registry, "add", ".");
-  git(registry, "commit", "-m", "registry");
   for (const name of ["base", "personal", "system", "system-testing", "examples"] as const) {
     const checkout = path.join(templates, name);
     fs.mkdirSync(path.join(checkout, "meta"), { recursive: true });

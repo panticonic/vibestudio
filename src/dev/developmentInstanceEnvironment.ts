@@ -1,4 +1,6 @@
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
+import * as path from "node:path";
+import { TEMPLATE_REGISTRY_FILE_ENV } from "@vibestudio/service-schemas/templates";
 import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
@@ -43,12 +45,14 @@ export function developmentInstanceEnvironment(input: {
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   delete env[WORKSPACE_SOURCES_ENV];
+  delete env[TEMPLATE_REGISTRY_FILE_ENV];
   Object.assign(env, {
     NODE_ENV: "development",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
     VIBESTUDIO_INSTANCE_ROOT: input.instanceRoot,
     VIBESTUDIO_INSTANCE: input.instanceId,
     VIBESTUDIO_SOURCE_INSTANCE: input.sourceCoupled ? "1" : "0",
+    [TEMPLATE_REGISTRY_FILE_ENV]: path.join(input.repoRoot, "templates", "registry.json"),
     // A disposable instance root is deleted when the supervisor exits, so
     // nothing it started may be left running behind an interactive prompt.
     VIBESTUDIO_INSTANCE_LIFECYCLE: input.disposable ? "ephemeral" : "persistent",

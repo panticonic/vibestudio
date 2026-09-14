@@ -72,6 +72,10 @@ import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInsta
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import {
+  TEMPLATE_REGISTRY_FILE_ENV,
+  templateRegistrySchema,
+} from "@vibestudio/service-schemas/templates";
+import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
@@ -2221,6 +2225,11 @@ async function main() {
     createWorkspaceTemplateSourceService({
       systemEpoch: workspaceConfig.systemEpoch,
       acquire: acquireWorkspaceTemplate,
+      localRegistry: () => {
+        const registryFile = process.env[TEMPLATE_REGISTRY_FILE_ENV]?.trim();
+        if (!registryFile) return null;
+        return templateRegistrySchema.parse(JSON.parse(fs.readFileSync(registryFile, "utf8")));
+      },
       resolveLocal: (url) => {
         const canonical = normalizeTemplateGitUrl(url);
         return (

@@ -1,13 +1,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { parse } = require("yaml");
 
 const DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY = "vibestudio.templateCheckouts";
 const DEVELOPMENT_TEMPLATE_ROOT_ENV = "VIBESTUDIO_TEMPLATE_CHECKOUTS";
 const DEFAULT_TEMPLATE_NAMES = ["base", "personal", "system"];
-const TEMPLATE_REGISTRY_DIRECTORY = "registry";
-const TEMPLATE_REGISTRY_URL = "https://github.com/panticonic/vibestudio-template-registry.git";
+const TEMPLATE_REGISTRY_RELATIVE_PATH = path.join("templates", "registry.json");
 
 function git(repoRoot, args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
@@ -64,12 +62,21 @@ function catalogEntry(value, expectedRole) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Template registry entries must be objects");
   }
-  const { id, role, url } = value;
+  const { id, role, name, description, url } = value;
+  if (![...DEFAULT_TEMPLATE_NAMES, "development", "catalog"].includes(role)) {
+    throw new Error(`Template registry entry ${String(id)} has an invalid role: ${String(role)}`);
+  }
   if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(id)) {
     throw new Error(`Template registry entry has an invalid id: ${String(id)}`);
   }
   if (role !== expectedRole) {
     throw new Error(`Template registry entry ${id} must have role ${expectedRole}`);
+  }
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error(`Template registry entry ${id} has no name`);
+  }
+  if (typeof description !== "string" || !description.trim()) {
+    throw new Error(`Template registry entry ${id} has no description`);
   }
   if (typeof url !== "string") throw new Error(`Template registry entry ${id} has no URL`);
   const consumers = value.consumers;
@@ -87,35 +94,36 @@ function catalogEntry(value, expectedRole) {
   return {
     id,
     role,
+    name,
+    description,
     url: `git+${canonicalRemoteUrl(url)}`,
+    ...(Array.isArray(value.tags) ? { tags: value.tags } : {}),
+    ...(typeof value.recommended === "boolean" ? { recommended: value.recommended } : {}),
     ...(expectedRole === "development" ? { consumers: [...new Set(consumers)] } : {}),
   };
 }
 
-function readOfficialTemplateCatalog(root) {
-  const registry = path.join(canonicalRoot(root), TEMPLATE_REGISTRY_DIRECTORY);
-  assertGitCheckout(registry, "template registry");
-  const document = parse(fs.readFileSync(path.join(registry, "registry.yml"), "utf8"));
+function readOfficialTemplateCatalog(registryFile) {
+  const registry = fs.realpathSync(path.resolve(registryFile));
+  const document = JSON.parse(fs.readFileSync(registry, "utf8"));
   if (!document || document.version !== 1) {
     throw new Error("Template registry must use version 1");
   }
-  const foundations = Array.isArray(document.foundations)
-    ? document.foundations.map((entry) => catalogEntry(entry, entry?.role))
-    : [];
+  if (!Array.isArray(document.templates)) {
+    throw new Error("Template registry must declare templates");
+  }
+  const sources = document.templates.map((entry) => catalogEntry(entry, entry?.role));
+  const foundations = sources.filter((entry) => DEFAULT_TEMPLATE_NAMES.includes(entry.role));
   const byRole = new Map(foundations.map((entry) => [entry.role, entry]));
   for (const role of DEFAULT_TEMPLATE_NAMES) {
-    if (!byRole.has(role)) throw new Error(`Template registry does not declare its ${role} source`);
+    if (foundations.filter((entry) => entry.role === role).length !== 1) {
+      throw new Error(`Template registry must declare exactly one ${role} source`);
+    }
   }
   if (foundations.some((entry) => !DEFAULT_TEMPLATE_NAMES.includes(entry.role))) {
     throw new Error("Template registry foundations may only declare base, personal, and system");
   }
-  const optional = Array.isArray(document.entries)
-    ? document.entries.map((entry) => catalogEntry({ ...entry, role: "optional" }, "optional"))
-    : [];
-  const development = Array.isArray(document.development)
-    ? document.development.map((entry) => catalogEntry(entry, "development"))
-    : [];
-  const sources = [...foundations, ...development, ...optional];
+  const development = sources.filter((entry) => entry.role === "development");
   const ids = new Set();
   const urls = new Set();
   for (const source of sources) {
@@ -134,9 +142,9 @@ function readOfficialTemplateCatalog(root) {
   return { registry, sources };
 }
 
-function templateCheckouts(root) {
+function templateCheckoutsForRepo(repoRoot, root) {
   const canonical = canonicalRoot(root);
-  const catalog = readOfficialTemplateCatalog(canonical);
+  const catalog = readOfficialTemplateCatalog(path.join(repoRoot, TEMPLATE_REGISTRY_RELATIVE_PATH));
   const checkouts = Object.fromEntries(
     catalog.sources.map((source) => {
       const checkout = path.join(canonical, source.id);
@@ -179,7 +187,7 @@ function requireDevelopmentTemplateCheckouts(repoRoot, env = process.env) {
       "No development template checkouts are configured. Run `pnpm dev:templates setup`."
     );
   }
-  return templateCheckouts(root);
+  return templateCheckoutsForRepo(repoRoot, root);
 }
 
 function requireDevelopmentTemplateCheckout(repoRoot, name, env = process.env) {
@@ -199,11 +207,11 @@ function selectDevelopmentTemplateCheckouts(
   const root = explicitRoot
     ? canonicalRoot(explicitRoot)
     : configuredDevelopmentTemplateRoot(repoRoot, env);
-  return root ? templateCheckouts(root) : undefined;
+  return root ? templateCheckoutsForRepo(repoRoot, root) : undefined;
 }
 
 function setDevelopmentTemplateRoot(repoRoot, root) {
-  const selected = templateCheckouts(root);
+  const selected = templateCheckoutsForRepo(repoRoot, root);
   git(repoRoot, ["config", "--local", DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY, selected.root]);
   return selected;
 }
@@ -232,8 +240,7 @@ module.exports = {
   DEVELOPMENT_TEMPLATE_ROOT_GIT_CONFIG_KEY,
   DEVELOPMENT_TEMPLATE_ROOT_ENV,
   DEFAULT_TEMPLATE_NAMES,
-  TEMPLATE_REGISTRY_DIRECTORY,
-  TEMPLATE_REGISTRY_URL,
+  TEMPLATE_REGISTRY_RELATIVE_PATH,
   configuredDevelopmentTemplateRoot,
   readOfficialTemplateCatalog,
   requireDevelopmentTemplateCheckouts,
@@ -241,7 +248,7 @@ module.exports = {
   selectDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
   clearDevelopmentTemplateRoot,
-  templateCheckouts,
+  templateCheckoutsForRepo,
   canonicalRoot,
   assertGitCheckout,
   developmentTemplateHead,

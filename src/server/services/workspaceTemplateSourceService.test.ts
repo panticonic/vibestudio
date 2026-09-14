@@ -76,10 +76,23 @@ describe("workspaceTemplateSource", () => {
     };
     const acquire = vi.fn(async (_pin: WorkspaceTemplatePin) => snapshot());
     const resolveLocal = vi.fn((url: string) => (url === first.url ? first : null));
+    const registry = {
+      version: 1 as const,
+      templates: [
+        {
+          id: "source",
+          role: "catalog" as const,
+          name: "Source",
+          description: "A moving template source",
+          url: first.url,
+        },
+      ],
+    };
     const service = createWorkspaceTemplateSourceService({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
       acquire,
       resolveLocal,
+      localRegistry: () => registry,
     });
     const id = "@workspace-extensions/templates";
     const ctx = {
@@ -120,6 +133,7 @@ describe("workspaceTemplateSource", () => {
     expect(two).toMatchObject({ pin: second });
     expect(one).not.toHaveProperty("checkout");
     await expect(service.handler(ctx, "resolveLocal", [first.url])).resolves.toEqual(first);
+    await expect(service.handler(ctx, "localRegistry", [])).resolves.toEqual(registry);
     await expect(
       service.handler(ctx, "resolveLocal", ["https://example.invalid/other.git"])
     ).resolves.toBeNull();
