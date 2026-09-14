@@ -66,6 +66,24 @@ export function requireActiveExecutionIdentity(
 }
 
 /**
+ * The context a declared workspace service activates in.
+ *
+ * An entity's context is part of its identity and never moves, so an existing
+ * one answers for itself. A creator-scoped service (PubSubChannel, say) is
+ * resolvable from any context by design, which means the resolving caller's
+ * context may only seed a service that does not exist yet -- preferring it
+ * over the entity's own manufactured a mismatch that activation then rejected,
+ * and a scheduled mission run could not reach the channel it launched from.
+ */
+export function declaredWorkspaceServiceContextId(
+  existingContextId: string | null | undefined,
+  refContextId: string | undefined,
+  canonicalContextId: string
+): string {
+  return existingContextId ?? refContextId ?? canonicalContextId;
+}
+
+/**
  * Compose the durable incarnation of a manifest-declared workspace service.
  *
  * A newly resolved service is host-managed workspace infrastructure, so it is

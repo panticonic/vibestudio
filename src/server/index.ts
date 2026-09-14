@@ -48,7 +48,10 @@ import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { retireAuthenticatedCallers } from "./authenticatedCallerRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { assertWorkspaceRpcAccess } from "./workspaceRpcAccess.js";
-import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
+import {
+  declaredWorkspaceServiceActivationInput,
+  declaredWorkspaceServiceContextId,
+} from "./runtimeExecutionIdentity.js";
 import { canonicalWorkspaceObjectContextId } from "./bootstrap/workspaceObjectIdentity.js";
 import type { PreparedCodeIncarnation, RuntimeEntityHooks } from "./services/runtimeService.js";
 import {
@@ -5943,10 +5946,11 @@ async function main() {
         return;
       }
     }
-    const contextId =
-      ref.contextId ??
-      existing?.contextId ??
-      canonicalWorkspaceObjectContextId(workspaceId, { source, className, key: objectKey });
+    const contextId = declaredWorkspaceServiceContextId(
+      existing?.contextId,
+      ref.contextId,
+      canonicalWorkspaceObjectContextId(workspaceId, { source, className, key: objectKey })
+    );
     const prepared = await workerdManagerInst.ensureDurableObjectEntity({
       source,
       className,

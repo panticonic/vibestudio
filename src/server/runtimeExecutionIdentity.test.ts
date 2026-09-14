@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   declaredWorkspaceServiceActivationInput,
+  declaredWorkspaceServiceContextId,
   requireActiveExecutionIdentity,
 } from "./runtimeExecutionIdentity.js";
 
@@ -206,5 +207,24 @@ describe("declaredWorkspaceServiceActivationInput", () => {
         "system"
       )
     ).toThrow(/refusing to synthesize ownership/);
+  });
+
+  it("keeps an existing service in its own context when a caller resolves it from another", () => {
+    expect(
+      declaredWorkspaceServiceContextId(
+        "context:creator",
+        "context:mission-run",
+        "context:canonical"
+      )
+    ).toBe("context:creator");
+  });
+
+  it("seeds a service that does not exist yet from the resolving caller's context", () => {
+    expect(declaredWorkspaceServiceContextId(null, "context:creator", "context:canonical")).toBe(
+      "context:creator"
+    );
+    expect(declaredWorkspaceServiceContextId(undefined, undefined, "context:canonical")).toBe(
+      "context:canonical"
+    );
   });
 });
