@@ -25,7 +25,6 @@ import type {
   GetClientConfigStatusRequest,
   ManagedCredentialSummary,
   ProxyGitHttpRequest,
-  ProxyGitHttpResponse,
   RequestCredentialInputRequest,
   ConfigureClientRequest,
   ResolveUrlBoundCredentialRequest,
@@ -80,7 +79,7 @@ import {
 import { assertPresent } from "../../lintHelpers";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { credentialGrantAgentId } from "./credentialGrantIdentity.js";
-import { serializeGitHttpResponse } from "./gitHttpRpc.js";
+import { createGitHttpResponse } from "./gitHttpRpc.js";
 import type { LocalGitMirrorTransport } from "./localGitMirrors.js";
 import { normalizeRemoteUrl } from "@vibestudio/workspace/remotes";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
@@ -882,10 +881,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     };
   }
 
-  async function proxyGitHttp(
-    ctx: ServiceContext,
-    params: ProxyGitHttpParams
-  ): Promise<ProxyGitHttpResponse> {
+  async function proxyGitHttp(ctx: ServiceContext, params: ProxyGitHttpParams): Promise<Response> {
     const request = params as ProxyGitHttpRequest;
     const credentialId = request.credentialId;
     if (request.logicalCredential) {
@@ -900,7 +896,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       method: request.method ?? "GET",
       body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
     });
-    if (mirrored) return serializeGitHttpResponse(mirrored);
+    if (mirrored) return createGitHttpResponse(mirrored);
     if (!egressProxy) {
       throw new Error("Egress proxy is unavailable");
     }
@@ -919,7 +915,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
             : { kind: "credential", credentialId },
       gitIntent: request.gitIntent,
     });
-    return serializeGitHttpResponse(result);
+    return createGitHttpResponse(result);
   }
 
   async function audit(params: AuditParams): Promise<AuditEntry[]> {

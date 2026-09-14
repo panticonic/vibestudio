@@ -36,6 +36,7 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import {
+  BRIDGE_STREAM_CHUNK_BYTES,
   envelopeFromMessage,
   responseEnvelopeFor,
   type RpcEnvelope,
@@ -624,6 +625,36 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     const frames = sentStreamFrames(client);
     expect(frames.map((f) => f.frameType)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
     expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("hello!");
+  });
+
+  it("splits a producer's oversized response chunk before it reaches a session carrier", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    const body = new Uint8Array(BRIDGE_STREAM_CHUNK_BYTES * 2 + 17).fill(0x61);
+    dispatcher.dispatch.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(body);
+            controller.close();
+          },
+        }),
+        { status: 200 }
+      )
+    );
+
+    const client = createClient();
+    registerClient(server, client);
+    await handleRpc(server, client, streamRequest("sr-bounded"));
+
+    const frames = sentStreamFrames(client);
+    const chunks = frames.filter((frame) => frame.frameType === FRAME_DATA);
+    expect(chunks).toHaveLength(3);
+    expect(chunks.map((frame) => Buffer.from(frame.payload, "base64").byteLength)).toEqual([
+      BRIDGE_STREAM_CHUNK_BYTES,
+      BRIDGE_STREAM_CHUNK_BYTES,
+      17,
+    ]);
+    expect(frames.at(-1)?.frameType).toBe(FRAME_END);
   });
 
   it("AWAITS each binary frame send — the producer loop suspends until the pipe accepts the frame", async () => {

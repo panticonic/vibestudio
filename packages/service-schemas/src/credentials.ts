@@ -15,13 +15,13 @@ import type {
   CredentialStoreSummary,
   ForwardOAuthCallbackRequest,
   ManagedCredentialSummary,
-  ProxyGitHttpResponse,
   StoredCredentialSummary,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
@@ -1041,17 +1041,6 @@ const CredentialProxyFetchResponseSchema = z
   })
   .strict();
 
-const ProxyGitHttpResponseSchema = z
-  .object({
-    url: z.string(),
-    method: z.string(),
-    statusCode: z.number().int(),
-    statusMessage: z.string(),
-    headers: z.record(z.string()),
-    bodyBase64: z.string(),
-  })
-  .strict() satisfies z.ZodType<ProxyGitHttpResponse>;
-
 const AuditEntrySchema = z
   .object({
     ts: z.number(),
@@ -1483,10 +1472,10 @@ export const credentialsMethods = defineServiceMethods({
         "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote",
     },
     description:
-      "Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded.",
+      "Stream a Git smart-HTTP response through the egress proxy with credential injection.",
     agentFacing: false,
     args: z.tuple([ProxyGitHttpParamsSchema]),
-    returns: ProxyGitHttpResponseSchema,
+    returns: StreamResponseSchema,
     access: PROXY_ACCESS,
     examples: [
       { args: [{ url: "https://github.com/owner/repo.git/info/refs?service=git-upload-pack" }] },

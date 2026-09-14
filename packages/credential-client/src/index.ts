@@ -1,4 +1,4 @@
-import { type RpcCaller, bytesToBase64, base64ToBytes } from "@vibestudio/rpc";
+import { type RpcCaller, bytesToBase64 } from "@vibestudio/rpc";
 import type {
   ClientConfigStatus,
   ConfigureClientRequest,
@@ -8,7 +8,6 @@ import type {
   GetClientConfigStatusRequest,
   ManagedCredentialSummary,
   ProxyGitHttpRequest,
-  ProxyGitHttpResponse,
   RequestCredentialInputRequest,
   ResolveUrlBoundCredentialRequest,
   StoredCredentialSummary,
@@ -32,7 +31,6 @@ export type {
   GrantUrlBoundCredentialRequest,
   ManagedCredentialSummary,
   ProxyGitHttpRequest,
-  ProxyGitHttpResponse,
   RequestCredentialInputRequest,
   ResolveUrlBoundCredentialRequest,
   StoredCredentialLifecycle,
@@ -213,36 +211,51 @@ export function createGitHttpClient(
     async request(request) {
       const body = request.body ? await collectGitBody(request.body) : undefined;
       const forward = (credentialId: string | null | undefined) =>
-        rpc.call<ProxyGitHttpResponse>("main", "credentials.proxyGitHttp", [
-          {
-            url: request.url,
-            method: request.method ?? "GET",
-            headers: request.headers ?? {},
-            bodyBase64: body ? bytesToBase64(body) : undefined,
-            credentialId,
-            logicalCredential: opts?.logicalCredential,
-            gitIntent: opts?.gitIntent,
-          } satisfies ProxyGitHttpRequest,
-        ]);
+        rpc.stream(
+          "main",
+          "credentials.proxyGitHttp",
+          [
+            {
+              url: request.url,
+              method: request.method ?? "GET",
+              headers: request.headers ?? {},
+              bodyBase64: body ? bytesToBase64(body) : undefined,
+              credentialId,
+              logicalCredential: opts?.logicalCredential,
+              gitIntent: opts?.gitIntent,
+            } satisfies ProxyGitHttpRequest,
+          ],
+          { trafficClass: "bulk" }
+        );
       let result = await forward(
         opts?.credentialId === undefined && !opts?.logicalCredential ? null : opts?.credentialId
       );
       if (
         opts?.credentialId === undefined &&
         !opts?.logicalCredential &&
-        (result.statusCode === 401 || result.statusCode === 403)
+        (result.status === 401 || result.status === 403)
       ) {
+        await result.body?.cancel();
         result = await forward(undefined);
       }
-      const responseBody = base64ToBytes(result.bodyBase64);
       return {
-        url: result.url,
-        method: result.method,
-        statusCode: result.statusCode,
-        statusMessage: result.statusMessage,
-        headers: result.headers,
+        url: result.url || request.url,
+        method: request.method ?? "GET",
+        statusCode: result.status,
+        statusMessage: result.statusText,
+        headers: Object.fromEntries(result.headers.entries()),
         body: (async function* () {
-          yield responseBody;
+          if (!result.body) return;
+          const reader = result.body.getReader();
+          try {
+            while (true) {
+              const next = await reader.read();
+              if (next.done) return;
+              yield next.value;
+            }
+          } finally {
+            reader.releaseLock();
+          }
         })(),
       };
     },

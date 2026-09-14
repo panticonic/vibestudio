@@ -1,5 +1,3 @@
-import type { ProxyGitHttpResponse } from "@vibestudio/credential-client/types";
-
 export interface GitHttpTransportResponse {
   url: string;
   method: string;
@@ -9,14 +7,11 @@ export interface GitHttpTransportResponse {
   body: Uint8Array;
 }
 
-/** Convert the host transport response to the public, JSON-safe RPC shape. */
-export function serializeGitHttpResponse(response: GitHttpTransportResponse): ProxyGitHttpResponse {
-  return {
-    url: response.url,
-    method: response.method,
-    statusCode: response.statusCode,
-    statusMessage: response.statusMessage,
+/** Keep Git pack bytes on the streaming RPC lane instead of a control envelope. */
+export function createGitHttpResponse(response: GitHttpTransportResponse): Response {
+  return new Response(Buffer.from(response.body), {
+    status: response.statusCode,
+    statusText: response.statusMessage,
     headers: response.headers,
-    bodyBase64: Buffer.from(response.body).toString("base64"),
-  };
+  });
 }

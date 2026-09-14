@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
-import { serializeGitHttpResponse } from "./gitHttpRpc.js";
+import { createGitHttpResponse } from "./gitHttpRpc.js";
 
-describe("serializeGitHttpResponse", () => {
-  it("removes the binary transport body and emits the strict public RPC shape", () => {
-    const result = serializeGitHttpResponse({
+describe("createGitHttpResponse", () => {
+  it("keeps binary Git transport bodies on the streaming response", async () => {
+    const result = createGitHttpResponse({
       url: "https://example.test/repo.git/info/refs",
       method: "GET",
       statusCode: 200,
@@ -13,16 +13,11 @@ describe("serializeGitHttpResponse", () => {
       body: Uint8Array.from([0, 1, 2, 255]),
     });
 
-    expect(result).toEqual({
-      url: "https://example.test/repo.git/info/refs",
-      method: "GET",
-      statusCode: 200,
-      statusMessage: "OK",
-      headers: { "content-type": "application/x-git-upload-pack-advertisement" },
-      bodyBase64: "AAEC/w==",
-    });
+    expect(result.status).toBe(200);
+    expect(result.statusText).toBe("OK");
+    expect(result.headers.get("content-type")).toBe("application/x-git-upload-pack-advertisement");
+    expect(new Uint8Array(await result.arrayBuffer())).toEqual(Uint8Array.from([0, 1, 2, 255]));
     expect(credentialsMethods.proxyGitHttp.returns.safeParse(result).success).toBe(true);
-    expect(result).not.toHaveProperty("body");
   });
 
   it("accepts null as an explicit anonymous Git transport selection", () => {

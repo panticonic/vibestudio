@@ -553,15 +553,6 @@ export interface ProxyGitHttpRequest {
   };
 }
 
-export interface ProxyGitHttpResponse {
-  url: string;
-  method: string;
-  statusCode: number;
-  statusMessage: string;
-  headers: Record<string, string>;
-  bodyBase64: string;
-}
-
 export interface StoredCredentialSummary {
   id: string;
   label: string;

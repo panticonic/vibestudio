@@ -1,4 +1,5 @@
 import {
+  BRIDGE_STREAM_CHUNK_BYTES,
   rpcErrorDataOf,
   rpcErrorKindOf,
   stampEnvelopeCaller,
@@ -37,6 +38,18 @@ type EgressStreamProxy = Pick<
 >;
 
 type RelayAuthorization = { ok: true } | { ok: false; reason: string };
+
+async function emitBoundedBodyFrames(
+  bytes: Uint8Array,
+  emitFrame: (frame: StreamFrame) => Promise<void> | void
+): Promise<void> {
+  for (let offset = 0; offset < bytes.byteLength; offset += BRIDGE_STREAM_CHUNK_BYTES) {
+    await emitFrame({
+      kind: "chunk",
+      bytes: bytes.subarray(offset, Math.min(offset + BRIDGE_STREAM_CHUNK_BYTES, bytes.byteLength)),
+    });
+  }
+}
 
 type StreamContextExtras = Omit<
   ServiceContext,
@@ -811,7 +824,7 @@ export class StreamingRelay {
           const next = await reader.read();
           if (next.done) break;
           bytesIn += next.value.byteLength;
-          await emitFrame({ kind: "chunk", bytes: next.value });
+          await emitBoundedBodyFrames(next.value, emitFrame);
         }
       } catch (error) {
         if (signal?.aborted) return;
@@ -860,7 +873,7 @@ export class StreamingRelay {
           const next = await reader.read();
           if (next.done) break;
           bytesIn += next.value.byteLength;
-          await emitFrame({ kind: "chunk", bytes: next.value });
+          await emitBoundedBodyFrames(next.value, emitFrame);
         }
         assertOpen();
       } finally {
