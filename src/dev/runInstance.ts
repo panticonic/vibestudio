@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
+import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
@@ -217,7 +218,21 @@ async function runServer(
     readiness: {
       file: readyFile,
       async onReady(ready) {
-        const bootstrap = await bootstrapInstanceCli(ready);
+        // Which private workspace this instance's CLI opens is fixed when it
+        // pairs: the workspace installs the units its cases need, so it is a
+        // property of the instance rather than of a single command.
+        const configuredWorkspace = env[CLI_WORKSPACE_ENV]?.trim();
+        if (configuredWorkspace && !isCliWorkspaceSelection(configuredWorkspace)) {
+          throw new Error(
+            `${CLI_WORKSPACE_ENV} must name personal or system, not ${configuredWorkspace}`
+          );
+        }
+        const selectedWorkspace = isCliWorkspaceSelection(configuredWorkspace)
+          ? configuredWorkspace
+          : undefined;
+        const bootstrap = await bootstrapInstanceCli(ready, {
+          ...(selectedWorkspace ? { workspace: selectedWorkspace } : {}),
+        });
         publishDevInstanceReady(instance, bootstrap);
         if (bootstrap.status === "invite-required") {
           console.warn(

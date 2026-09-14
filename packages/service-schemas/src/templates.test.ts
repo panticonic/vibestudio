@@ -36,6 +36,7 @@ describe("templates contract", () => {
         presentation: { name: "Base", description: "Common source" },
         repositories: ["workers/agent"],
         files: ["README.md"],
+        dependencies: [],
       }).repositories
     ).toEqual(["workers/agent"]);
   });

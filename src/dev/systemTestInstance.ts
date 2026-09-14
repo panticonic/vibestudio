@@ -1,4 +1,9 @@
 import * as fs from "node:fs";
+import {
+  CLI_WORKSPACE_ENV,
+  isCliWorkspaceSelection,
+  type CliWorkspaceSelection,
+} from "./cliWorkspaceSelection.js";
 import { SYSTEM_TEST_INSTANCE_ENV } from "../server/systemTestInstanceMode.js";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -37,6 +42,8 @@ type LauncherArgs = {
   explicitInstance: boolean;
   persistent: boolean;
   selfDevelopment: boolean;
+  /** Which private workspace this instance's CLI opens; System by default. */
+  workspace?: CliWorkspaceSelection;
   command: string[];
 };
 
@@ -89,6 +96,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   let instanceId: string | undefined;
   let persistent = false;
   let selfDevelopment = false;
+  let workspace: CliWorkspaceSelection | undefined;
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -107,6 +115,18 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       if (!instanceId) throw new Error("--instance requires an id");
       continue;
     }
+    if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.startsWith("--workspace=")
+        ? arg.slice("--workspace=".length)
+        : argv[(index += 1)];
+      if (!value) throw new Error("--workspace requires personal or system");
+      if (workspace) throw new Error("--workspace may only be specified once");
+      if (!isCliWorkspaceSelection(value)) {
+        throw new Error(`--workspace must name personal or system, not ${value}`);
+      }
+      workspace = value;
+      continue;
+    }
     if (arg === "--persistent") {
       persistent = true;
       continue;
@@ -122,6 +142,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
     explicitInstance: instanceId !== undefined,
     persistent,
     selfDevelopment,
+    ...(workspace ? { workspace } : {}),
     command,
   };
 }
@@ -372,6 +393,8 @@ export async function ensureSystemTestInstance(
     persistent?: boolean;
     /** Serve the developer's own checkouts so their projects can be adopted. */
     selfDevelopment?: boolean;
+    /** Private workspace this instance's CLI pairs into; System by default. */
+    workspace?: CliWorkspaceSelection;
   } = {}
 ): Promise<EnsuredSystemTestInstance> {
   const repoRoot = canonicalRepoRoot(repoRootInput);
@@ -393,13 +416,10 @@ export async function ensureSystemTestInstance(
         })
       );
     }
-    spawnManagedInstance(
-      repoRoot,
-      instanceId,
-      outputFile,
-      options.persistent === true,
-      mirrorEnvironment
-    );
+    spawnManagedInstance(repoRoot, instanceId, outputFile, options.persistent === true, {
+      ...mirrorEnvironment,
+      ...(options.workspace ? { [CLI_WORKSPACE_ENV]: options.workspace } : {}),
+    });
     created = true;
     try {
       instance = await waitForRegistration(

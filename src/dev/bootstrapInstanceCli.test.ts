@@ -256,6 +256,78 @@ describe("bootstrapInstanceCliFromDevice", () => {
     });
   });
 
+  it("opens Personal when the instance selects it, not the account's default System", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-personal-"));
+    roots.push(root);
+    const credentialFile = path.join(root, "credentials.json");
+    const serverId = `srv_${"S".repeat(24)}`;
+    const serverBootId = `boot_${"B".repeat(24)}`;
+    const pairing = { ...reach("aa"), code: "D".repeat(21) + "A" };
+    const invite = {
+      ...pairing,
+      deepLink: createConnectDeepLink(pairing),
+      pairUrl: createConnectPairUrl(pairing),
+      expiresInMs: 2_000_000_000_000 - Date.now(),
+      expiresAt: 2_000_000_000_000,
+      serverId,
+      serverBootId,
+    };
+    const routed: unknown[] = [];
+    const rpcClient = vi.fn(() => ({
+      call: vi.fn(async (method: string, args: unknown[]) => {
+        if (method === "hubControl.ensureUserWorkspaces") {
+          return {
+            personal: { workspaceId: "ws_personal" },
+            system: { workspaceId: "ws_system" },
+          };
+        }
+        routed.push(args[0]);
+        return {
+          workspace: "personal-ws_personal",
+          workspaceId: "ws_personal",
+          running: true,
+          serverUrl: "http://127.0.0.1:5000/_r/ws/personal-ws_personal",
+          workspaceReach: reach("bb"),
+          serverId,
+          serverBootId,
+        };
+      }),
+      close: vi.fn(async () => undefined),
+    }));
+    const fetchMock = vi.fn(async () =>
+      Response.json({ deviceId: `dev_${"E".repeat(24)}`, refreshToken: "R".repeat(43) })
+    );
+
+    await expect(
+      bootstrapInstanceCli(
+        {
+          gatewayUrl: "http://127.0.0.1:5000",
+          serverId,
+          serverBootId,
+          workspaces: [],
+          mode: "hub",
+          rootInvite: invite,
+          gatewayPort: 5000,
+          pid: 1,
+          version: "0.1.33",
+          buildId: "a".repeat(64),
+        },
+        {
+          credentialFile,
+          workspace: "personal",
+          fetch: fetchMock as unknown as typeof fetch,
+          rpcClient,
+        }
+      )
+    ).resolves.toEqual({
+      status: "paired",
+      workspaceName: "personal-ws_personal",
+      workspaceId: "ws_personal",
+    });
+    expect(routed).toEqual([{ workspaceId: "ws_personal" }]);
+    expect(loadCliCredentials(credentialFile)).toMatchObject({ workspaceId: "ws_personal" });
+  });
+
   it("reuses the issued device credential when a cold workspace route times out once", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-bootstrap-retry-"));
     roots.push(root);

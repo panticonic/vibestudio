@@ -11,6 +11,7 @@ describe("templates client", () => {
       },
       repositories: [],
       files: [],
+      dependencies: [],
     });
     const locator = { url: "https://example.test/template.git" };
     await createTemplatesClient({ call }).inspect(locator);

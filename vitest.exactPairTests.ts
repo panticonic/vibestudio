@@ -11,7 +11,6 @@ export const exactPairTests = [
   "tests/workspacePackageGraph.test.ts",
   "packages/typecheck/src/userland-policy.test.ts",
   "packages/shared/src/channelEnvelopeSkillDocs.test.ts",
-  "src/server/productConduitPolicy.test.ts",
   "src/server/mobileMetroNativeBoundary.test.ts",
   "src/server/buildV2/builder.terminalWorker.test.ts",
   "src/server/buildV2/cdpClientBuild.test.ts",

@@ -28,6 +28,9 @@ export type DevCliBootstrapResult =
   | { status: "paired"; workspaceName: string; workspaceId: string }
   | { status: "invite-required" };
 
+/** Which of the account's private workspaces this device opens. */
+export type DevCliWorkspaceSelection = "personal" | "system";
+
 export interface DevCliPairingSponsor {
   gatewayUrl: string;
   serverId: string;
@@ -208,6 +211,7 @@ async function pairWithInvite(
     gatewayUrl: string;
     serverId: string;
     invite: HubPairingInvite;
+    workspace?: DevCliWorkspaceSelection;
   },
   credentialFile: string | undefined,
   deps: BootstrapDeps = {}
@@ -224,10 +228,12 @@ async function pairWithInvite(
     },
     deps
   );
-  // System is where the account's tooling lives — the system-test runner among
-  // it — and it is what a desktop client routes its own connection to, so a
-  // headless development CLI and an attached client see the same workspace.
-  const workspaceId = pair.system.workspaceId;
+  // System is where the account's tooling lives and what a desktop client
+  // routes its own connection to, so a headless development CLI and an
+  // attached client see the same workspace by default. Personal is a real
+  // choice, not a fallback: it installs different units, so it is the only
+  // place cases that need those units can run.
+  const workspaceId = pair[input.workspace ?? "system"].workspaceId;
   const route = await routeWorkspace(
     {
       gatewayUrl: input.gatewayUrl,
@@ -267,7 +273,10 @@ async function pairWithInvite(
  */
 export async function bootstrapInstanceCli(
   rawReady: unknown,
-  options: { credentialFile?: string } & BootstrapDeps = {}
+  options: {
+    credentialFile?: string;
+    workspace?: DevCliWorkspaceSelection;
+  } & BootstrapDeps = {}
 ): Promise<DevCliBootstrapResult> {
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
@@ -292,6 +301,7 @@ export async function bootstrapInstanceCli(
       gatewayUrl: ready.gatewayUrl,
       serverId: ready.serverId,
       invite: ready.rootInvite,
+      ...(options.workspace ? { workspace: options.workspace } : {}),
     },
     options.credentialFile,
     options

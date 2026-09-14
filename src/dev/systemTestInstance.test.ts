@@ -45,6 +45,23 @@ describe("self-provisioning system-test instance", () => {
       command: ["doctor", "--json"],
     });
     expect(
+      parseSystemTestLauncherArgs(["--workspace", "personal", "run", "browser-import"])
+    ).toEqual({
+      instanceId: "system-test",
+      explicitInstance: false,
+      persistent: false,
+      selfDevelopment: false,
+      workspace: "personal",
+      command: ["run", "browser-import"],
+    });
+    expect(parseSystemTestLauncherArgs(["--workspace=system", "list"]).workspace).toBe("system");
+    expect(() => parseSystemTestLauncherArgs(["--workspace", "project", "list"])).toThrow(
+      /personal or system/
+    );
+    expect(() =>
+      parseSystemTestLauncherArgs(["--workspace", "personal", "--workspace", "system", "list"])
+    ).toThrow(/only be specified once/);
+    expect(
       parseSystemTestLauncherArgs(["--instance", "self-development", "--persistent", "doctor"])
     ).toEqual({
       instanceId: "self-development",

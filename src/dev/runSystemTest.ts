@@ -24,7 +24,7 @@ import {
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 
-const HELP = `Usage: pnpm system-test [--instance ID] [--bootstrap-workspace NAME] COMMAND [ARGS...]
+const HELP = `Usage: pnpm system-test [--instance ID] [--workspace NAME] COMMAND [ARGS...]
 
 Self-provisions one isolated Vibestudio server for headless agentic acceptance.
 
@@ -40,6 +40,10 @@ Commands:
 
 Options:
   --instance ID                  Stable unique instance name (default: system-test)
+  --workspace personal|system    Private workspace this instance runs in (default: system).
+                                 Fixed when the instance pairs; cases naming units
+                                 the workspace does not install are reported
+                                 not-installed rather than run.
   --persistent                   Keep this instance's state across restarts
   --self-development             Adopt this checkout as projects/vibestudio
   -h, --help                     Show this help without starting infrastructure
@@ -177,6 +181,7 @@ async function main(): Promise<void> {
     explicitInstance: parsed.explicitInstance,
     persistent: parsed.persistent,
     ...(parsed.selfDevelopment ? { selfDevelopment: true } : {}),
+    ...(parsed.workspace ? { workspace: parsed.workspace } : {}),
   });
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = ensured.instance.root;
   process.env["VIBESTUDIO_INSTANCE"] = ensured.instance.id;
