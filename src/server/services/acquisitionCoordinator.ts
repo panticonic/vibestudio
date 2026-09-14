@@ -530,7 +530,6 @@ export class AcquisitionCoordinator {
       subject: request.targetSubject,
       constraints: {
         ...(missionSubject ? { missionSubject } : {}),
-        lineageAtConsent: [],
       },
       issuedBy,
       provenance: "acquisition",
@@ -1601,7 +1600,6 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.missionSubject === "-"
             ? { sessionId: input.snapshot.sessionId }
             : { missionSubject: input.snapshot.missionSubject }),
-          lineageAtConsent: [],
         },
         issuedBy: grantIssuer(input.caller),
         provenance: "acquisition",
@@ -1779,7 +1777,6 @@ export class AcquisitionCoordinator {
         ...(input.snapshot.sourceWorkspaceId
           ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
           : {}),
-        lineageAtConsent: [],
         ...(decision === "version" && input.snapshot.providerExecutionDigest !== "-"
           ? { providerExecutionDigest: input.snapshot.providerExecutionDigest }
           : {}),
@@ -1911,7 +1908,6 @@ function acquisitionRequestKey(input: AcquisitionRequestInput): string {
       taskRef: input.snapshot.taskRef ?? null,
       lineageClasses: [...(input.snapshot.lineageClasses ?? ["none"])].sort(),
       codeLineage: input.snapshot.codeLineage,
-      contextLineage: input.snapshot.contextLineage,
       presentation: input.presentation ?? null,
       substance: input.substance ?? null,
     }),
@@ -1971,7 +1967,7 @@ function cardTypeFor(input: AcquisitionRequestInput): AuthorityPromptCardType {
   return authorityPromptCardType({
     tier: input.tier,
     capability: input.snapshot.capability,
-    outsideContent: input.snapshot.contextLineage?.class === "external",
+    outsideContent: false,
   });
 }
 
@@ -1981,8 +1977,7 @@ function tierForGroup(inputs: readonly AcquisitionRequestInput[]): "gated" | "cr
 
 function cardTypeForGroup(inputs: readonly AcquisitionRequestInput[]): AuthorityPromptCardType {
   if (tierForGroup(inputs) === "critical") return "confirm.critical";
-  const outside = inputs.find((input) => input.snapshot.contextLineage?.class === "external");
-  return cardTypeFor(outside ?? validateAcquisitionGroup(inputs));
+  return cardTypeFor(validateAcquisitionGroup(inputs));
 }
 
 function authorityRowForAcquisition(input: AcquisitionRequestInput) {

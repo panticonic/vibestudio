@@ -27,7 +27,6 @@ export type {
   AuthorityGrant,
   AuthorityRequirement,
   CapabilityScope,
-  ContextIntegrityFact,
   ExecutionAdmissionFact,
   AttachedHostExecutionFact,
   LiveWorkspaceRelationship,
@@ -480,21 +479,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         standing: denied.constraints?.sessionId === undefined,
       };
     }
-    const lineageRejected = tierCandidates.some(
-      (grant) => grant.effect === "allow" && !lineageAtConsentCovers(grant, input.context)
-    );
-    const allowed = tierCandidates.find(
-      (grant) => grant.effect === "allow" && lineageAtConsentCovers(grant, input.context)
-    );
-    if (!allowed && lineageRejected) {
-      return {
-        allowed: false,
-        code: "approval-required",
-        reason: `${principal} has authority, but new outside content entered the session`,
-        requirement,
-        principal,
-      };
-    }
+    const allowed = tierCandidates.find((grant) => grant.effect === "allow");
     return {
       allowed: Boolean(allowed),
       code: allowed ? "allowed" : "approval-required",
@@ -634,10 +619,10 @@ function builtinRelationship(
         repoPath && (value.endsWith("/") ? repoPath.startsWith(value) : repoPath === value)
       );
     }
-    case "context-integrity":
-      return context.contextIntegrity?.class !== "external";
     case "closure-internal":
       // Only the receiver's attested-chain relation resolver can satisfy this.
+      return false;
+    default:
       return false;
   }
 }
@@ -769,35 +754,6 @@ function grantConstraintsMatch(
   return true;
 }
 
-function lineageAtConsentCovers(grant: AuthorityGrant, context: AuthorizationContext): boolean {
-  const integrity = context.contextIntegrity;
-  // P3 interim semantics: no latch fact means no lineage gate yet.
-  if (!integrity || integrity.class === "not-applicable") return true;
-  const consented = new Set(grant.constraints?.lineageAtConsent ?? []);
-  return lineageClasses(integrity).every((lineageClass) => consented.has(lineageClass));
-}
-
-export function lineageClasses(
-  integrity: import("@vibestudio/rpc").ContextIntegrityFact
-): readonly string[] {
-  if (integrity.class !== "external") return ["none"];
-  const classes = new Set<string>();
-  for (const key of integrity.externalKeys) {
-    const prefix = key.split(":", 1)[0]?.toLowerCase();
-    classes.add(
-      prefix === "web" || prefix === "email" || prefix === "channel"
-        ? prefix === "channel"
-          ? "channel-external"
-          : prefix
-        : "external"
-    );
-    // A source class explains the risk; the exact source preserves the consent
-    // boundary. Reading a second website or channel therefore requires a
-    // visible delta even when it belongs to the same broad class.
-    classes.add(`source:${key}`);
-  }
-  return [...classes].sort();
-}
 
 /**
  * Structural well-formedness only.

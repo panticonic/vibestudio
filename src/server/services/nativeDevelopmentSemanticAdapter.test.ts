@@ -21,10 +21,6 @@ const ingress = {
     logId: "trajectory:development",
     head: "head:development",
   },
-  contextIntegrity: {
-    class: "external" as const,
-    externalKeys: ["upstream:file"],
-  },
 };
 
 describe("createNativeDevelopmentSemanticAdapter", () => {
@@ -59,8 +55,7 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
           applicationId: "application:dirty",
         },
       }),
-      ingress.causalParent,
-      ingress.contextIntegrity
+      ingress.causalParent
     );
   });
 
@@ -124,14 +119,7 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
         ],
         message: "Native development checkpoint snapshot-revision-1",
       },
-      ingress.causalParent,
-      {
-        class: "external",
-        externalKeys: [
-          `native-development-snapshot:${descriptor.descriptorDigest}`,
-          "upstream:file",
-        ],
-      }
+      ingress.causalParent
     );
   });
 

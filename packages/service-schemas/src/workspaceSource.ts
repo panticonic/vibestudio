@@ -1248,16 +1248,9 @@ const semanticCausalParentSchema = z
     invocationId: z.string().min(1),
   })
   .strict();
-const semanticContextIntegritySchema = z
-  .object({
-    class: z.enum(["internal", "external"]),
-    externalKeys: z.array(z.string()),
-  })
-  .strict();
 const semanticIngressSchema = z
   .object({
     causalParent: semanticCausalParentSchema.nullable(),
-    contextIntegrity: semanticContextIntegritySchema,
   })
   .strict();
 const semanticEffectSchema = z

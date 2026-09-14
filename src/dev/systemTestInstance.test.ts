@@ -86,6 +86,7 @@ describe("self-provisioning system-test instance", () => {
       systemTestInstanceEnvironment({ VIBESTUDIO_IROH_RELAYS: "https://stale.invalid/" })
     ).toEqual({
       VIBESTUDIO_IROH_RELAYS: DEFAULT_IROH_RELAYS.join(","),
+      VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1",
     });
   });
 

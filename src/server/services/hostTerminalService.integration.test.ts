@@ -23,7 +23,6 @@ it("runs an approved real PTY with host access outside its initial directory", a
     args: [script, canary],
     cwd,
     environment: { ...process.env },
-    recordContextIngestion: async () => {},
   });
   const connection = new AbortController();
   const ctx: ServiceContext = {

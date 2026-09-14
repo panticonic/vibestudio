@@ -71,7 +71,6 @@ describe("grant scope inference", () => {
       subject: "user:usr_alice",
       capability: "permissions.read",
       resource: { kind: "exact", key: "permissions.read" },
-      constraints: { lineageAtConsent: [] },
       issuedBy: "user:usr_alice",
       provenance: "acquisition",
     });

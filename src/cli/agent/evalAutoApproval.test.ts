@@ -45,7 +45,6 @@ function capabilityApproval(input: {
       missionSubject: "-",
       snippetDigest: "snippet-1",
       codeLineage: { class: "internal", chain: [] },
-      contextLineage: { class: "internal", latchEpoch: 1, externalKeys: [] },
       initiatorChain: input.initiatorChain ?? ["user:u1"],
       ...(input.taskRef ? { taskRef: input.taskRef } : {}),
       ...(input.taskAuthority ? { taskAuthority: input.taskAuthority } : {}),

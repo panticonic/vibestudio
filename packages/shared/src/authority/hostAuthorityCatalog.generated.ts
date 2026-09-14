@@ -2247,125 +2247,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "contentTrust.addPolicy": {
-    tier: {
-      tier: "critical",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "contentTrust.control",
-      rationale:
-        "A future-content trust policy changes the authority meaning of content that has not yet been observed",
-    },
-    capability: "content.trust.policy.manage",
-    presentation: {
-      title: "Always allow matching outside content",
-      action: "skip reviews for outside content matching a pattern",
-      description: "Automatically allow future outside content from the same source.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "contentTrust.list": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "contentTrust.read",
-      rationale: "Human governance read; sessions cannot inspect the workspace trust ledger",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "contentTrust.revoke": {
-    tier: {
-      tier: "critical",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "contentTrust.retire",
-      rationale:
-        "Revocation changes which external content may enter future internal-context sessions",
-    },
-    capability: "content.trust.policy.manage",
-    presentation: {
-      title: "Undo a content safety decision",
-      action: "remove a previous decision about outside content",
-      description: "Undo a decision you made about outside content, so it will be reviewed again.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "contentTrust.status": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "contentTrust.control",
-      rationale: "Human governance read of the one-way context-integrity cutover",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "contentTrust.vouch": {
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "contentTrust.control",
-      rationale: "An exact content-addressed vouch changes future context classification",
-    },
-    capability: "content.trust.vouch",
-    presentation: {
-      title: "Remember this outside content as safe",
-      action: "mark this exact outside content as safe",
-      description: "Remember this outside content so it won't need review again.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "contextIntegrity.explain": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "grant-authority",
-      family: "contextIntegrity.control",
-      rationale:
-        "A session may inspect bounded verified lineage for its own monotone ingestion latch",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "contextIntegrity.fact": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "grant-authority",
-      family: "contextIntegrity.control",
-      rationale: "A session may inspect its own monotone ingestion latch",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "contextIntegrity.ingest": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "grant-authority",
-      family: "contextIntegrity.control",
-      rationale:
-        "A session may only tighten its own context classification through a registered chokepoint",
-    },
-    capability: null,
-    presentation: null,
-  },
   "corsApproval.authorize": {
     tier: {
       tier: "open",
@@ -8928,14 +8809,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "computer",
     verb: "manage",
   },
-  "content.trust.policy.manage": {
-    domain: "safety",
-    verb: "manage",
-  },
-  "content.trust.vouch": {
-    domain: "safety",
-    verb: "manage",
-  },
   "context.clone": {
     domain: "files",
     verb: "act",
@@ -9407,26 +9280,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "accounts",
     authorityCategory: {
       domain: "computer",
-      verb: "manage",
-    },
-  },
-  "content.trust.policy.manage": {
-    title: "Always allow matching outside content",
-    action: "skip reviews for outside content matching a pattern",
-    description: "Automatically allow future outside content from the same source.",
-    group: "approvals",
-    authorityCategory: {
-      domain: "safety",
-      verb: "manage",
-    },
-  },
-  "content.trust.vouch": {
-    title: "Remember this outside content as safe",
-    action: "mark this exact outside content as safe",
-    description: "Remember this outside content so it won't need review again.",
-    group: "approvals",
-    authorityCategory: {
-      domain: "safety",
       verb: "manage",
     },
   },

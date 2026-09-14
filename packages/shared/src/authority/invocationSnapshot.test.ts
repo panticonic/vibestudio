@@ -18,7 +18,6 @@ const base = () =>
     missionSubject: "-",
     snippetDigest: "a".repeat(64),
     codeLineage: { class: "internal", chain: ["repo:x@y"] },
-    contextLineage: { class: "external", latchEpoch: 2, externalKeys: ["web:example.com"] },
     initiatorChain: ["user:u", "session:conversation-1"],
     at: 1,
   });
@@ -44,11 +43,6 @@ describe("invocation snapshot", () => {
       ...left,
       callerPrincipal: "session:conversation-2" as const,
       sessionId: "conversation-2",
-      contextLineage: {
-        class: "external" as const,
-        latchEpoch: 9,
-        externalKeys: ["web:other.test"],
-      },
       initiatorChain: ["user:other"],
       at: 999,
     };

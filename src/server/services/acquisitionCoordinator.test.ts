@@ -29,7 +29,6 @@ function snapshot() {
     missionSubject: "-",
     snippetDigest: "a".repeat(64),
     codeLineage: { class: "internal", chain: [] },
-    contextLineage: { class: "internal", latchEpoch: 0, externalKeys: [] },
     initiatorChain: ["user:u"],
   });
 }
@@ -337,120 +336,6 @@ describe("AcquisitionCoordinator", () => {
     );
     expect(grantStore.grantsForSubjects([targetSubject], "panel.inspect")).toEqual([]);
     targetRequests.close();
-    grantStore.close();
-  });
-
-  it("expands aggregate lineage for people while preserving its exact consent identity", async () => {
-    const grantStore = new CapabilityGrantStore({
-      statePath: mkdtempSync(join(tmpdir(), "authority-source-delta-")),
-    });
-    const task = `task:${"e".repeat(64)}` as const;
-    for (const [capability, key] of [["notification.show", "user:alice"]] as const) {
-      for (let duplicate = 0; duplicate < 2; duplicate += 1) {
-        grantStore.issue({
-          effect: "allow",
-          capability,
-          resource: { kind: "exact", key },
-          subject: task,
-          constraints: {
-            lineageAtConsent: [`source:lineage-set:${(duplicate === 0 ? "8" : "9").repeat(64)}`],
-          },
-          issuedBy: "user:alice",
-          provenance: "acquisition",
-          scope: "task",
-        });
-      }
-    }
-    let resolveReview!: (value: { decision: "task"; selectedAuthorityFacetKeys: string[] }) => void;
-    const resolution = new Promise<{
-      decision: "task";
-      selectedAuthorityFacetKeys: string[];
-    }>((resolve) => {
-      resolveReview = resolve;
-    });
-    const requestWithHandle = vi.fn(
-      (request: {
-        authorityFacets: Array<{ selectionKey: string; capability: string }>;
-        description: string;
-      }) => ({
-        approvalId: "approval:source",
-        decision: resolution.then((value) => value.decision),
-        resolution,
-        request,
-      })
-    );
-    const coordinator = new AcquisitionCoordinator({
-      approvalQueue: { requestWithHandle } as never,
-      grantStore,
-      expandLineageKeys: (keys) => {
-        if (keys.length === 0) return [];
-        if (keys[0] === `lineage-set:${"8".repeat(64)}`) return ["web:trello.com"];
-        expect(keys).toEqual([`lineage-set:${"9".repeat(64)}`]);
-        return ["web:trello.com", "web:docs.example.com"];
-      },
-    });
-    const snap = {
-      ...snapshot(),
-      capability: "panel.inspect",
-      resourceKey: "panel:task-board",
-      taskAuthority: task,
-      lineageClasses: ["web", `source:lineage-set:${"9".repeat(64)}`],
-      contextLineage: {
-        class: "external" as const,
-        latchEpoch: 1,
-        externalKeys: [`lineage-set:${"9".repeat(64)}`],
-      },
-    };
-    const outcome = coordinator.requestAndWait({
-      snapshot: snap,
-      snapshotDigest: invocationSnapshotDigest(snap),
-      tier: "gated",
-      caller: createVerifiedCaller("agent:source", "agent", null),
-      renderedAction: "inspect the task board",
-      resource: { kind: "exact", key: "panel:task-board" },
-      presentation: reviewedPresentation(),
-    });
-    await vi.waitFor(() => expect(requestWithHandle).toHaveBeenCalledTimes(1));
-    const card = requestWithHandle.mock.calls[0]![0];
-    expect(card).toMatchObject({ cardType: "task.rules" });
-    expect(card.description).toContain("docs.example.com");
-    expect(card.description).not.toContain("trello.com");
-    expect(card.description).toContain("has not been allowed for this task yet");
-    expect(card.description).not.toContain("lineage-set:");
-    expect(card.authorityFacets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ capability: "panel.inspect", defaultSelected: true }),
-        expect.objectContaining({ capability: "notification.show", defaultSelected: false }),
-      ])
-    );
-    expect(
-      card.authorityFacets.filter(
-        (facet: { capability: string }) => facet.capability === "notification.show"
-      )
-    ).toHaveLength(1);
-    resolveReview({
-      decision: "task",
-      selectedAuthorityFacetKeys: [
-        card.authorityFacets.find((facet) => facet.capability === "panel.inspect")!.selectionKey,
-        card.authorityFacets.find((facet) => facet.capability === "notification.show")!
-          .selectionKey,
-      ],
-    });
-    await expect(outcome).resolves.toMatchObject({ state: "decided", decision: "task" });
-    await vi.waitFor(() =>
-      expect(
-        grantStore
-          .grantsForSubjects([task], "panel.inspect")
-          .some((grant) =>
-            grant.constraints?.lineageAtConsent?.includes(`source:lineage-set:${"9".repeat(64)}`)
-          )
-      ).toBe(true)
-    );
-    const updatedNotifications = grantStore.grantsForSubjects([task], "notification.show");
-    expect(updatedNotifications).toHaveLength(1);
-    expect(updatedNotifications[0]?.constraints?.lineageAtConsent).toContain(
-      `source:lineage-set:${"9".repeat(64)}`
-    );
     grantStore.close();
   });
 

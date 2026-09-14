@@ -62,7 +62,6 @@ import {
   bindMethodCapability,
   evaluateAuthority,
   requirementForPrincipals,
-  lineageClasses,
   scopeCovers,
 } from "./authorization.js";
 import { capabilityPatternCovers } from "./authorityManifest.js";
@@ -408,12 +407,6 @@ export type ServiceContext = {
    * can never populate this field.
    */
   attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
-  /**
-   * Invocation-scoped outside lineage inherited from a host-verified ingress
-   * or exact active authority parent. Boundary code owns this field; service
-   * arguments and wire metadata can never populate it.
-   */
-  inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact;
   /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;
@@ -1931,9 +1924,6 @@ export class ServiceDispatcher {
               agentName: resolved.context.executionSession.agentBinding.entityId,
             }
           : {}),
-        lineageClasses: resolved.context.contextIntegrity
-          ? lineageClasses(resolved.context.contextIntegrity)
-          : ["none"],
         irreversible: receiverPolicy.irreversible,
         agentScopeEligible: standingAgentScopeEligible({
           capability,
@@ -1964,7 +1954,6 @@ export class ServiceDispatcher {
               chain: resolved.context.executingCode.sourceLineage.externalKeys,
             }
           : { class: "unknown", chain: [] },
-        contextLineage: resolved.context.contextIntegrity,
         initiatorChain: resolved.context.initiatorChain,
       });
       const snapshotDigest = invocationSnapshotDigest(snapshot);
@@ -2224,9 +2213,7 @@ export class ServiceDispatcher {
               cardType:
                 tier === "critical"
                   ? "confirm.critical"
-                  : resolved.context.contextIntegrity?.class === "external"
-                    ? "permission.outside"
-                    : "permission.gated",
+                  : "permission.gated",
               renderedAction,
             },
             acquisition: { input: acquisitionInput, context: resolved.context },
@@ -2353,9 +2340,7 @@ export class ServiceDispatcher {
           cardType:
             tier === "critical"
               ? "confirm.critical"
-              : resolved.context.contextIntegrity?.class === "external"
-                ? "permission.outside"
-                : "permission.gated",
+              : "permission.gated",
           renderedAction,
           pending: false,
         };

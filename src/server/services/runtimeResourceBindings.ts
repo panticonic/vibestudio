@@ -14,7 +14,6 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 export const RUNTIME_RESOURCE_BINDING_SURFACE = "runtime-resource-binding";
 const ISSUER = "host:vibestudio";
-const LINEAGE_CLASSES = ["channel-external", "email", "external", "none", "web"] as const;
 const QUICKFIRE_SOURCE = "workers/quickfire-service";
 const WORKSPACE_DIAGNOSTICS_RESOURCE = {
   kind: "workspace-diagnostics",
@@ -163,7 +162,7 @@ export async function prepareRuntimeResourceBindings(
           resource: ResourceScope;
           subject: AuthorityGrant["subject"];
           scope: AuthorityGrant["scope"];
-          constraints: NonNullable<AuthorityGrant["constraints"]>;
+          constraints?: AuthorityGrant["constraints"];
         }>;
       }> = [];
       for (const { binding, panel } of resolved) {
@@ -193,7 +192,7 @@ export async function prepareRuntimeResourceBindings(
           resource: ResourceScope;
           subject: AuthorityGrant["subject"];
           scope: AuthorityGrant["scope"];
-          constraints: NonNullable<AuthorityGrant["constraints"]>;
+          constraints?: AuthorityGrant["constraints"];
         }> = panel
           ? [
               {
@@ -203,7 +202,6 @@ export async function prepareRuntimeResourceBindings(
                 scope: "session",
                 constraints: {
                   sessionId: binding.scope.channelId,
-                  lineageAtConsent: [...LINEAGE_CLASSES],
                 },
               },
               {
@@ -211,7 +209,6 @@ export async function prepareRuntimeResourceBindings(
                 resource: { kind: "exact", key: binding.resource.id },
                 subject: `agent:${record.id}@${record.contextId}`,
                 scope: "agent",
-                constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
               },
             ]
           : [
@@ -220,7 +217,6 @@ export async function prepareRuntimeResourceBindings(
                 resource: { kind: "prefix", prefix: "" },
                 subject: `agent:${record.id}@${record.contextId}`,
                 scope: "agent",
-                constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
               },
             ];
         if (panel && declares(record, "context.boundary")) {
@@ -234,7 +230,6 @@ export async function prepareRuntimeResourceBindings(
             scope: "session",
             constraints: {
               sessionId: binding.scope.channelId,
-              lineageAtConsent: [...LINEAGE_CLASSES],
             },
           });
           resources.push({
@@ -245,7 +240,6 @@ export async function prepareRuntimeResourceBindings(
             },
             subject: `agent:${record.id}@${record.contextId}`,
             scope: "agent",
-            constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
           });
         }
         preparedGrants.push({ shared, resources });

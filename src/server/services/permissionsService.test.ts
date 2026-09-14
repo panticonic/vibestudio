@@ -125,7 +125,6 @@ describe("permissions service", () => {
           scope: documentId ? "session" : "system",
           constraints: {
             sourceWorkspaceId: subject.workspaceId,
-            lineageAtConsent: [],
             subjectGeneration: subject.generation,
             ...(documentId ? { documentId } : {}),
           },
@@ -186,7 +185,6 @@ describe("permissions service", () => {
       subject: "agent:do:workers/agent-worker:assistant@context-1",
       constraints: {
         agentBindingId: "do:workers/agent-worker:assistant@context-1",
-        lineageAtConsent: ["none"],
       },
       issuedBy: "user:usr_123456789012345678901234",
       decidedBy: "user:usr_123456789012345678901234",

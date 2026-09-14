@@ -61,7 +61,6 @@ export function stateLayout(statePath: string) {
     governance: {
       root: path.join(statePath, "governance"),
       missionsDb: path.join(statePath, "governance", "missions.db"),
-      contentTrustDb: path.join(statePath, "governance", "content-trust.db"),
     },
     databases: {
       root: databases,

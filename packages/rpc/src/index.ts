@@ -90,7 +90,6 @@ export type {
   AuthorityRequirement,
   CapabilityScope,
   CodeLineageFact,
-  ContextIntegrityFact,
   EntityPrincipal,
   LiveWorkspaceRelationship,
   Principal,

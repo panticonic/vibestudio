@@ -11,7 +11,6 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { serverLogMethods } from "@vibestudio/service-schemas/serverLog";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { ServerLogRecord, ServerLogStore } from "./serverLogStore.js";
 
 const STREAM_BATCH_MS = 100;
@@ -23,7 +22,6 @@ export function createServerLogService(deps: {
   workspaceId: string;
   serverBootId: string;
   startedAt: number;
-  recordContextIngestion?: ContextIngestionRecorder;
 }): ServiceDefinition & { stop: () => void } {
   // Batch appended records so a chatty burst becomes one event frame.
   let pending: ServerLogRecord[] = [];
@@ -64,26 +62,12 @@ export function createServerLogService(deps: {
     authority: { principals: ["user", "code", "host"] },
     methods: serverLogMethods,
     handler: defineServiceHandler("serverLog", serverLogMethods, {
-      query: async (ctx, [query]) => {
+      query: async (_ctx, [query]) => {
         const result = envelope(deps.store.query(query ?? {}));
-        if (result.records.length > 0) {
-          await deps.recordContextIngestion?.(ctx, {
-            key: "log:server",
-            via: "server-log:query",
-            classification: "external",
-          });
-        }
         return result;
       },
-      tail: async (ctx, [limit]) => {
+      tail: async (_ctx, [limit]) => {
         const result = envelope(deps.store.tail(limit));
-        if (result.records.length > 0) {
-          await deps.recordContextIngestion?.(ctx, {
-            key: "log:server",
-            via: "server-log:tail",
-            classification: "external",
-          });
-        }
         return result;
       },
       stats: () => deps.store.stats(),

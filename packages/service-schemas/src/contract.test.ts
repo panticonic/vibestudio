@@ -25,8 +25,6 @@ import { browserVaultNativeMethods } from "./browserVaultNative.js";
 import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
-import { contentTrustMethods } from "./contentTrust.js";
-import { contextIntegrityMethods } from "./contextIntegrity.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
@@ -130,12 +128,6 @@ const serviceTables: ServiceTable[] = [
   },
   { service: "build", file: "build.ts", methods: buildMethods },
   { service: "channel", file: "channel.ts", methods: channelMethods },
-  { service: "contentTrust", file: "contentTrust.ts", methods: contentTrustMethods },
-  {
-    service: "contextIntegrity",
-    file: "contextIntegrity.ts",
-    methods: contextIntegrityMethods,
-  },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },

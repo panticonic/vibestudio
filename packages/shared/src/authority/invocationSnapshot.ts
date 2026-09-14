@@ -49,9 +49,6 @@ export function createInvocationSnapshot(input: InvocationSnapshotInput): Invoca
       class: input.codeLineage.class,
       chain: [...input.codeLineage.chain],
     },
-    contextLineage: input.contextLineage
-      ? { ...input.contextLineage, externalKeys: [...input.contextLineage.externalKeys] }
-      : null,
     initiatorChain: [...input.initiatorChain],
     at: input.at ?? Date.now(),
   };

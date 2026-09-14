@@ -201,7 +201,6 @@ export function createTestDirectAuthority(input: {
     testPolicy: null,
     workspace: { workspaceId: "test", member: true, role: "member", revision: "test" },
     session: { id: "test", audience, version: "1", expiresAt: now + 60_000 },
-    contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
   return {
     audience,
@@ -232,7 +231,6 @@ export function createTestDirectAuthority(input: {
         issuedBy: "test-fixture",
         createdAt: now,
         constraints: {
-          lineageAtConsent: [],
           ...(invocationDigest ? { invocationDigest } : {}),
         },
         provenance: invocationDigest ? "critical-confirmation" : "explicit-test-fixture",

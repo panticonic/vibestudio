@@ -5,20 +5,13 @@ import {
   vcsImportSnapshotResultSchema,
 } from "@vibestudio/service-schemas/vcs";
 import type { RpcCausalParent } from "@vibestudio/rpc";
-import type {
-  NativeDevelopmentSemanticAdapter,
-  NativeDevelopmentSemanticIngress,
-} from "./nativeDevelopmentExecutor.js";
+import type { NativeDevelopmentSemanticAdapter } from "./nativeDevelopmentExecutor.js";
 
 export interface NativeDevelopmentSemanticCausalPort {
   semanticCausalCall(
     method: string,
     input: unknown,
-    causalParent: RpcCausalParent | null,
-    contextIntegrity: {
-      class: "internal" | "external";
-      externalKeys: readonly string[];
-    }
+    causalParent: RpcCausalParent | null
   ): Promise<unknown>;
 }
 
@@ -46,12 +39,7 @@ export function createNativeDevelopmentSemanticAdapter(
         message: input.message,
       });
       const result = vcsCommitResultSchema.parse(
-        await workspaceVcs.semanticCausalCall(
-          "vcsCommit",
-          request,
-          input.ingress.causalParent,
-          input.ingress.contextIntegrity
-        )
+        await workspaceVcs.semanticCausalCall("vcsCommit", request, input.ingress.causalParent)
       );
       if (result.contextId !== input.developmentContextId || result.event.kind !== "event") {
         throw coded("EINTEGRITY", "Native development base commit returned the wrong context");
@@ -93,16 +81,11 @@ export function createNativeDevelopmentSemanticAdapter(
         ],
         message: `Native development checkpoint ${input.descriptor.source.snapshotRevision}`,
       });
-      const integrity = externalCheckpointIntegrity(
-        input.ingress,
-        input.descriptor.descriptorDigest
-      );
       const result = vcsImportSnapshotResultSchema.parse(
         await workspaceVcs.semanticCausalCall(
           "vcsImportSnapshot",
           request,
-          input.ingress.causalParent,
-          integrity
+          input.ingress.causalParent
         )
       );
       if (
@@ -122,21 +105,6 @@ export function createNativeDevelopmentSemanticAdapter(
       }
       return result;
     },
-  };
-}
-
-function externalCheckpointIntegrity(
-  ingress: NativeDevelopmentSemanticIngress,
-  descriptorDigest: string
-): { class: "external"; externalKeys: readonly string[] } {
-  return {
-    class: "external",
-    externalKeys: [
-      ...new Set([
-        ...ingress.contextIntegrity.externalKeys,
-        `native-development-snapshot:${descriptorDigest}`,
-      ]),
-    ].sort(),
   };
 }
 

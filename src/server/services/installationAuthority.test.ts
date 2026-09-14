@@ -76,7 +76,6 @@ describe("host-attested installation continuity", () => {
       constraints: {
         subjectGeneration: 0,
         sourceWorkspaceId: workspaceId,
-        lineageAtConsent: [],
       },
     };
     try {

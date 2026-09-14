@@ -664,14 +664,6 @@ export const invocationSnapshotSchema = z
         chain: z.array(z.string()).readonly(),
       })
       .strict(),
-    contextLineage: z
-      .object({
-        class: z.enum(["internal", "external", "not-applicable"]),
-        latchEpoch: z.number(),
-        externalKeys: z.array(z.string()).readonly(),
-      })
-      .strict()
-      .nullable(),
     initiatorChain: z.array(z.string()).readonly(),
     executionMode: z.enum(["interactive", "mission", "test"]).optional(),
     testPolicyId: z.string().optional(),

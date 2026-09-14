@@ -124,7 +124,6 @@ function approvalSnapshot(overrides: Partial<InvocationSnapshot> = {}): Invocati
     missionSubject: "-",
     snippetDigest: "d".repeat(64),
     codeLineage: { class: "internal", chain: [] },
-    contextLineage: null,
     initiatorChain: ["agent:runtime-1"],
     at: 1_000_000,
     ...overrides,

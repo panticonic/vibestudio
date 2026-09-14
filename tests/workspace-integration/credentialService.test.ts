@@ -997,11 +997,6 @@ describe("credentialService", () => {
             version: "1",
             expiresAt: Date.now() + 60_000,
           },
-          contextIntegrity: {
-            class: "not-applicable",
-            latchEpoch: 0,
-            externalKeys: [],
-          },
         } satisfies NonNullable<ServiceContext["authorization"]>,
       },
       "resolveCredential",

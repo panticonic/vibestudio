@@ -152,20 +152,6 @@ Authority principals: `code`, `host`, `user`
 | `chromiumFetch.read` | Read an owner-bound chunk from an open Chromium response. |
 | `chromiumFetch.close` | Close an owner-bound Chromium response. |
 
-## `contentTrust`
-
-Human-owned exact content vouches and bounded trust policies
-
-Authority principals: `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `contentTrust.status` | Report whether the context-integrity cutover is active. |
-| `contentTrust.list` | List exact content vouches and future-content trust policies. |
-| `contentTrust.vouch` | Trust one exact content-addressed lineage key. |
-| `contentTrust.addPolicy` | Trust future versions from one exact package name or repository remote. |
-| `contentTrust.revoke` | Revoke an exact content vouch or trust policy for future resolutions. |
-
 ## `credentials`
 
 URL-bound userland credential storage and egress

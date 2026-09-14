@@ -63,8 +63,6 @@ import {
   workspaceUnitDeclarationFingerprint,
 } from "./workspaceUnitDeclarationFingerprint.js";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
-import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
-import { joinContextIntegrity } from "@vibestudio/shared/authority/contextIntegrity";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { hostBuildOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
 import { WorkspaceRpcMethodUndeclaredError } from "./workspaceRpcCatalogMismatch.js";
@@ -74,12 +72,8 @@ import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/s
 import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
-  TEMPLATE_SOURCE_MANIFEST_PATH,
 } from "@vibestudio/workspace/templateCoordinates";
-import {
-  hostDesignatedTemplateUrls,
-  readDefaultWorkspaceTemplates,
-} from "@vibestudio/workspace/baseTemplateRelease";
+import { hostDesignatedTemplateUrls } from "@vibestudio/workspace/baseTemplateRelease";
 import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
@@ -961,19 +955,12 @@ async function main() {
     executionIsActive: (runtimeId, authority) =>
       agentExecutionSessions.resolve(runtimeId)?.taskAuthority === authority,
   });
-  const {
-    ContextIntegrityStore,
-    createContextIngestionBatchRecorder,
-    createContextIngestionRecorder,
-    recordContextIngestionForCaller,
-  } = await import("./services/contextIntegrityStore.js");
-  const contextIntegrityStore = new ContextIntegrityStore({ statePath });
-  const recordContextIngestion = createContextIngestionRecorder(contextIntegrityStore);
-  const recordContextIngestionBatch = createContextIngestionBatchRecorder(contextIntegrityStore);
-  const { ConduitBlessingStore } = await import("./services/conduitBlessingStore.js");
-  const conduitBlessingStore = new ConduitBlessingStore({ statePath });
-  const { authorizeVerifiedCaller, isAttestedSystemTestHarness, isBlessedSystemTestConduit } =
-    await import("./services/authorityRuntime.js");
+  const { readSystemTestInstanceMode } = await import("./systemTestInstanceMode.js");
+  // Read once, from the environment this process started in. Harness-only
+  // seams and unattended test policies are admitted on a server a developer
+  // started to run tests, and nowhere else.
+  const systemTestInstance = readSystemTestInstanceMode();
+  const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
   // Exact root bootstrap may run while services are starting, before the
   // dispatcher can be marked fully initialized. Install the one compositional
   // resolver as soon as all of its
@@ -981,14 +968,6 @@ async function main() {
   // markInitialized() after every service has registered.
   dispatcher.setAuthorityResolver(({ ctx, caller, service, capability, resourceKey, tier }) => {
     const sessionId = caller.executionSession?.authoritySessionId ?? caller.runtime.id;
-    const sessionOrigin = caller.executionSession !== undefined;
-    const conduitBlessed = Boolean(
-      caller.code?.executionDigest &&
-      conduitBlessingStore.isBlessed(caller.code) &&
-      caller.executionSession &&
-      caller.executionSession.executionImage.executionDigest === caller.code.executionDigest &&
-      caller.executionSession.executionImage.principal === codePrincipal(caller.code)
-    );
     return {
       ...authorizeVerifiedCaller(caller, {
         initiatingWebsite: verifiedInitiator(ctx).website,
@@ -1000,16 +979,6 @@ async function main() {
         capability,
         resourceKey,
         tier,
-        contextIntegrity: joinContextIntegrity(
-          sessionOrigin && caller.agentBinding
-            ? contextIntegrityStore.effectiveFact({
-                sessionId,
-                attested: ctx.authorization?.contextIntegrity,
-                conduitBlessed,
-              })
-            : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-          ctx.inheritedContextIntegrity ?? null
-        ) ?? { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
         grantStore: capabilityGrantStore,
       }),
     };
@@ -1081,7 +1050,6 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     targetRequests: targetAuthorityRequests,
-    expandLineageKeys: (keys) => keys.flatMap((key) => contextIntegrityStore.expandLineageKey(key)),
     resolveTaskTitle,
     notifyOwner: async (ownerRuntimeId, acquisitionId) => {
       const ref = parseDoTargetId(ownerRuntimeId);
@@ -1368,13 +1336,6 @@ async function main() {
         return false;
       }
     },
-    recordExternalIngestion: (caller, url, via) => {
-      recordContextIngestionForCaller(contextIntegrityStore, caller, {
-        key: `web:${url.hostname.toLowerCase()}`,
-        via,
-        classification: "external",
-      });
-    },
     // Every admitted mission uses manual redirect handling. The ordinary
     // credential/network authority path decides each concrete origin; the
     // launch-time operation plan must never become a second deny-only gate.
@@ -1489,8 +1450,7 @@ async function main() {
   const rootTemplateCaller = createHostCaller("server", "server", SYSTEM_SUBJECT);
   const { acquireRootTemplateSnapshot, seedRootTemplateSnapshotFromCheckout } =
     await import("./acquireRootTemplateSnapshot.js");
-  const { WorkspaceRootTemplateBootstrap, composeDeclaredTemplateLayers } =
-    await import("./workspaceRootTemplateBootstrap.js");
+  const { WorkspaceRootTemplateBootstrap } = await import("./workspaceRootTemplateBootstrap.js");
   const createRootTemplateGitClient = (pin: { url: string; credential?: string }) => {
     const remoteUrl = templateGitTransportUrl(pin.url);
     return createHostGitReadClient({
@@ -1593,7 +1553,7 @@ async function main() {
       };
     },
   });
-  const workspaceRootPin = await rootTemplateBootstrap.prepareSource();
+  await rootTemplateBootstrap.prepareSource();
   console.log(
     `[Perf] root template source prepared at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -2748,85 +2708,6 @@ async function main() {
           },
         }
       );
-      // Context attestation is product trust, independent of workspace install
-      // approval. Resolve only a configured, exact distribution receipt; an
-      // app's initial snapshot or mutable main can never bless its own code.
-      const { trustedConduitTemplate, resolveTrustedConduits, unblessedLiveConduits } =
-        await import("./trustedConduitSnapshot.js");
-      const { PRODUCT_CONDUIT_UNITS } = await import("./productConduitPolicy.js");
-      const conduitPin = trustedConduitTemplate(
-        workspaceRootPin,
-        readDefaultWorkspaceTemplates(appRoot)
-      );
-      // A unit's effective version covers its dependency closure, and a
-      // distribution's units routinely depend on packages that live in the
-      // distribution it is built on. Blessing the bare snapshot therefore
-      // resolves versions no workspace ever runs — it must be the same
-      // composition an install performs on this exact pin.
-      const conduitRoot = await acquireWorkspaceTemplate(conduitPin);
-      const conduitComposition = await composeDeclaredTemplateLayers({
-        pin: conduitPin,
-        root: conduitRoot,
-        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        acquire: acquireWorkspaceTemplate,
-        resolveTrack: resolveTemplateTrack,
-      });
-      const conduitSnapshot = conduitComposition.snapshot;
-      // Every other file arrives from an acquired snapshot already in content
-      // storage; composition authors exactly one itself, so only the merged
-      // source manifest's bytes exist nowhere else yet.
-      const composedManifest = conduitSnapshot.files.find(
-        (file) => file.path === TEMPLATE_SOURCE_MANIFEST_PATH
-      );
-      const composedManifestBytes =
-        conduitComposition.layers.length > 1 && composedManifest
-          ? conduitSnapshot.readFile(composedManifest.path)
-          : null;
-      if (composedManifest && composedManifestBytes) {
-        const stored = await putBootstrapBytes(layout.blobsDir, Buffer.from(composedManifestBytes));
-        if (stored.digest !== composedManifest.contentHash) {
-          throw new Error(
-            `Conduit composition changed the content identity of ${composedManifest.path}`
-          );
-        }
-      }
-      const conduitTree = await mirrorWorktreeTree(
-        layout.blobsDir,
-        conduitSnapshot.files.map((file) => ({
-          path: file.path,
-          contentHash: file.contentHash,
-          mode: file.mode === 0o755 ? 0o100755 : 0o100644,
-        }))
-      );
-      if (!conduitBlessingStore.isSeededFor(conduitTree.stateHash)) {
-        const identities = await resolveTrustedConduits(conduitTree.stateHash, (paths, state) =>
-          buildSystem.resolveBuildUnits(paths, state)
-        );
-        conduitBlessingStore.seedProductSnapshot(conduitTree.stateHash, identities);
-      }
-      // Say so when this workspace runs a product conduit at a version the
-      // blessing does not cover. Refusing that code is the policy working when
-      // the workspace edited it, and a broken seed when it did not — either
-      // way, the alternative to one line here is a much later failure in
-      // whatever operation needed the attestation.
-      const unblessed = unblessedLiveConduits({
-        units: PRODUCT_CONDUIT_UNITS,
-        liveVersion: (repoPath) => buildSystem.getEffectiveVersion(repoPath),
-        isBlessed: (identity) => conduitBlessingStore.isBlessed(identity),
-      });
-      if (unblessed.length > 0) {
-        serverLogStore.append("warn", [
-          `[ConduitBlessing] ${unblessed.length} product conduit${
-            unblessed.length === 1 ? "" : "s"
-          } run here at a version no blessing covers; that code cannot attest agent context`,
-          {
-            conduitSnapshotState: conduitTree.stateHash,
-            conduitTemplate: conduitPin.url,
-            composedLayers: conduitComposition.layers.map((layer) => layer.url),
-            unblessed,
-          },
-        ]);
-      }
       return buildSystem;
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -3299,16 +3180,6 @@ async function main() {
   container.registerRpc(
     createWorkspaceEventsService({
       eventService,
-      onWatchOpened: (events, ctx) => {
-        if (events.includes("server-log:append") || events.includes("workspace:unit-log")) {
-          recordContextIngestion(ctx, {
-            key: "log:server",
-            via: "events:log-watch",
-            classification: "external",
-          });
-        }
-        return undefined;
-      },
       snapshots: {
         "shell-approval:pending-changed": (ctx) => {
           const owner = eventWatchOwner(ctx);
@@ -3646,27 +3517,6 @@ async function main() {
     );
   }
 
-  {
-    const { createContentTrustService } = await import("./services/contentTrustService.js");
-    container.registerRpc(createContentTrustService({ store: contextIntegrityStore }));
-  }
-
-  {
-    const { createContextIntegrityService } = await import("./services/contextIntegrityService.js");
-    container.registerRpc(
-      createContextIntegrityService({
-        store: contextIntegrityStore,
-        resolveMessageClass: async ({ channelId, messageId }) => {
-          const envelope = await workspaceVcs.getChannelEnvelopeIntegrity({
-            channelId,
-            envelopeId: messageId,
-          });
-          return envelope?.contentClass ?? "unknown";
-        },
-      })
-    );
-  }
-
   // Explicit host terminals are native effects, separately approved from shell
   // extension execution. The receiver owns their lifetime and launch settings.
   const { createHostTerminalService } = await import("./services/hostTerminalService.js");
@@ -3710,7 +3560,6 @@ async function main() {
     args: process.platform === "win32" ? [] : ["-l"],
     cwd: hostAccount.homedir,
     environment: hostTerminalEnvironment,
-    recordContextIngestion,
   });
   container.registerManaged({
     name: "hostTerminal",
@@ -3729,7 +3578,6 @@ async function main() {
         workspaceId: entryWorkspaceId,
         serverBootId,
         startedAt: serverLogStartedAt,
-        recordContextIngestion,
       })
     );
   }
@@ -3861,11 +3709,8 @@ async function main() {
           workspaceId,
           executionSessions: agentExecutionSessions,
           taskAuthorities,
-          isSystemTestHarness: (caller, runId) =>
-            runId.startsWith("system-test-runner:") &&
-            isBlessedSystemTestConduit(caller, (identity) =>
-              conduitBlessingStore.isBlessed(identity)
-            ),
+          isSystemTestHarness: (_caller, runId) =>
+            systemTestInstance && runId.startsWith("system-test-runner:"),
           activity: activityRegistry,
           recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
             workerdManager.recoverUnresponsiveSandbox(
@@ -4598,14 +4443,10 @@ async function main() {
             // Matches auth/model.ts agentCallerId(entityId).
             tokenManager.revokeToken(`agent:${entityId}`);
           },
-          faultAbortAgentVessel: async (caller, record) => {
-            if (
-              !isAttestedSystemTestHarness(caller, (identity) =>
-                conduitBlessingStore.isBlessed(identity)
-              )
-            ) {
+          faultAbortAgentVessel: async (_caller, record) => {
+            if (!systemTestInstance) {
               throw new Error(
-                "runtime.faultAbortAgentVessel requires an attested system-test harness"
+                "runtime.faultAbortAgentVessel is available only on a system-test instance"
               );
             }
             if (
@@ -4724,13 +4565,11 @@ async function main() {
           },
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          dispatchToTarget: async (target, event, verifiedExternalContext) => {
-            const { bindVerifiedExternalContext } = await import("@vibestudio/rpc/internal");
+          dispatchToTarget: async (target, event) => {
             await rpcServer.server.callTarget(
               `do:${target.source}:${target.className}:${target.objectKey}`,
               target.method,
-              [event],
-              bindVerifiedExternalContext({}, verifiedExternalContext)
+              [event]
             );
           },
         });
@@ -4981,18 +4820,7 @@ async function main() {
         workspaceChildHub,
         workspaceRoleResolver,
         describeCapability,
-        contextIntegrityFactForSession: (sessionId, caller) =>
-          caller.executionSession !== undefined
-            ? contextIntegrityStore.effectiveFact({
-                sessionId,
-                attested: contextIntegrityStore.fact(sessionId),
-                conduitBlessed: conduitBlessingStore.isBlessed(caller.code),
-              })
-            : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-        isAttestedSystemTestHarness: (caller) =>
-          isAttestedSystemTestHarness(caller, (identity) =>
-            conduitBlessingStore.isBlessed(identity)
-          ),
+        isSystemTestInstance: () => systemTestInstance,
         resolveProductBuiltinPreparedAuthority: async ({
           caller,
           source,
@@ -6268,29 +6096,15 @@ async function main() {
     const { FsService } = await import("./services/fsService.js");
     const { isWritableVcsPath } = await import("./vcsHost/paths.js");
     type FsCausalParent = import("@vibestudio/rpc").RpcCausalParent | null;
-    type FsMutationIntegrity = import("./services/fsService.js").FsVcsMutationIntegrity;
-    const callSemantic = <T>(
-      method: string,
-      input: unknown,
-      causalParent?: FsCausalParent,
-      contextIntegrity?: FsMutationIntegrity
-    ) =>
+    const callSemantic = <T>(method: string, input: unknown, causalParent?: FsCausalParent) =>
       causalParent === undefined
         ? workspaceVcs.semanticDirectCall<T>(method, input)
-        : workspaceVcs.semanticCausalCall<T>(
-            method,
-            input,
-            causalParent,
-            assertPresent(contextIntegrity)
-          );
+        : workspaceVcs.semanticCausalCall<T>(method, input, causalParent);
     const vcsBridge: import("./services/fsService.js").FsVcsBridge = {
       isTracked: async (relPath) => isWritableVcsPath(relPath),
-      edit: (input, causalParent, integrity) =>
-        callSemantic("vcsEdit", input, causalParent, integrity),
-      move: (input, causalParent, integrity) =>
-        callSemantic("vcsMove", input, causalParent, integrity),
-      copy: (input, causalParent, integrity) =>
-        callSemantic("vcsCopy", input, causalParent, integrity),
+      edit: (input, causalParent) => callSemantic("vcsEdit", input, causalParent),
+      move: (input, causalParent) => callSemantic("vcsMove", input, causalParent),
+      copy: (input, causalParent) => callSemantic("vcsCopy", input, causalParent),
       status: (input) => callSemantic("vcsStatus", input),
       resolveRepository: (input) => callSemantic("vcsResolveRepository", input),
       readFile: (input) => callSemantic("vcsReadFile", input),
@@ -6315,8 +6129,6 @@ async function main() {
         return new FsService(contextFolderManager, entityCache, {
           disk: nativeWorkspace.disk,
           contextAuthority: { kind: "semantic", bridge: vcsBridge },
-          recordContextIngestion,
-          recordContextIngestionBatch,
         });
       },
       stop: (service: InstanceType<typeof FsService>) => service.stop(),
@@ -6471,7 +6283,6 @@ async function main() {
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
       const activated = await vcs.activateWorkspaceFromSource();
-      contextIntegrityStore.ensureCutover(activated.stateHash);
       const launchRecord = readWorkspaceHostLaunchRecord(statePath);
       if (!launchRecord) {
         throw new Error("Workspace semantic main has no durable host launch record");
@@ -6694,7 +6505,6 @@ async function main() {
     tokenManager,
     cdpGrants,
     grantStore: capabilityGrantStore,
-    recordContextIngestion,
     hasAppCapability: (callerId: string, capability: AppCapability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     contextExists: contextBoundaryDeps.contextExists,

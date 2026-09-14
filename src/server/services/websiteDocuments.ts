@@ -307,7 +307,6 @@ export class WebsiteDocuments {
           sourceWorkspaceId: this.deps.workspaceId,
           subjectGeneration: doc.fact.binding.generation,
           ...(decision === "session" ? { documentId: doc.documentId } : {}),
-          lineageAtConsent: [],
         },
         scope: decision === "session" ? "session" : "system",
         issuedBy: `user:${doc.user.userId}`,

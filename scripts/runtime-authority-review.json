@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:cd92e20585475c730cad24268a222e8628c538f7dee261898813fdbdc5d240f1",
+  "censusDigest": "sha256:c6b9d37730790a638100a30c318f2e29e4a20c8a2a31cd36310878b835a53e11",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -365,10 +365,6 @@
     "host:permissions.setWorkspaceAuthorityLock": {
       "review": "user-approved-emergency-authority-barrier",
       "change": "Adds the critical control that durably blocks protected agent authority workspace-wide before interrupting live agent transports. Releasing the barrier uses the same reviewed critical capability."
-    },
-    "host:contextIntegrity.explain": {
-      "review": "own-session-verified-lineage-explanation",
-      "change": "Adds a read-only agent-bound explanation of a lineage coordinate already present in the caller's own session. The receiver derives session identity, verifies aggregate content addressing, and returns bounded opaque-cursor pages."
     },
     "host:app.openShellSurface": {
       "review": "bounded-first-party-shell-navigation",

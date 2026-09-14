@@ -44,7 +44,6 @@ function invocation(type: "request" | "stream-request" = "request"): WorkspaceRp
   return {
     caller,
     authorizingCaller: caller,
-    contextIntegrity: null,
     operation: "calendar.slots",
     purpose: "call",
     envelope: {

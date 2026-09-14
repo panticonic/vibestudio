@@ -307,7 +307,6 @@ describe("install clearance", () => {
       resource: { kind: "exact", key: "notifications" },
       subject: outgoing!.subject,
       scope: "version",
-      constraints: { lineageAtConsent: [] },
       issuedBy: "user:test",
       provenance: "acquisition",
       decidedBy: "user:test",

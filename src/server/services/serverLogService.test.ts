@@ -9,16 +9,14 @@ const ctx: ServiceContext = { caller: createVerifiedCaller("panel-1", "panel") }
 function makeService() {
   const store = createServerLogStore({ now: () => 42 });
   const emit = vi.fn();
-  const recordContextIngestion = vi.fn();
   const service = createServerLogService({
     store,
     eventService: { emit } as never,
     workspaceId: "ws-1",
     serverBootId: "boot-1",
     startedAt: 40,
-    recordContextIngestion,
   });
-  return { store, emit, recordContextIngestion, service };
+  return { store, emit, service };
 }
 
 describe("serverLogService", () => {
@@ -26,7 +24,7 @@ describe("serverLogService", () => {
   afterEach(() => vi.useRealTimers());
 
   it("wraps query/tail results in the process-metadata envelope", async () => {
-    const { store, recordContextIngestion, service } = makeService();
+    const { store, service } = makeService();
     store.append("info", ["[X] hello"]);
 
     const result = (await service.handler(ctx, "tail", [10])) as Record<string, unknown>;
@@ -38,17 +36,11 @@ describe("serverLogService", () => {
       startedAt: 40,
     });
     expect((result["records"] as unknown[]).length).toBe(1);
-    expect(recordContextIngestion).toHaveBeenCalledWith(ctx, {
-      key: "log:server",
-      via: "server-log:tail",
-      classification: "external",
-    });
 
     const filtered = (await service.handler(ctx, "query", [{ level: "warn" }])) as {
       records: unknown[];
     };
     expect(filtered.records).toEqual([]);
-    expect(recordContextIngestion).toHaveBeenCalledTimes(1);
   });
 
   it("validates query args against the schema", async () => {

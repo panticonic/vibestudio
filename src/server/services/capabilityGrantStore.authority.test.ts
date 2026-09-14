@@ -32,13 +32,12 @@ describe("CapabilityGrantStore agent authority", () => {
         subjectGeneration: subject.generation,
         sourceWorkspaceId: "ws-1",
         documentId: "doc-1",
-        lineageAtConsent: [],
       },
     };
     const issued = grants.issue(issue);
-    expect(() => grants.issue({ ...issue, constraints: { lineageAtConsent: [] } })).toThrow(
-      /current subject/
-    );
+    expect(() =>
+      grants.issue({ ...issue, constraints: { subjectGeneration: subject.generation + 1 } })
+    ).toThrow(/current subject/);
     grants.close();
     grants = new CapabilityGrantStore({ statePath });
     expect(grants.ensureWebsiteSubject(input)).toEqual(subject);
@@ -85,7 +84,7 @@ describe("CapabilityGrantStore agent authority", () => {
       subject: "user:alice",
       issuedBy: "user:alice",
       provenance: "acquisition",
-      constraints: { lineageAtConsent: ["none"] },
+      constraints: { sessionId: "session-legacy" },
     });
     first.close();
     const legacy = new DatabaseSync(first.databasePath);
@@ -99,7 +98,7 @@ describe("CapabilityGrantStore agent authority", () => {
 
     const reopened = new CapabilityGrantStore({ statePath });
     expect(reopened.grantsForSubjects(["user:alice"], issued.capability)).toEqual([
-      expect.objectContaining({ id: issued.id, constraints: { lineageAtConsent: ["none"] } }),
+      expect.objectContaining({ id: issued.id, constraints: { sessionId: "session-legacy" } }),
     ]);
     reopened.close();
   });
@@ -117,7 +116,6 @@ describe("CapabilityGrantStore agent authority", () => {
         sessionId: "session-one",
         taskRef: "task:one",
         sourceWorkspaceId: "source-workspace",
-        lineageAtConsent: ["none"],
       },
       scope: "task",
     });
@@ -145,7 +143,6 @@ describe("CapabilityGrantStore agent authority", () => {
       constraints: {
         sessionId: "task-one",
         agentBindingId: "binding:news",
-        lineageAtConsent: ["none"],
       },
     };
     grants.issue({
@@ -188,7 +185,6 @@ describe("CapabilityGrantStore agent authority", () => {
       provenance: "acquisition",
       constraints: {
         agentBindingId: "binding:news",
-        lineageAtConsent: ["none"],
       },
       scope: "agent",
       createdAt: 1,
@@ -218,7 +214,6 @@ describe("CapabilityGrantStore agent authority", () => {
       provenance: "acquisition",
       constraints: {
         agentBindingId: "binding:news",
-        lineageAtConsent: ["none"],
       },
       scope: "agent",
       createdAt: 1,

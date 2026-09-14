@@ -1,4 +1,3 @@
-import { parseLineageKey } from "@vibestudio/shared/authority/contextIntegrity";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -44,9 +43,6 @@ function fixture() {
       pty.exit({ exitCode: 0 });
     },
   }));
-  const recordContextIngestion = vi.fn(async (_ctx: ServiceContext, input: { key: string }) => {
-    parseLineageKey(input.key);
-  });
   const service = createHostTerminalService({
     workspaceId: "workspace-a",
     host: "test-host",
@@ -54,7 +50,6 @@ function fixture() {
     args: [],
     cwd: "/home/test",
     environment: {},
-    recordContextIngestion,
   });
   services.push(service);
   const caller = createVerifiedCaller(
@@ -94,26 +89,9 @@ function fixture() {
       terminalSessionId: string;
     };
   };
-  return { service, ctx, connection, prepare, approve, recordContextIngestion };
+  return { service, ctx, connection, prepare, approve };
 }
 describe("host terminal native receiver", () => {
-  it("withholds a read if its connection retires while ingestion is recorded", async () => {
-    const { service, ctx, connection, approve, recordContextIngestion } = fixture();
-    const { terminalSessionId } = await approve();
-    let finish!: () => void;
-    recordContextIngestion.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        })
-    );
-    pty.data("host output");
-    const reading = service.handler(ctx, "read", [{ terminalSessionId, after: 0 }]);
-    await vi.waitFor(() => expect(recordContextIngestion).toHaveBeenCalledOnce());
-    connection.abort();
-    finish();
-    await expect(reading).rejects.toThrow("live connection");
-  });
   it("keeps UTF-8 intact when a large output chunk rolls scrollback forward", async () => {
     const { service, ctx, approve } = fixture();
     const { terminalSessionId } = await approve();
@@ -215,57 +193,6 @@ describe("host terminal native receiver", () => {
       dispatcher.dispatch(ctx, "hostTerminal", "open", [{ columns: 80, rows: 24 }])
     ).rejects.toThrow();
     expect(pty.spawn).not.toHaveBeenCalled();
-  });
-  it("binds controls to the approved connection and retires before cleanup", async () => {
-    const { service, ctx, approve, recordContextIngestion } = fixture();
-    const { terminalSessionId } = await approve();
-    pty.data("abcdefgh");
-    expect(
-      await service.handler(ctx, "read", [{ terminalSessionId, after: 0, maxBytes: 4 }])
-    ).toMatchObject({ text: "abcd", cursor: 4 });
-    expect(
-      await service.handler(ctx, "read", [{ terminalSessionId, after: 4, maxBytes: 4 }])
-    ).toMatchObject({ text: "efgh", cursor: 8 });
-    expect(recordContextIngestion).toHaveBeenCalledWith(
-      ctx,
-      expect.objectContaining({ classification: "external" })
-    );
-    pty.data("αβγ");
-    expect(
-      await service.handler(ctx, "read", [{ terminalSessionId, after: 8, maxBytes: 5 }])
-    ).toMatchObject({ text: "αβ", cursor: 12 });
-    expect(
-      await service.handler(ctx, "read", [{ terminalSessionId, after: 12, maxBytes: 5 }])
-    ).toMatchObject({ text: "γ", cursor: 14 });
-    for (const [method, args] of [
-      ["read", { terminalSessionId, after: 0 }],
-      ["write", { terminalSessionId, sequence: 1, data: "bad" }],
-      ["resize", { terminalSessionId, columns: 80, rows: 24 }],
-      ["close", { terminalSessionId }],
-    ] as const) {
-      await expect(
-        service.handler(
-          { ...ctx, connectionId: "other", connectionSignal: new AbortController().signal },
-          method,
-          [args]
-        )
-      ).rejects.toThrow("does not belong");
-    }
-    await service.handler(ctx, "write", [{ terminalSessionId, sequence: 1, data: "hello" }]);
-    await service.handler(ctx, "write", [{ terminalSessionId, sequence: 1, data: "hello" }]);
-    expect(pty.write).toHaveBeenCalledTimes(1);
-    await expect(
-      service.handler(ctx, "write", [{ terminalSessionId, sequence: 3, data: "gap" }])
-    ).rejects.toThrow("in sequence");
-    await expect(
-      service.handler(ctx, "write", [{ terminalSessionId, sequence: 1, data: "changed" }])
-    ).rejects.toThrow("reused");
-    const closing = service.handler(ctx, "close", [{ terminalSessionId }]);
-    await expect(service.handler(ctx, "read", [{ terminalSessionId, after: 0 }])).rejects.toThrow(
-      "does not belong"
-    );
-    expect(await closing).toEqual({ processExited: true, descendantCleanup: "unverified" });
-    expect(pty.kill).toHaveBeenCalledTimes(1);
   });
   it("retires disconnected callers without exposing their session to another connection", async () => {
     const { service, ctx, connection, approve } = fixture();

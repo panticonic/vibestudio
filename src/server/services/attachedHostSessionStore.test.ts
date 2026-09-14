@@ -68,7 +68,6 @@ function challengeRecord(): AttachedHostChallengeRecord {
         missionSubject: "-",
         snippetDigest: "c".repeat(64),
         codeLineage: { class: "internal", chain: [] },
-        contextLineage: null,
         initiatorChain: ["agent:one"],
         at: 1,
       },

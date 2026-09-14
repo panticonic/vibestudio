@@ -7,7 +7,7 @@ import {
   writeFrame,
   MAX_ENVELOPE_FRAME_BYTES,
 } from "@vibestudio/iroh-transport";
-import type { ContextIntegrityFact, RpcEnvelope } from "@vibestudio/rpc";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 export const WORKSPACE_RPC_INTERNAL_ROUTE = "/_r/s/internal/workspace-rpc";
@@ -19,7 +19,6 @@ export interface WorkspaceRpcInvocation {
   envelope: RpcEnvelope;
   caller: VerifiedCaller;
   authorizingCaller: VerifiedCaller;
-  contextIntegrity: ContextIntegrityFact | null;
   /** Original method scope, retained for cancellation and subscription events. */
   operation: string;
   purpose: "call" | "discover";
@@ -79,8 +78,7 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
     !value["envelope"]["destination"]["workspaceId"] ||
     !record(value["envelope"]["delivery"]) ||
     !record(value["envelope"]["delivery"]["caller"]) ||
-    !Array.isArray(value["envelope"]["provenance"]) ||
-    (value["contextIntegrity"] !== null && !record(value["contextIntegrity"]))
+    !Array.isArray(value["envelope"]["provenance"])
   )
     throw denied();
   const invocation = value as unknown as WorkspaceRpcInvocation;

@@ -12,7 +12,6 @@ export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   invocation_digest TEXT,
   provider_execution_digest TEXT,
   mission_subject TEXT,
-  lineage_at_consent TEXT NOT NULL DEFAULT '[]',
   issued_by TEXT NOT NULL,
   provenance TEXT NOT NULL,
   created_at INTEGER NOT NULL,

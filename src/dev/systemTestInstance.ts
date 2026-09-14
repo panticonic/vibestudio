@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { SYSTEM_TEST_INSTANCE_ENV } from "../server/systemTestInstanceMode.js";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -67,6 +68,10 @@ export function systemTestInstanceEnvironment(
     // Managed tests own their network topology and must not inherit a caller's
     // relay override. Use the same public Phase-0 topology as the product default.
     VIBESTUDIO_IROH_RELAYS: DEFAULT_IROH_RELAYS.join(","),
+    // This server exists to run system tests, which is what admits unattended
+    // test policies and harness-only seams. A developer starting it is the
+    // whole authorisation; no caller asserts anything.
+    [SYSTEM_TEST_INSTANCE_ENV]: "1",
   };
 }
 
