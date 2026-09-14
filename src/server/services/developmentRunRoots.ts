@@ -99,7 +99,15 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
   }
 
   private async retireUnlocked(runId: string, snapshotDigest: string): Promise<void> {
-    await this.assertOwnedUnlocked(runId, snapshotDigest);
+    try {
+      await this.assertOwnedUnlocked(runId, snapshotDigest);
+    } catch (error) {
+      // Retirement states an outcome — this root is gone — so a root that was
+      // never claimed, or that an earlier retirement already removed, is that
+      // outcome and not a failure. A foreign owner marker is still refused.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
     await fs.rm(this.runRoot(runId), { recursive: true, force: true });
   }
 

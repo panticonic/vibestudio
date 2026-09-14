@@ -237,6 +237,14 @@ describe("DevelopmentRunRoots", () => {
     ]);
   });
 
+  it("treats retiring an unclaimed or already-retired root as done", async () => {
+    const { owner } = await fixture();
+    await expect(owner.retire("run-never-claimed", "c".repeat(64))).resolves.toBeUndefined();
+    await owner.claim("run-twice", "d".repeat(64));
+    await owner.retire("run-twice", "d".repeat(64));
+    await expect(owner.retire("run-twice", "d".repeat(64))).resolves.toBeUndefined();
+  });
+
   it("serializes retirement with an in-progress root snapshot", async () => {
     const exact = artifact();
     let releaseLegacy!: (roots: readonly ExecutionRoot[]) => void;
