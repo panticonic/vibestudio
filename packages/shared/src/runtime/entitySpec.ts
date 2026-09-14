@@ -109,6 +109,23 @@ export function isFlatSection(section: string): boolean {
   return FLAT_SECTIONS.has(section);
 }
 
+/** Name what arrived, bounded, so a caller can see its own mistake. */
+function describeReceivedRepoPath(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (Array.isArray(value)) return `an array of ${value.length}`;
+  if (typeof value === "object") {
+    let rendered: string;
+    try {
+      rendered = JSON.stringify(value) ?? "an object";
+    } catch {
+      return "an object";
+    }
+    return rendered.length > 120 ? `${rendered.slice(0, 120)}…` : rendered;
+  }
+  return typeof value;
+}
+
 /**
  * Canonical workspace repo identity. A repo path is either:
  * - `meta`, the only flat repo; or
@@ -118,7 +135,16 @@ export function isFlatSection(section: string): boolean {
  * deeper paths such as `packages/foo/bar` are workspace paths, not repo ids.
  */
 export function normalizeWorkspaceRepoPath(repoPath: string): RepoPath {
-  if (typeof repoPath !== "string" || repoPath.length === 0) {
+  // A wrong type and an empty string are different mistakes, and saying
+  // "empty" for both sends the caller looking for a missing value when what
+  // arrived was the wrong shape — the round trip from a surface that returns
+  // `{ repoPath }` rows into one that takes bare paths reads exactly that way.
+  if (typeof repoPath !== "string") {
+    throw new Error(
+      `Invalid workspace repo path: expected a string, received ${describeReceivedRepoPath(repoPath)}`
+    );
+  }
+  if (repoPath.length === 0) {
     throw new Error("Invalid workspace repo path: empty");
   }
   if (repoPath.length > MAX_REPO_PATH_LENGTH) {
