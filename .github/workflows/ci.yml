@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       base-ref:
-        description: Exact Base commit or branch paired with this host revision
+        description: Exact Base template commit or branch paired with this host revision
         type: string
         default: main
         required: true
@@ -32,7 +32,7 @@ jobs:
     name: Quality Checks
     runs-on: ubuntu-latest
     env:
-      VIBESTUDIO_USERLAND_ROOT: ${{ github.workspace }}/vibestudio-workspace-base
+      VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
     permissions:
       contents: read
 
@@ -42,16 +42,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout current Base userland
+      - name: Checkout current Base template
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: panticonic/vibestudio-workspace-base
+          repository: panticonic/vibestudio-base
           ref: ${{ inputs.base-ref || 'main' }}
-          path: vibestudio-workspace-base
+          path: vibestudio-templates/base
           persist-credentials: false
-
-      - name: Name the isolated Base checkout
-        run: git -C vibestudio-workspace-base switch -c ci-acceptance-base
 
       - name: Install pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
@@ -83,13 +80,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Acquire complete template source set
+        run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
       - name: Check acceptance and native preparation harnesses
         run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs
 
       - name: Type-check
         run: pnpm type-check
 
-      - name: Base type-check and complete userland suite
+      - name: Template type-check and complete userland suite
         run: pnpm test:pair
 
       - name: Mobile host and Iroh integration suites
@@ -272,15 +272,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Checkout Base for desktop integration
-        id: desktop-base
+      - name: Checkout Base template for desktop integration
+        id: desktop_template_base
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.production-build.outcome == 'success' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: panticonic/vibestudio-workspace-base
+          repository: panticonic/vibestudio-base
           ref: ${{ inputs.base-ref || 'main' }}
-          path: vibestudio-workspace-base
+          path: vibestudio-templates/base
           persist-credentials: false
+
+      - name: Acquire complete template source set for desktop integration
+        id: desktop_templates
+        if: ${{ !cancelled() && steps.desktop_template_base.outcome == 'success' }}
+        shell: bash
+        run: pnpm dev:templates setup "$GITHUB_WORKSPACE/vibestudio-templates"
 
       # Native, desktop and installed acceptance report independently. A failed
       # native assertion still fails this required job and cannot publish a release.
@@ -322,11 +328,9 @@ jobs:
 
       # Source bootstrap can rebuild dist; capture the production candidate first.
       - name: Desktop pairing, approvals, panels, relaunch, and recovery
-        if: ${{ !cancelled() && steps.desktop-base.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.desktop_templates.outcome == 'success' }}
         shell: bash
-        run: |
-          git -C vibestudio-workspace-base switch -c ci-acceptance-base
-          node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+        run: node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
 
   packaged-acceptance:
     name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
