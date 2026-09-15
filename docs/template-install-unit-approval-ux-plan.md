@@ -918,6 +918,12 @@ so it cannot render its own approval. Each host target reviews its own app and
 the extensions that target requires — desktop in the Electron main window, mobile
 on a native pre-workspace screen, terminal as text.
 
+Once an admitted client is running, its approval queue shows every pending
+review, including reviews containing other client apps. A part's app kind does
+not establish that a launch gate is presenting its review. Pending counts and
+notifications use the same rule; only reviews still preparing lack an actionable
+decision.
+
 It is also, after §7.1, the **only** review these units ever get, including for a
 third-party root. So it is specified properly here rather than treated as chrome.
 

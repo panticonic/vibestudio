@@ -218,15 +218,15 @@ describe("createApprovalAttention", () => {
     expect(window.flashFrame).toHaveBeenLastCalledWith(false);
   });
 
-  it("ignores startup privileged-unit approvals owned by target launch", () => {
+  it("keeps pending client-app reviews visible in workspace attention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
     attention.handlePendingChanged(snapshot([makeStartupUnitApproval()]));
 
-    expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(0);
-    expect(window.flashFrame).not.toHaveBeenCalledWith(true);
-    expect(electronMocks.notificationInstances).toHaveLength(0);
+    expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(1);
+    expect(window.flashFrame).toHaveBeenCalledWith(true);
+    expect(electronMocks.notificationInstances).toHaveLength(1);
   });
 
   it("flashes and notifies for a new approval while the window is unfocused", () => {

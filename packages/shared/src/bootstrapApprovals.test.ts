@@ -5,7 +5,6 @@ import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 import {
   filterBootstrapApprovals,
   filterBootstrapApprovalsForTarget,
-  filterRuntimeApprovals,
 } from "./bootstrapApprovals.js";
 
 function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
@@ -98,12 +97,6 @@ describe("which surface owns which review", () => {
     // apps/shell can render this one, because it is not the code under review.
     const panels = review([part({ kind: "panel", label: "Panel", repoPath: "panels/chat" })]);
     expect(filterBootstrapApprovals([panels])).toEqual([]);
-    expect(filterRuntimeApprovals([panels])).toEqual([panels]);
-  });
-
-  it("keeps a client-app review out of the app that would have to host it", () => {
-    const gate = review([part()]);
-    expect(filterRuntimeApprovals([credentialApproval, gate])).toEqual([credentialApproval]);
   });
 
   it("asks each host target only about its own app and the extensions it needs", () => {

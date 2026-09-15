@@ -114,7 +114,7 @@ describe("approval audience", () => {
     }
   });
 
-  it("counts ready workspace creation reviews while leaving native bootstrap decisions to their owner", async () => {
+  it("counts every ready workspace review, including pending native apps", async () => {
     const queue = createApprovalQueue({
       eventService: new EventService(),
       scopeAccess: access,
@@ -146,13 +146,13 @@ describe("approval audience", () => {
       expect(queue.listPending()).toHaveLength(2);
       expect(pendingApprovalCounts(queue.listPending())).toEqual({
         pendingApprovals: [],
-        workspaceApprovalCount: 1,
+        workspaceApprovalCount: 2,
       });
       const creation = queue.listPending().find((entry) => entry.callerId === "system:panel")!;
       expect(approvalVisibleToUser(creation, "bob", access)).toBe(true);
       expect(approvalVisibleToUser(creation, "alice", access)).toBe(false);
       await queue.resolveInstallReview(creation.approvalId, { decision: "cancel" });
-      expect(pendingApprovalCounts(queue.listPending()).workspaceApprovalCount).toBe(0);
+      expect(pendingApprovalCounts(queue.listPending()).workspaceApprovalCount).toBe(1);
     } finally {
       for (const entry of queue.listPending())
         await queue.resolveInstallReview(entry.approvalId, { decision: "cancel" });

@@ -1,6 +1,5 @@
 import { isAccountUserId } from "@vibestudio/identity/types";
 import type { PendingApproval } from "./approvals.js";
-import { filterRuntimeApprovals } from "./bootstrapApprovals.js";
 
 export interface ApprovalScopeAccess {
   /** Whether this account is still admitted to the queue's owning scope. */
@@ -62,11 +61,12 @@ function accountOrUndefined(userId: string | undefined): string | undefined {
   return isAccountUserId(userId) ? userId : undefined;
 }
 
-/** Progress-only and bootstrap-owned reviews do not demand workspace attention. */
+/** Every unresolved decision remains actionable, including reviews of client apps.
+ * Launch gates can present reviews before a client runs; that does not make them
+ * invisible to an already-running client. Only preparation has no decision yet.
+ */
 export function actionableRuntimeApprovals(approvals: PendingApproval[]): PendingApproval[] {
-  return filterRuntimeApprovals(approvals).filter(
-    (approval) => approval.lifecycle?.state !== "preparing"
-  );
+  return approvals.filter((approval) => approval.lifecycle?.state !== "preparing");
 }
 
 /** Separate owned and administrative counts so the hub applies live role changes. */

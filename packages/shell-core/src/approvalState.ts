@@ -1,5 +1,4 @@
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 
 export const SHELL_APPROVAL_PENDING_CHANGED_EVENT = "shell-approval:pending-changed" as const;
 
@@ -15,13 +14,6 @@ export function pendingApprovalsFromEventPayload(payload: unknown): PendingAppro
   if (!payload || typeof payload !== "object") return null;
   const pending = (payload as { pending?: unknown }).pending;
   return Array.isArray(pending) ? (pending as PendingApproval[]) : null;
-}
-
-export function runtimePendingApprovalsFromEventPayload(
-  payload: unknown
-): PendingApproval[] | null {
-  const pending = pendingApprovalsFromEventPayload(payload);
-  return pending ? filterRuntimeApprovals(pending) : null;
 }
 
 export function pendingApprovalSignature(pending: readonly PendingApproval[]): string {

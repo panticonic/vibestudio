@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
@@ -198,14 +197,14 @@ async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
                 })()`,
                   true
                 );
-                if (result === "approved") return true;
+                if (result === "approved" || result === "hosted-shell-loaded") return true;
               } catch {
                 // Ignore non-DOM webContents.
               }
             }
             return false;
           },
-          { workspaceId: testApp!.workspaceId }
+          { workspaceId: testApp!.systemWorkspaceId }
         ),
       { timeout: 120_000, intervals: [500, 1000, 2000] }
     )
@@ -345,6 +344,171 @@ test.describe("Desktop Shell Chrome", () => {
     }
   });
 
+  test("presents every private workspace review before using the workspace catalog", async () => {
+    testApp = await launchTestApp({ launchTimeout: 240_000 });
+    await approveStartupUnitsIfNeeded(testApp);
+    let page: Page | undefined;
+    await expect
+      .poll(
+        () => {
+          page = testApp!.app
+            .context()
+            .pages()
+            .find(
+              (candidate) =>
+                candidate.url().includes("/_a/") && candidate.url().endsWith("/index.html")
+            );
+          return Boolean(page);
+        },
+        { timeout: 120_000 }
+      )
+      .toBe(true);
+    const chrome = page!;
+    const rendererDiagnostics: string[] = [];
+    chrome.on("console", (message) => {
+      if (message.type() === "error" || message.type() === "warning")
+        rendererDiagnostics.push(message.text());
+    });
+    chrome.on("pageerror", (error) => rendererDiagnostics.push(error.message));
+    const workspaces = await nativeUiRead<Array<{ workspaceId: string; privateRole?: string }>>(
+      chrome,
+      { kind: "hub" },
+      "hubControl.listWorkspaces",
+      []
+    );
+    const privateWorkspaces = workspaces.filter(
+      (workspace) => workspace.privateRole === "personal" || workspace.privateRole === "system"
+    );
+    expect(privateWorkspaces).toHaveLength(2);
+    for (const workspace of privateWorkspaces) {
+      await expect
+        .poll(
+          async () =>
+            (
+              await nativeUiRead<{ status: string }>(
+                chrome,
+                { kind: "workspace", workspaceId: workspace.workspaceId },
+                "shellApproval.getWorkspaceCreationReviewState",
+                []
+              )
+            ).status,
+          { timeout: 60_000 }
+        )
+        .not.toBe("preparing");
+    }
+    const pendingReviews = async () =>
+      (
+        await Promise.all(
+          privateWorkspaces.map(async (workspace) => {
+            const pending = await nativeUiRead<
+              import("@vibestudio/shared/approvals").PendingApproval[]
+            >(
+              chrome,
+              { kind: "workspace", workspaceId: workspace.workspaceId },
+              "shellApproval.listPending",
+              []
+            );
+            return pending
+              .filter((approval) => approval.kind === "unit-install-review")
+              .map((approval) => ({
+                workspace: workspace.privateRole,
+                id: approval.approvalId,
+                parts: approval.parts.map((part) => part.repoPath),
+              }));
+          })
+        )
+      ).flat();
+    for (let pass = 0; pass < 8; pass++) {
+      const pending = await pendingReviews();
+      if (!pending.length) break;
+      const add = chrome.getByRole("button", { name: "Add to workspace", exact: true });
+      await expect(add, JSON.stringify(pending)).toBeVisible({ timeout: 30_000 });
+      const card = chrome.locator("[data-approval-card]").filter({ has: add });
+      const approvalId = await card.getAttribute("data-approval-id");
+      expect(pending.some((review) => review.id === approvalId)).toBe(true);
+      await add.click();
+      await expect
+        .poll(async () => (await pendingReviews()).some((review) => review.id === approvalId), {
+          timeout: 60_000,
+        })
+        .toBe(false);
+    }
+    expect(await pendingReviews()).toEqual([]);
+    await chrome.getByRole("button", { name: "Add workspace", exact: true }).click();
+    await chrome.getByRole("radio", { name: "Git URL Use a repository" }).click();
+    await expect(
+      chrome.getByRole("heading", { name: "Workspace catalog", exact: true })
+    ).toBeVisible();
+    try {
+      let approvalPage: Page | undefined;
+      await expect
+        .poll(
+          () => {
+            approvalPage = chrome
+              .context()
+              .pages()
+              .find((candidate) => candidate.url().endsWith("#overlaySurface=approval-card"));
+            return Boolean(approvalPage);
+          },
+          { timeout: 30_000 }
+        )
+        .toBe(true);
+      const networkCard = approvalPage!.locator("[data-approval-card]");
+      await expect(networkCard).toContainText("raw.githubusercontent.com");
+      await expect(
+        networkCard.getByRole("button", { name: "Connect once", exact: true })
+      ).toBeVisible();
+      await networkCard
+        .getByRole("button", { name: "Connect once", exact: true })
+        .evaluate((button: HTMLButtonElement) => button.click());
+      await expect(chrome.getByRole("button", { name: "Review News", exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
+    } catch (error) {
+      await test.info().attach("catalog-surfaces.json", {
+        body: JSON.stringify(
+          {
+            surfaces: chrome
+              .context()
+              .pages()
+              .map((page) => page.url()),
+            rendererDiagnostics,
+            anchors: await chrome.evaluate(() =>
+              [
+                ...document.querySelectorAll(
+                  '[id*="approval-host"], .workspace-desktop-notifications'
+                ),
+              ].map((element) => ({
+                id: element.id,
+                rect: element.getBoundingClientRect().toJSON(),
+                html: element.outerHTML.slice(0, 1000),
+              }))
+            ),
+          },
+          null,
+          2
+        ),
+        contentType: "application/json",
+      });
+      const pending = await Promise.all(
+        privateWorkspaces.map(async (workspace) => ({
+          workspace: workspace.privateRole,
+          pending: await nativeUiRead(
+            chrome,
+            { kind: "workspace", workspaceId: workspace.workspaceId },
+            "shellApproval.listPending",
+            []
+          ),
+        }))
+      );
+      await test.info().attach("catalog-pending-approvals.json", {
+        body: JSON.stringify(pending, null, 2),
+        contentType: "application/json",
+      });
+      throw error;
+    }
+  });
+
   test("copies one selected file between workspaces into an unpublished review branch", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsIfNeeded(testApp);
@@ -406,9 +570,7 @@ test.describe("Desktop Shell Chrome", () => {
               "Only the designated System workspace can ask to start native apps"
             ).toEqual([]);
           }
-          const pending = filterRuntimeApprovals(queued).filter(
-            (approval) => approval.kind === "unit-install-review"
-          );
+          const pending = queued.filter((approval) => approval.kind === "unit-install-review");
           if (!pending.length) return;
           const add = page.getByRole("button", { name: "Add to workspace", exact: true });
           // Approval settlement can coalesce another startup request while its
@@ -417,7 +579,7 @@ test.describe("Desktop Shell Chrome", () => {
             .poll(
               async () =>
                 (await add.isVisible()) ||
-                !filterRuntimeApprovals(await approvals.listPending()).some(
+                !(await approvals.listPending()).some(
                   (approval) => approval.kind === "unit-install-review"
                 ),
               { timeout: 60_000 }

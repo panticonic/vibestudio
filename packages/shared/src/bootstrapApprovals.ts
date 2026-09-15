@@ -3,16 +3,13 @@ import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 import type { HostTarget } from "./hostTargets.js";
 
 /**
- * Which reviews the launch gate owns, and which the running workspace does
+ * Which reviews a launch gate needs before starting a client
  * (docs/template-install-unit-approval-ux-plan.md §7.6).
  *
- * Client apps and extensions are decided before the workspace UI exists, in a
- * host-owned window and in the terminal. That surface cannot be replaced by the
- * collection route for a simple reason: `apps/shell` is itself under review, so
- * it cannot render its own approval. A startup review is atomic: when it also
- * contains panels or workers, the launch gate owns the whole review rather than
- * splitting one human decision across two surfaces. Reviews containing only
- * runtime parts remain in the workspace.
+ * Before a client is admitted, a host-owned window or terminal presents its
+ * review. A startup review is atomic, including any panels or workers batched
+ * with that client. Once a client is running it can present every pending review:
+ * app kind alone never establishes that a launch gate is currently presenting it.
  */
 
 function isLaunchGatePart(part: InstallReviewPart): boolean {
@@ -33,20 +30,6 @@ export function filterBootstrapApprovals(
   approvals: PendingApproval[]
 ): PendingUnitInstallReviewApproval[] {
   return approvals.filter(isBootstrapUnitApproval);
-}
-
-/**
- * Approvals that belong to the already-running workspace surface.
- *
- * A launch-gate decision is handled out-of-band by bootstrap, not by the
- * generic consent queue inside whichever app happens to be running — an app
- * cannot host the decision about whether that app may run.
- */
-export function filterRuntimeApprovals(approvals: PendingApproval[]): PendingApproval[] {
-  return approvals.filter(
-    (approval) =>
-      !(isBootstrapUnitApproval(approval) && approval.parts.some((part) => part.kind === "app"))
-  );
 }
 
 /**

@@ -535,7 +535,7 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toBe("accepted");
   });
 
-  it("does not mirror startup unit approvals into push notifications", async () => {
+  it("notifies about unresolved workspace adoption reviews", async () => {
     const queue = createQueue();
     const push = createPushMock();
     createApprovalPushBridge({
@@ -553,7 +553,7 @@ describe("approvalPushBridge", () => {
     const promise = requestStartupUnit(queue);
     await flush();
 
-    expect(push.sendToTargets).not.toHaveBeenCalled();
+    expect(push.sendToTargets).toHaveBeenCalled();
     const pending = queue.listPending()[0]!;
     if (pending.kind !== "unit-install-review") throw new Error("expected install review");
     await queue.resolveInstallReview(pending.approvalId, {
