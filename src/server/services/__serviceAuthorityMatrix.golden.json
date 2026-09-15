@@ -18780,6 +18780,26 @@
       ]
     },
     "methods": {
+      "composeExact": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "workspaceTemplateSource.exactSnapshot",
+          "rationale": "Reviewed template updates acquire their exact source composition through the host."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "inspectExact": {
         "authority": {
           "principals": [
@@ -18796,6 +18816,46 @@
           "residency": "protected-write",
           "family": "workspaceTemplateSource.exactSnapshot",
           "rationale": "Reviewed shell and templates-extension flows delegate verified exact source acquisition to the host; their public inspection operation owns disclosure review."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "localRegistry": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "workspaceTemplateSource.exactSnapshot",
+          "rationale": "Trusted template consumers may read the instance-designated development catalog."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "resolveLocal": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "workspaceTemplateSource.exactSnapshot",
+          "rationale": "A trusted source consumer may prefer an instance-designated exact checkpoint without learning its host path."
         },
         "capability": null,
         "presentation": null

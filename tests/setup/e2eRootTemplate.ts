@@ -175,7 +175,6 @@ function regenerateRootRuntimeManifest(checkout: string): void {
         ...(manifest.presentation ?? {}),
         ...(manifest.dependencies.length ? { dependencies: manifest.dependencies } : {}),
         repositories: manifest.inventory.repositories,
-        files: manifest.inventory.files,
       },
     }),
     "utf8"
@@ -264,7 +263,6 @@ export async function deriveE2eRootTemplate(input: {
         review: {
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
           repositories: [...manifest.inventory.repositories],
-          files: [...manifest.inventory.files],
         },
       },
     ],

@@ -39,7 +39,6 @@ function fixture(): { checkout: string; checkpointRoot: string } {
       "  description: Example template.",
       "  repositories:",
       "    - panels/example",
-      "  files: []",
       "",
     ].join("\n")
   );
@@ -87,7 +86,6 @@ describe("development template selection", () => {
       review: {
         presentation: { name: "Example", description: "Example template." },
         repositories: ["panels/example"],
-        files: [],
       },
       pin: {
         url: "git+https://github.com/acme/example.git",

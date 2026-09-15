@@ -22,7 +22,6 @@ export interface WorkspaceSource {
   review?: {
     presentation?: { name?: string; description?: string };
     repositories: string[];
-    files: string[];
   };
 }
 
@@ -37,7 +36,6 @@ export const WorkspaceSourceSchema: z.ZodType<WorkspaceSource> = z
           .strict()
           .optional(),
         repositories: z.array(z.string()),
-        files: z.array(z.string()),
       })
       .strict()
       .optional(),

@@ -14,7 +14,6 @@ describe("current template manifest", () => {
 template:
   name: Test
   repositories: [panels/test]
-  files: [package.json]
 initPanels:
   - source: panels/test
 `,
@@ -22,7 +21,6 @@ initPanels:
     );
     expect(parsed.inventory).toEqual({
       repositories: ["panels/test"],
-      files: ["package.json"],
     });
     expect(() =>
       parseTemplateManifestContent(
@@ -35,8 +33,8 @@ template: { name: Test }
   });
 
   it("rejects missing and undeclared release bytes", () => {
-    const inventory = { repositories: ["panels/test"], files: ["package.json"] };
-    const exact = ["meta/vibestudio.yml", "package.json", "panels/test/index.tsx"];
+    const inventory = { repositories: ["panels/test"] };
+    const exact = ["meta/vibestudio.yml", "panels/test/index.tsx"];
     expect(() => validateTemplateSnapshotInventory(inventory, exact)).not.toThrow();
     expect(() =>
       validateTemplateSnapshotInventory(inventory, [...exact, "panels/other/index.tsx"])
@@ -44,9 +42,9 @@ template: { name: Test }
     expect(() =>
       validateTemplateSnapshotInventory(
         inventory,
-        exact.filter((path) => path !== "package.json")
+        exact.filter((path) => path !== "panels/test/index.tsx")
       )
-    ).toThrow(/missing path/);
+    ).toThrow(/missing repository/);
   });
 
   it("projects a workspace snapshot manifest directly into its runtime", () => {
@@ -54,7 +52,6 @@ template: { name: Test }
       `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
   repositories: []
-  files: []
 routes: []
 providers:
   evalRuntime:
@@ -87,7 +84,6 @@ git:
         `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
   repositories: []
-  files: []
 disable: [routes/example]
 `,
         WORKSPACE_SYSTEM_EPOCH
@@ -105,7 +101,6 @@ disable: [routes/example]
           description: "Built on Base",
           dependencies: [{ url: base }],
           repositories: ["panels/news"],
-          files: [],
         },
       }),
       WORKSPACE_SYSTEM_EPOCH
@@ -118,7 +113,7 @@ disable: [routes/example]
     const standalone = parseTemplateManifestContent(
       canonicalTemplateYaml({
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        template: { repositories: [], files: [] },
+        template: { repositories: [] },
       }),
       WORKSPACE_SYSTEM_EPOCH
     );
@@ -133,7 +128,6 @@ disable: [routes/example]
         template: {
           dependencies: [{ url: base, track: "refs/tags/v*", commit: "a".repeat(40) }],
           repositories: [],
-          files: [],
         },
       }),
       WORKSPACE_SYSTEM_EPOCH
@@ -149,11 +143,25 @@ disable: [routes/example]
           template: {
             dependencies: [{ url: base, version: "2" }],
             repositories: [],
-            files: [],
           },
         }),
         WORKSPACE_SYSTEM_EPOCH
       )
     ).toThrow(/unrecognized key.*version/iu);
   });
+});
+
+it("rejects the removed standalone-files field and unowned root files", () => {
+  expect(() =>
+    parseTemplateManifestContent(
+      canonicalTemplateYaml({
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        template: { repositories: [], files: ["README.md"] },
+      }),
+      WORKSPACE_SYSTEM_EPOCH
+    )
+  ).toThrow(/files/);
+  expect(() =>
+    validateTemplateSnapshotInventory({ repositories: [] }, ["meta/vibestudio.yml", "README.md"])
+  ).toThrow(/undeclared paths/);
 });

@@ -14,7 +14,7 @@ function layer(
       canonicalTemplateYaml({
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,
         ...rest,
-        template: { repositories: [], files: [], ...template },
+        template: { repositories: [], ...template },
       }),
       WORKSPACE_SYSTEM_EPOCH
     ),
@@ -24,12 +24,11 @@ function layer(
 describe("mergeTemplateManifests", () => {
   it("declares both layers' repositories so the base's files are not left unowned", () => {
     const merged = mergeTemplateManifests([
-      layer("base", { repositories: ["meta", "panels/chat"], files: ["README.md"] }),
-      layer("personal", { repositories: ["meta", "panels/news"], files: [] }),
+      layer("base", { repositories: ["meta", "panels/chat"] }),
+      layer("personal", { repositories: ["meta", "panels/news"] }),
     ]);
 
     expect(merged.inventory.repositories).toEqual(["meta", "panels/chat", "panels/news"]);
-    expect(merged.inventory.files).toEqual(["README.md"]);
   });
 
   it("accumulates extension declarations so a dependent inherits what it builds on", () => {
@@ -125,7 +124,7 @@ describe("mergeTemplateManifests", () => {
       manifest: parseTemplateManifestContent(
         canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH + 1,
-          template: { repositories: ["meta"], files: [] },
+          template: { repositories: ["meta"] },
         }),
         WORKSPACE_SYSTEM_EPOCH + 1
       ),

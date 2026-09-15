@@ -72,9 +72,8 @@ export interface ComposeDeclaredTemplateLayersInput {
  * Lay any templates one template is built on underneath it, and merge what they
  * declare into the one manifest the composed workspace runs on.
  *
- * A standalone template takes none of this: its acquired snapshot is already
- * the tree, and round-tripping its manifest through a merge would only risk
- * changing it.
+ * Every installed tree records the exact source pins used to compose it.
+ * This supplies the baseline for subsequent three-way template updates.
  *
  * This is the composition a workspace install performs, exposed on its own so
  * that anything reasoning about what a template actually runs — including
@@ -91,15 +90,13 @@ export async function composeDeclaredTemplateLayers(
       expectedSystemEpoch: input.expectedSystemEpoch,
     });
   const rootManifest = readManifestOf(root);
-  if (rootManifest.dependencies.length === 0) {
-    return { snapshot: root, layers: [{ url: pin.url, ref: pin.ref, commit: pin.commit }] };
-  }
-  const resolveTrack = input.resolveTrack;
-  if (!resolveTrack) {
-    throw new Error(
-      `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
-    );
-  }
+  const resolveTrack =
+    input.resolveTrack ??
+    (async () => {
+      throw new Error(
+        `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
+      );
+    });
   const acquired = new Map<
     string,
     { pin: WorkspaceTemplatePin; snapshot: ExactGitSnapshot; manifest: ParsedTemplateManifest }
@@ -140,6 +137,8 @@ export async function composeDeclaredTemplateLayers(
   const merged = mergeTemplateManifests(
     stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }))
   );
+  const layers = stack.map((entry) => ({ ...entry.pin }));
+  (merged.document["template"] as Record<string, unknown>)["sources"] = layers;
   const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(merged.document));
   const composed = composeTemplateLayers({
     layers: stack.map((entry) => ({
@@ -158,11 +157,6 @@ export async function composeDeclaredTemplateLayers(
       mode: 0o644 as const,
     },
   ].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-  const layers = stack.map((entry) => ({
-    url: entry.pin.url,
-    ref: entry.pin.ref,
-    commit: entry.pin.commit,
-  }));
   const snapshot: ExactGitSnapshot = {
     // The root's commit, which keys this materialization's staging paths. What
     // the workspace is made of is the recorded layers, not this one commit.
@@ -390,9 +384,7 @@ export class WorkspaceRootTemplateBootstrap {
    * Lay any templates this one is built on underneath it, and merge what they
    * declare into the one manifest the composed workspace runs on.
    *
-   * A standalone template — every template today — takes none of this: its
-   * acquired snapshot is already the tree, and round-tripping its manifest
-   * through a merge would only risk changing it.
+   * Composition records exact source provenance even without dependencies.
    */
   private async composeDeclaredLayers(
     pin: WorkspaceTemplatePin,

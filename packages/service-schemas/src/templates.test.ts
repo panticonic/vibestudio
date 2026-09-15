@@ -9,6 +9,14 @@ import {
 describe("templates contract", () => {
   it("contains discovery, inspection, and publication operations", () => {
     expect(Object.keys(templatesMethods)).toEqual([
+      "installed",
+      "inspectContribution",
+      "suggestContribution",
+      "prepareUpdate",
+      "reviewUpdate",
+      "readUpdateFile",
+      "resolveUpdate",
+      "publishUpdate",
       "registry",
       "resolveSource",
       "inspect",
@@ -73,7 +81,6 @@ describe("templates contract", () => {
         },
         presentation: { name: "Base", description: "Common source" },
         repositories: ["workers/agent"],
-        files: ["README.md"],
         dependencies: [],
       }).repositories
     ).toEqual(["workers/agent"]);

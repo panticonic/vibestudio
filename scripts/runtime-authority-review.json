@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:c6b9d37730790a638100a30c318f2e29e4a20c8a2a31cd36310878b835a53e11",
+  "censusDigest": "sha256:c5f331146e08a9d0f68737ece7ad4c94b5059d721215ee53387b2e2d8ff42b84",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -985,6 +985,18 @@
     "host:gateway.fetch": {
       "review": "connected-website-workspace-asset-gateway",
       "change": "Records the website principal for the existing path-allowlisted workspace gateway transport. The change does not expose a host bearer or unrestricted external egress; method/resource checks still apply."
+    },
+    "host:workspaceTemplateSource.composeExact": {
+      "review": "reviewed-exact-workspace-source-consumer",
+      "change": "Acquires and validates the dependency-first exact source composition used by a reviewed template update. The receiver admits only the reviewed templates extension or authenticated shell, returns content-addressed repository descriptors, and grants no workspace mutation or arbitrary host-path access."
+    },
+    "host:workspaceTemplateSource.localRegistry": {
+      "review": "reviewed-exact-workspace-source-consumer",
+      "change": "Records the existing instance-designated catalog read for the reviewed templates extension and authenticated shell. It exposes template URLs and presentation metadata, never checkout paths or credentials."
+    },
+    "host:workspaceTemplateSource.resolveLocal": {
+      "review": "reviewed-exact-workspace-source-consumer",
+      "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
     }
   }
 }

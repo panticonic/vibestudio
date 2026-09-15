@@ -18,8 +18,6 @@ function manifest(): string {
     "  description: Test template",
     "  repositories:",
     "    - apps/one",
-    "  files:",
-    "    - package.json",
     "apps:",
     "  - source: apps/one",
     "",

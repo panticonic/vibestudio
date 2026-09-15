@@ -82,7 +82,7 @@ export function mergeTemplateManifests(
   }
 
   const owners = new Map<string, string>();
-  const claim = (kind: "repository" | "file" | "source", value: string, label: string): void => {
+  const claim = (kind: "repository" | "source", value: string, label: string): void => {
     const key = `${kind}\0${value}`;
     const existing = owners.get(key);
     if (existing) {
@@ -92,7 +92,6 @@ export function mergeTemplateManifests(
   };
 
   const repositories: string[] = [];
-  const files: string[] = [];
   for (const layer of layers) {
     for (const repository of layer.manifest.inventory.repositories) {
       // `meta` is every template's own manifest repository, so each layer
@@ -100,10 +99,6 @@ export function mergeTemplateManifests(
       if (repository === "meta") continue;
       claim("repository", repository, layer.label);
       repositories.push(repository);
-    }
-    for (const file of layer.manifest.inventory.files) {
-      claim("file", file, layer.label);
-      files.push(file);
     }
   }
   if (layers.some((layer) => layer.manifest.inventory.repositories.includes("meta"))) {
@@ -168,15 +163,14 @@ export function mergeTemplateManifests(
     // created from this tree must still know which repositories came from an
     // upstream when it later publishes itself as a template.
     ...(top.manifest.dependencies.length > 0 ? { dependencies: top.manifest.dependencies } : {}),
+    ...(top.manifest.sources.length ? { sources: top.manifest.sources } : {}),
     repositories: [...repositories].sort(compareUtf16CodeUnits),
-    files: [...files].sort(compareUtf16CodeUnits),
   };
 
   return {
     document,
     inventory: {
       repositories: [...repositories].sort(compareUtf16CodeUnits),
-      files: [...files].sort(compareUtf16CodeUnits),
     },
   };
 }

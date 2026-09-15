@@ -1,3 +1,8 @@
+import {
+  composeDeclaredTemplateLayers,
+  enumerateRootTemplateRepositories,
+} from "../workspaceRootTemplateBootstrap.js";
+import type { ExactGitSnapshot } from "@vibestudio/git";
 import { Buffer } from "node:buffer";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -8,17 +13,15 @@ import {
   rootRuntimeFromTemplateManifest,
   validateTemplateSnapshotInventory,
 } from "@vibestudio/workspace/templateManifest";
-import { TEMPLATE_SOURCE_MANIFEST_PATH } from "@vibestudio/workspace/templateCoordinates";
+import {
+  TEMPLATE_SOURCE_MANIFEST_PATH,
+  normalizeTemplateGitUrl,
+} from "@vibestudio/workspace/templateCoordinates";
 import {
   sameWorkspaceTemplatePin,
   type WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 import type { WorkspaceSource } from "@vibestudio/workspace-contracts/workspaceSource";
-
-interface ExactSnapshot {
-  files: readonly { path: string }[];
-  readFile(path: string): Uint8Array | null;
-}
 
 export async function acquireExactWorkspaceSource<T>(input: {
   pin: WorkspaceTemplatePin;
@@ -32,16 +35,75 @@ export async function acquireExactWorkspaceSource<T>(input: {
 
 export function createWorkspaceTemplateSourceService(deps: {
   systemEpoch: number;
-  acquire(pin: WorkspaceTemplatePin): Promise<ExactSnapshot>;
+  acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   resolveLocal(url: string): WorkspaceTemplatePin | null;
   localRegistry(): TemplateRegistry | null;
+  resolveTrack?(address: {
+    url: string;
+    track: string;
+    credential?: string;
+  }): Promise<{ ref: string; commit: string }>;
+  put(bytes: Uint8Array): Promise<unknown>;
 }): ServiceDefinition {
+  const acquireValidated = async (pin: WorkspaceTemplatePin) => {
+    const snapshot = await deps.acquire(pin);
+    const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+    if (!bytes) throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
+    const manifest = parseTemplateManifestContent(
+      Buffer.from(bytes).toString("utf8"),
+      deps.systemEpoch
+    );
+    rootRuntimeFromTemplateManifest(manifest);
+    validateTemplateSnapshotInventory(
+      manifest.inventory,
+      snapshot.files.map((file) => file.path)
+    );
+    return { snapshot, manifest };
+  };
   return {
     name: "workspaceTemplateSource",
     description: "Host-owned exact workspace source acquisition",
     authority: { principals: ["code", "host"] },
     methods: workspaceTemplateSourceMethods,
     handler: defineServiceHandler("workspaceTemplateSource", workspaceTemplateSourceMethods, {
+      composeExact: async (ctx, [{ sources }]) => {
+        requireReviewedSourceConsumer(ctx.caller);
+        const root = sources.at(-1)!;
+        const normalize = normalizeTemplateGitUrl;
+        if (new Set(sources.map((source) => normalize(source.url))).size !== sources.length)
+          throw new Error("Each installed template source must have one exact pin");
+        const composed = await composeDeclaredTemplateLayers({
+          pin: root,
+          root: (await acquireValidated(root)).snapshot,
+          expectedSystemEpoch: deps.systemEpoch,
+          acquire: async (pin) => (await acquireValidated(pin)).snapshot,
+          resolveTrack: async (address) => {
+            const pinned = sources.find(
+              (source) => normalize(source.url) === normalize(address.url)
+            );
+            if (pinned) return { ref: pinned.ref, commit: pinned.commit };
+            if (!deps.resolveTrack) throw new Error("New template dependency cannot be resolved");
+            return deps.resolveTrack(address);
+          },
+        });
+        // Composition generates the metadata manifest; store it beside acquired
+        // blobs so the native VCS receives content-addressed snapshots only.
+        const manifestBytes = composed.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+        if (!manifestBytes) throw new Error("Composed source lost its manifest");
+        await deps.put(manifestBytes);
+        return {
+          sources: composed.layers,
+          repositories: enumerateRootTemplateRepositories(composed.snapshot).map((repo) => ({
+            repoPath: repo.repoPath,
+            snapshot: repo.snapshot,
+            files: repo.files.map((file) => ({
+              path: file.path,
+              contentHash: file.contentHash,
+              mode: file.mode,
+            })),
+          })),
+        };
+      },
       localRegistry: async (ctx) => {
         requireReviewedSourceConsumer(ctx.caller);
         return deps.localRegistry();
@@ -52,23 +114,11 @@ export function createWorkspaceTemplateSourceService(deps: {
       },
       inspectExact: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);
-        const snapshot = await deps.acquire(pin);
-        const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
-        if (!bytes) {
-          throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
-        }
-        const manifest = parseTemplateManifestContent(
-          Buffer.from(bytes).toString("utf8"),
-          deps.systemEpoch
-        );
-        rootRuntimeFromTemplateManifest(manifest);
-        const paths = snapshot.files.map((file) => file.path);
-        validateTemplateSnapshotInventory(manifest.inventory, paths);
+        const { manifest } = await acquireValidated(pin);
         return {
           pin,
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
           repositories: manifest.inventory.repositories,
-          files: manifest.inventory.files,
           dependencies: manifest.dependencies,
         };
       },

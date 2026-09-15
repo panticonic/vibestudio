@@ -53,7 +53,6 @@ it("derives explicit Personal and ordinary project roots from canonical template
             ? {}
             : { dependencies: [{ url: "git+https://example.test/base.git" }] }),
           repositories: [source],
-          files: [],
         },
         initPanels: [{ source }],
       })
@@ -115,7 +114,6 @@ it("derives explicit Personal and ordinary project roots from canonical template
   expect(derived.sources.at(-1)?.review).toEqual({
     presentation: { name: "personal" },
     repositories: ["panels/chat"],
-    files: [],
   });
   const runtime = YAML.parse(
     fs.readFileSync(path.join(derived.materializedSource, "meta/vibestudio.yml"), "utf8")

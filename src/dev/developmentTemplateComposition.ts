@@ -44,7 +44,6 @@ export function composeDevelopmentTemplateCheckouts(
       const root = roots[index]!;
       for (const relative of [
         ...manifest.inventory.repositories.filter((entry) => entry !== "meta"),
-        ...manifest.inventory.files,
       ]) {
         if (claimed.has(relative))
           throw new Error(`Template composition has duplicate ${relative}`);

@@ -298,8 +298,8 @@ work:
 4. review the derived release diff.
 
 The machinery never guesses membership from all changed repositories, a Git
-checkout, or a publication event. `template.files` names non-repository support
-paths explicitly and accepts no globs or path escapes.
+checkout, or a publication event. All published files belong to declared
+repository units; standalone support-file declarations have been removed.
 
 ### `meta/vibestudio.yml`: generated effective runtime
 

@@ -10,7 +10,6 @@ describe("templates client", () => {
         commit: "a".repeat(40),
       },
       repositories: [],
-      files: [],
       dependencies: [],
     });
     const locator = { url: "https://example.test/template.git" };

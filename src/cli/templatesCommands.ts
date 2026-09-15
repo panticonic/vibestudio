@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   templateAuthoringInspectionSchema,
+  templateContributionPlanSchema,
   type TemplateAuthoringInspection,
   type TemplateLocator,
   type TemplatePublication,
@@ -117,7 +118,7 @@ function saveReceipt(inv: ParsedInvocation, kind: string, value: unknown): void 
     );
   }
 }
-function target(inv: ParsedInvocation): TemplateLocator {
+function target(inv: ParsedInvocation): Extract<TemplateLocator, { url: string }> {
   const url = inv.positionals[0]?.trim();
   if (!url) throw new UsageError("pass a template URL");
   return {
@@ -135,7 +136,133 @@ function renderPublication(value: TemplatePublication): void {
   console.log(`  commit: ${value.commit}`);
 }
 
+const renderJson = (value: unknown) => console.log(JSON.stringify(value, null, 2));
+const operationId = (inv: ParsedInvocation) => {
+  const value = inv.positionals[0]?.trim();
+  if (!value || inv.positionals.length !== 1) throw new UsageError("Pass one update operation ID");
+  return value;
+};
 export const templatesCommands: CliCommand[] = [
+  {
+    group: "templates",
+    name: "installed",
+    summary: "List exact installed template sources",
+    flags: [JSON_FLAG],
+    run: (inv) => run(inv, (c) => c.installed(), renderJson),
+  },
+  {
+    group: "templates",
+    name: "contribution-inspect",
+    summary: "Review selected units for contribution to their installed source",
+    flags: [PART, RECEIPT, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (c) => {
+          const plan = await c.inspectContribution({
+            sourceUrl: target(inv).url!,
+            parts: inv.flagsMulti("part"),
+          });
+          saveReceipt(inv, "contribution", plan);
+          return plan;
+        },
+        renderJson
+      ),
+  },
+  {
+    group: "templates",
+    name: "contribution-push",
+    summary: "Push a reviewed contribution on its own upstream branch",
+    flags: [COMMAND_ID, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        (c) =>
+          c.suggestContribution({
+            commandId: commandId(inv),
+            plan: readReceipt(inv, "contribution", templateContributionPlanSchema),
+          }),
+        renderJson
+      ),
+  },
+  {
+    group: "templates",
+    name: "update-prepare",
+    summary: "Prepare the latest template update in a separate review context",
+    flags: [COMMAND_ID, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        (c) => c.prepareUpdate({ commandId: commandId(inv), sourceUrl: target(inv).url! }),
+        renderJson
+      ),
+  },
+  {
+    group: "templates",
+    name: "update-review",
+    summary: "Resume a template update and inspect remaining conflicts",
+    flags: [JSON_FLAG],
+    run: (inv) => run(inv, (c) => c.reviewUpdate({ operationId: operationId(inv) }), renderJson),
+  },
+  {
+    group: "templates",
+    name: "update-read",
+    summary: "Read base, local, and incoming versions of an update file",
+    flags: [
+      flag("repo-path", "Workspace unit"),
+      flag("path", "Unit-relative file path"),
+      JSON_FLAG,
+    ],
+    run: (inv) =>
+      run(
+        inv,
+        (c) =>
+          c.readUpdateFile({
+            operationId: operationId(inv),
+            repoPath: requiredFlag(inv, "repo-path"),
+            path: requiredFlag(inv, "path"),
+          }),
+        renderJson
+      ),
+  },
+  {
+    group: "templates",
+    name: "update-resolve",
+    summary: "Resolve an exact update conflict using ours or theirs",
+    flags: [
+      flag("delta-id", "Native delta from update review"),
+      flag("kind", "file or repository"),
+      flag("id", "Coordinate identity from update review"),
+      flag("resolution", "ours or theirs"),
+      JSON_FLAG,
+    ],
+    run: (inv) =>
+      run(
+        inv,
+        (c) => {
+          const kind = requiredFlag(inv, "kind"),
+            resolution = requiredFlag(inv, "resolution");
+          if (kind !== "file" && kind !== "repository")
+            throw new UsageError("--kind must be file or repository");
+          if (resolution !== "ours" && resolution !== "theirs")
+            throw new UsageError("--resolution must be ours or theirs");
+          return c.resolveUpdate({
+            operationId: operationId(inv),
+            deltaId: requiredFlag(inv, "delta-id"),
+            coordinate: { kind, id: requiredFlag(inv, "id") },
+            resolution,
+          });
+        },
+        renderJson
+      ),
+  },
+  {
+    group: "templates",
+    name: "update-publish",
+    summary: "Apply a fully reviewed template update to workspace main",
+    flags: [JSON_FLAG],
+    run: (inv) => run(inv, (c) => c.publishUpdate({ operationId: operationId(inv) }), renderJson),
+  },
   {
     group: "templates",
     name: "inspect",

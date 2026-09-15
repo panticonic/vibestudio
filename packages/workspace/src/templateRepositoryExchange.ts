@@ -196,7 +196,6 @@ function projection(root: string): {
       ...files.filter(
         (file) =>
           file === "meta/vibestudio.yml" ||
-          manifest.inventory.files.includes(file) ||
           manifest.inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
       ),
     ]),

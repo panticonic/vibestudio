@@ -1,3 +1,4 @@
+import { vcsMergeCoordinateSchema } from "./vcs.js";
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
@@ -92,7 +93,6 @@ export const templateInspectionSchema = z
       .strict()
       .optional(),
     repositories: z.array(z.string()),
-    files: z.array(z.string()),
     dependencies: z.array(WorkspaceTemplateDependencySchema),
   })
   .strict();
@@ -136,7 +136,155 @@ export const templatePublicationSchema = z
     parts: z.array(z.string()).min(1),
   })
   .strict();
+export const templateSourceTreeSchema = z
+  .object({
+    sources: z.array(WorkspaceTemplatePinSchema).min(1),
+    repositories: z.array(
+      z
+        .object({
+          repoPath: z.string(),
+          snapshot: digest,
+          files: z.array(
+            z
+              .object({
+                path: z.string(),
+                contentHash: z.string().regex(/^[0-9a-f]{64}$/u),
+                mode: z.number().int(),
+              })
+              .strict()
+          ),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+export type TemplateSourceTree = z.infer<typeof templateSourceTreeSchema>;
+
+export const templateContributionPlanSchema = z
+  .object({
+    source: WorkspaceTemplatePinSchema,
+    parts: z.array(z.string()).min(1),
+    mainEventId: z.string(),
+    fingerprint: digest,
+  })
+  .strict();
+export type TemplateContributionPlan = z.infer<typeof templateContributionPlanSchema>;
+export const templateContributionResultSchema = z
+  .object({
+    outcome: z.enum(["pushed", "already-at-remote", "nothing-to-suggest"]),
+    operationId: z.string(),
+    branch: z.string().nullable(),
+    url: z.string().optional(),
+    headCommit: z.string().nullable(),
+    commits: z.number(),
+    parts: z.array(z.string()),
+  })
+  .strict();
+export const templateUpdateReviewSchema = z
+  .object({
+    operationId: z.string(),
+    contextId: z.string(),
+    sourceUrl: z.string(),
+    target: WorkspaceTemplatePinSchema,
+    mainEventId: z.string(),
+    status: z.enum(["review", "published"]),
+    repositories: z.array(
+      z.object({ repoPath: z.string(), kind: z.enum(["added", "changed", "removed"]) }).strict()
+    ),
+    conflicts: z.array(
+      z
+        .object({ deltaId: z.string(), repoPath: z.string(), coordinate: vcsMergeCoordinateSchema })
+        .strict()
+    ),
+  })
+  .strict();
+export type TemplateUpdateReview = z.infer<typeof templateUpdateReviewSchema>;
+
 export const templatesMethods = defineServiceMethods({
+  installed: {
+    description: "List the exact template sources recorded in this workspace.",
+    website: {
+      kind: "closed",
+      reason: "Workspace source provenance is private to its members.",
+    } as const,
+    args: z.tuple([]),
+    returns: z.array(templateInspectionSchema),
+    access: READ,
+  },
+  inspectContribution: {
+    description: "Review selected owned units to suggest back to one installed template.",
+    website: { kind: "closed", reason: "Controls workspace source publication." } as const,
+    args: z.tuple([
+      z.object({ sourceUrl: z.string(), parts: z.array(z.string()).min(1) }).strict(),
+    ]),
+    returns: templateContributionPlanSchema,
+    access: READ,
+  },
+  suggestContribution: {
+    description: "Push the reviewed units on a contribution branch in their template repository.",
+    website: { kind: "closed", reason: "Controls workspace source publication." } as const,
+    args: z.tuple([z.object({ commandId, plan: templateContributionPlanSchema }).strict()]),
+    returns: templateContributionResultSchema,
+    access: WRITE,
+  },
+  prepareUpdate: {
+    description:
+      "Prepare an exact template update in a separate VCS context, preserving local changes for review.",
+    website: { kind: "closed", reason: "Controls workspace source updates." } as const,
+    args: z.tuple([
+      z
+        .object({ commandId, sourceUrl: z.string(), target: WorkspaceTemplatePinSchema.optional() })
+        .strict(),
+    ]),
+    returns: templateUpdateReviewSchema,
+    access: WRITE,
+  },
+  reviewUpdate: {
+    description: "Inspect a prepared update and its remaining native VCS conflicts.",
+    website: { kind: "closed", reason: "Controls workspace source updates." } as const,
+    args: z.tuple([z.object({ operationId: commandId }).strict()]),
+    returns: templateUpdateReviewSchema,
+    access: READ,
+  },
+  readUpdateFile: {
+    description: "Read the base, local, and incoming versions of a file in a prepared update.",
+    website: { kind: "closed", reason: "Workspace source is private." } as const,
+    args: z.tuple([
+      z.object({ operationId: commandId, repoPath: z.string(), path: z.string() }).strict(),
+    ]),
+    returns: z
+      .object({
+        base: z.string().nullable(),
+        ours: z.string().nullable(),
+        theirs: z.string().nullable(),
+      })
+      .strict(),
+    access: READ,
+  },
+  resolveUpdate: {
+    description: "Resolve one exact native VCS conflict in a template update.",
+    website: { kind: "closed", reason: "Controls workspace source updates." } as const,
+    args: z.tuple([
+      z
+        .object({
+          operationId: commandId,
+          deltaId: z.string(),
+          coordinate: z.object({ kind: z.enum(["file", "repository"]), id: z.string() }).strict(),
+          resolution: z.enum(["ours", "theirs"]),
+        })
+        .strict(),
+    ]),
+    returns: templateUpdateReviewSchema,
+    access: WRITE,
+  },
+  publishUpdate: {
+    description:
+      "Publish a fully reviewed template update through the ordinary workspace VCS gate.",
+    website: { kind: "closed", reason: "Controls workspace source updates." } as const,
+    args: z.tuple([z.object({ operationId: commandId }).strict()]),
+    returns: templateUpdateReviewSchema,
+    access: WRITE,
+  },
   registry: {
     website: {
       kind: "eligible",
@@ -223,6 +371,26 @@ export const templatesMethods = defineServiceMethods({
 
 /** Host-owned exact-source acquisition used by reviewed source consumers. */
 export const workspaceTemplateSourceMethods = defineServiceMethods({
+  composeExact: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Reviewed template updates acquire their exact source composition through the host.",
+    },
+    authority: { principals: ["user", "code"] },
+    description:
+      "Acquire an exact template tree using the supplied layer pins, resolving newly introduced dependencies once.",
+    website: {
+      kind: "closed",
+      reason: "Source acquisition is owned by the reviewed template workflow.",
+    } as const,
+    args: z.tuple([z.object({ sources: z.array(WorkspaceTemplatePinSchema).min(1) }).strict()]),
+    returns: templateSourceTreeSchema,
+    access: READ,
+  },
   localRegistry: {
     tier: {
       tier: "open",

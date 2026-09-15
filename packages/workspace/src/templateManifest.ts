@@ -6,6 +6,7 @@ import {
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceConfig,
+  WorkspaceTemplatePin,
   WorkspaceTemplateDependency,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
@@ -16,7 +17,6 @@ type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
 
 export interface TemplateRepositoryInventory {
   repositories: string[];
-  files: string[];
 }
 
 export interface ParsedTemplateManifest {
@@ -24,6 +24,7 @@ export interface ParsedTemplateManifest {
   inventory: TemplateRepositoryInventory;
   /** Templates this one is built on, in declaration order. Empty when it stands alone. */
   dependencies: WorkspaceTemplateDependency[];
+  sources: WorkspaceTemplatePin[];
   presentation?: WorkspaceTemplatePresentation;
 }
 
@@ -36,7 +37,7 @@ function uniqueSortedPaths(paths: readonly string[], label: string): string[] {
 /**
  * Prove that every released byte has exactly one manifest owner. The source
  * manifest is intrinsic to the format; all other paths must belong to one
- * declared semantic repository or be named explicitly as a support file.
+ * declared semantic repository.
  */
 export function validateTemplateSnapshotInventory(
   inventory: TemplateRepositoryInventory,
@@ -53,9 +54,6 @@ export function validateTemplateSnapshotInventory(
   if (!paths.has(TEMPLATE_SOURCE_MANIFEST_PATH)) {
     throw new Error(`template snapshot is missing required ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
   }
-  for (const file of inventory.files) {
-    if (!paths.has(file)) throw new Error(`template.files declares missing path ${file}`);
-  }
   for (const repository of inventory.repositories) {
     const prefix = `${repository}/`;
     if (![...paths].some((file) => file.startsWith(prefix))) {
@@ -65,7 +63,6 @@ export function validateTemplateSnapshotInventory(
   const unowned = [...paths].filter(
     (file) =>
       file !== TEMPLATE_SOURCE_MANIFEST_PATH &&
-      !inventory.files.includes(file) &&
       !inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
   );
   if (unowned.length > 0) {
@@ -135,14 +132,6 @@ export function parseTemplateManifestContent(
   const raw = document as Record<string, unknown>;
   const authoring = WorkspaceTemplateAuthoringMetadataSchema.parse(raw["template"]);
   const repositories = uniqueSortedPaths(authoring.repositories, "template.repositories");
-  const files = uniqueSortedPaths(authoring.files, "template.files");
-  for (const file of files) {
-    if (
-      repositories.some((repository) => file === repository || file.startsWith(`${repository}/`))
-    ) {
-      throw new Error(`template.files path ${file} is already owned by a declared repository`);
-    }
-  }
   const top = WorkspaceConfigTopLayerSchema.parse({
     ...raw,
     template: {
@@ -157,8 +146,9 @@ export function parseTemplateManifestContent(
   }
   return {
     top,
-    inventory: { repositories, files },
+    inventory: { repositories },
     dependencies: authoring.dependencies ?? [],
+    sources: authoring.sources ?? [],
     ...(top.template === undefined ? {} : { presentation: top.template }),
   };
 }

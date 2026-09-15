@@ -597,6 +597,12 @@ const mutationEnvelope = {
 export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
   z
     .object({
+      kind: z.literal("repository-delete"),
+      repositoryId: id("Empty repository to remove; resolve contained file changes first."),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("repository-create"),
       repoPath: canonicalRepoPath.describe(
         "New, currently unoccupied repository root shaped exactly as <section>/<name>. Repositories cannot be nested inside an existing project. To change an existing project, resolve its repository and file identities and use a file edit/create operation."

@@ -1,6 +1,8 @@
+import { canonicalSnapshotDigest, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import type { TemplateSourceTree } from "@vibestudio/service-schemas/templates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
   acquireExactWorkspaceSource,
@@ -11,19 +13,25 @@ const sourceManifest = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
   name: Dirty source
   repositories: [panels/example]
-  files: [package.json]
 initPanels:
   - source: panels/example
 `;
 
 function snapshot() {
-  const files = [
-    { path: "meta/vibestudio.yml" },
-    { path: "package.json" },
-    { path: "panels/example/index.tsx" },
-  ];
+  const files = [{ path: "meta/vibestudio.yml" }, { path: "panels/example/index.tsx" }];
+  const descriptors = files.map((file) => {
+    const content = file.path === "meta/vibestudio.yml" ? sourceManifest : "{}";
+    return {
+      ...file,
+      contentHash: sha256HexSyncText(content),
+      size: Buffer.byteLength(content),
+      mode: 0o644 as const,
+    };
+  });
   return {
-    files,
+    commit: "a".repeat(40),
+    snapshot: canonicalSnapshotDigest(descriptors.map((file) => ({ ...file, mode: 0o100644 }))),
+    files: descriptors,
     readFile: (path: string) =>
       path === "meta/vibestudio.yml" ? Buffer.from(sourceManifest) : Buffer.from("{}"),
   };
@@ -88,7 +96,9 @@ describe("workspaceTemplateSource", () => {
         },
       ],
     };
+    const put = vi.fn(async (_bytes: Uint8Array) => undefined);
     const service = createWorkspaceTemplateSourceService({
+      put,
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
       acquire,
       resolveLocal,
@@ -127,10 +137,19 @@ describe("workspaceTemplateSource", () => {
       pin: first,
       presentation: { name: "Dirty source" },
       repositories: ["panels/example"],
-      files: ["package.json"],
       dependencies: [],
     });
     expect(two).toMatchObject({ pin: second });
+    const composed = (await service.handler(ctx, "composeExact", [
+      { sources: [first] },
+    ])) as TemplateSourceTree;
+    expect(composed.sources).toEqual([first]);
+    expect(composed.repositories.map((repo) => repo.repoPath)).toEqual(["meta", "panels/example"]);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(new TextDecoder().decode(put.mock.calls[0]![0])).toContain(first.commit);
+    await expect(
+      service.handler(ctx, "composeExact", [{ sources: [first, second] }])
+    ).rejects.toThrow("one exact pin");
     expect(one).not.toHaveProperty("checkout");
     await expect(service.handler(ctx, "resolveLocal", [first.url])).resolves.toEqual(first);
     await expect(service.handler(ctx, "localRegistry", [])).resolves.toEqual(registry);

@@ -34,7 +34,7 @@ are checkout-local operation evidence, not template source or an ambient cache.
 
 The projection is derived from `meta/vibestudio.yml`:
 
-- declared repository subtrees and declared support files are included;
+- only declared repository subtrees are included;
 - undeclared paths are reported as `untouched` and never copied or deleted;
 - the authored `meta/vibestudio.yml` is included as the single source and
   runtime manifest.

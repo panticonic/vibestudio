@@ -8671,6 +8671,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspaceTemplateSource.composeExact": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Reviewed template updates acquire their exact source composition through the host.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workspaceTemplateSource.inspectExact": {
     tier: {
       tier: "open",
@@ -8679,6 +8691,29 @@ export const HOST_AUTHORITY_METHODS = {
       family: "workspaceTemplateSource.exactSnapshot",
       rationale:
         "Reviewed shell and templates-extension flows delegate verified exact source acquisition to the host; their public inspection operation owns disclosure review.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "workspaceTemplateSource.localRegistry": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale: "Trusted template consumers may read the instance-designated development catalog.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "workspaceTemplateSource.resolveLocal": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "A trusted source consumer may prefer an instance-designated exact checkpoint without learning its host path.",
     },
     capability: null,
     presentation: null,

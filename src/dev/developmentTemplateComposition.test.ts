@@ -29,13 +29,13 @@ describe("composeDevelopmentTemplateCheckouts", () => {
   it("materializes dependency-owned and dependent-owned units without changing their ownership", () => {
     const base = template(
       "base",
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Base\n  repositories: [packages/base]\n  files: [BASE.md]\n`,
-      { "packages/base/package.json": "{}", "BASE.md": "base" }
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Base\n  repositories: [packages/base]\n`,
+      { "packages/base/package.json": "{}", "packages/base/BASE.md": "base" }
     );
     const personal = template(
       "personal",
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Personal\n  dependencies:\n    - url: git+https://example.test/base.git\n  repositories: [panels/tour]\n  files: [PERSONAL.md]\n`,
-      { "panels/tour/package.json": "{}", "PERSONAL.md": "personal" }
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Personal\n  dependencies:\n    - url: git+https://example.test/base.git\n  repositories: [panels/tour]\n`,
+      { "panels/tour/package.json": "{}", "panels/tour/PERSONAL.md": "personal" }
     );
 
     const composition = composeDevelopmentTemplateCheckouts([base, personal]);
@@ -47,10 +47,13 @@ describe("composeDevelopmentTemplateCheckouts", () => {
 
     expect(parsed.inventory).toEqual({
       repositories: ["packages/base", "panels/tour"],
-      files: ["BASE.md", "PERSONAL.md"],
     });
     expect(parsed.dependencies).toEqual([{ url: "git+https://example.test/base.git" }]);
-    expect(fs.readFileSync(path.join(composition.root, "BASE.md"), "utf8")).toBe("base");
-    expect(fs.readFileSync(path.join(composition.root, "PERSONAL.md"), "utf8")).toBe("personal");
+    expect(fs.readFileSync(path.join(composition.root, "packages/base/BASE.md"), "utf8")).toBe(
+      "base"
+    );
+    expect(fs.readFileSync(path.join(composition.root, "panels/tour/PERSONAL.md"), "utf8")).toBe(
+      "personal"
+    );
   });
 });

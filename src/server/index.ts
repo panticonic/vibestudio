@@ -2225,6 +2225,8 @@ async function main() {
     createWorkspaceTemplateSourceService({
       systemEpoch: workspaceConfig.systemEpoch,
       acquire: acquireWorkspaceTemplate,
+      resolveTrack: resolveTemplateTrack,
+      put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
       localRegistry: () => {
         const registryFile = process.env[TEMPLATE_REGISTRY_FILE_ENV]?.trim();
         if (!registryFile) return null;

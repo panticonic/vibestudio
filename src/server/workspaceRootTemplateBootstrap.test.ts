@@ -1,3 +1,4 @@
+import { parse } from "yaml";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -116,14 +117,13 @@ describe("WorkspaceRootTemplateBootstrap", () => {
           template: {
             name: "Base",
             repositories: ["extensions/templates"],
-            files: ["README.md"],
           },
           extensions: [{ source: "extensions/templates" }],
         }),
       },
       { path: "extensions/templates/package.json", text: "{}" },
       { path: "extensions/templates/index.ts", text: "export {};" },
-      { path: "README.md", text: "repository tooling" },
+      { path: "extensions/templates/README.md", text: "unit documentation" },
     ]);
 
   it("records what a designated template shipped, so units need no signature", async () => {
@@ -181,27 +181,28 @@ describe("WorkspaceRootTemplateBootstrap", () => {
           template: {
             name: "Base",
             repositories: ["extensions/templates"],
-            files: ["README.md"],
           },
           extensions: [{ source: "extensions/templates" }],
         }),
       },
       { path: "extensions/templates/package.json", text: "{}" },
       { path: "extensions/templates/index.ts", text: "export {};" },
-      { path: "README.md", text: "repository tooling" },
+      { path: "extensions/templates/README.md", text: "unit documentation" },
     ]);
     const fx = fixture(rootSnapshot);
 
-    await expect(fx.bootstrap.prepareInitialization()).resolves.toEqual({
-      pin: fx.pin,
-      repositories: enumerateRootTemplateRepositories(rootSnapshot),
-    });
+    const prepared = await fx.bootstrap.prepareInitialization();
+    expect(prepared.pin).toEqual(fx.pin);
+    expect(prepared.repositories.filter((repo) => repo.repoPath !== "meta")).toEqual(
+      enumerateRootTemplateRepositories(rootSnapshot).filter((repo) => repo.repoPath !== "meta")
+    );
+    const installedManifest = parse(
+      fs.readFileSync(path.join(fx.sourcePath, "meta/vibestudio.yml"), "utf8")
+    );
+    expect(installedManifest.template.sources).toEqual([fx.pin]);
     expect(fx.acquire).toHaveBeenCalledExactlyOnceWith(fx.pin);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(false);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(false);
-    expect(fs.readFileSync(path.join(fx.sourcePath, "meta/vibestudio.yml"), "utf8")).toBe(
-      new TextDecoder().decode(rootSnapshot.readFile("meta/vibestudio.yml")!)
-    );
   });
 
   it("rejects container-root files instead of inventing an owner", () => {
@@ -214,7 +215,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-          template: { repositories: [], files: [] },
+          template: { repositories: [] },
         }),
       },
       { path: "packages/tsconfig.json", text: "{}" },
@@ -234,7 +235,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-          template: { repositories: [], files: [] },
+          template: { repositories: [] },
         }),
       },
     ]);
@@ -256,7 +257,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-          template: { repositories: [], files: [] },
+          template: { repositories: [] },
         }),
       },
     ]);
@@ -285,17 +286,20 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     const rootSnapshot = snapshot([
       {
         path: "meta/vibestudio.yml",
-        text:
-          `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` +
-          `template:\n  repositories: []\n  files: []\n`,
+        text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` + `template:\n  repositories: []\n`,
       },
     ]);
     const fx = fixture(rootSnapshot);
 
-    await expect(fx.bootstrap.prepareInitialization()).resolves.toEqual({
-      pin: fx.pin,
-      repositories: enumerateRootTemplateRepositories(rootSnapshot),
-    });
+    const prepared = await fx.bootstrap.prepareInitialization();
+    expect(prepared.pin).toEqual(fx.pin);
+    expect(prepared.repositories.filter((repo) => repo.repoPath !== "meta")).toEqual(
+      enumerateRootTemplateRepositories(rootSnapshot).filter((repo) => repo.repoPath !== "meta")
+    );
+    const installedManifest = parse(
+      fs.readFileSync(path.join(fx.sourcePath, "meta/vibestudio.yml"), "utf8")
+    );
+    expect(installedManifest.template.sources).toEqual([fx.pin]);
   });
 
   it("lays a declared dependency underneath and runs on one merged manifest", async () => {
@@ -311,7 +315,6 @@ describe("WorkspaceRootTemplateBootstrap", () => {
             template: {
               name: "Base",
               repositories: ["extensions/templates"],
-              files: [],
             },
           }),
         },
@@ -331,7 +334,6 @@ describe("WorkspaceRootTemplateBootstrap", () => {
             name: "Personal",
             dependencies: [{ url: "git+https://example.test/foundation.git" }],
             repositories: ["panels/news"],
-            files: [],
           },
         }),
       },
@@ -393,7 +395,6 @@ describe("WorkspaceRootTemplateBootstrap", () => {
           template: {
             dependencies: [{ url: "git+https://example.test/foundation.git" }],
             repositories: [],
-            files: [],
           },
         }),
       },
@@ -418,7 +419,7 @@ describe("composeDeclaredTemplateLayers", () => {
           text: canonicalTemplateYaml({
             systemEpoch: WORKSPACE_SYSTEM_EPOCH,
             defaultRepo: "projects/default",
-            template: { name: "Base", repositories: ["packages/runtime"], files: [] },
+            template: { name: "Base", repositories: ["packages/runtime"] },
           }),
         },
         { path: "packages/runtime/package.json", text: '{"name":"@workspace/runtime"}' },
@@ -438,7 +439,6 @@ describe("composeDeclaredTemplateLayers", () => {
             name: "System",
             dependencies: [{ url: dependencyUrl }],
             repositories: ["workers/system-test-runner"],
-            files: [],
           },
         }),
       },
@@ -478,7 +478,7 @@ describe("composeDeclaredTemplateLayers", () => {
     expect(manifest).toContain("projects/default");
   });
 
-  it("passes a standalone template through as its own acquired tree", async () => {
+  it("records exact provenance for a template without dependencies", async () => {
     const root = baseLayer();
     const acquire = vi.fn(async () => baseLayer());
 
@@ -494,7 +494,12 @@ describe("composeDeclaredTemplateLayers", () => {
     });
 
     expect(acquire).not.toHaveBeenCalled();
-    expect(composed.snapshot).toBe(root);
+    expect(composed.snapshot.readFile("packages/runtime/index.ts")).toEqual(
+      root.readFile("packages/runtime/index.ts")
+    );
+    expect(new TextDecoder().decode(composed.snapshot.readFile("meta/vibestudio.yml")!)).toContain(
+      baseCommit
+    );
     expect(composed.layers).toEqual([
       {
         url: "git+https://example.test/foundation.git",

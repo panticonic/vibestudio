@@ -64,7 +64,7 @@ function fixture(epoch: number) {
     );
     fs.writeFileSync(
       path.join(checkout, "meta", "vibestudio.yml"),
-      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/${name}]\n  files: []\n`
+      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/${name}]\n`
     );
     git(checkout, "init", "-b", "main");
     git(checkout, "add", ".");

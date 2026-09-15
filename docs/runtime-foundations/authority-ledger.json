@@ -34555,6 +34555,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspaceTemplateSource.composeExact",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "composeExact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "Reviewed template updates acquire their exact source composition through the host.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.composeExact"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.composeExact),workspace-member),allOf(capability(code,service:workspaceTemplateSource.composeExact),workspace-member))",
+      "r3b": {
+        "review": "reviewed-exact-workspace-source-consumer",
+        "change": "Acquires and validates the dependency-first exact source composition used by a reviewed template update. The receiver admits only the reviewed templates extension or authenticated shell, returns content-addressed repository descriptors, and grants no workspace mutation or arbitrary host-path access."
+      },
+      "capability": "service:workspaceTemplateSource.composeExact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspaceTemplateSource.inspectExact",
       "rpcPlane": "host-service",
       "owner": "workspaceTemplateSource",
@@ -34597,6 +34642,96 @@
         "change": "Records the host source-acquisition endpoint for the reviewed templates extension and authenticated shell. It validates the exact pin and manifest inventory and does not authorize arbitrary website callers to inspect native source paths."
       },
       "capability": "service:workspaceTemplateSource.inspectExact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspaceTemplateSource.localRegistry",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "localRegistry",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "Trusted template consumers may read the instance-designated development catalog.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.localRegistry"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.localRegistry),workspace-member),allOf(capability(code,service:workspaceTemplateSource.localRegistry),workspace-member))",
+      "r3b": {
+        "review": "reviewed-exact-workspace-source-consumer",
+        "change": "Records the existing instance-designated catalog read for the reviewed templates extension and authenticated shell. It exposes template URLs and presentation metadata, never checkout paths or credentials."
+      },
+      "capability": "service:workspaceTemplateSource.localRegistry",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspaceTemplateSource.resolveLocal",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "resolveLocal",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "A trusted source consumer may prefer an instance-designated exact checkpoint without learning its host path.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.resolveLocal"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.resolveLocal),workspace-member),allOf(capability(code,service:workspaceTemplateSource.resolveLocal),workspace-member))",
+      "r3b": {
+        "review": "reviewed-exact-workspace-source-consumer",
+        "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
+      },
+      "capability": "service:workspaceTemplateSource.resolveLocal",
       "parityAssertion": "generated-census:host-authority"
     }
   ]

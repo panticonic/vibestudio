@@ -246,15 +246,13 @@ export const WorkspaceTemplateAuthoringMetadataSchema = z
      * shares an upstream's repositories instead of carrying a copy of them.
      */
     dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
+    /** Exact installed layers, dependency-first. Generated on acquisition; omitted from publication. */
+    sources: z.array(WorkspaceTemplatePinSchema).min(1).optional(),
     repositories: z.array(CanonicalWorkspaceInventoryPathSchema),
-    files: z.array(CanonicalWorkspaceInventoryPathSchema),
   })
   .strict()
-  .superRefine(({ repositories, files }, ctx) => {
-    for (const [field, paths] of [
-      ["repositories", repositories],
-      ["files", files],
-    ] as const) {
+  .superRefine(({ repositories }, ctx) => {
+    for (const [field, paths] of [["repositories", repositories]] as const) {
       if (new Set(paths).size !== paths.length) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
