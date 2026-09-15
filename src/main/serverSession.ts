@@ -266,7 +266,7 @@ export async function establishServerSession(args: {
   log.info(
     `[Server] ${target.attached ? "Attached to" : "Spawned"} local hub and routed ${mode.workspaceName}`
   );
-  const gatewayConfig = { serverUrl: target.serverUrl };
+  const gatewayConfig = { serverUrl: target.serverUrl, workspace: target.workspaceId };
 
   let cdpAuthToken = "";
   const refreshCdpAuthToken = async (): Promise<void> => {
@@ -731,7 +731,7 @@ async function connectLocalWorkspace(
       serverClient.call(svc, m, a)
     );
     const info = await workspace.getInfo();
-    const gatewayConfig = { serverUrl: route.serverUrl };
+    const gatewayConfig = { serverUrl: route.serverUrl, workspace: info.config.id };
     return {
       nativeStorageScope: storageScope,
       connectionMode: "local",
@@ -854,7 +854,10 @@ async function shapeRemoteWorkspaceConnection(
     stateDir: path.join(workspaceStateDirectory, "panel-asset-facade"),
   });
   try {
-    const gatewayConfig = { serverUrl: `http://127.0.0.1:${facade.port}` };
+    const gatewayConfig = {
+      serverUrl: `http://127.0.0.1:${facade.port}`,
+      workspace: wsInfo.config.id,
+    };
 
     const serverInfo = buildServerInfo(
       facade.port,

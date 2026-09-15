@@ -16,11 +16,64 @@ export const MAX_PANEL_LOCATION_PARAMS_LENGTH = 32 * 1024;
 export type PanelDisposition = "current" | "child" | "root";
 export type PanelLocationCarrier = "scheme" | "https";
 
+/** A name is convenient; an ID is exact; a role follows the signed-in user. */
+export type PanelWorkspace = string | { id: string } | { role: "personal" | "system" };
+
+export interface PanelWorkspaceEntry {
+  workspaceId: string;
+  name: string;
+  privateRole?: "personal" | "system";
+}
+
+function panelWorkspaceMatches(selector: PanelWorkspace, entry: PanelWorkspaceEntry): boolean {
+  return typeof selector === "string"
+    ? entry.name === selector
+    : "id" in selector
+      ? entry.workspaceId === selector.id
+      : entry.privateRole === selector.role;
+}
+
+export function resolvePanelWorkspace<T extends PanelWorkspaceEntry>(
+  selector: PanelWorkspace | undefined,
+  entries: readonly T[],
+  activeWorkspaceId?: string | null
+): T {
+  if (selector !== undefined) validatePanelWorkspace(selector);
+  const matches = entries.filter((entry) =>
+    selector === undefined
+      ? entry.workspaceId === activeWorkspaceId
+      : panelWorkspaceMatches(selector, entry)
+  );
+  const match = matches[0];
+  if (!match || matches.length !== 1) {
+    throw new Error(
+      matches.length
+        ? "The panel link workspace is ambiguous"
+        : "The workspace for this panel link is unavailable"
+    );
+  }
+  return match;
+}
+
+function validatePanelWorkspace(selector: PanelWorkspace): void {
+  if (typeof selector === "string" && isSafeText(selector, 256)) return;
+  if (
+    selector &&
+    typeof selector === "object" &&
+    !Array.isArray(selector) &&
+    Object.keys(selector).length === 1
+  ) {
+    if ("id" in selector && typeof selector.id === "string" && isSafeText(selector.id, 256)) return;
+    if ("role" in selector && (selector.role === "personal" || selector.role === "system")) return;
+  }
+  throw new Error("Panel workspace must be a name, { id }, or { role: personal | system }");
+}
+
 export interface PanelLocation {
   /** Workspace-relative build source, for example `panels/chat`. */
   source: string;
-  /** Optional workspace selector for links that cross application launches. */
-  workspace?: string;
+  /** Omit for the current workspace; strings select an exact workspace name. */
+  workspace?: PanelWorkspace;
   /** Optional code/build ref; independent from the state context. */
   ref?: string;
   /** Optional data/storage context. */
@@ -51,6 +104,7 @@ const PARAMETER_KEYS = new Set([
   "v",
   "source",
   "workspace",
+  "workspaceKind",
   "ref",
   "contextId",
   "stateArgs",
@@ -93,11 +147,14 @@ function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
 }
 
 export function validatePanelLocation(location: PanelLocation): void {
-  if (!SOURCE_RE.test(location.source)) {
+  if (location.workspace !== undefined) validatePanelWorkspace(location.workspace);
+  if (
+    !SOURCE_RE.test(location.source) ||
+    location.source.split("/").some((part) => part === "." || part === "..")
+  ) {
     throw new Error("Panel source must be a canonical two-segment workspace source");
   }
   for (const [label, value, maxLength] of [
-    ["workspace", location.workspace, 256],
     ["ref", location.ref, 1024],
     ["contextId", location.contextId, 1024],
     ["title", location.title, 256],
@@ -160,7 +217,12 @@ function encodePanelLocationParams(location: PanelLocation): string {
     ["v", String(PANEL_LOCATION_PROTOCOL_VERSION)],
     ["source", location.source],
   ];
-  if (location.workspace !== undefined) pairs.push(["workspace", location.workspace]);
+  if (location.workspace !== undefined) {
+    const target = location.workspace;
+    if (typeof target === "string") pairs.push(["workspace", target]);
+    else if ("id" in target) pairs.push(["workspaceKind", "id"], ["workspace", target.id]);
+    else pairs.push(["workspaceKind", "role"], ["workspace", target.role]);
+  }
   if (location.ref !== undefined) pairs.push(["ref", location.ref]);
   if (location.contextId !== undefined) pairs.push(["contextId", location.contextId]);
   if (location.stateArgs !== undefined) {
@@ -321,9 +383,28 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
     }
   }
 
+  const workspaceValue = decoded.get("workspace");
+  const workspaceKind = decoded.get("workspaceKind");
+  if (
+    workspaceKind !== undefined &&
+    (workspaceValue === undefined || !["name", "id", "role"].includes(workspaceKind))
+  ) {
+    return { kind: "error", reason: "Panel link has an invalid workspace selector" };
+  }
+  if (workspaceKind === "role" && workspaceValue !== "system" && workspaceValue !== "personal") {
+    return { kind: "error", reason: "Panel link has an invalid workspace role" };
+  }
+  const workspace: PanelWorkspace | undefined =
+    workspaceValue === undefined
+      ? undefined
+      : workspaceKind === "id"
+        ? { id: workspaceValue }
+        : workspaceKind === "role"
+          ? { role: workspaceValue as "personal" | "system" }
+          : workspaceValue;
   const location: PanelLocation = {
     source,
-    ...(decoded.get("workspace") !== undefined ? { workspace: decoded.get("workspace") } : {}),
+    ...(workspace !== undefined ? { workspace } : {}),
     ...(decoded.get("ref") !== undefined ? { ref: decoded.get("ref") } : {}),
     ...(decoded.get("contextId") !== undefined ? { contextId: decoded.get("contextId") } : {}),
     ...(stateArgs !== undefined ? { stateArgs } : {}),

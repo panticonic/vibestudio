@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Panel } from "@vibestudio/shared/types";
 import { PanelView, elideForMenu, selectionPrompt } from "./panelView.js";
 import type { MenuItemConstructorOptions } from "electron";
+import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 
 function makePanel(id: string, source = "about/new"): Panel {
   return {
@@ -95,7 +96,9 @@ function createHarness(
   const sendPanelEvent = vi.fn();
   const openExternal = vi.fn(async () => undefined);
   const openShellSurface = vi.fn();
+  const openPanelLocation = vi.fn();
   const panelView = new PanelView({
+    openPanelLocation,
     nativeStorageScope: "test-host-device",
     viewManager,
     panelRegistry,
@@ -129,10 +132,46 @@ function createHarness(
     openExternal,
     openShellSurface,
     ...wc,
+    openPanelLocation,
   };
 }
 
 describe("PanelView plain panel links", () => {
+  it.each(["panel", "browser"] as const)(
+    "routes qualified links from a %s through the workspace navigator",
+    async (kind) => {
+      const { panelId, panelView, webContents, windowOpen, openPanelLocation, panelOrchestrator } =
+        createHarness();
+      if (kind === "panel")
+        await panelView.createViewForPanel(
+          panelId,
+          "http://127.0.0.1:1234/panels/chat/",
+          "ctx-current"
+        );
+      else
+        await panelView.createViewForBrowser(
+          panelId,
+          "https://example.com",
+          "ctx-current",
+          "persist:test"
+        );
+      const location = {
+        source: "about/automations",
+        workspace: { role: "system" as const },
+        stateArgs: { tab: "active" },
+        placement: { disposition: "side" as const },
+      };
+      const url = createPanelDeepLink(location);
+      const event = { preventDefault: vi.fn() };
+      webContents.emit("will-navigate", event, url);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(openPanelLocation).toHaveBeenLastCalledWith({ ...location, disposition: "root" });
+      windowOpen({ url });
+      expect(openPanelLocation).toHaveBeenCalledTimes(2);
+      expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+      expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
+    }
+  );
   it("opens shell surface links from installed panels without navigating their document", async () => {
     const { panelId, panelView, webContents, windowOpen, openShellSurface, panelOrchestrator } =
       createHarness();
@@ -325,29 +364,47 @@ describe("PanelView plain panel links", () => {
     expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
   });
 
-  it("navigates canonical panel links in place with ref, context, and state", async () => {
-    const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
-      gatewayServerUrl: "http://127.0.0.1:1234/_workspace/dev-123",
-    });
-    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+  it.each([undefined, "dev-123"])(
+    "preserves ref, context, and state for canonical workspace %s",
+    async (workspace) => {
+      const { panelId, panelView, webContents, panelOrchestrator, openPanelLocation } =
+        createHarness({
+          gatewayServerUrl: "http://127.0.0.1:1234/_workspace/dev-123",
+        });
+      await panelView.createViewForPanel(
+        panelId,
+        "http://127.0.0.1:1234/about/new/",
+        "ctx-current"
+      );
 
-    const event = { preventDefault: vi.fn() };
-    webContents.emit(
-      "will-navigate",
-      event,
-      "vibestudio://panel?v=1&source=panels%2Fchat&workspace=dev-123&ref=state%3Aabc&contextId=ctx-next&stateArgs=%7B%22prompt%22%3A%22hi%22%7D&disposition=current"
-    );
-
-    await vi.waitFor(() => {
-      expect(panelOrchestrator.navigatePanel).toHaveBeenCalledWith(panelId, "panels/chat", {
+      const event = { preventDefault: vi.fn() };
+      const location = {
+        source: "panels/chat",
+        workspace,
         ref: "state:abc",
         contextId: "ctx-next",
         stateArgs: { prompt: "hi" },
-      });
-    });
-    expect(event.preventDefault).toHaveBeenCalled();
-    expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
-  });
+        disposition: "current" as const,
+      };
+      webContents.emit("will-navigate", event, createPanelDeepLink(location));
+
+      if (workspace !== undefined) {
+        // All explicit destinations use the catalog router, including a name
+        // that happens to identify the workspace of the source panel.
+        expect(openPanelLocation).toHaveBeenCalledWith(location);
+        expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
+      } else
+        await vi.waitFor(() => {
+          expect(panelOrchestrator.navigatePanel).toHaveBeenCalledWith(panelId, "panels/chat", {
+            ref: "state:abc",
+            contextId: "ctx-next",
+            stateArgs: { prompt: "hi" },
+          });
+        });
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+    }
+  );
 
   it("honors explicit root placement from a panel", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness();

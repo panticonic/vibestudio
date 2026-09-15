@@ -567,6 +567,7 @@ installProcessSignalShutdown(process, () => {
 });
 
 const applicationWindow = new ApplicationWindowController({
+  openPanelLocation: sendIncomingPanelLocation,
   getSystemWorkspaceId: () => serverSession?.workspaceId ?? null,
   onCodeIdentityChanged: (nativeId) => {
     void activeIpcDispatcher?.revokeUiCaller(nativeId).catch(console.error);

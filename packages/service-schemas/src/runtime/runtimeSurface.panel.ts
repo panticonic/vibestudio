@@ -41,11 +41,22 @@ export const panelRuntimeSurface: RuntimeSurface = {
   exports: {
     ...coreRuntimeSurface,
     isRpcConnectionLost: valueEntry("Recognize a retired or disconnected RPC session."),
-    createConversationClient: valueEntry("Bind a conversation client to an explicit RPC client. A module-level factory, not a runtime instance member."),
-    createPanelRuntime: valueEntry("Create the complete panel API with explicit transport, bootstrap, presentation inputs and lifetime ownership. No injected globals are required."),
-    connectWorkspace: valueEntry("Explicitly ask the presentation host to connect this website to its workspace, then bind the same runtime API used by installed panels. Calls never connect implicitly."),
-    disconnectWorkspace: valueEntry("Disconnect this document and retire its RPC calls, streams and borrowed clients."),
-    workspaceConnection: namespaceEntry(["connected", "available", "subscribe"], "Connection state can be observed without accessing a workspace."),
+    createConversationClient: valueEntry(
+      "Bind a conversation client to an explicit RPC client. A module-level factory, not a runtime instance member."
+    ),
+    createPanelRuntime: valueEntry(
+      "Create the complete panel API with explicit transport, bootstrap, presentation inputs and lifetime ownership. No injected globals are required."
+    ),
+    connectWorkspace: valueEntry(
+      "Explicitly ask the presentation host to connect this website to its workspace, then bind the same runtime API used by installed panels. Calls never connect implicitly."
+    ),
+    disconnectWorkspace: valueEntry(
+      "Disconnect this document and retire its RPC calls, streams and borrowed clients."
+    ),
+    workspaceConnection: namespaceEntry(
+      ["connected", "available", "subscribe"],
+      "Connection state can be observed without accessing a workspace."
+    ),
     // Entries whose description is panel-specific (member arrays shared with core).
     workspace: namespaceEntry(
       WORKSPACE_MEMBERS,
@@ -73,7 +84,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     z: valueEntry("Zod export."),
     defineContract: valueEntry(),
     buildPanelLink: valueEntry(
-      "Build a managed panel URL; options.disposition controls tree placement and options.placement supplies visual side/side-if-room/replace/split-below hints."
+      "Build a logical panel link. options.workspace selects an exact name, { id }, or { role: system | personal }; omitted stays local. disposition controls destination tree placement; placement controls visual layout."
     ),
     buildPanelDeepLink: valueEntry(
       "Build a canonical panel deep link with optional tree disposition and visual placement hints."

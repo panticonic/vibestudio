@@ -3,6 +3,7 @@ import {
   createPanelDeepLink,
   createPanelShareUrl,
   parsePanelLocationLink,
+  resolvePanelWorkspace,
   type PanelLocation,
 } from "./panelLocation.js";
 
@@ -20,6 +21,34 @@ const LOCATION: PanelLocation = {
 };
 
 describe("panel location links", () => {
+  it.each([{ id: "ws-123" }, { role: "system" as const }, { role: "personal" as const }])(
+    "round-trips typed workspace selector %j on both carriers",
+    (workspace) => {
+      const location = { source: "about/automations", workspace, stateArgs: { tab: "active" } };
+      for (const create of [createPanelDeepLink, createPanelShareUrl]) {
+        expect(parsePanelLocationLink(create(location))).toMatchObject({ kind: "ok", location });
+      }
+    }
+  );
+
+  it("resolves names, IDs, and private roles without confusing them", () => {
+    const entries = [
+      { workspaceId: "ws-private", name: "My tools", privateRole: "system" as const },
+      { workspaceId: "ws-project", name: "ws-private" },
+    ];
+    expect(resolvePanelWorkspace({ role: "system" }, entries)).toBe(entries[0]);
+    expect(resolvePanelWorkspace({ id: "ws-private" }, entries)).toBe(entries[0]);
+    expect(resolvePanelWorkspace("ws-private", entries)).toBe(entries[1]);
+    expect(resolvePanelWorkspace(undefined, entries, "ws-project")).toBe(entries[1]);
+    expect(() => resolvePanelWorkspace({ role: "personal" }, entries)).toThrow(/unavailable/);
+    expect(() => resolvePanelWorkspace("missing", entries, "ws-project")).toThrow(/unavailable/);
+    expect(() =>
+      resolvePanelWorkspace("same", [
+        { workspaceId: "a", name: "same" },
+        { workspaceId: "b", name: "same" },
+      ])
+    ).toThrow(/ambiguous/);
+  });
   it("round-trips the custom-scheme carrier without relying on URL support", () => {
     const link = createPanelDeepLink(LOCATION);
     const RealURL = URL;
@@ -57,13 +86,31 @@ describe("panel location links", () => {
       `${link}&secret=nope`,
       link.replace("v=1", "v=2"),
       link.replace("about%2Fserver-logs", "not-a-source"),
+      link.replace("about%2Fserver-logs", "..%2Fescape"),
       `${link}&focus=maybe`,
       `${link}&disposition=popup`,
       `${link}&placement=popup`,
       `${link}&preferredWidth=wide`,
       `${link}&minWidth=0`,
+      `${link}&workspaceKind=role`,
+      `${link}&workspaceKind=unknown&workspace=x`,
+      `${link}&workspaceKind=role&workspace=admin`,
     ]) {
       expect(parsePanelLocationLink(invalid).kind).toBe("error");
+    }
+  });
+  it("rejects ambiguous or malformed workspace objects", () => {
+    for (const workspace of [
+      { id: "x", role: "system" },
+      { role: "admin" },
+      { id: "" },
+      {},
+      [],
+      null,
+    ]) {
+      expect(() =>
+        createPanelDeepLink({ source: "panels/chat", workspace } as PanelLocation)
+      ).toThrow(/workspace/);
     }
   });
 

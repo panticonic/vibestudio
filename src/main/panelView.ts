@@ -32,7 +32,6 @@ import {
   type PanelDisposition,
   type PanelLocation,
 } from "@vibestudio/shared/panelLocation";
-import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
 import { classifyPanelUrl, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import {
   parseShellSurfaceLink,
@@ -139,7 +138,7 @@ export class PanelView implements PanelViewLike {
   private readonly panelOrchestrator: PanelOrchestratorLike;
   private readonly managedHosts: readonly string[];
   private readonly managedBasePaths: readonly string[];
-  private readonly managedWorkspace?: string;
+  private readonly openPanelLocation: (location: PanelLocation) => void;
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
   private openExternal?: (url: string) => Promise<void>;
@@ -180,6 +179,7 @@ export class PanelView implements PanelViewLike {
   private disposed = false;
 
   constructor(deps: {
+    openPanelLocation: (location: PanelLocation) => void;
     nativeStorageScope: string;
     viewManager: WorkspaceNativeViews;
     panelRegistry: PanelRegistry;
@@ -210,9 +210,7 @@ export class PanelView implements PanelViewLike {
     this.panelOrchestrator = deps.panelOrchestrator;
     this.managedHosts = this.buildManagedHosts(deps.serverInfo);
     this.managedBasePaths = this.buildManagedBasePaths(deps.serverInfo);
-    this.managedWorkspace = deps.serverInfo.gatewayConfig?.serverUrl
-      ? (selectedWorkspaceNameFromUrl(deps.serverInfo.gatewayConfig.serverUrl) ?? undefined)
-      : undefined;
+    this.openPanelLocation = deps.openPanelLocation;
     this.sendPanelEvent = deps.sendPanelEvent;
     this.onPanelLinkError = deps.onPanelLinkError;
     this.openExternal = deps.openExternal;
@@ -995,7 +993,10 @@ export class PanelView implements PanelViewLike {
     }
   ): void {
     if (this.handleShellSurfaceLink(panelId, url)) return;
-    const parsed = options.translateManagedLinks ? this.parseManagedPanelUrl(url) : null;
+    const parsed =
+      options.translateManagedLinks || tryParsePanelLocationLink(url)
+        ? this.parseManagedPanelUrl(url)
+        : null;
     if (parsed) {
       void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
         this.handlePanelLinkError(panelId, err, url)
@@ -1039,7 +1040,6 @@ export class PanelView implements PanelViewLike {
         event.preventDefault();
         return;
       }
-      if (!translateManagedLinks) return;
       const canonical = tryParsePanelLocationLink(url);
       if (canonical) {
         event.preventDefault();
@@ -1052,6 +1052,7 @@ export class PanelView implements PanelViewLike {
         }
         return;
       }
+      if (!translateManagedLinks) return;
       if (!this.isManagedUrl(url)) {
         event.preventDefault();
         const policy = classifyPanelUrl(url);
@@ -1206,25 +1207,19 @@ export class PanelView implements PanelViewLike {
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
   }
 
-  private assertLinkWorkspace(location: PanelLocation): void {
-    if (
-      location.workspace &&
-      this.managedWorkspace &&
-      location.workspace !== this.managedWorkspace
-    ) {
-      throw new Error(
-        `Panel link targets workspace ${location.workspace}; current workspace is ${this.managedWorkspace}`
-      );
-    }
-  }
-
   private async handleManagedLink(
     sourceViewId: string,
     parsed: ParsedPanelUrl,
     url: string,
     fallbackDisposition: PanelDisposition
   ): Promise<void> {
-    this.assertLinkWorkspace(parsed);
+    const location = tryParsePanelLocationLink(url);
+    if (location?.workspace !== undefined) {
+      // The destination owns its tree. Never carry a source panel or context
+      // into another workspace; unspecified placement starts a destination root.
+      this.openPanelLocation({ ...location, disposition: location.disposition ?? "root" });
+      return;
+    }
     const disposition = parsed.disposition ?? fallbackDisposition;
     const sourcePanel = this.panelRegistry.getPanel(sourceViewId);
     if (disposition === "current" && sourcePanel) {

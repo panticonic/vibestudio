@@ -144,6 +144,7 @@ function createHarness() {
   const stopElectronHostTargetLaunchLoop = vi.fn();
   const onWindowClosed = vi.fn(() => mocks.lifecycleEvents.push("controller:closed"));
   const deps: ApplicationWindowControllerDeps = {
+    openPanelLocation: vi.fn(),
     getSystemWorkspaceId: () => "system",
     eventService: { emit: vi.fn() } as never,
     isHeadlessHost: false,

@@ -89,6 +89,7 @@ export interface ServerInfoLike {
     serverUrl: string;
     token?: string;
     aliases?: readonly string[];
+    /** Exact workspace ID, supplied by the owning host (never a display name). */
     workspace?: string;
   };
   workerdPort: number;

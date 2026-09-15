@@ -2,6 +2,7 @@ import { app, BaseWindow, dialog, nativeTheme, shell } from "electron";
 import * as path from "node:path";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
+import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { ViewManager } from "./viewManager.js";
@@ -49,6 +50,7 @@ export interface WorkspaceWindowServices {
 }
 
 export interface ApplicationWindowControllerDeps {
+  openPanelLocation: (location: PanelLocation) => void;
   eventService: EventService;
   getSystemWorkspaceId(): string | null;
   isHeadlessHost: boolean;
@@ -340,6 +342,7 @@ export class ApplicationWindowController {
         : undefined;
       const nativeViews = new WorkspaceNativeViews(services.serverSession.workspaceId, viewManager);
       const panelView = new PanelView({
+        openPanelLocation: this.deps.openPanelLocation,
         openShellSurface: services.openShellSurface,
         nativeStorageScope: services.serverSession.nativeStorageScope,
         viewManager: nativeViews,

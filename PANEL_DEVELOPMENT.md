@@ -29,6 +29,11 @@ That's it. Vibestudio auto-mounts your default export.
 
 ## Panel Identity
 
+For local and cross-workspace navigation, use
+[`buildPanelLink`](docs/panel-navigation.md). Its `workspace` option accepts
+an exact name, an ID, or the user's Personal/System role. It produces a logical
+navigation address, not an asset-serving URL.
+
 Panels have two IDs. `slotId` is the stable visible panel slot and is the right
 identity for panel-tree operations and PubSub/channel clients. `rpc.selfId`
 matches the current runtime entity for direct RPC delivery and can change when
@@ -638,7 +643,10 @@ Key channel client APIs:
 
 4. **Export contracts** -- Put contract in separate file and export via package.json
 
-5. **Use openPanel for navigation** -- `openPanel(source)` opens any panel; use `buildPanelLink` only for in-page navigation:
+5. **Choose links for navigation, handles for interaction** -- `openPanel(source)`
+   opens a panel in the current workspace and returns its handle.
+   `buildPanelLink(source, { workspace: { role: "system" } })` creates a
+   user-facing link into another workspace. See [panel navigation](docs/panel-navigation.md).
    ```typescript
    import { openPanel } from "@workspace/runtime";
    await openPanel("panels/target");
