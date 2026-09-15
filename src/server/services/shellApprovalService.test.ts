@@ -9,6 +9,7 @@ import {
   SHELL_APPROVAL_READ_AUTHORITY_RESOLVER,
   shellApprovalMethods,
 } from "@vibestudio/service-schemas/shellApproval";
+import type { InstallReviewResolution } from "@vibestudio/service-schemas/shellApproval";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";
@@ -388,6 +389,55 @@ describe("shellApprovalService", () => {
       "startup-1",
       "startup-2",
       "startup-2",
+    ]);
+  });
+
+  it("settles every startup review before awaiting their landing reports", async () => {
+    const pending = [startupApproval("startup-1"), startupApproval("startup-2")];
+    const releases = new Map<string, () => void>();
+    const resolveInstallReview = vi.fn(
+      (approvalId: string) =>
+        new Promise<InstallReviewResolution>((resolve) => {
+          releases.set(approvalId, () =>
+            resolve({
+              approvalId,
+              mode: "adopt-root" as const,
+              decision: "accepted" as const,
+              heading: "Workspace access approved",
+              parts: [],
+            })
+          );
+        })
+    );
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
+        requestCredentialInput: vi.fn(),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve: vi.fn(),
+        resolveInstallReview,
+        submitClientConfig: vi.fn(),
+        submitSecretInput: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => pending),
+        cancelForCaller: vi.fn(),
+      },
+    });
+
+    const resolution = service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "resolveBootstrap",
+      [["startup-1", "startup-2"], "once"]
+    );
+    await vi.waitFor(() => expect(resolveInstallReview).toHaveBeenCalledTimes(2));
+    releases.get("startup-1")?.();
+    releases.get("startup-2")?.();
+    await expect(resolution).resolves.toEqual([
+      { approvalId: "startup-1", status: "resolved" },
+      { approvalId: "startup-2", status: "resolved" },
     ]);
   });
 

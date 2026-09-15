@@ -1013,6 +1013,14 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   let lastApprovalTap = 0;
   while (Date.now() < deadlineMs) {
     if (logcat.hasPhase(phase)) return;
+    // React Native owns the transition after it receives the press. Android can
+    // retain the old clickable accessibility node while the visual tree is
+    // already busy; dumping and tapping that ghost node creates duplicate
+    // decisions and competes with the JS/native bridge.
+    if (logcat.hasPhase("embedded-host-target-approval-submitted")) {
+      await sleep(250);
+      continue;
+    }
     if (logcat.hasPhase("embedded-pairing-failed")) {
       await logcat.waitForPhase(phase, deadlineMs);
     }
@@ -1026,7 +1034,9 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
         "approval-action-accept-install-review"
       );
       if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
-      const approvedLaunch = reviewedUnits ? false : await tapVisibleNode(device, xml, "Start");
+      const approvedLaunch = reviewedUnits
+        ? false
+        : await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept");
       if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
     }
     await sleep(250);
@@ -1507,7 +1517,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       await sleep(2_000);
       continue;
     }
-    if (await tapVisibleNode(device, xml, "Start")) {
+    if (await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept")) {
       await sleep(1_000);
       continue;
     }

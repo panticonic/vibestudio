@@ -192,7 +192,7 @@ async function closeBootstrapConnectionAfterFailure(connection, error) {
   }
 }
 
-function ActionButton({ title, onPress, variant = "primary", disabled = false }) {
+function ActionButton({ title, onPress, variant = "primary", disabled = false, testID }) {
   const buttonStyle =
     variant === "danger"
       ? styles.dangerButton
@@ -205,6 +205,7 @@ function ActionButton({ title, onPress, variant = "primary", disabled = false })
       accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
+      testID={testID}
       style={({ pressed }) => [
         styles.actionButton,
         buttonStyle,
@@ -370,6 +371,11 @@ function VibestudioMobileHostBootstrap() {
     async (decision) => {
       if (!launchGrant) return;
       if (!approvals.length) return;
+      // A local decision owns the launch gate now. Retire the observer before
+      // awaiting the RPC so it cannot republish the same approval and re-enable
+      // the buttons while the decision is still landing.
+      launchGateGeneration.current += 1;
+      smokePhase("embedded-host-target-approval-submitted");
       setBusy(true);
       setStatus(decision === "once" ? "Approving workspace app..." : "Denying workspace app...");
       try {
@@ -377,15 +383,11 @@ function VibestudioMobileHostBootstrap() {
           launchGrant.rpc.call("main", `${service}.${method}`, args)
         );
         await launchClient.resolveApprovals(approvals, decision);
+        smokePhase("embedded-host-target-approval-resolved");
         if (decision === "once") {
-          // The existing launch-gate observer owns this connection and will
-          // see the canonical state advance. Starting a second observer here
-          // briefly lets the first one's cleanup expose Retry while the second
-          // is still preparing; an automated tap can then open a second mobile
-          // session and make both offerers supersede each other.
           setApprovals([]);
           setStatus("Workspace app approved. Preparing bundle...");
-          return;
+          await runLaunchGate(launchGrant);
         } else {
           setLaunchSession(null);
           setApprovals([]);
@@ -397,7 +399,7 @@ function VibestudioMobileHostBootstrap() {
         setBusy(false);
       }
     },
-    [approvals, launchGrant]
+    [approvals, launchGrant, runLaunchGate]
   );
 
   const presentConnectLink = useCallback((rawUrl) => {
@@ -677,6 +679,7 @@ function VibestudioMobileHostBootstrap() {
                 <ActionButton
                   title={launchGate.acceptLabel}
                   onPress={() => resolveLaunchApprovals("once")}
+                  testID="launch-gate-accept"
                 />
                 <ActionButton
                   title={launchGate.declineLabel}

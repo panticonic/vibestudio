@@ -212,10 +212,6 @@ export function createShellApprovalService(deps: {
         });
       },
       resolveBootstrap: async (ctx, [approvalIds, decision]) => {
-        const results: Array<{
-          approvalId: string;
-          status: "resolved" | "not-pending";
-        }> = [];
         const resolver = resolverFrom(ctx, deviceLabelFor);
         // The launch gate answers an install review, so it settles through the
         // install-review path like every other surface — that path is what
@@ -225,23 +221,23 @@ export function createShellApprovalService(deps: {
         // A batch may have partially settled before one resolution fails. The
         // result makes already-settled ids explicit; retrying the same snapshot
         // can therefore skip them and converge on the remaining approvals.
-        for (const approvalId of approvalIds) {
-          const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
-          if (!pending || !isBootstrapUnitApproval(pending)) {
-            results.push({ approvalId, status: "not-pending" });
-            continue;
-          }
-          await approvalQueue.resolveInstallReview(
-            approvalId,
-            decision === "once"
-              ? defaultAcceptance(pending.mode, pending.parts)
-              : { decision: "cancel" },
-            resolver
-          );
-          metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
-          results.push({ approvalId, status: "resolved" });
-        }
-        return results;
+        return Promise.all(
+          approvalIds.map(async (approvalId) => {
+            const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
+            if (!pending || !isBootstrapUnitApproval(pending)) {
+              return { approvalId, status: "not-pending" as const };
+            }
+            await approvalQueue.resolveInstallReview(
+              approvalId,
+              decision === "once"
+                ? defaultAcceptance(pending.mode, pending.parts)
+                : { decision: "cancel" },
+              resolver
+            );
+            metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
+            return { approvalId, status: "resolved" as const };
+          })
+        );
       },
       submitClientConfig: async (ctx, [approvalId, values]) => {
         const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);

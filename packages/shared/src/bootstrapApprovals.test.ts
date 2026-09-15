@@ -86,7 +86,11 @@ const credentialApproval: PendingApproval = {
 
 describe("which surface owns which review", () => {
   it("gives the launch gate the reviews it is the only surface that can render", () => {
-    const gate = review([part(), extensionPart]);
+    const gate = review([
+      part(),
+      extensionPart,
+      part({ kind: "panel", label: "Panel", repoPath: "panels/chat" }),
+    ]);
     expect(filterBootstrapApprovals([credentialApproval, gate])).toEqual([gate]);
   });
 

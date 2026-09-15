@@ -9,8 +9,10 @@ import type { HostTarget } from "./hostTargets.js";
  * Client apps and extensions are decided before the workspace UI exists, in a
  * host-owned window and in the terminal. That surface cannot be replaced by the
  * collection route for a simple reason: `apps/shell` is itself under review, so
- * it cannot render its own approval. Everything else — panels, workers, and the
- * templates that ship them — is reviewed inside the workspace.
+ * it cannot render its own approval. A startup review is atomic: when it also
+ * contains panels or workers, the launch gate owns the whole review rather than
+ * splitting one human decision across two surfaces. Reviews containing only
+ * runtime parts remain in the workspace.
  */
 
 function isLaunchGatePart(part: InstallReviewPart): boolean {
@@ -23,7 +25,7 @@ export function isBootstrapUnitApproval(
   return (
     approval.kind === "unit-install-review" &&
     approval.parts.length > 0 &&
-    approval.parts.every(isLaunchGatePart)
+    approval.parts.some(isLaunchGatePart)
   );
 }
 
