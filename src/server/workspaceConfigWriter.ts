@@ -6,6 +6,7 @@ import { rpcErrorDataOf } from "@vibestudio/rpc";
 import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { MERGED_RECORD_SETTINGS } from "@vibestudio/workspace/templateManifestMerge";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import {
   assertWorkspaceConfigPathScope,
@@ -417,10 +418,56 @@ export function renderWorkspaceConfigYaml(
 ): string {
   // Parse the old file so malformed runtime state is never overwritten under
   // cover of an unrelated mutation.
-  parseWorkspaceConfigContentWithId(currentContent, workspaceId);
+  const previous = parseWorkspaceConfigContentWithId(currentContent, workspaceId);
   // `WorkspaceConfig.id` is resolved host state, not manifest content.
   const { id: _resolvedId, ...nextManifest } = nextConfig;
-  const nextContent = YAML.stringify(nextManifest);
-  parseWorkspaceConfigContentWithId(nextContent, workspaceId);
+  const authored = YAML.parse(currentContent) as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(nextManifest)])) {
+    if (
+      key === "id" ||
+      isDeepStrictEqual(
+        previous[key as keyof WorkspaceConfig],
+        nextManifest[key as keyof typeof nextManifest]
+      )
+    )
+      continue;
+    const before = previous[key as keyof WorkspaceConfig];
+    const after = nextManifest[key as keyof typeof nextManifest];
+    if (
+      (MERGED_RECORD_SETTINGS as readonly string[]).includes(key) &&
+      after &&
+      typeof after === "object"
+    ) {
+      const priorSlots = (before ?? {}) as Record<string, unknown>;
+      const nextSlots = after as Record<string, unknown>;
+      const ownSlots = { ...(authored[key] as Record<string, unknown> | undefined) };
+      for (const slot of new Set([...Object.keys(priorSlots), ...Object.keys(nextSlots)])) {
+        if (isDeepStrictEqual(priorSlots[slot], nextSlots[slot])) continue;
+        if (slot in nextSlots) ownSlots[slot] = nextSlots[slot];
+        else delete ownSlots[slot];
+      }
+      authored[key] = ownSlots;
+    } else if (Array.isArray(before) && Array.isArray(after) && authored["template"]) {
+      const own = (Array.isArray(authored[key]) ? authored[key] : []) as unknown[];
+      const removed = before.filter(
+        (value) => !after.some((next) => isDeepStrictEqual(value, next))
+      );
+      if (removed.some((value) => !own.some((local) => isDeepStrictEqual(value, local))))
+        throw new Error(
+          `Cannot remove inherited ${key} declarations through a local configuration edit; author the owning template`
+        );
+      authored[key] = [
+        ...own.filter((value) => !removed.some((old) => isDeepStrictEqual(value, old))),
+        ...after.filter((value) => !before.some((old) => isDeepStrictEqual(value, old))),
+      ];
+    } else if (key in nextManifest) authored[key] = after;
+    else delete authored[key];
+  }
+  const nextContent = YAML.stringify(authored);
+  const resolved = parseWorkspaceConfigContentWithId(nextContent, workspaceId);
+  if (!isDeepStrictEqual(resolved, nextConfig))
+    throw new Error(
+      "The configuration edit would leave inherited settings active; override their values explicitly"
+    );
   return nextContent;
 }

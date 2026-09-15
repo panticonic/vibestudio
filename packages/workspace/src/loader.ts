@@ -57,6 +57,7 @@ const WORKSPACE_CREATION_DESCRIPTOR = "workspace-creation/v1.json";
 
 export interface WorkspaceCreationOptions {
   rootTemplate: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
   /** Allocated by the catalog owner. */
   workspaceId: string;
 }
@@ -320,6 +321,7 @@ export function initWorkspace(name: string, opts: WorkspaceCreationOptions): voi
       version: 1,
       workspaceId: opts.workspaceId,
       rootTemplate: opts.rootTemplate,
+      purpose: opts.purpose ?? "use",
     });
     fs.writeFileSync(stagedConfigPath, YAML.stringify({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }), {
       encoding: "utf-8",
@@ -459,6 +461,7 @@ export interface ResolveWorkspaceOpts {
   workspaceId?: string;
   /** Explicit exact root selected by a development or management caller. */
   rootTemplate?: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
 }
 
 export interface ResolvedWorkspace {
@@ -524,6 +527,7 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
       opts.rootTemplate ?? readTemplateRelease(opts.appRoot).workspaceTemplates.base;
     initWorkspace(name, {
       rootTemplate: exactBaseTemplate,
+      purpose: opts.purpose,
       workspaceId: opts.workspaceId ?? createWorkspaceId(),
     });
     created = true;

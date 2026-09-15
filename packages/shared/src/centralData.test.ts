@@ -168,6 +168,7 @@ describe("CentralDataManager SQLite control store", () => {
     expect(central.getWorkspaceCreationIntent("new-workspace")).toEqual({
       version: 1,
       workspaceId: "ws_pending",
+      purpose: "use",
       rootTemplate: ROOT_TEMPLATE,
     });
     expect(central.completeWorkspaceCreation("ws_pending")).toBe(true);

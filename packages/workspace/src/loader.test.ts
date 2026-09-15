@@ -328,6 +328,7 @@ describe("initWorkspace", () => {
 
     initWorkspace("external-root", {
       rootTemplate: pin,
+      purpose: "author",
       workspaceId: "ws_external",
     });
 
@@ -350,6 +351,7 @@ describe("initWorkspace", () => {
     });
     expect(config).not.toHaveProperty("templates");
     expect(descriptor).toMatchObject({
+      purpose: "author",
       workspaceId: "ws_external",
       rootTemplate: { commit: "a".repeat(40) },
     });

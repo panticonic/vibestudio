@@ -1,3 +1,5 @@
+import { mergeTemplateManifests, type TemplateManifestLayer } from "./templateManifestMerge.js";
+import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import YAML from "yaml";
 import { sortForCanonicalJson } from "@vibestudio/content-addressing";
 import {
@@ -6,7 +8,8 @@ import {
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceConfig,
-  WorkspaceTemplatePin,
+  WorkspaceTemplateOverride,
+  WorkspaceTemplateInstallation,
   WorkspaceTemplateDependency,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
@@ -24,7 +27,8 @@ export interface ParsedTemplateManifest {
   inventory: TemplateRepositoryInventory;
   /** Templates this one is built on, in declaration order. Empty when it stands alone. */
   dependencies: WorkspaceTemplateDependency[];
-  sources: WorkspaceTemplatePin[];
+  overrides?: WorkspaceTemplateOverride[];
+  installation?: WorkspaceTemplateInstallation;
   presentation?: WorkspaceTemplatePresentation;
 }
 
@@ -111,7 +115,7 @@ function runtimeManifest(top: ParsedTopLayer): Omit<WorkspaceConfig, "id"> {
 export function rootRuntimeFromTemplateManifest(
   manifest: ParsedTemplateManifest
 ): Omit<WorkspaceConfig, "id"> {
-  const projected = structuredClone(runtimeManifest(manifest.top));
+  const projected = structuredClone(runtimeManifest(effectiveTemplateManifest(manifest).top));
   validateWorkspaceGitConfig(projected.git);
   for (const repositories of Object.values(projected.git?.remotes ?? {})) {
     for (const remotes of Object.values(repositories)) {
@@ -148,7 +152,8 @@ export function parseTemplateManifestContent(
     top,
     inventory: { repositories },
     dependencies: authoring.dependencies ?? [],
-    sources: authoring.sources ?? [],
+    overrides: authoring.overrides ?? [],
+    ...(authoring.installation ? { installation: authoring.installation } : {}),
     ...(top.template === undefined ? {} : { presentation: top.template }),
   };
 }
@@ -163,4 +168,82 @@ export function readTemplateManifest(input: {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     input.expectedSystemEpoch
   );
+}
+
+/** The authoritative document contains authored settings plus exact dependency declarations.
+ * Effective settings are calculated, never written over the authored layer. */
+export function effectiveTemplateManifest(
+  manifest: ParsedTemplateManifest
+): ParsedTemplateManifest {
+  if (!manifest.installation) return manifest;
+  const { upstream } = manifest.installation;
+  const layers = installedDependencyLayers(manifest);
+  const merged = mergeTemplateManifests([
+    ...layers,
+    { label: upstream?.url ?? "workspace", manifest },
+  ]);
+  return parseTemplateManifestContent(
+    canonicalTemplateYaml(merged.document),
+    manifest.top.systemEpoch
+  );
+}
+
+export function templateManifestDocument(
+  manifest: ParsedTemplateManifest
+): Record<string, unknown> {
+  return {
+    ...manifest.top,
+    template: {
+      ...manifest.presentation,
+      repositories: manifest.inventory.repositories,
+      ...(manifest.dependencies.length ? { dependencies: manifest.dependencies } : {}),
+      ...(manifest.overrides?.length ? { overrides: manifest.overrides } : {}),
+    },
+  };
+}
+
+/** Walk the authored dependency graph against its exact installed declarations, offline. */
+export function installedDependencyLayers(
+  manifest: ParsedTemplateManifest
+): TemplateManifestLayer[] {
+  const installation = manifest.installation;
+  if (!installation) return [];
+  const entries = new Map<string, (typeof installation.sources)[number]>();
+  for (const source of installation.sources) {
+    const key = normalizeTemplateGitUrl(source.pin.url);
+    if (entries.has(key)) throw new Error(`Duplicate installed template source ${key}`);
+    entries.set(key, source);
+  }
+  if (installation.upstream) {
+    const upstream = entries.get(normalizeTemplateGitUrl(installation.upstream.url));
+    if (!upstream || upstream.pin.commit !== installation.upstream.commit)
+      throw new Error("Template upstream must identify its exact recorded source baseline");
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const layers: TemplateManifestLayer[] = [];
+  const visit = (dependency: WorkspaceTemplateDependency) => {
+    const key = normalizeTemplateGitUrl(dependency.url);
+    if (
+      visiting.has(key) ||
+      (installation.upstream && key === normalizeTemplateGitUrl(installation.upstream.url))
+    )
+      throw new Error(`Template dependency cycle at ${key}`);
+    const source = entries.get(key);
+    if (!source || (dependency.commit && dependency.commit !== source.pin.commit))
+      throw new Error(
+        `Dependency ${key} has no matching installed exact source; resolve the dependency before using it`
+      );
+    if (visited.has(key)) return;
+    const parsed = parseTemplateManifestContent(source.manifest, manifest.top.systemEpoch);
+    if (parsed.installation)
+      throw new Error("Installed source declarations cannot contain nested installations");
+    visiting.add(key);
+    for (const parent of parsed.dependencies) visit(parent);
+    visiting.delete(key);
+    visited.add(key);
+    layers.push({ label: source.pin.url, manifest: parsed });
+  };
+  for (const dependency of manifest.dependencies) visit(dependency);
+  return layers;
 }

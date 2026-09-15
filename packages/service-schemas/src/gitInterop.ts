@@ -109,6 +109,7 @@ export const gitTemplatePublishResultSchema = z
     remoteUrl: z.string().url(),
     webUrl: z.string().url(),
     templateUrl: z.string(),
+    credential: z.string().min(1).optional(),
     ref: z.string().startsWith("refs/tags/"),
     commit: z.string().regex(/^[0-9a-f]{40}$/u),
     parts: z.array(z.string()).min(1),

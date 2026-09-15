@@ -405,6 +405,7 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
     const created = await createRemoteWorkspace(credentials, {
       operationId,
       workspace,
+      purpose: inv.flags["author-template"] ? "author" : "use",
       ...(rootTemplate ? { rootTemplate } : {}),
     });
     printResult(created, {
@@ -822,6 +823,12 @@ const remoteCommands: CliCommand[] = [
         description: "Persisted client operation ID; reuse only for exact retries",
       },
       { name: "template", takesValue: true, description: "External root-template Git URL" },
+      {
+        name: "author-template",
+        takesValue: false,
+        description:
+          "Adopt the template repository for authoring instead of using it as a dependency",
+      },
       {
         name: "template-ref",
         takesValue: true,

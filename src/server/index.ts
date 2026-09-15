@@ -442,7 +442,9 @@ async function main() {
       init: args.init,
       requireExplicitSelection: isWorkspaceServer,
       workspaceId,
-      ...(creationIntent ? { rootTemplate: creationIntent.rootTemplate } : {}),
+      ...(creationIntent
+        ? { rootTemplate: creationIntent.rootTemplate, purpose: creationIntent.purpose }
+        : {}),
     });
     // Managed directory names are storage coordinates, not workspace
     // identities: a child retains the hub catalog's opaque id.

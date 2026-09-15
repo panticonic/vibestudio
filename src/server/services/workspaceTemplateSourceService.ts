@@ -66,7 +66,7 @@ export function createWorkspaceTemplateSourceService(deps: {
     authority: { principals: ["code", "host"] },
     methods: workspaceTemplateSourceMethods,
     handler: defineServiceHandler("workspaceTemplateSource", workspaceTemplateSourceMethods, {
-      composeExact: async (ctx, [{ sources }]) => {
+      composeExact: async (ctx, [{ sources, purpose }]) => {
         requireReviewedSourceConsumer(ctx.caller);
         const root = sources.at(-1)!;
         const normalize = normalizeTemplateGitUrl;
@@ -74,6 +74,7 @@ export function createWorkspaceTemplateSourceService(deps: {
           throw new Error("Each installed template source must have one exact pin");
         const composed = await composeDeclaredTemplateLayers({
           pin: root,
+          purpose,
           root: (await acquireValidated(root)).snapshot,
           expectedSystemEpoch: deps.systemEpoch,
           acquire: async (pin) => (await acquireValidated(pin)).snapshot,

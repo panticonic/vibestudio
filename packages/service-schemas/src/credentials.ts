@@ -847,7 +847,7 @@ export const ProxyGitHttpParamsSchema = z
       ),
     logicalCredential: z
       .object({
-        name: IdentifierSchema.describe("Portable credential name declared by workspace config."),
+        name: z.string().trim().min(1).max(256).regex(/^[^\u0000-\u001f\u007f]+$/u).describe("Stored credential label declared by workspace config."),
         remoteUrl: z
           .string()
           .url()

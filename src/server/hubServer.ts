@@ -1643,7 +1643,7 @@ export async function executeHubControl(
     return;
   }
   if (method === "createWorkspace") {
-    const opts = asRecord(args[0]) ?? {};
+    const opts = hubControlMethods.createWorkspace.args.parse(args)[0];
     const name = normalizeWorkspaceName(opts["workspace"]);
     const rootTemplate = opts["rootTemplate"]
       ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
@@ -1653,6 +1653,7 @@ export async function executeHubControl(
       {
         operationId: String(opts["operationId"] ?? ""),
         workspace: name,
+        ...(opts.purpose ? { purpose: opts.purpose } : {}),
         ...(rootTemplate ? { rootTemplate } : {}),
       },
       () =>
@@ -1682,7 +1683,7 @@ export async function executeHubControl(
     return;
   }
   if (method === "deleteWorkspace") {
-    const opts = asRecord(args[0]) ?? {};
+    const opts = hubControlMethods.createWorkspace.args.parse(args)[0];
     const name = normalizeWorkspaceName(opts["workspace"]);
     const workspaceId = requireWorkspaceAdmin(state, subject, name);
     const active = state.runtimes.get(name);
@@ -1771,7 +1772,7 @@ export async function executeHubControl(
     return;
   }
   if (method === "listWorkspaceMembers") {
-    const opts = asRecord(args[0]) ?? {};
+    const opts = hubControlMethods.createWorkspace.args.parse(args)[0];
     const name = normalizeWorkspaceName(opts["workspace"]);
     const workspaceId = requireMemberWorkspaceId(state, subject, name);
     const storedMembers = state.membershipStore.listMembers(workspaceId);

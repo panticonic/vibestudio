@@ -1,113 +1,100 @@
-# Workspace template ownership review
+# Workspace template ownership
 
-Status: repository destination UI implemented; ownership redesign pending the inherited-edit policy.
+## Creating a workspace
 
-## Verified current behavior
+**Use template** creates a new user-owned root that depends on the selected
+repository. It has no publishing upstream until its first publication. Personal,
+System, and Start fresh (Base) use this operation by default.
 
-- `CentralData.ensurePrivateWorkspaces` reserves Personal and System with the same
-  `addWorkspaceCreation` operation used for ordinary template workspaces.
-  The durable descriptor stores a root template pin, with no distinction between
-  using a template and authoring it.
-- `composeDeclaredTemplateLayers` resolves the root's dependencies, appends the
-  selected root, and replaces `meta/vibestudio.yml` with a merged manifest. It
-  records the exact stack in `template.sources`, but retains only the root's
-  declared `template.dependencies`.
-- Consequently Personal's own units look local to Personal, and System's own
-  units look local to System. The selected template is not itself a dependency
-  of a new user-owned workspace.
-- `templates.authoringParts` removes the inventory of declared dependencies.
-  It cannot distinguish the selected root's units from units added by the user.
-  Dependency inventory is also resolved from the dependency declaration, which
-  can float beyond the installed exact pins recorded in `template.sources`.
-- There is no workspace-template upstream declaration separate from installed
-  source pins. Per-unit `git.remotes` and `git.upstreams` describe a different
-  thing. Publishing a template returns a receipt but does not establish the
-  destination as the workspace's own template upstream.
-- `prepareUpdate` recomposes the recorded exact source stack and merges it
-  through native VCS. This preserves local file edits, but its metadata baseline
-  is the composed runtime manifest, not a separate authored root declaration.
-- Composition rejects duplicate unit ownership. A dependent template cannot
-  currently publish an edited copy of a dependency's unit at the same path.
-  Silently omitting that edited copy from publication loses the user's changes.
+**Author template** adopts the selected repository as the workspace's authored
+root, preserves its own dependencies, and records that repository as the upstream.
+The selected repository is not also a dependency. Choose Base in the picker and
+select **Author template** to author Base directly. The CLI equivalent is
+`remote create-workspace --author-template` with the normal exact template inputs.
+The purpose is part of the durable creation request and cannot change on retry.
 
-These are model defects, not just missing picker controls. Adding a creation-mode
-field and changing `template.dependencies` in the already-merged manifest would
-not fix ownership of configuration or portable publication of inherited edits.
+## Authored source and runtime configuration
 
-## Intended model
+`meta/vibestudio.yml` contains the workspace's authored configuration and template
+metadata. Its `template.installation` records exact source pins together with the
+source manifests used to resolve dependencies. `installation.upstream`, when
+present, names this workspace's own exact published baseline.
 
-An authored manifest and its effective runtime configuration must have distinct
-roles. The authored manifest is the source of truth for the workspace's own
-units, dependency declarations, and configuration changes. Runtime configuration
-is a deterministic projection of that source and its resolved dependencies;
-it must not overwrite the authored declaration that publication later reads.
+Runtime configuration is computed from the reachable dependency declarations and
+this authored root. It is never written over the root as a flattened source
+manifest. Resolution is offline and uses the installed exact pins; publication
+and ownership inspection do not silently follow newer remote heads.
 
-### Use a template (default)
+The installation record is local metadata. Publication emits only the authored
+configuration, dependencies, selected repository units, and explicit overrides.
+It omits installation records and credential IDs. Portable credential references
+use the connected account's label; no credential material is exported.
 
-Create a new user-owned root whose dependency is the selected template. Initially
-it has no template upstream. Personal and System use this operation too. Record
-exact dependency source pins as installation/update baselines. User-created units
-belong to the new root. Choosing or creating a publishing destination establishes
-that root's own upstream through the same durable publication operation.
+The `meta` repository belongs to the root. Dependency manifests supply runtime
+declarations through the installation record; their companion metadata files do
+not become the new workspace's own files.
 
-### Author a template
+## Explicit whole-unit overrides
 
-Adopt the selected repository as the authored root and retain its own dependency
-declarations. Its upstream is that repository. The selected root must not also
-become its own dependency. Authoring Base therefore owns Base's units; a normal
-workspace using Base inherits them.
+A derivative can publish an inherited unit by selecting it as an override:
 
-Both operations use one resolver, one native semantic source model, and one
-publication/update workflow. Their difference is the authored root being created
-or adopted, not different runtime implementations.
+```yaml
+systemEpoch: 0
+template:
+  name: My workspace
+  description: My customized workspace
+  dependencies:
+    - url: git+https://github.com/example/base.git
+  repositories:
+    - meta
+    - panels/chat
+  overrides:
+    - repoPath: panels/chat
+      source: git+https://github.com/example/base.git
+```
 
-## Decision required: edited inherited units
+The override owns the complete unit, including the absence of files deleted from
+its source. Composition must name the dependency being replaced. An undeclared
+collision, unrelated sibling, or different current owner is rejected. An override
+can survive removal of the original unit by its dependency.
 
-Two coherent policies are possible:
+Updating the dependency leaves the complete replacement intact. Updating the
+template that owns the replacement uses the ordinary native three-way merge and
+conflict review, preserving subsequent local edits. Overrides are replacements,
+not patches automatically reapplied to each new dependency version.
 
-1. **Explicit replacement units.** A derivative declares that it replaces an
-   inherited unit, carries the complete edited unit, and records its original
-   exact baseline. Composition must validate that declaration rather than accept
-   arbitrary duplicate ownership. Publication includes it; updates perform a
-   three-way merge and require review of conflicts. Replacements and their
-   configuration need one canonical representation.
-2. **Fork the source template.** Dependencies remain strict and disjoint.
-   Local inherited-unit edits can be used and contributed upstream, but cannot
-   be published as a derivative without adopting/forking the owning template.
-   Publication must identify such edits and explain the required fork, rather
-   than silently omit them.
+The publishing UI labels inherited choices as overrides. Selecting local units
+only leaves inherited units supplied by dependencies. An empty unit selection is
+valid: it publishes the manifest and dependencies alone. The entire selection is
+the release; omitted local units remain local but are absent from that release.
 
-The first policy supports publishing a customized running workspace most
-naturally. The second keeps composition smaller but restricts that workflow.
-Neither policy should be implemented as silent precedence between duplicate
-unit paths.
+## Publication and upstream tracking
 
-## Repository destination UI
+The publishing page supports a connected GitHub account, paginated writable
+repository selection, and an owner/name entry with public/private visibility for
+creation. Existing destinations retain their visibility and Git history; their
+complete file tree is replaced by the selected release. Name entry uses the same
+resolve-or-create operation, so entering an existing name also updates it.
 
-The publishing page now lists writable, active GitHub repositories for the chosen
-connected account, with pagination and actual listed visibility. Changing accounts
-clears the selected repository. The account ID is captured in the durable review
-and passed to publication.
+Publication captures the reviewed main state, publishes the exact release, then
+records the resulting upstream and exact source baseline through native VCS. It
+retains omitted local units and dependency origins. Each effect's arguments are
+persisted before dispatch, so an uncertain response retries the same operation;
+a completed remote publication is not repeated after a local push reply is lost.
 
-The name-entry path uses the existing resolve-or-create publishing operation.
-A missing repository is created with the selected visibility. If the name already
-exists, publication replaces its file tree while retaining Git history and its
-existing visibility. Both entry and final review state this behavior. A strict
-create-only operation would need a durable repository-creation identity so that
-retry after an uncertain creation can distinguish this operation's repository
-from an unrelated pre-existing one; it should not be approximated with a
-preflight existence check.
+Complete publication to a dependency repository is rejected. Open that repository
+for authoring, or use a contribution branch for selected upstream changes.
+The configured upstream pre-fills subsequent publication forms.
 
-## Required validation for the ownership change
+## Updating and existing workspaces
 
-- Fresh Personal and System roots depend on their templates and have no own upstream.
-- Using Base and authoring Base produce different, correct ownership inventories.
-- A derived publication round-trips through a fresh installation, preserving local
-  units, inherited units, intended configuration, and the chosen inherited-edit policy.
-- Installed ownership is determined from exact recorded pins, not current remote heads.
-- Updating any dependency preserves the authored root and local edits; conflicts
-  remain reviewable and retries preserve operation identity.
-- Publishing to another repository establishes that root's upstream without
-  changing dependency origins or falsely claiming write access to them.
-- Existing workspaces require an explicit, validated ownership conversion;
-  changing their interpretation merely because the application restarted is unsafe.
+Updates recompose exact source baselines, stage native VCS changes, expose
+conflicts, and publish only after review. A creation interrupted after source
+materialization reuses the recorded dependency pins on recovery.
+
+This is a source-format cutover. Old workspaces with the former flattened
+`template.sources` metadata must be recreated from their template; the application
+does not guess which flattened declarations were originally user-owned. Export
+or retain local changes before replacing an old workspace. Existing source with
+no ownership installation record can still be read as standalone configuration,
+but template publication requires reopening through the picker.

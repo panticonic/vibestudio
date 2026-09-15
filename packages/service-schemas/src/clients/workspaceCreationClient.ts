@@ -31,7 +31,7 @@ export async function submitWorkspaceCreation(
     TypedServiceClient<typeof workspaceCreationMethods>,
     "createWorkspace" | "workspaceCreationReceipt"
   >,
-  input: { workspace: string; rootTemplate?: WorkspaceTemplatePin },
+  input: { workspace: string; rootTemplate?: WorkspaceTemplatePin; purpose?: "use" | "author" },
   persistence: {
     key: string;
     getItem(key: string): string | null | Promise<string | null>;
@@ -46,7 +46,8 @@ export async function submitWorkspaceCreation(
   // A pending operation is never silently replaced by a changed form submission.
   if (
     retained &&
-    (retained.input.workspace !== input.workspace ||
+    ((retained.input.purpose ?? "use") !== (input.purpose ?? "use") ||
+      retained.input.workspace !== input.workspace ||
       (retained.input.rootTemplate && input.rootTemplate
         ? !sameWorkspaceTemplatePin(retained.input.rootTemplate, input.rootTemplate)
         : Boolean(retained.input.rootTemplate) !== Boolean(input.rootTemplate)))

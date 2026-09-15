@@ -58,6 +58,8 @@ describe("private workspace ownership", () => {
       central.ensurePrivateWorkspaces(alice.id, { personal: different, system: different })
     ).toEqual(first);
     expect(central.getWorkspaceCreationIntent(first.system.name)?.rootTemplate).toEqual(pin);
+    for (const workspace of Object.values(first))
+      expect(central.getWorkspaceCreationIntent(workspace.name)?.purpose).toBe("use");
     const second = central.ensurePrivateWorkspaces(bob.id, { personal: pin, system: pin });
     expect(
       new Set([...Object.values(first), ...Object.values(second)].map((w) => w.workspaceId)).size

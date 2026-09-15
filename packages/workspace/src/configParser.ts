@@ -1,3 +1,7 @@
+import {
+  parseTemplateManifestContent,
+  rootRuntimeFromTemplateManifest,
+} from "./templateManifest.js";
 import YAML from "yaml";
 import { ZodError, type ZodIssue } from "zod";
 import type {
@@ -45,9 +49,9 @@ export function parseWorkspaceSystemEpochEnvelope(content: string): number {
 /**
  * Read the single runtime manifest published at one immutable workspace state.
  *
- * Source metadata is validated from this same manifest and omitted from the
- * runtime configuration. There is no second generated manifest or composition
- * layer to keep in sync.
+ * Authored settings and exact installed dependency declarations share this
+ * manifest. Runtime settings are resolved from them without replacing authored
+ * source or maintaining a second generated file.
  */
 export async function readWorkspaceConfig(
   reader: WorkspaceConfigReader,
@@ -87,7 +91,8 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
       "meta/vibestudio.yml: `id` is resolved by the host and must not be declared in workspace source"
     );
   }
-  const { template: _template, ...runtime } = yamlValue as Record<string, unknown>;
+  const { template: _template, ...authored } = yamlValue as Record<string, unknown>;
+  let runtime = authored;
   if (_template !== undefined) {
     const metadata = WorkspaceTemplateAuthoringMetadataSchema.safeParse(_template);
     if (!metadata.success) {
@@ -101,6 +106,10 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
   }
   let config: WorkspaceConfig;
   try {
+    if (_template !== undefined)
+      runtime = rootRuntimeFromTemplateManifest(
+        parseTemplateManifestContent(content, authored["systemEpoch"] as number)
+      ) as unknown as Record<string, unknown>;
     config = WorkspaceConfigSchema.parse({
       ...runtime,
       id,

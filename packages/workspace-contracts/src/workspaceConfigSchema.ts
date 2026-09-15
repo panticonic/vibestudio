@@ -89,9 +89,12 @@ export const WorkspaceGitSnapshotSchema = z.custom<`v1-sha256:${string}`>(
 /** Portable credential requirement name; never a concrete credential id. */
 export const WorkspaceLogicalCredentialNameSchema = z
   .string()
-  .regex(
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u,
-    "Expected a logical credential name using letters, digits, dot, underscore, or hyphen"
+  .trim()
+  .min(1)
+  .max(256)
+  .refine(
+    (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+    "Credential labels must not contain control characters"
   );
 
 export const WorkspaceGitUpstreamSchema = z
@@ -234,6 +237,24 @@ export const CanonicalWorkspaceInventoryPathSchema = z
     "must be a canonical relative path"
   );
 
+export const WorkspaceTemplateOverrideSchema = z
+  .object({
+    repoPath: CanonicalWorkspaceInventoryPathSchema.refine(
+      (path) => path !== "meta",
+      "meta is the workspace's own manifest repository"
+    ),
+    source: z.string().url(),
+  })
+  .strict();
+export const WorkspaceTemplateInstallationSchema = z
+  .object({
+    sources: z
+      .array(z.object({ pin: WorkspaceTemplatePinSchema, manifest: z.string().min(1) }).strict())
+      .min(1),
+    upstream: WorkspaceTemplatePinSchema.optional(),
+  })
+  .strict();
+
 /** Authoring-only facts carried beside runtime configuration in the one source manifest. */
 export const WorkspaceTemplateAuthoringMetadataSchema = z
   .object({
@@ -246,12 +267,22 @@ export const WorkspaceTemplateAuthoringMetadataSchema = z
      * shares an upstream's repositories instead of carrying a copy of them.
      */
     dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
-    /** Exact installed layers, dependency-first. Generated on acquisition; omitted from publication. */
-    sources: z.array(WorkspaceTemplatePinSchema).min(1).optional(),
+    overrides: z.array(WorkspaceTemplateOverrideSchema).optional(),
+    installation: WorkspaceTemplateInstallationSchema.optional(),
     repositories: z.array(CanonicalWorkspaceInventoryPathSchema),
   })
   .strict()
-  .superRefine(({ repositories }, ctx) => {
+  .superRefine(({ repositories, overrides = [] }, ctx) => {
+    const overridden = new Set<string>();
+    for (const [index, override] of overrides.entries()) {
+      if (!repositories.includes(override.repoPath) || overridden.has(override.repoPath))
+        ctx.addIssue({
+          code: "custom",
+          path: ["overrides", index],
+          message: "An override must name exactly one repository owned by this template",
+        });
+      overridden.add(override.repoPath);
+    }
     for (const [field, paths] of [["repositories", repositories]] as const) {
       if (new Set(paths).size !== paths.length) {
         ctx.addIssue({
@@ -456,5 +487,6 @@ export const WorkspaceCreationDescriptorSchema: z.ZodType<WorkspaceCreationDescr
     version: z.literal(1),
     workspaceId: z.string().trim().min(1),
     rootTemplate: WorkspaceTemplatePinSchema,
+    purpose: z.enum(["use", "author"]).optional(),
   })
   .strict();

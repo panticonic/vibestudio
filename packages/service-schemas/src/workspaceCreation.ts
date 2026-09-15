@@ -71,6 +71,7 @@ export const workspaceCreationMethods = defineServiceMethods({
           operationId: WorkspaceCreationOperationIdSchema,
           workspace: z.string().min(1),
           rootTemplate: WorkspaceTemplatePinSchema.optional(),
+          purpose: z.enum(["use", "author"]).optional(),
         })
         .strict(),
     ]),

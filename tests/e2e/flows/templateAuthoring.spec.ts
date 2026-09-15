@@ -1,3 +1,4 @@
+import YAML from "yaml";
 import { expect, test, type Page } from "@playwright/test";
 import {
   approvePendingWorkspaceCreationReview,
@@ -21,6 +22,29 @@ test("opens publishing and installed sources in the selected workspace", async (
     await waitHostedShellReady(app);
     for (const workspaceId of [app.systemWorkspaceId, app.workspaceId]) {
       await approvePendingWorkspaceCreationReview({ app: app.app, workspaceId });
+      const text = await app.app.evaluate(async (_electron, workspaceId) => {
+        const api = await globalThis.__testApi!.forWorkspace(workspaceId);
+        const state = await api.rpcCall("vcs", "mainState", []);
+        const repo = (await api.rpcCall("vcs", "resolveRepository", [
+          { state, repoPath: "meta" },
+        ])) as { repositoryId: string };
+        const file = (await api.rpcCall("vcs", "readFile", [
+          {
+            state,
+            repositoryId: repo.repositoryId,
+            file: { kind: "path", path: "vibestudio.yml" },
+          },
+        ])) as { content: { kind: string; text: string } };
+        return file.content.text;
+      }, workspaceId);
+      const document = YAML.parse(text);
+      const expectedTemplate =
+        workspaceId === app.systemWorkspaceId
+          ? requireE2eRootTemplate().defaultTemplates.system
+          : requireE2eRootTemplate().defaultTemplates.personal;
+      expect(document.template.dependencies).toEqual([{ url: expectedTemplate.url }]);
+      expect(document.template.repositories).toEqual(["meta"]);
+      expect(document.template.installation.upstream).toBeUndefined();
     }
     const panels = await getPanelTree(app);
     expect(panels.length).toBeGreaterThan(0);

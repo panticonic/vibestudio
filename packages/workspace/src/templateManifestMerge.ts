@@ -1,3 +1,4 @@
+import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ParsedTemplateManifest, TemplateRepositoryInventory } from "./templateManifest.js";
 
@@ -35,7 +36,12 @@ const ACCUMULATING_LISTS = ["services", "routes", "singletonObjects"] as const;
  * deliberately absent: its records nest further, and half-merging them would
  * be harder to predict than replacing them.
  */
-const MERGED_RECORD_SETTINGS = ["providers", "trust", "hostTargets", "defaultAgentConfig"] as const;
+export const MERGED_RECORD_SETTINGS = [
+  "providers",
+  "trust",
+  "hostTargets",
+  "defaultAgentConfig",
+] as const;
 
 function plainRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -50,7 +56,7 @@ export interface TemplateManifestLayer {
 }
 
 export interface MergedTemplateManifest {
-  /** The composed manifest document, ready to serialize as the source manifest. */
+  /** Effective runtime document; never write it over authored workspace source. */
   document: Record<string, unknown>;
   inventory: TemplateRepositoryInventory;
 }
@@ -81,29 +87,8 @@ export function mergeTemplateManifests(
     throw new Error(`Composed templates disagree about the workspace system epoch: ${described}`);
   }
 
-  const owners = new Map<string, string>();
-  const claim = (kind: "repository" | "source", value: string, label: string): void => {
-    const key = `${kind}\0${value}`;
-    const existing = owners.get(key);
-    if (existing) {
-      throw new Error(`Composed templates both declare ${kind} ${value}: ${existing} and ${label}`);
-    }
-    owners.set(key, label);
-  };
-
-  const repositories: string[] = [];
-  for (const layer of layers) {
-    for (const repository of layer.manifest.inventory.repositories) {
-      // `meta` is every template's own manifest repository, so each layer
-      // declares it and only the composed manifest ends up in the tree.
-      if (repository === "meta") continue;
-      claim("repository", repository, layer.label);
-      repositories.push(repository);
-    }
-  }
-  if (layers.some((layer) => layer.manifest.inventory.repositories.includes("meta"))) {
-    repositories.push("meta");
-  }
+  const owners = templateRepositoryOwners(layers);
+  const repositories = [...owners.keys()];
 
   const document: Record<string, unknown> = {};
   // Settings resolve to the last layer that stated them, so a dependency
@@ -126,28 +111,37 @@ export function mergeTemplateManifests(
     }
   }
 
-  for (const key of UNIQUE_SOURCE_LISTS) {
+  for (const key of [...UNIQUE_SOURCE_LISTS, ...ACCUMULATING_LISTS]) {
     const merged: unknown[] = [];
+    const declarations = new Map<string, string>();
     for (const layer of layers) {
       const entries = (layer.manifest.top as Record<string, unknown>)[key] as
         | readonly unknown[]
         | undefined;
+      const replacements = new Set(
+        (layer.manifest.overrides ?? []).map((override) => override.repoPath)
+      );
+      const replaced = new Set<string>();
       for (const entry of entries ?? []) {
         const source = sourceOf(entry);
-        if (source) claim("source", `${key}:${source}`, layer.label);
+        const repoPath = source
+          ?.replace("@workspace-extensions/", "extensions/")
+          .replace("@workspace-apps/", "apps/");
+        if (source && declarations.has(source)) {
+          if (repoPath && replacements.has(repoPath)) {
+            if (!replaced.has(source))
+              for (let index = merged.length - 1; index >= 0; index--)
+                if (sourceOf(merged[index]) === source) merged.splice(index, 1);
+            replaced.add(source);
+          } else if ((UNIQUE_SOURCE_LISTS as readonly string[]).includes(key)) {
+            throw new Error(
+              `Composed templates both declare source ${key}:${source}: ${declarations.get(source)} and ${layer.label}`
+            );
+          }
+        }
+        if (source) declarations.set(source, layer.label);
         merged.push(entry);
       }
-    }
-    if (merged.length) document[key] = merged;
-  }
-
-  for (const key of ACCUMULATING_LISTS) {
-    const merged: unknown[] = [];
-    for (const layer of layers) {
-      const entries = (layer.manifest.top as Record<string, unknown>)[key] as
-        | readonly unknown[]
-        | undefined;
-      for (const entry of entries ?? []) merged.push(entry);
     }
     if (merged.length) document[key] = merged;
   }
@@ -163,7 +157,7 @@ export function mergeTemplateManifests(
     // created from this tree must still know which repositories came from an
     // upstream when it later publishes itself as a template.
     ...(top.manifest.dependencies.length > 0 ? { dependencies: top.manifest.dependencies } : {}),
-    ...(top.manifest.sources.length ? { sources: top.manifest.sources } : {}),
+
     repositories: [...repositories].sort(compareUtf16CodeUnits),
   };
 
@@ -173,4 +167,56 @@ export function mergeTemplateManifests(
       repositories: [...repositories].sort(compareUtf16CodeUnits),
     },
   };
+}
+
+const sourceKey = (source: string) =>
+  /^(git\+)?https?:/.test(source) ? normalizeTemplateGitUrl(source) : source;
+
+/** Every collision must name the exact dependency whose whole unit it replaces. */
+export function templateRepositoryOwners(
+  layers: readonly TemplateManifestLayer[]
+): Map<string, TemplateManifestLayer> {
+  const owners = new Map<string, TemplateManifestLayer>();
+  const bySource = new Map(layers.map((layer) => [sourceKey(layer.label), layer]));
+  const dependsOn = (
+    layer: TemplateManifestLayer,
+    target: string,
+    seen = new Set<string>()
+  ): boolean =>
+    layer.manifest.dependencies.some((dependency) => {
+      const key = sourceKey(dependency.url);
+      if (key === target) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      const parent = bySource.get(key);
+      return parent ? dependsOn(parent, target, seen) : false;
+    });
+  for (const layer of layers) {
+    const overrides = new Map(
+      (layer.manifest.overrides ?? []).map((override) => [override.repoPath, override])
+    );
+    for (const [repoPath, override] of overrides) {
+      const prior = owners.get(repoPath);
+      if (
+        !layer.manifest.inventory.repositories.includes(repoPath) ||
+        (prior && sourceKey(prior.label) !== sourceKey(override.source)) ||
+        !dependsOn(layer, sourceKey(override.source))
+      )
+        throw new Error(
+          `Invalid override ${repoPath} in ${layer.label}: ${override.source} must be the dependency that currently owns this unit`
+        );
+    }
+    for (const repoPath of layer.manifest.inventory.repositories) {
+      if (repoPath === "meta") continue;
+      const prior = owners.get(repoPath);
+      if (prior && !overrides.has(repoPath))
+        throw new Error(
+          `Composed templates both declare repository ${repoPath}: ${prior.label} and ${layer.label}; declare an explicit override`
+        );
+      owners.set(repoPath, layer);
+    }
+  }
+  const top = layers.at(-1);
+  if (top?.manifest.inventory.repositories.includes("meta")) owners.set("meta", top);
+  return owners;
 }

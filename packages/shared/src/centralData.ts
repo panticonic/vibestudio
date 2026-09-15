@@ -186,7 +186,8 @@ export class CentralDataManager {
   addWorkspaceCreation(
     name: string,
     rootTemplate: WorkspaceTemplatePin,
-    workspaceId = createWorkspaceId()
+    workspaceId = createWorkspaceId(),
+    purpose: "use" | "author" = "use"
   ): WorkspaceEntry {
     const normalized = name.trim();
     if (!normalized) throw new Error("Workspace name is required");
@@ -194,6 +195,7 @@ export class CentralDataManager {
       version: 1,
       workspaceId,
       rootTemplate,
+      purpose,
     });
     const row = this.stmt(
       `INSERT INTO workspaces (workspace_id, name, last_opened, creation_intent_json)
@@ -210,7 +212,12 @@ export class CentralDataManager {
    */
   createWorkspaceOperation(
     owner: WorkspaceCreationOwner,
-    input: { operationId: string; workspace: string; rootTemplate?: WorkspaceTemplatePin },
+    input: {
+      operationId: string;
+      workspace: string;
+      rootTemplate?: WorkspaceTemplatePin;
+      purpose?: "use" | "author";
+    },
     selectRoot: () => WorkspaceTemplatePin,
     assertLive: () => void
   ): WorkspaceCreationReceipt {
@@ -219,7 +226,11 @@ export class CentralDataManager {
       throw new Error("Invalid workspace creation operation ID");
     const name = input.workspace.trim();
     if (!name) throw new Error("Workspace name is required");
-    const request = canonicalJson({ workspace: name, rootTemplate: input.rootTemplate ?? null });
+    const request = canonicalJson({
+      workspace: name,
+      rootTemplate: input.rootTemplate ?? null,
+      purpose: input.purpose ?? "use",
+    });
     return this.transaction(() => {
       assertLive();
       const user = this.assertCreationOwnerActive(owner);
@@ -231,7 +242,12 @@ export class CentralDataManager {
           throw new Error("Workspace creation operation ID was already used with different inputs");
         return this.creationReceipt(existing);
       }
-      const entry = this.addWorkspaceCreation(name, selectRoot());
+      const entry = this.addWorkspaceCreation(
+        name,
+        selectRoot(),
+        createWorkspaceId(),
+        input.purpose
+      );
       const at = this.now();
       const operationId =
         "workspace-creation:" +

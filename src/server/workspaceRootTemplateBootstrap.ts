@@ -13,12 +13,19 @@ import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configP
 import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import {
   canonicalTemplateYaml,
+  templateManifestDocument,
   readTemplateManifest,
   type ParsedTemplateManifest,
 } from "@vibestudio/workspace/templateManifest";
-import { TEMPLATE_SOURCE_MANIFEST_PATH } from "@vibestudio/workspace/templateCoordinates";
+import {
+  TEMPLATE_SOURCE_MANIFEST_PATH,
+  normalizeTemplateGitUrl,
+} from "@vibestudio/workspace/templateCoordinates";
 import { composeTemplateLayers } from "@vibestudio/workspace/templateComposition";
-import { mergeTemplateManifests } from "@vibestudio/workspace/templateManifestMerge";
+import {
+  mergeTemplateManifests,
+  templateRepositoryOwners,
+} from "@vibestudio/workspace/templateManifestMerge";
 import {
   resolveTemplateDependencies,
   type ResolvedTemplateDependency,
@@ -57,6 +64,7 @@ export interface ComposedTemplateLayer {
 
 export interface ComposeDeclaredTemplateLayersInput {
   pin: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
   /** The already-acquired snapshot of `pin` itself. */
   root: ExactGitSnapshot;
   expectedSystemEpoch: number;
@@ -84,11 +92,17 @@ export async function composeDeclaredTemplateLayers(
   input: ComposeDeclaredTemplateLayersInput
 ): Promise<{ snapshot: ExactGitSnapshot; layers: ComposedTemplateLayer[] }> {
   const { pin, root } = input;
-  const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest =>
-    readTemplateManifest({
+  const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest => {
+    const manifest = readTemplateManifest({
       readFile: (filePath) => snapshot.readFile(filePath),
       expectedSystemEpoch: input.expectedSystemEpoch,
     });
+    if (manifest.installation)
+      throw new Error(
+        "A published template cannot contain local installation records; publish its authored source instead"
+      );
+    return manifest;
+  };
   const rootManifest = readManifestOf(root);
   const resolveTrack =
     input.resolveTrack ??
@@ -134,16 +148,46 @@ export async function composeDeclaredTemplateLayers(
     ...resolved.layers.map((layer) => acquired.get(layer.url)!),
     { pin, snapshot: root, manifest: rootManifest },
   ];
-  const merged = mergeTemplateManifests(
-    stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }))
-  );
+  const sourceLayers = stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }));
+  // Validate overrides before selecting whole-unit trees, including deleted files.
+  mergeTemplateManifests(sourceLayers);
+  const owners = templateRepositoryOwners(sourceLayers);
   const layers = stack.map((entry) => ({ ...entry.pin }));
-  (merged.document["template"] as Record<string, unknown>)["sources"] = layers;
-  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(merged.document));
+  const authored =
+    input.purpose === "use"
+      ? {
+          systemEpoch: input.expectedSystemEpoch,
+          template: {
+            repositories: ["meta"],
+            dependencies: [
+              { url: pin.url, ...(pin.credential ? { credential: pin.credential } : {}) },
+            ],
+          },
+        }
+      : templateManifestDocument(rootManifest);
+  const metadata = authored["template"] as Record<string, unknown>;
+  metadata["repositories"] = [...new Set([...(metadata["repositories"] as string[]), "meta"])].sort(
+    compareUtf16CodeUnits
+  );
+  metadata["installation"] = {
+    sources: stack.map((entry) => ({
+      pin: entry.pin,
+      manifest: new TextDecoder().decode(entry.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH)!),
+    })),
+    ...(input.purpose === "use" ? {} : { upstream: pin }),
+  };
+  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(authored));
   const composed = composeTemplateLayers({
     layers: stack.map((entry) => ({
       label: entry.pin.url,
-      files: entry.snapshot.files,
+      files: entry.snapshot.files.filter((file) => {
+        if (file.path.startsWith("meta/"))
+          return input.purpose !== "use" && entry.pin.url === pin.url;
+        return [...owners].some(
+          ([repoPath, owner]) =>
+            owner.label === entry.pin.url && file.path.startsWith(`${repoPath}/`)
+        );
+      }),
       readFile: (filePath) => entry.snapshot.readFile(filePath),
     })),
     composedPaths: [TEMPLATE_SOURCE_MANIFEST_PATH],
@@ -195,11 +239,15 @@ interface MaterializedLayer {
  * restart deliberately does not re-resolve, because re-resolving could pick up
  * a newer dependency and quietly replace a source the user has been editing.
  */
-function materializationReceipt(layers: readonly MaterializedLayer[]): {
+function materializationReceipt(
+  layers: readonly MaterializedLayer[],
+  purpose: "use" | "author"
+): {
   version: number;
+  purpose: "use" | "author";
   layers: readonly MaterializedLayer[];
 } {
-  return { version: 2, layers };
+  return { version: 3, purpose, layers };
 }
 
 const CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
@@ -393,9 +441,20 @@ export class WorkspaceRootTemplateBootstrap {
     const composed = await composeDeclaredTemplateLayers({
       pin,
       root,
+      purpose: this.readDescriptor().purpose ?? "use",
       expectedSystemEpoch: this.deps.expectedSystemEpoch,
       acquire: (layerPin) => this.deps.acquire(layerPin),
-      ...(this.deps.resolveTrack ? { resolveTrack: this.deps.resolveTrack } : {}),
+      resolveTrack: async (address) => {
+        const recorded = this.acquiredLayers.find(
+          (layer) => normalizeTemplateGitUrl(layer.url) === normalizeTemplateGitUrl(address.url)
+        );
+        if (recorded) return { ref: recorded.ref, commit: recorded.commit };
+        if (!this.deps.resolveTrack)
+          throw new Error(
+            `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks (${address.url})`
+          );
+        return this.deps.resolveTrack(address);
+      },
     });
     this.acquiredLayers = composed.layers;
     return composed.snapshot;
@@ -448,7 +507,11 @@ export class WorkspaceRootTemplateBootstrap {
     // recorded here; taking them from the receipt rather than resolving again
     // is what keeps a restart from picking up a newer dependency and replacing
     // a source the user has been editing.
-    if (recorded.at(-1)?.commit !== pin.commit) {
+    if (
+      recorded.at(-1)?.commit !== pin.commit ||
+      recorded.at(-1)?.url !== pin.url ||
+      (receipt as { purpose?: string }).purpose !== (this.readDescriptor().purpose ?? "use")
+    ) {
       throw new Error("Workspace root materialization receipt does not match its exact pin");
     }
     this.acquiredLayers = [...recorded];
@@ -505,7 +568,7 @@ export class WorkspaceRootTemplateBootstrap {
     const temporary = `${receiptPath}.${process.pid}.tmp`;
     fs.writeFileSync(
       temporary,
-      `${JSON.stringify(materializationReceipt(this.acquiredLayers), null, 2)}\n`,
+      `${JSON.stringify(materializationReceipt(this.acquiredLayers, this.readDescriptor().purpose ?? "use"), null, 2)}\n`,
       { encoding: "utf8", mode: 0o600 }
     );
     fs.renameSync(temporary, receiptPath);

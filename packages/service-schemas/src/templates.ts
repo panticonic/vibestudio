@@ -100,7 +100,7 @@ const authoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
     description: z.string().trim().min(1),
-    parts: z.array(z.string()).min(1),
+    parts: z.array(z.string()),
   })
   .strict();
 export const templateAuthoringInspectionSchema = z
@@ -108,7 +108,7 @@ export const templateAuthoringInspectionSchema = z
     request: authoringIntentSchema,
     mainEventId: z.string().trim().min(1),
     selectableParts: z.array(z.string()),
-    requestedParts: z.array(z.string()).min(1),
+    requestedParts: z.array(z.string()),
     includedParts: z.array(z.string()).min(1),
     requiredParts: z.array(z.string()),
     manifest: z.string().min(1),
@@ -131,6 +131,7 @@ export const templatePublicationSchema = z
     remoteUrl: z.string().url(),
     webUrl: z.string().url(),
     templateUrl: z.string(),
+    credential: z.string().min(1).optional(),
     ref: z.string().startsWith("refs/tags/"),
     commit: WorkspaceGitCommitSchema,
     parts: z.array(z.string()).min(1),
@@ -360,6 +361,16 @@ export const templatesMethods = defineServiceMethods({
       .strict(),
     access: READ,
   },
+  authoringUpstream: {
+    website: {
+      kind: "closed",
+      reason: "Reads this workspace's private template upstream.",
+    } as const,
+    description: "Read the workspace's own template publishing repository, if configured.",
+    args: z.tuple([]),
+    returns: WorkspaceTemplatePinSchema.nullable(),
+    access: READ,
+  },
   authoringParts: {
     website: {
       kind: "closed",
@@ -369,7 +380,13 @@ export const templatesMethods = defineServiceMethods({
     description: "List protected-main repositories available for snapshot authoring.",
     args: z.tuple([]),
     returns: z.array(
-      z.object({ repoPath: z.string(), packageName: z.string().optional() }).strict()
+      z
+        .object({
+          repoPath: z.string(),
+          packageName: z.string().optional(),
+          inheritedFrom: z.string().optional(),
+        })
+        .strict()
     ),
     access: READ,
   },
@@ -419,7 +436,14 @@ export const workspaceTemplateSourceMethods = defineServiceMethods({
       kind: "closed",
       reason: "Source acquisition is owned by the reviewed template workflow.",
     } as const,
-    args: z.tuple([z.object({ sources: z.array(WorkspaceTemplatePinSchema).min(1) }).strict()]),
+    args: z.tuple([
+      z
+        .object({
+          sources: z.array(WorkspaceTemplatePinSchema).min(1),
+          purpose: z.enum(["use", "author"]).optional(),
+        })
+        .strict(),
+    ]),
     returns: templateSourceTreeSchema,
     access: READ,
   },

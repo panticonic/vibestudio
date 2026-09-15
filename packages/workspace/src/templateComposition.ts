@@ -4,12 +4,9 @@ import type { ExactSnapshotFile } from "@vibestudio/git";
 /**
  * Laying resolved template layers down into the one tree a workspace runs from.
  *
- * Ordering is the only precedence there is: layers arrive dependency-first, so
- * a base is placed before whatever extends it. Beyond that, nothing overrides
- * anything — two layers claiming one path is a mistake in the templates rather
- * than a question for a merge policy, and it stops here naming both sides. The
- * alternative, silently letting the later layer win, is how a workspace ends up
- * running a file its author never wrote and cannot find.
+ * The caller resolves explicit whole-unit ownership before supplying files.
+ * Remaining path collisions indicate inconsistent ownership and are rejected;
+ * file ordering never silently overrides source.
  */
 
 export interface TemplateLayer {

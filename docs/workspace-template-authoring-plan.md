@@ -6,20 +6,16 @@ field or standalone-file export. Put documentation, artwork notes, and similar
 files inside an appropriate unit; use `meta` for template metadata companions.
 Publication does not synthesize a root README.
 
-## Current ownership limitation
+## Open the right workspace
 
-The picker currently installs the selected template as the root for both ordinary
-use and authoring. Personal and System use this same operation. It does **not**
-yet create a separate user-owned root that depends on the selected template.
-The [ownership review](template-workspace-ownership-review.md) describes the
-required correction and the unresolved policy for publishing inherited-unit edits.
+Normal creation, including Personal, System, and **Start fresh**, creates a
+user-owned root that depends on the selected template and initially has no
+publishing upstream. To author Base, select Base in the catalog or enter its
+Git URL, then choose **Author template** in the review. That adopts Base as the
+root and records its repository as the upstream.
 
-## Open the right authoring workspace
-
-For a complete Base release, open Base directly from the workspace picker:
-**Start fresh** starts with Base, and **Git URL** accepts the Base repository
-address. This gives the authoring workspace Base's own units, without an
-intermediate Personal or System template.
+See [workspace template ownership](template-workspace-ownership-review.md) for
+the source model and explicit whole-unit overrides.
 
 The workspace's **Workspaces** page contains **Browse**, **Publish**, and
 **Installed** tabs. Publishing always reads protected main in that workspace.
@@ -39,8 +35,8 @@ repository too; the review explains the complete-tree replacement below.
 manifest-selected Git interop provider creates repositories and pushes the
 reviewed bytes.
 
-1. `authoringParts()` lists selectable workspace units. Units supplied by
-   declared dependencies remain dependencies and are not selectable exports.
+1. `authoringParts()` lists selectable workspace units. Inherited units are labeled with their source. Selecting one explicitly publishes
+   it as a whole-unit override; unselected inherited units remain dependencies.
 2. `inspectAuthoring({name, description, parts})` resolves the required unit
    closure and projects the runtime declarations into a portable
    `meta/vibestudio.yml`. Package-addressed provider declarations follow the
@@ -78,8 +74,9 @@ vibestudio templates author-publish news-plan.json --owner alice \
 
 ## Contribute units to an installed source
 
-Installation records dependency-first exact source pins in `template.sources`.
-These local provenance coordinates are not exported in a published template.
+Installation records exact pins and source declarations in `template.installation`.
+The runtime resolver computes effective settings from these declarations and the
+authored root. Installation records are omitted from published templates.
 
 The Installed tab lists those sources separately. Select a source and its units,
 review the destination, then push a contribution branch. The source repository's

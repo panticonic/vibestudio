@@ -191,3 +191,77 @@ describe("mergeTemplateManifests", () => {
     expect(merged.document["trust"]).toEqual({ chromeApps: ["apps/shell"] });
   });
 });
+
+it("requires an override to name the current ancestor owner, not an unrelated sibling", () => {
+  const base = "https://example.test/base.git",
+    derived = "https://example.test/derived.git",
+    sibling = "https://example.test/sibling.git";
+  const first = layer(base, { repositories: ["panels/chat"] });
+  const replacement = layer(derived, {
+    repositories: ["panels/chat"],
+    dependencies: [{ url: base }],
+    overrides: [{ repoPath: "panels/chat", source: base }],
+  });
+  expect(mergeTemplateManifests([first, replacement]).inventory.repositories).toEqual([
+    "panels/chat",
+  ]);
+  expect(() =>
+    mergeTemplateManifests([
+      first,
+      layer(sibling, {
+        repositories: ["panels/chat"],
+        overrides: [{ repoPath: "panels/chat", source: base }],
+      }),
+    ])
+  ).toThrow("Invalid override");
+  expect(() =>
+    mergeTemplateManifests([
+      first,
+      replacement,
+      layer(sibling, {
+        repositories: ["panels/chat"],
+        dependencies: [{ url: derived }],
+        overrides: [{ repoPath: "panels/chat", source: base }],
+      }),
+    ])
+  ).toThrow("currently owns");
+});
+
+it("retains an explicit override after its dependency removes the original unit", () => {
+  const base = "https://example.test/base.git";
+  expect(
+    mergeTemplateManifests([
+      layer(base, { repositories: [] }),
+      layer("https://example.test/mine.git", {
+        repositories: ["panels/chat"],
+        dependencies: [{ url: base }],
+        overrides: [{ repoPath: "panels/chat", source: base }],
+      }),
+    ]).inventory.repositories
+  ).toEqual(["panels/chat"]);
+});
+
+it("keeps every service declared by an override while replacing the inherited services", () => {
+  const base = "https://example.test/base.git";
+  const service = (name: string) => ({
+    source: "workers/example",
+    name,
+    action: "inspect example",
+    presentation: { domain: "files", verb: "see" },
+    authority: { principals: ["code"] },
+    worker: { routePath: "/" + name },
+  });
+  const merged = mergeTemplateManifests([
+    layer(base, { repositories: ["workers/example"] }, { services: [service("old")] }),
+    layer(
+      "https://example.test/mine.git",
+      {
+        repositories: ["workers/example"],
+        dependencies: [{ url: base }],
+        overrides: [{ repoPath: "workers/example", source: base }],
+      },
+      { services: [service("first"), service("second")] }
+    ),
+  ]);
+  expect(merged.document["services"]).toEqual([service("first"), service("second")]);
+});

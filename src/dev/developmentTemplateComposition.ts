@@ -1,8 +1,12 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import YAML from "yaml";
-import { mergeTemplateManifests } from "@vibestudio/workspace/templateManifestMerge";
+import {
+  mergeTemplateManifests,
+  templateRepositoryOwners,
+} from "@vibestudio/workspace/templateManifestMerge";
 import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
@@ -23,7 +27,11 @@ export function composeDevelopmentTemplateCheckouts(
   if (checkouts.length === 0) throw new Error("Template composition needs at least one checkout");
   const roots = checkouts.map((checkout) => fs.realpathSync(path.resolve(checkout)));
   const layers = roots.map((root) => ({
-    label: root,
+    label: fs.existsSync(path.join(root, ".git"))
+      ? execFileSync("git", ["remote", "get-url", "origin"], { cwd: root, encoding: "utf8" })
+          .trim()
+          .replace(/^git@github.com:/, "https://github.com/")
+      : root,
     manifest: parseTemplateManifestContent(
       fs.readFileSync(path.join(root, "meta", "vibestudio.yml"), "utf8"),
       WORKSPACE_SYSTEM_EPOCH
@@ -38,16 +46,14 @@ export function composeDevelopmentTemplateCheckouts(
     fs.rmSync(target, { recursive: true, force: true });
   };
   try {
-    const claimed = new Set<string>();
+    const owners = templateRepositoryOwners(layers);
     for (let index = 0; index < layers.length; index += 1) {
       const { manifest } = layers[index]!;
       const root = roots[index]!;
       for (const relative of [
         ...manifest.inventory.repositories.filter((entry) => entry !== "meta"),
       ]) {
-        if (claimed.has(relative))
-          throw new Error(`Template composition has duplicate ${relative}`);
-        claimed.add(relative);
+        if (owners.get(relative)?.label !== layers[index]!.label) continue;
         const destination = path.join(target, relative);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.cpSync(path.join(root, relative), destination, { recursive: true });

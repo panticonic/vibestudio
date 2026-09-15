@@ -161,6 +161,17 @@ export interface WorkspaceTemplatePin extends WorkspaceTemplateDeclaration {
   commit: string;
 }
 
+export interface WorkspaceTemplateOverride {
+  repoPath: string;
+  source: string;
+}
+
+/** Exact source declarations used to resolve this installed workspace offline. */
+export interface WorkspaceTemplateInstallation {
+  sources: Array<{ pin: WorkspaceTemplatePin; manifest: string }>;
+  upstream?: WorkspaceTemplatePin;
+}
+
 export function sameWorkspaceTemplatePin(
   left: WorkspaceTemplatePin,
   right: WorkspaceTemplatePin
@@ -192,6 +203,7 @@ export interface WorkspaceCreationDescriptor {
   version: 1;
   workspaceId: string;
   rootTemplate: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
 }
 
 export interface WorkspaceGitRemoteConfig {

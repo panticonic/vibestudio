@@ -11,6 +11,7 @@ export interface ResolveLocalWorkspaceStartupOpts {
   workspaceId?: string;
   /** Explicit exact root for a newly created child; existing workspaces ignore it. */
   rootTemplate?: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
 }
 
 export interface LocalWorkspaceStartup {
@@ -38,6 +39,7 @@ export function resolveLocalWorkspaceStartup(
       init: opts.init,
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
+      ...(opts.purpose ? { purpose: opts.purpose } : {}),
     });
     return { resolved };
   }
@@ -49,6 +51,7 @@ export function resolveLocalWorkspaceStartup(
       init: opts.init,
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
+      ...(opts.purpose ? { purpose: opts.purpose } : {}),
     });
     return { resolved };
   }
@@ -64,6 +67,7 @@ export function resolveLocalWorkspaceStartup(
       init: true,
       workspaceId: opts.workspaceId,
       ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
+      ...(opts.purpose ? { purpose: opts.purpose } : {}),
     }),
   };
 }

@@ -42,6 +42,7 @@ export interface CreateRemoteWorkspaceOptions {
   operationId: string;
   workspace: string;
   rootTemplate?: WorkspaceTemplatePin;
+  purpose?: "use" | "author";
 }
 
 function controlClient(rpc: RpcClient) {
@@ -202,6 +203,7 @@ export async function createRemoteWorkspace(
     client.createWorkspace({
       workspace: options.workspace,
       operationId: options.operationId,
+      ...(options.purpose ? { purpose: options.purpose } : {}),
       ...(options.rootTemplate ? { rootTemplate: options.rootTemplate } : {}),
     })
   );
