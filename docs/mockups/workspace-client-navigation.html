@@ -1,0 +1,233 @@
+<div id="vs-workspace-preview" aria-label="Vibestudio workspace navigation">
+  <style>
+    #vs-workspace-preview { --vs-bg: light-dark(#ffffff,#202126); --vs-nav: light-dark(#f5f5f7,#191a1e); --vs-ink: light-dark(#25242d,#eeedf4); --vs-muted: light-dark(#686574,#b4b0c0); --vs-line: light-dark(#e3e1e8,#3b3943); --vs-accent: light-dark(#6552b7,#c2b1ff); --vs-tint: light-dark(#eee9fb,#373044); color:var(--vs-ink); font:14px/1.5 system-ui,sans-serif; }
+    #vs-workspace-preview * { box-sizing:border-box; }
+    #vs-workspace-preview button, #vs-workspace-preview input { font:inherit; color:inherit; }
+    #vs-workspace-preview button { cursor:pointer; background:transparent; border:1px solid transparent; border-radius:8px; padding:8px 10px; text-align:left; }
+    #vs-workspace-preview button:hover { background:var(--vs-tint); }
+    #vs-workspace-preview button:focus-visible { outline:2px solid var(--vs-accent); outline-offset:2px; }
+    #vs-workspace-preview [hidden] { display:none !important; }
+    #vs-workspace-preview .vs-window { position:relative; background:var(--vs-bg); border:1px solid var(--vs-line); border-radius:12px; overflow:hidden; min-height:550px; }
+    #vs-workspace-preview .vs-top { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 14px; border-bottom:1px solid var(--vs-line); flex-wrap:wrap; }
+    #vs-workspace-preview .vs-brand { font-weight:500; letter-spacing:-.4px; }
+    #vs-workspace-preview .vs-subtle { color:var(--vs-muted); font-size:12px; }
+    #vs-workspace-preview .vs-layout { display:grid; grid-template-columns:250px minmax(0,1fr); min-height:500px; }
+    #vs-workspace-preview .vs-sidebar { background:var(--vs-nav); padding:14px 10px; border-right:1px solid var(--vs-line); display:flex; flex-direction:column; gap:16px; }
+    #vs-workspace-preview .vs-section-head { display:flex; align-items:center; gap:2px; }
+    #vs-workspace-preview .vs-section-head .vs-select { flex:1; min-width:0; font-weight:500; }
+    #vs-workspace-preview .vs-section-head[data-active="true"] { background:var(--vs-tint); border-radius:8px; }
+    #vs-workspace-preview .vs-chevron { width:28px; padding:4px; text-align:center; }
+    #vs-workspace-preview .vs-new-in { width:32px; text-align:center; font-size:18px; padding:2px; }
+    #vs-workspace-preview .vs-items { padding-left:30px; }
+    #vs-workspace-preview .vs-items button { display:block; width:100%; color:var(--vs-muted); padding:6px 10px; }
+    #vs-workspace-preview .vs-items button[aria-current="page"] { color:var(--vs-accent); font-weight:500; }
+    #vs-workspace-preview .vs-footer { margin-top:auto; border-top:1px solid var(--vs-line); padding-top:12px; }
+    #vs-workspace-preview .vs-content { min-width:0; }
+    #vs-workspace-preview .vs-toolbar { display:flex; align-items:center; justify-content:space-between; padding:13px 20px; gap:8px; border-bottom:1px solid var(--vs-line); }
+    #vs-workspace-preview .vs-workspace-button { padding:0; font-weight:500; }
+    #vs-workspace-preview .vs-actions { display:flex; gap:4px; flex-wrap:wrap; }
+    #vs-workspace-preview .vs-document { padding:30px 32px; max-width:680px; }
+    #vs-workspace-preview h2 { font-size:26px; line-height:1.2; font-weight:500; letter-spacing:-.6px; margin:8px 0 20px; }
+    #vs-workspace-preview h3 { font-size:16px; font-weight:500; margin:20px 0 8px; }
+    #vs-workspace-preview p { margin:8px 0 16px; }
+    #vs-workspace-preview .vs-paper-list { padding-left:20px; margin-bottom:24px; }
+    #vs-workspace-preview .vs-paper-list li { margin:10px 0; }
+    #vs-workspace-preview .vs-secondary { border-color:var(--vs-line); background:var(--vs-bg); }
+    #vs-workspace-preview .vs-primary { background:var(--vs-accent); color:light-dark(#ffffff,#24202f); text-align:center; }
+    #vs-workspace-preview .vs-primary:hover { opacity:.9; background:var(--vs-accent); }
+    #vs-workspace-preview .vs-sheet { position:absolute; z-index:4; top:76px; right:18px; width:min(365px,calc(100% - 36px)); background:var(--vs-bg); border:1px solid var(--vs-line); border-radius:14px; padding:20px; box-shadow:0 14px 40px light-dark(#29203926,#00000066); }
+    #vs-workspace-preview .vs-sheet h2 { font-size:21px; margin:12px 0; }
+    #vs-workspace-preview .vs-sheet-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    #vs-workspace-preview .vs-sheet-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; flex-wrap:wrap; }
+    #vs-workspace-preview .vs-meta { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    #vs-workspace-preview .vs-label { background:var(--vs-tint); color:var(--vs-accent); border-radius:5px; padding:2px 6px; font-size:12px; }
+    #vs-workspace-preview .vs-field { padding:12px; border:1px solid var(--vs-line); border-radius:8px; margin:10px 0; }
+    #vs-workspace-preview .vs-field strong { font-weight:500; display:block; }
+    #vs-workspace-preview .vs-toast { padding:10px 16px; display:flex; justify-content:space-between; gap:8px; align-items:center; background:var(--vs-tint); border-top:1px solid var(--vs-line); }
+    #vs-workspace-preview .vs-mobile-menu { display:none; margin-right:6px; }
+    #vs-workspace-preview .vs-close-drawer { display:none; }
+    #vs-workspace-preview .vs-new-options { display:grid; gap:8px; max-width:320px; }
+    #vs-workspace-preview .vs-new-options button { border:1px solid var(--vs-line); }
+    #vs-workspace-preview[data-density="comfortable"] .vs-items button { padding:10px; }
+    #vs-workspace-preview[data-device="phone"] .vs-window { max-width:410px; margin:auto; }
+    #vs-workspace-preview[data-device="phone"] .vs-layout { grid-template-columns:minmax(0,1fr); min-height:550px; }
+    #vs-workspace-preview[data-device="phone"] .vs-sidebar { display:none; }
+    #vs-workspace-preview[data-device="phone"] .vs-mobile-menu { display:inline-block; }
+    #vs-workspace-preview[data-device="phone"] .vs-sidebar.vs-open { display:flex; position:absolute; inset:55px 38px 0 0; z-index:3; border-radius:0 10px 10px 0; }
+    #vs-workspace-preview[data-device="phone"] .vs-close-drawer { display:block; align-self:flex-end; }
+    #vs-workspace-preview[data-device="phone"] .vs-document { padding:24px 20px; }
+    #vs-workspace-preview[data-device="phone"] button { min-height:44px; }
+    #vs-workspace-preview[data-device="phone"] .vs-chevron, #vs-workspace-preview[data-device="phone"] .vs-new-in { min-width:44px; }
+    #vs-workspace-preview[data-device="phone"] .vs-toolbar { padding:12px; }
+    #vs-workspace-preview[data-device="phone"] .vs-sheet { top:auto; bottom:10px; right:10px; width:calc(100% - 20px); }
+    #vs-workspace-preview[data-device="phone"] .vs-account { display:none; }
+    @media(max-width:600px) {
+      #vs-workspace-preview .vs-layout { grid-template-columns:minmax(0,1fr); min-height:550px; }
+      #vs-workspace-preview .vs-sidebar { display:none; }
+      #vs-workspace-preview .vs-mobile-menu { display:inline-block; }
+      #vs-workspace-preview .vs-sidebar.vs-open { display:flex; position:absolute; inset:55px 38px 0 0; z-index:3; border-radius:0 10px 10px 0; }
+      #vs-workspace-preview .vs-close-drawer { display:block; align-self:flex-end; }
+      #vs-workspace-preview .vs-document { padding:24px 20px; }
+      #vs-workspace-preview button { min-height:44px; }
+      #vs-workspace-preview .vs-chevron, #vs-workspace-preview .vs-new-in { min-width:44px; }
+      #vs-workspace-preview .vs-toolbar { padding:12px; }
+      #vs-workspace-preview .vs-sheet { top:auto; bottom:10px; right:10px; width:calc(100% - 20px); }
+      #vs-workspace-preview .vs-account { display:none; }
+    }
+  </style>
+  <div class="vs-window">
+    <header class="vs-top">
+      <span class="vs-brand">Vibestudio <span class="vs-subtle vs-account"> / Alice · Home server</span></span>
+      <button class="vs-secondary" data-action="approval">Approvals <span data-count>1</span></button>
+    </header>
+    <div class="vs-layout">
+      <nav class="vs-sidebar" aria-label="Workspaces">
+        <button class="vs-close-drawer" data-action="close-drawer">Close workspaces</button>
+        <section>
+          <div class="vs-section-head" data-heading="personal">
+            <button class="vs-chevron" data-expand="personal" aria-expanded="true" aria-label="Collapse Personal">⌄</button>
+            <button class="vs-select" data-workspace="personal">Personal <span class="vs-subtle">· Only you</span></button>
+            <button class="vs-new-in" data-new="personal" aria-label="New panel in Personal">+</button>
+          </div>
+          <div class="vs-items" data-tree="personal">
+            <button data-panel="personal:Field notes">Field notes</button>
+            <button data-panel="personal:Reading list">Reading list</button>
+          </div>
+        </section>
+        <section>
+          <div class="vs-section-head" data-heading="project">
+            <button class="vs-chevron" data-expand="project" aria-expanded="true" aria-label="Collapse Project">⌄</button>
+            <button class="vs-select" data-workspace="project">Project <span class="vs-subtle">· 2 members</span></button>
+            <button class="vs-new-in" data-new="project" aria-label="New panel in Project">+</button>
+          </div>
+          <div class="vs-items" data-tree="project">
+            <button data-panel="project:Research notes">Research notes</button>
+            <button data-panel="project:Next steps">Next steps</button>
+          </div>
+        </section>
+        <section>
+          <div class="vs-section-head" data-heading="system">
+            <button class="vs-chevron" data-expand="system" aria-expanded="false" aria-label="Expand System">›</button>
+            <button class="vs-select" data-workspace="system">System <span class="vs-subtle">· Only you</span></button>
+            <button class="vs-new-in" data-new="system" aria-label="New panel in System">+</button>
+          </div>
+          <div class="vs-items" data-tree="system" hidden><button data-panel="system:Settings">Settings</button></div>
+        </section>
+        <div class="vs-footer"><button data-action="settings">Settings for <span data-settings-target>Project</span></button></div>
+      </nav>
+      <main class="vs-content">
+        <div class="vs-toolbar">
+          <div><button class="vs-workspace-button" data-action="drawer"><span class="vs-mobile-menu">☰ </span><span data-active-workspace>Project</span></button><div class="vs-subtle" data-panel-caption>Research notes · Shared with Alice and Bob</div></div>
+          <button class="vs-secondary" data-action="new">+ New</button>
+        </div>
+        <article class="vs-document" data-document></article>
+      </main>
+    </div>
+    <aside class="vs-sheet" data-sheet hidden aria-label="Workspace action"></aside>
+    <div class="vs-toast" data-toast hidden role="status"><span data-toast-text></span><button data-action="open-copy" hidden>Open copy</button></div>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('vs-workspace-preview');
+      const names = {personal:'Personal', project:'Project', system:'System'};
+      const state = {active:'project', panels:{personal:'Field notes',project:'Research notes',system:'Settings'}, sheet:null, captured:null, returnTo:null, managed:'project', approved:false, copied:null, drafts:{}, invoker:null};
+      const design = {device:'desktop',density:'compact'};
+      const el = selector => root.querySelector(selector);
+      const safe = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      function notice(text, copy=false) { el('[data-toast-text]').textContent=text; el('[data-toast]').hidden=false; el('[data-action="open-copy"]').hidden=!copy; }
+      function focusWorkspace(id, panel) {
+        state.active=id;
+        if(panel) {
+          state.panels[id]=panel;
+          const existing=Array.from(root.querySelectorAll('[data-panel]')).some(node=>node.dataset.panel===id+':'+panel);
+          if(!existing) {const row=document.createElement('button');row.dataset.panel=id+':'+panel;row.textContent=panel;el('[data-tree="'+id+'"]').append(row);}
+        }
+        el('.vs-sidebar').classList.remove('vs-open');
+        render();
+      }
+      function openSheet(kind) {
+        state.invoker=document.activeElement;
+        state.sheet=kind;
+        state.captured={workspace:state.active,panel:state.panels[state.active]};
+        renderSheet();
+        el('[data-sheet] button')?.focus();
+      }
+      function dismissSheet() {
+        state.sheet=null;renderSheet();
+        const target=state.invoker?.isConnected?state.invoker:el('[data-action="drawer"]');
+        target?.focus();
+      }
+      function renderSheet() {
+        const sheet=el('[data-sheet]');
+        sheet.hidden=!state.sheet;
+        if(!state.sheet) { sheet.replaceChildren(); return; }
+        const captured=state.captured;
+        let content='';
+        if(state.sheet==='approval') {
+          content=state.approved ? '<h2>Already handled</h2><p>This request belonged to Project.</p>' : '<div class="vs-meta"><span class="vs-label">Project → Personal</span><span class="vs-subtle">Research Agent</span></div><h2>Allow access to “Field notes”?</h2><p>Project will receive this document. Alice and Bob can see it.</p><div class="vs-field"><strong>Personal / Field notes</strong><span class="vs-subtle">Read this document · requested by Alice</span></div><div class="vs-sheet-actions"><button class="vs-secondary" data-action="deny">Don’t allow</button><button class="vs-primary" data-action="allow">Just once</button></div>';
+        } else if(state.sheet==='copy') {
+          const dest=captured.workspace==='personal'?'project':'personal';
+          state.copyTarget=dest;
+          content='<div class="vs-meta"><span class="vs-label">'+names[captured.workspace]+' → '+names[dest]+'</span></div><h2>Send a copy?</h2><div class="vs-field"><strong>'+safe(captured.panel)+'</strong><span class="vs-subtle">One document · original stays in '+names[captured.workspace]+'</span></div><p>'+(dest==='project'?'Visible to Project members: Alice and Bob.':'Visible only to you in Personal.')+'</p><div class="vs-sheet-actions"><button class="vs-secondary" data-action="dismiss">Cancel</button><button class="vs-primary" data-action="confirm-copy">Copy to '+names[dest]+'</button></div>';
+        } else {
+          content='<div class="vs-meta"><span class="vs-label">'+names[captured.workspace]+' / '+safe(captured.panel)+'</span></div><h2>Quickfire</h2><p>What would you like to do with this panel?</p><label class="vs-subtle" for="vs-qf-draft">Message</label><textarea id="vs-qf-draft" rows="3" style="width:100%;padding:12px;border:1px solid var(--vs-line);border-radius:8px;background:var(--vs-bg);color:var(--vs-ink);font:inherit" placeholder="Ask about this panel…"></textarea>';
+        }
+        sheet.innerHTML='<div class="vs-sheet-head"><span class="vs-subtle">'+(state.sheet==='approval'?'Permission request':state.sheet==='copy'?'Selected copy':'Panel assistant')+'</span><button data-action="dismiss" aria-label="Close action">Close</button></div>'+content;
+        if(state.sheet==='quickfire') el('#vs-qf-draft').value=state.drafts[captured.workspace+':'+captured.panel]||'';
+      }
+      function render() {
+        root.dataset.device=design.device;
+        root.dataset.density=design.density;
+        const w=state.active, panel=state.panels[w];
+        el('[data-active-workspace]').textContent=names[w];
+        el('[data-panel-caption]').textContent=panel+' · '+(w==='project'?'Shared with Alice and Bob':'Only you');
+        el('[data-settings-target]').textContent=names[w];
+        el('[data-count]').textContent=state.approved?'0':'1';
+        el('[data-action="new"]').setAttribute('aria-label','New panel in '+names[w]);
+        root.querySelectorAll('[data-heading]').forEach(node=>node.dataset.active=String(node.dataset.heading===w));
+        root.querySelectorAll('[data-workspace]').forEach(node=>node.setAttribute('aria-pressed',String(node.dataset.workspace===w)));
+        root.querySelectorAll('[data-panel]').forEach(node=>{if(node.dataset.panel===w+':'+panel) node.setAttribute('aria-current','page'); else node.removeAttribute('aria-current');});
+        const doc=el('[data-document]');
+        if(panel==='New') {
+          doc.innerHTML='<span class="vs-label">'+names[w]+'</span><h2>New in '+names[w]+'</h2><p class="vs-subtle">A place for your next thought.</p><div class="vs-new-options"><button data-action="create-note">Create a note</button><button data-action="quickfire">Ask Quickfire</button></div>';
+        } else if(w==='system') {
+          doc.innerHTML=(state.returnTo?'<button class="vs-secondary" data-action="back">← Back to '+names[state.returnTo.workspace]+'</button>':'')+'<h2>Settings</h2><span class="vs-label">Managing '+names[state.managed]+'</span><h3>Connections</h3><div class="vs-field"><strong>Incoming calls</strong><span class="vs-subtle">'+(state.managed==='system'?'Blocked by system policy':'Only explicitly permitted operations')+'</span></div><div class="vs-field"><strong>Members</strong><span class="vs-subtle">'+(state.managed==='project'?'Alice and Bob':'Only you')+'</span></div>';
+        } else {
+          const personal=w==='personal';
+          doc.innerHTML='<div class="vs-meta"><span class="vs-label">'+(personal?'Personal notes':'Project research')+'</span><span class="vs-subtle">'+(personal?'Only you':'Alice · Bob')+'</span></div><h2>'+safe(panel)+'</h2><p>'+(personal?'Ideas worth taking into the next project.':'A few things we want to learn before the next prototype.')+'</p><h3>'+(personal?'What stood out':'Questions to explore')+'</h3><ul class="vs-paper-list"><li>Make it easy to return to unfinished work.</li><li>Keep the next action close to the thing it affects.</li><li>Show who can see something before sharing it.</li></ul><div class="vs-actions"><button class="vs-secondary" data-action="copy">Send a copy…</button><button class="vs-primary" data-action="quickfire">Ask Quickfire</button></div>';
+        }
+      }
+      root.addEventListener('click',event=>{
+        const b=event.target.closest('button'); if(!b||!root.contains(b)) return;
+        if(b.dataset.workspace) return focusWorkspace(b.dataset.workspace);
+        if(b.dataset.panel) { const [w,panel]=b.dataset.panel.split(':'); return focusWorkspace(w,panel); }
+        if(b.dataset.new) return focusWorkspace(b.dataset.new,'New');
+        if(b.dataset.expand) {
+          const tree=el('[data-tree="'+b.dataset.expand+'"]'); tree.hidden=!tree.hidden;
+          b.setAttribute('aria-expanded',String(!tree.hidden)); b.textContent=tree.hidden?'›':'⌄';
+          b.setAttribute('aria-label',(tree.hidden?'Expand ':'Collapse ')+names[b.dataset.expand]); return;
+        }
+        const action=b.dataset.action;
+        if(action==='drawer') el('.vs-sidebar').classList.toggle('vs-open');
+        if(action==='close-drawer') el('.vs-sidebar').classList.remove('vs-open');
+        if(action==='new') focusWorkspace(state.active,'New');
+        if(action==='create-note') focusWorkspace(state.active,'Untitled note');
+        if(action==='settings') {state.returnTo={workspace:state.active,panel:state.panels[state.active]};state.managed=state.active;focusWorkspace('system','Settings');}
+        if(action==='back'&&state.returnTo) {const previous=state.returnTo;state.returnTo=null;focusWorkspace(previous.workspace,previous.panel);}
+        if(['copy','quickfire','approval'].includes(action)) openSheet(action);
+        if(action==='dismiss') dismissSheet();
+        if(action==='allow'||action==='deny') {state.approved=true;state.sheet=null;render();renderSheet();notice(action==='allow'?'Permission recorded for Project · just once':'Request declined for Project');}
+        if(action==='confirm-copy') {state.copied={workspace:state.copyTarget,panel:state.captured.panel};state.sheet=null;renderSheet();notice('Copied to '+names[state.copied.workspace]+'. Original kept.',true);}
+        if(action==='open-copy'&&state.copied) {focusWorkspace(state.copied.workspace,state.copied.panel);el('[data-toast]').hidden=true;}
+      });
+      root.addEventListener('input',event=>{if(event.target.id==='vs-qf-draft') state.drafts[state.captured.workspace+':'+state.captured.panel]=event.target.value;});
+      root.addEventListener('keydown',event=>{if(event.key==='Escape'){dismissSheet();el('.vs-sidebar').classList.remove('vs-open');}});
+      render();
+      if(globalThis.Tweak) {
+        const tweak=new Tweak({container:root,onChange:render});
+        tweak.addSelect(design,'device',{label:'Layout',options:[{label:'Desktop',value:'desktop'},{label:'Phone',value:'phone'}]});
+        tweak.addSelect(design,'density',{label:'Tree spacing',options:[{label:'Compact',value:'compact'},{label:'Comfortable',value:'comfortable'}]});
+      }
+    })();
+  </script>
+</div>
