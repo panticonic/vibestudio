@@ -34,7 +34,7 @@ describe("panelCommands", () => {
 
   it("applies configurable search templates", () => {
     expect(applySearchTemplate("hello world")).toBe(
-      "https://www.google.com/search?q=hello%20world"
+      "https://duckduckgo.com/?q=hello%20world"
     );
     expect(applySearchTemplate("hello world", "https://search.example/?term=%s")).toBe(
       "https://search.example/?term=hello%20world"

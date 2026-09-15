@@ -398,7 +398,11 @@ function browserDataMethod<A extends z.ZodType<unknown[]>, R extends z.ZodType>(
         : "browser-data.write";
   const tier = sensitivity === "read" && !options.secret ? "open" : "gated";
   return {
-    website: {"kind":"closed","reason":"Browser profile data requires the browser privacy UI and cannot be exported to websites."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+    } as const,
     description: options.description,
     args,
     returns,
@@ -653,6 +657,32 @@ export const browserDataMethods = defineReceiverServiceMethods({
     "List imported search engines."
   ),
   setDefaultEngine: write(z.tuple([id]), voidResult, "Select the default search engine."),
+  saveSearchEngine: write(
+    z.tuple([
+      searchEngineInputSchema
+        .omit({ sourceId: true, faviconUrl: true })
+        .extend({ id: id.optional() }),
+    ]),
+    id,
+    "Save a search provider and its optional OpenSearch suggestion URL."
+  ),
+  getSearchSuggestions: read(
+    z.tuple([text]),
+    z.array(
+      z
+        .object({
+          url: text,
+          title: text,
+        source: z.literal("search-suggestion"),
+        completionQuery: text,
+          engineId: id,
+          engineName: text,
+          searchTemplate: text,
+        })
+        .strict()
+    ),
+    "Request completions from the configured search provider."
+  ),
   putPageFavicon: write(z.tuple([faviconInputSchema]), voidResult, "Store a page favicon."),
   getPageFavicon: read(
     z.tuple([text]),

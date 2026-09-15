@@ -1,4 +1,6 @@
 import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import type { BrowserAddressSuggestion } from "@vibestudio/shared/webSearch";
+import type { WebSearchEngineInput } from "@vibestudio/shared/webSearch";
 import type {
   BrowserEnvironmentIdentity,
   BrowserImportAcquisitionOption,
@@ -103,7 +105,10 @@ export interface BrowserDataClient {
   previewSensitiveImport(
     request: SensitiveBrowserImportSelection
   ): Promise<SensitiveBrowserImportPreview>;
-  startImport(selection: NonSensitiveBrowserImportSelection, operationId: string): Promise<ImportJobSnapshot>;
+  startImport(
+    selection: NonSensitiveBrowserImportSelection,
+    operationId: string
+  ): Promise<ImportJobSnapshot>;
   startSensitiveImport(
     request: SensitiveBrowserImportRequest
   ): Promise<SensitiveBrowserImportStatus>;
@@ -156,6 +161,8 @@ export interface BrowserDataClient {
 
   getSearchEngines(): Promise<StoredSearchEngine[]>;
   setDefaultEngine(id: number): Promise<void>;
+  saveSearchEngine(engine: WebSearchEngineInput & { id?: number }): Promise<number>;
+  getSearchSuggestions(query: string): Promise<BrowserAddressSuggestion[]>;
 
   listDownloads(): Promise<BrowserDownloadRecord[]>;
   listDownloadRecords(hostId: string): Promise<BrowserDownloadRecord[]>;
@@ -236,6 +243,8 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     updateHistoryTitle: (request) => callData("updateHistoryTitle", request),
     getSearchEngines: () => callData("getSearchEngines"),
     setDefaultEngine: (id) => callData("setDefaultEngine", id),
+    saveSearchEngine: (engine) => callData("saveSearchEngine", engine),
+    getSearchSuggestions: (query) => callData("getSearchSuggestions", query),
     listDownloads: () => callBrowserEnvironment("listDownloads"),
     listDownloadRecords: (hostId) => callData("listDownloadRecords", hostId),
     upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),

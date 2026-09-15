@@ -103,14 +103,15 @@ export interface PanelCommandDefinition {
   enabled: boolean;
 }
 
-export const DEFAULT_SEARCH_TEMPLATE = "https://www.google.com/search?q=%s";
+import { DEFAULT_SEARCH_TEMPLATE, webSearchUrl } from "./webSearch.js";
+export { DEFAULT_SEARCH_TEMPLATE } from "./webSearch.js";
 
 export function applySearchTemplate(
   query: string,
   template: string = DEFAULT_SEARCH_TEMPLATE
 ): string {
   const encoded = encodeURIComponent(query);
-  if (template.includes("%s")) return template.replace(/%s/g, encoded);
+  if (/%s|\{searchTerms\}/.test(template)) return webSearchUrl(template, query);
   const separator = template.includes("?") ? "&" : "?";
   return `${template}${separator}q=${encoded}`;
 }

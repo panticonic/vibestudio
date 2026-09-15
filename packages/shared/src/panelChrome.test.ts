@@ -100,7 +100,7 @@ describe("panelChrome", () => {
     });
     expect(parseAddressInput("example.com")).toEqual({
       type: "browser-url",
-      url: "https://example.com",
+      url: "https://example.com/",
     });
     expect(parseAddressInput("https://example.com/path")).toEqual({
       type: "browser-url",

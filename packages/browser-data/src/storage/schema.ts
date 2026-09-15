@@ -71,6 +71,18 @@ CREATE TABLE IF NOT EXISTS history_visits (
 CREATE INDEX IF NOT EXISTS idx_history_visits_history_id ON history_visits(history_id);
 CREATE INDEX IF NOT EXISTS idx_history_visits_source ON history_visits(source, import_source_id);
 
+-- Imported totals are observations about a profile, not individual visits.
+CREATE TABLE IF NOT EXISTS history_import_summaries (
+  history_id INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL,
+  visit_count INTEGER NOT NULL,
+  typed_count INTEGER NOT NULL,
+  first_visit INTEGER NOT NULL,
+  last_visit INTEGER NOT NULL,
+  title TEXT,
+  PRIMARY KEY(history_id, source_id)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS history_fts
 USING fts5(url, title, content=history, content_rowid=id);
 CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN

@@ -145,6 +145,8 @@ export const BROWSER_DATA_METHOD_NAMES = [
   "getCookieSiteSummary",
   "getSearchEngines",
   "setDefaultEngine",
+  "saveSearchEngine",
+  "getSearchSuggestions",
   "putPageFavicon",
   "getPageFavicon",
   "upsertImportJob",

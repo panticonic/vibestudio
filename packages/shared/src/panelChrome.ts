@@ -14,6 +14,10 @@
 import type { Panel, PanelNavigationState, PanelSnapshot } from "./types.js";
 import { getCurrentSnapshot, getPanelHistoryState, getPanelRef } from "./panel/accessors.js";
 import { tryParsePanelLocationLink, type PanelLocation } from "./panelLocation.js";
+import { isReviewPending } from "./authority/reviewPending.js";
+import { browserUrlFromEntry } from "./webAddress.js";
+import type { BrowserAddressSuggestion } from "./webSearch.js";
+export type { BrowserAddressSuggestion } from "./webSearch.js";
 
 export type PanelSourceKind = "panel" | "browser";
 
@@ -43,22 +47,10 @@ export interface PanelChromeState {
   mediaPlaying: boolean;
 }
 
-export interface BrowserAddressSuggestion {
-  url: string;
-  title?: string;
-  visitCount?: number;
-  typedCount?: number;
-  lastVisit?: number;
-  source: "history" | "session" | "bookmark" | "search-engine";
-  engineId?: number;
-  engineName?: string;
-  keyword?: string;
-  searchTemplate?: string;
-}
-
 export interface BrowserAddressOptions {
   query: string;
   suggestions: BrowserAddressSuggestion[];
+  historyStatus?: "ready" | "review-pending" | "unavailable";
 }
 
 export type AddressAction =
@@ -123,7 +115,7 @@ const BROWSER_SOURCE_PREFIX = "browser:";
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const PANEL_SOURCE_RE = /^(?:about|panels|packages|apps|templates|workers|skills|projects)\//;
 /** Fallback engine when the browser has no default search engine configured. */
-export const DEFAULT_SEARCH_TEMPLATE = "https://www.google.com/search?q=%s";
+export { DEFAULT_SEARCH_TEMPLATE } from "./webSearch.js";
 
 export type PanelUrlDisposition = "browser-panel" | "managed" | "external" | "refused";
 
@@ -230,15 +222,14 @@ export function parseAddressInput(input: string): AddressInputResult | null {
     return { type: "panel-source", source: trimmed.replace(/^\/+/, "").replace(/\/+$/, "") };
   }
 
+  const browserUrl = browserUrlFromEntry(trimmed);
+  if (browserUrl) return { type: "browser-url", url: browserUrl };
+
   if (SCHEME_RE.test(trimmed)) {
     if (classifyPanelUrl(trimmed).disposition === "browser-panel") {
       return { type: "browser-url", url: trimmed };
     }
     return { type: "search", query: trimmed };
-  }
-
-  if (!/\s/.test(trimmed) && looksLikeHostname(trimmed)) {
-    return { type: "browser-url", url: `https://${trimmed}` };
   }
 
   return { type: "search", query: trimmed };
@@ -368,8 +359,8 @@ export function mergeBrowserAddressSuggestions(
   const byUrl = new Map<string, BrowserAddressSuggestion>();
   for (const group of groups) {
     for (const item of group) {
-      if (item.source === "search-engine") {
-        const key = `search-engine:${item.engineId ?? item.keyword ?? item.searchTemplate}`;
+      if (item.source === "search-engine" || item.source === "search-suggestion") {
+        const key = `${item.source}:${item.engineId ?? item.keyword ?? item.searchTemplate}:${item.source === "search-suggestion" ? item.title : ""}`;
         if (!byUrl.has(key)) byUrl.set(key, item);
         continue;
       }
@@ -384,13 +375,18 @@ export function mergeBrowserAddressSuggestions(
       }
     }
   }
-  return [...byUrl.values()]
+  const providerRows = [...byUrl.values()].filter(
+    (item) => item.source === "search-engine" || item.source === "search-suggestion"
+  );
+  const destinations = [...byUrl.values()]
+    .filter((item) => item.source !== "search-engine" && item.source !== "search-suggestion")
     .sort(
       (a, b) =>
         scoreBrowserAddressSuggestion(b, normalizedQuery) -
         scoreBrowserAddressSuggestion(a, normalizedQuery)
     )
     .slice(0, limit);
+  return [...destinations, ...providerRows];
 }
 
 function getRefDisplay(ref?: string): string | undefined {
@@ -437,6 +433,7 @@ export interface AddressProviderBrowserDataAdapter {
   getHistory(query: { limit: number }): Promise<BrowserHistoryAddressRow[]>;
   searchBookmarks(query: string): Promise<BrowserBookmarkAddressRow[]>;
   getSearchEngines(): Promise<SearchEngineAddressRow[]>;
+  getSearchSuggestions?(query: string): Promise<BrowserAddressSuggestion[]>;
 }
 
 export async function getSharedBrowserAddressOptions(args: {
@@ -458,21 +455,38 @@ export async function getSharedBrowserAddressOptions(args: {
 
   try {
     const trimmed = args.query.trim();
-    const [historyRows, bookmarkRows, searchEngineRows] = await Promise.all([
-      trimmed
-        ? browserData.searchHistoryForAutocomplete(trimmed, 50)
-        : browserData.getHistory({ limit: 50 }),
-      trimmed ? browserData.searchBookmarks(trimmed) : Promise.resolve([]),
-      browserData.getSearchEngines(),
-    ]);
+    const [historyResult, bookmarkResult, engineResult, suggestionResult] =
+      await Promise.allSettled([
+        trimmed
+          ? browserData.searchHistoryForAutocomplete(trimmed, 50)
+          : browserData.getHistory({ limit: 50 }),
+        trimmed ? browserData.searchBookmarks(trimmed) : Promise.resolve([]),
+        browserData.getSearchEngines(),
+        trimmed && browserData.getSearchSuggestions
+          ? browserData.getSearchSuggestions(trimmed).catch(() => [])
+          : Promise.resolve([]),
+      ]);
     return {
       query: args.query,
+      historyStatus:
+        historyResult.status === "fulfilled"
+          ? "ready"
+          : isReviewPending(historyResult.reason)
+            ? "review-pending"
+            : "unavailable",
       suggestions: mergeBrowserAddressSuggestions(
         [
           sessionSuggestions,
-          normalizeBrowserAddressSuggestions(historyRows),
-          normalizeBookmarkAddressSuggestions(bookmarkRows),
-          normalizeSearchEngineAddressSuggestions(searchEngineRows),
+          normalizeBrowserAddressSuggestions(
+            historyResult.status === "fulfilled" ? historyResult.value : []
+          ),
+          normalizeBookmarkAddressSuggestions(
+            bookmarkResult.status === "fulfilled" ? bookmarkResult.value : []
+          ),
+          normalizeSearchEngineAddressSuggestions(
+            engineResult.status === "fulfilled" ? engineResult.value : []
+          ),
+          suggestionResult.status === "fulfilled" ? suggestionResult.value : [],
         ],
         args.query,
         50
@@ -484,16 +498,6 @@ export async function getSharedBrowserAddressOptions(args: {
       suggestions: mergeBrowserAddressSuggestions([sessionSuggestions], args.query, 25),
     };
   }
-}
-
-function looksLikeHostname(value: string): boolean {
-  if (value.includes("/")) {
-    const [host] = value.split("/");
-    return Boolean(host && looksLikeHostname(host));
-  }
-  if (value === "localhost") return true;
-  if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(value)) return true;
-  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?$/i.test(value);
 }
 
 function readOptionalNumber(value: unknown): number | undefined {
