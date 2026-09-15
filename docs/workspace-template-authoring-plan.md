@@ -6,6 +6,14 @@ field or standalone-file export. Put documentation, artwork notes, and similar
 files inside an appropriate unit; use `meta` for template metadata companions.
 Publication does not synthesize a root README.
 
+## Current ownership limitation
+
+The picker currently installs the selected template as the root for both ordinary
+use and authoring. Personal and System use this same operation. It does **not**
+yet create a separate user-owned root that depends on the selected template.
+The [ownership review](template-workspace-ownership-review.md) describes the
+required correction and the unresolved policy for publishing inherited-unit edits.
+
 ## Open the right authoring workspace
 
 For a complete Base release, open Base directly from the workspace picker:
@@ -19,6 +27,13 @@ Commit and publish local task changes to workspace main before reviewing a
 release.
 
 ## Publish a complete release
+
+In the Publish tab, choose a connected GitHub account, then either select an
+existing writable repository or enter the owner and name of one to create.
+Repository listings are paginated and exclude read-only, archived, and disabled
+repositories. New repositories use the chosen public/private visibility. An
+existing destination retains its visibility. Entering an existing name uses that
+repository too; the review explains the complete-tree replacement below.
 
 `@workspace-extensions/templates` owns inspection and publication. The
 manifest-selected Git interop provider creates repositories and pushes the

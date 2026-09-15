@@ -328,6 +328,38 @@ export const templatesMethods = defineServiceMethods({
     returns: templateAuthoringInspectionSchema,
     access: READ,
   },
+  publicationRepositories: {
+    website: {
+      kind: "closed",
+      reason: "Lists private connected GitHub repository metadata.",
+    } as const,
+    description: "List writable GitHub repositories for a selected connected account.",
+    args: z.tuple([
+      z
+        .object({
+          credentialId: z.string().min(1).optional(),
+          page: z.number().int().min(1).default(1),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        owner: z.string(),
+        repositories: z.array(
+          z
+            .object({
+              owner: z.string(),
+              name: z.string(),
+              private: z.boolean(),
+              webUrl: z.string(),
+            })
+            .strict()
+        ),
+        nextPage: z.number().int().nullable(),
+      })
+      .strict(),
+    access: READ,
+  },
   authoringParts: {
     website: {
       kind: "closed",

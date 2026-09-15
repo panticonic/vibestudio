@@ -47,13 +47,19 @@ test("opens publishing and installed sources in the selected workspace", async (
       page!.getByRole("heading", { name: "Publish this workspace as a template" })
     ).toBeVisible();
     await expect(page!.getByRole("textbox", { name: "GitHub owner" })).toBeVisible();
+    await expect(page!.getByRole("combobox", { name: "GitHub account" })).toBeVisible();
+    await expect(page!.getByRole("combobox", { name: "Repository visibility" })).toHaveValue(
+      "private"
+    );
+    await page!.getByRole("combobox", { name: "Repository destination" }).selectOption("existing");
+    await expect(page!.getByRole("combobox", { name: "Existing repository" })).toBeVisible();
+    await expect(page!.getByRole("button", { name: "Load writable repositories" })).toBeDisabled();
+    await page!.getByRole("combobox", { name: "Repository destination" }).selectOption("new");
     await expect(page!.getByRole("button", { name: "Review release" })).toBeVisible();
-    await test
-      .info()
-      .attach("template-publication.png", {
-        body: await page!.screenshot(),
-        contentType: "image/png",
-      });
+    await test.info().attach("template-publication.png", {
+      body: await page!.screenshot(),
+      contentType: "image/png",
+    });
     await page!
       .getByRole("tab", { name: "Installed", exact: true })
       .dispatchEvent("mousedown", { button: 0, ctrlKey: false });
