@@ -2,6 +2,10 @@
 
 > Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Authority contracts remain subordinate detail. Historical lifetime descriptions must be reconciled with current authority-session semantics in U0.
 
+The security model enables the agentic UI continuum: apps with agents and
+agents with interfaces, including third-party code. Workspace boundaries and
+scoped capabilities let these pieces work together without sharing all authority.
+
 Vibestudio treats runtime tokens as authentication, not authorization. A token
 identifies the caller. Sensitive actions must still pass through the server-side
 permission system before they run.

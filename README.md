@@ -2,7 +2,7 @@
 
 ## An integrated personal software environment
 
-Vibestudio is a browser and light-weight sandbox for agents and personalized apps. The goal is to tighten the loop between agentically building software, humans using their own personal apps, integrating agents directly into those apps, and generating UI on-the-fly in agentic contexts -- while imposing hard barriers, with fine-grained control over what your agents can access.
+Vibestudio is a browser and light-weight sandbox for agents and personalized apps. Its starting point is an **agentic UI continuum**: full apps with agents, agents working through app controls, and interactive UI inside conversations. Build and adapt your own tools, or connect your agents to third-party software, choosing the interface that fits the task.
 
 - **Batteries included.** One build system, version-controlled file structure, background-process runtime, credentials management, and agentic harness -- standardized into a single composable happy-path so agents cannot and need not reinvent the wheel.
 - **Self-modifying agentic harness.** The agentic system is embedded inside the environment it builds, so it can modify itself and be used in or adapted for any app you create.
@@ -19,9 +19,9 @@ Vibestudio sandbox details:
 - Extension system for native-access Node.js code.
 - Mobile, CLI and desktop apps based on one sandbox runtime that you can customize yourself.
 
-### Toward safely sharing AI-enabled code
+### Security enables integration
 
-A further question vibestudio is exploring: how do we create an environment to safely integrate untrusted code into an agentic system? For the near term we will likely rely on adapting shared primitives rather than generating complex experiences entirely on the fly -- but if those primitives need to be AI-enabled, there are obvious security and control challenges. The capability-grant system prototyped here is a step toward the equivalent of an agentic, bring-your-own-agent web page.
+Bringing agents and third-party code together requires explicit boundaries. Workspaces separate software, data, and conversations; capability grants control privileged access. Enabled websites can request capabilities within a workspace, while app templates provide full apps in dedicated workspaces. Connecting a website does not approve all its capabilities. This security model serves the continuum: useful integration without blanket access.
 
 ## Status
 

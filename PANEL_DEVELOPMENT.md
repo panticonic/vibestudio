@@ -2,6 +2,11 @@
 
 Practical guide to building Vibestudio panels. For API reference, see [PANEL_SYSTEM.md](PANEL_SYSTEM.md).
 
+Design for the agentic UI continuum: an app can expose tools to an agent, and a
+conversation can contain interactive UI. Integrating third-party code follows
+the same principle—expose useful capabilities with explicit
+[permission boundaries](docs/permission-system.md), not blanket access.
+
 ## Quick Start
 
 ```tsx
