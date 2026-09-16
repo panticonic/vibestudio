@@ -1,3 +1,4 @@
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -68,8 +69,13 @@ afterEach(() => {
 });
 
 describe("development template selection", () => {
-  it("checkpoints dirty source and derives canonical identity from an SSH origin", async () => {
+  it.each([
+    { dependencies: [] },
+    { dependencies: [{ url: "git+https://example.test/base.git", track: "stable" }] },
+  ])("preserves review dependencies %j through folder registration", async ({ dependencies }) => {
     const fx = fixture();
+    const manifestPath = path.join(fx.checkout, "meta", "vibestudio.yml");
+    fs.appendFileSync(manifestPath, `  dependencies: ${JSON.stringify(dependencies)}\n`);
     fs.writeFileSync(
       path.join(fx.checkout, "panels", "example", "new.ts"),
       "export const v = 2;\n"
@@ -82,16 +88,29 @@ describe("development template selection", () => {
 
     expect(selection).toMatchObject({
       sourceCheckout: fx.checkout,
-      changedPaths: ["panels/example/new.ts"],
+      changedPaths: ["meta/vibestudio.yml", "panels/example/new.ts"],
       review: {
         presentation: { name: "Example", description: "Example template." },
         repositories: ["panels/example"],
+        dependencies,
       },
       pin: {
         url: "git+https://github.com/acme/example.git",
         ref: "refs/heads/vibestudio-dev-checkpoint",
       },
     });
+    const [registered] = hubControlMethods.registerLocalTemplateSource.args.parse([
+      {
+        pin: selection!.pin,
+        checkout: selection!.checkout,
+        review: selection!.review,
+      },
+    ]);
+    const response = hubControlMethods.registerLocalTemplateSource.returns.parse({
+      pin: registered.pin,
+      ...registered.review,
+    });
+    expect(response.dependencies).toEqual(dependencies);
     expect(
       fs.readFileSync(path.join(selection!.checkout, "panels", "example", "new.ts"), "utf8")
     ).toContain("v = 2");

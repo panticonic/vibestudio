@@ -149,6 +149,7 @@ export async function inspectWorkspaceSources(input: {
             }
           : {}),
         ...manifest.inventory,
+        dependencies: manifest.dependencies,
       },
     });
   }

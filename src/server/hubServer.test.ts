@@ -1,3 +1,4 @@
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -618,7 +619,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         commit: "a".repeat(40),
       },
       checkout: "/instance/workspace-source-inspections/one/0",
-      review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },
+      review: { repositories: ["panels/example"], dependencies: [] },
     };
     const env = buildWorkspaceChildEnv({
       ...base,
@@ -966,7 +967,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
         commit: "a".repeat(40),
       },
       checkout,
-      review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },
+      review: { repositories: ["panels/example"], dependencies: [] },
     };
     vi.stubEnv("VIBESTUDIO_INSTANCE_ROOT", instanceRoot);
     try {
@@ -981,7 +982,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
             result = value;
           }
         );
-        return result;
+        return hubControlMethods.registerLocalTemplateSource.returns.parse(result);
       };
       expect(await register(source)).toEqual({ pin: source.pin, ...source.review });
       expect(await register(source)).toEqual({ pin: source.pin, ...source.review });

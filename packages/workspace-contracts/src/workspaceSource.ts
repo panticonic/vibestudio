@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
+import {
+  WorkspaceTemplateDependencySchema,
+  WorkspaceTemplatePinSchema,
+} from "./workspaceConfigSchema.js";
 import type { WorkspaceTemplatePin } from "./types.js";
 
 /**
@@ -15,30 +18,30 @@ export interface WorkspaceSourceExactPin {
   commit: string;
 }
 
+/** Review facts shared by native folder and remote template inspection. */
+export const WorkspaceSourceReviewSchema = z
+  .object({
+    presentation: z
+      .object({ name: z.string().optional(), description: z.string().optional() })
+      .strict()
+      .optional(),
+    repositories: z.array(z.string()),
+    dependencies: z.array(WorkspaceTemplateDependencySchema),
+  })
+  .strict();
+
 /** Host-private acquisition transport for one reviewed exact workspace source. */
 export interface WorkspaceSource {
   pin: WorkspaceTemplatePin;
   checkout: string;
-  review?: {
-    presentation?: { name?: string; description?: string };
-    repositories: string[];
-  };
+  review?: z.infer<typeof WorkspaceSourceReviewSchema>;
 }
 
 export const WorkspaceSourceSchema: z.ZodType<WorkspaceSource> = z
   .object({
     pin: WorkspaceTemplatePinSchema,
     checkout: z.string().trim().min(1),
-    review: z
-      .object({
-        presentation: z
-          .object({ name: z.string().optional(), description: z.string().optional() })
-          .strict()
-          .optional(),
-        repositories: z.array(z.string()),
-      })
-      .strict()
-      .optional(),
+    review: WorkspaceSourceReviewSchema.optional(),
   })
   .strict();
 

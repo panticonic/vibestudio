@@ -21,6 +21,7 @@ const templates = [
     review: {
       presentation: { name: "Local example" },
       repositories: ["panels/example"],
+      dependencies: [],
     },
   },
 ];

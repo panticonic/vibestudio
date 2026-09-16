@@ -1,3 +1,4 @@
+import { WorkspaceSourceReviewSchema } from "@vibestudio/workspace-contracts/workspaceSource";
 import { vcsMergeCoordinateSchema } from "./vcs.js";
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
@@ -6,7 +7,6 @@ import {
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import {
-  WorkspaceTemplateDependencySchema,
   WorkspaceGitCommitSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -85,17 +85,9 @@ export const templateSourceDeclarationSchema = z
     credential: z.string().trim().min(1).optional(),
   })
   .strict();
-export const templateInspectionSchema = z
-  .object({
-    pin: WorkspaceTemplatePinSchema,
-    presentation: z
-      .object({ name: z.string().optional(), description: z.string().optional() })
-      .strict()
-      .optional(),
-    repositories: z.array(z.string()),
-    dependencies: z.array(WorkspaceTemplateDependencySchema),
-  })
-  .strict();
+export const templateInspectionSchema = WorkspaceSourceReviewSchema.extend({
+  pin: WorkspaceTemplatePinSchema,
+}).strict();
 const authoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
