@@ -91,7 +91,7 @@ export interface ComposeDeclaredTemplateLayersInput {
 export async function composeDeclaredTemplateLayers(
   input: ComposeDeclaredTemplateLayersInput
 ): Promise<{ snapshot: ExactGitSnapshot; layers: ComposedTemplateLayer[] }> {
-  const { pin, root } = input;
+  const { pin, root, purpose = "use" } = input;
   const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest => {
     const manifest = readTemplateManifest({
       readFile: (filePath) => snapshot.readFile(filePath),
@@ -154,7 +154,7 @@ export async function composeDeclaredTemplateLayers(
   const owners = templateRepositoryOwners(sourceLayers);
   const layers = stack.map((entry) => ({ ...entry.pin }));
   const authored =
-    input.purpose === "use"
+    purpose === "use"
       ? {
           systemEpoch: input.expectedSystemEpoch,
           template: {
@@ -174,15 +174,14 @@ export async function composeDeclaredTemplateLayers(
       pin: entry.pin,
       manifest: new TextDecoder().decode(entry.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH)!),
     })),
-    ...(input.purpose === "use" ? {} : { upstream: pin }),
+    ...(purpose === "use" ? {} : { upstream: pin }),
   };
   const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(authored));
   const composed = composeTemplateLayers({
     layers: stack.map((entry) => ({
       label: entry.pin.url,
       files: entry.snapshot.files.filter((file) => {
-        if (file.path.startsWith("meta/"))
-          return input.purpose !== "use" && entry.pin.url === pin.url;
+        if (file.path.startsWith("meta/")) return purpose !== "use" && entry.pin.url === pin.url;
         return [...owners].some(
           ([repoPath, owner]) =>
             owner.label === entry.pin.url && file.path.startsWith(`${repoPath}/`)

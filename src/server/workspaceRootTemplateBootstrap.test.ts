@@ -457,34 +457,45 @@ describe("composeDeclaredTemplateLayers", () => {
     ]);
   }
 
-  it("places a declared dependency's files in the tree a unit's closure needs", async () => {
-    const root = dependentRoot();
+  it.each([undefined, "use", "author"] as const)(
+    "composes dependency ownership with purpose %s",
+    async (purpose) => {
+      const root = dependentRoot();
 
-    const composed = await composeDeclaredTemplateLayers({
-      pin: {
-        url: "git+https://example.test/system.git",
-        ref: "refs/heads/main",
-        commit: "a".repeat(40),
-      },
-      root,
-      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      acquire: async () => baseLayer(),
-      resolveTrack: async () => ({ ref: "refs/tags/v1.0.0", commit: baseCommit }),
-    });
+      const composed = await composeDeclaredTemplateLayers({
+        purpose,
+        pin: {
+          url: "git+https://example.test/system.git",
+          ref: "refs/heads/main",
+          commit: "a".repeat(40),
+        },
+        root,
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire: async () => baseLayer(),
+        resolveTrack: async () => ({ ref: "refs/tags/v1.0.0", commit: baseCommit }),
+      });
 
-    const paths = composed.snapshot.files.map((file) => file.path);
-    expect(paths).toContain("workers/system-test-runner/package.json");
-    // The dependency this unit resolves against must be in the same tree, or a
-    // version derived from it names a closure no workspace ever runs.
-    expect(paths).toContain("packages/runtime/package.json");
-    expect(paths).toContain("packages/runtime/index.ts");
-    // Dependency first, with the template being installed last.
-    expect(composed.layers.map((layer) => layer.commit)).toEqual([baseCommit, "a".repeat(40)]);
-    const manifest = new TextDecoder().decode(composed.snapshot.readFile("meta/vibestudio.yml")!);
-    expect(manifest).toContain("workers/system-test-runner");
-    expect(manifest).toContain("packages/runtime");
-    expect(manifest).toContain("projects/default");
-  });
+      const paths = composed.snapshot.files.map((file) => file.path);
+      expect(paths).toContain("workers/system-test-runner/package.json");
+      // The dependency this unit resolves against must be in the same tree, or a
+      // version derived from it names a closure no workspace ever runs.
+      expect(paths).toContain("packages/runtime/package.json");
+      expect(paths).toContain("packages/runtime/index.ts");
+      // Dependency first, with the template being installed last.
+      expect(composed.layers.map((layer) => layer.commit)).toEqual([baseCommit, "a".repeat(40)]);
+      const manifest = new TextDecoder().decode(composed.snapshot.readFile("meta/vibestudio.yml")!);
+      expect(manifest).toContain("workers/system-test-runner");
+      expect(manifest).toContain("packages/runtime");
+      expect(manifest).toContain("projects/default");
+      const { template } = parse(manifest);
+      expect(template.dependencies).toEqual([
+        { url: purpose === "author" ? dependencyUrl : "git+https://example.test/system.git" },
+      ]);
+      expect(template.installation.upstream?.url).toBe(
+        purpose === "author" ? "git+https://example.test/system.git" : undefined
+      );
+    }
+  );
 
   it("records exact provenance for a template without dependencies", async () => {
     const root = baseLayer();
@@ -557,9 +568,11 @@ it("keeps authored configuration and dependency ownership distinct for use and a
     acquire: async () => root,
   };
   const used = await composeDeclaredTemplateLayers({ ...input, purpose: "use" });
+  const defaulted = await composeDeclaredTemplateLayers(input);
   const authored = await composeDeclaredTemplateLayers({ ...input, purpose: "author" });
   const read = (value: typeof used) =>
     parse(Buffer.from(value.snapshot.readFile("meta/vibestudio.yml")!).toString());
+  expect(read(defaulted)).toEqual(read(used));
   expect(read(used)).toMatchObject({
     template: { repositories: ["meta"], dependencies: [{ url: pin.url }] },
   });
