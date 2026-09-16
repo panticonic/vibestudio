@@ -7,6 +7,7 @@ import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/servi
 import {
   authorizeVerifiedCaller,
   attestDirectRpc,
+  attestWorkspaceDoRpc,
   directAuthorityAudience,
   directAuthorityCapability,
   testPolicyAllowsGatedInvocation,
@@ -19,6 +20,74 @@ const executionDigest = "b".repeat(64);
 const digest = "c".repeat(64);
 
 describe("authority runtime", () => {
+  it("projects independent service and receiver-resource grants into one attestation", () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "service-resource-authority-")),
+    });
+    const audience = "do:workers/target:TargetDO:main";
+    const resourceKey = `sample:${audience}`;
+    const capability = "userland:workers/target/read#v1";
+    const requested = [
+      { capability, resource: { kind: "exact" as const, key: resourceKey } },
+      {
+        capability: "workspace-service:sample",
+        resource: { kind: "exact" as const, key: audience },
+      },
+    ];
+    for (const request of requested) {
+      grantStore.issue({
+        ...request,
+        effect: "allow",
+        subject: "code:panels/example@ev-1",
+        issuedBy: "user:u1",
+        provenance: "acquisition",
+      });
+    }
+    const attestation = attestWorkspaceDoRpc({
+      caller: createVerifiedCaller("panel:example", "panel", {
+        callerId: "panel:example",
+        callerKind: "panel",
+        repoPath: "panels/example",
+        effectiveVersion: "ev-1",
+        executionDigest,
+        requested,
+      }),
+      source: "workers/target",
+      className: "TargetDO",
+      objectKey: "main",
+      method: "read",
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "s-1",
+      grantStore,
+      resourceKey,
+      service: { name: "sample", principals: ["code"] },
+      methodAuthority: {
+        capability,
+        tier: "gated",
+        effect: {
+          kind: "userland-capability",
+          capability: "read",
+          resource: { kind: "receiver-object" },
+        },
+      },
+    });
+    expect(attestation.resourceKey).toBe(resourceKey);
+    expect(attestation.audience).toBe(audience);
+    expect(attestation.grants).toHaveLength(2);
+    for (const request of requested) {
+      expect(
+        evaluateAuthority({
+          context: attestation.context,
+          requirement: requirementForPrincipals(["code"], request.capability),
+          resourceKey: request.resource.key,
+          grants: attestation.grants,
+          tier: "gated",
+        }).allowed
+      ).toBe(true);
+    }
+  });
+
   it("resolves website subjects from durable host facts and refuses stale or foreign bindings", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "website-authority-runtime-")),

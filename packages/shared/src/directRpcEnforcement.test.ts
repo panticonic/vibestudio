@@ -59,6 +59,78 @@ function attestation(
 }
 
 describe("directRpcInvocationResourceKey", () => {
+  it("keeps service admission on the target object when a method protects a separate resource", () => {
+    const audience = "do:workers/notes:Notes:main";
+    const resourceKey = `notes:${audience}`;
+    const capability = `userland:workers/notes/read#${"d".repeat(64)}`;
+    const targetCapability = "workspace-service:notes";
+    const methodGrant = {
+      subject: code,
+      effect: "allow" as const,
+      capability,
+      resource: { kind: "exact" as const, key: resourceKey },
+      issuedBy: "user:test",
+      provenance: "acquisition" as const,
+      createdAt: 1,
+    };
+    const targetGrant = {
+      ...methodGrant,
+      capability: targetCapability,
+      resource: { kind: "exact" as const, key: audience },
+    };
+    const effect = {
+      kind: "userland-capability" as const,
+      capability: "read",
+      resource: { kind: "receiver-object" as const },
+    };
+    const authorization = attestation({
+      audience,
+      resourceKey,
+      capability,
+      effect,
+      context: {
+        ...context,
+        executingCode: { ...context.executingCode!, requested: [methodGrant, targetGrant] },
+      },
+      targetCapability,
+      targetTier: "gated",
+      targetRequirement: requiredCapability("code", targetCapability),
+      grants: [methodGrant, targetGrant],
+    });
+    const input = {
+      kind: "call" as const,
+      method: "read",
+      caller: null,
+      attestation: authorization,
+      audience,
+      resourceKey,
+      capability,
+      now: 100,
+      declaration: {
+        website: { kind: "closed" as const, reason: "Test receiver" },
+        principals: ["code" as const],
+        tier: "gated" as const,
+        sensitivity: "read" as const,
+        effect,
+      },
+    };
+    expect(directRpcDenial(input)).toBeNull();
+    expect(
+      directRpcDenial({ ...input, attestation: { ...authorization, grants: [methodGrant] } })
+    ).toMatchObject({ failure: { capability: targetCapability, resourceKey: audience } });
+    expect(
+      directRpcDenial({ ...input, attestation: { ...authorization, grants: [targetGrant] } })
+    ).toMatchObject({ failure: { capability, resourceKey } });
+    expect(
+      directRpcDenial({
+        ...input,
+        attestation: {
+          ...authorization,
+          grants: [methodGrant, { ...targetGrant, resource: { kind: "exact", key: resourceKey } }],
+        },
+      })
+    ).toMatchObject({ failure: { capability: targetCapability, resourceKey: audience } });
+  });
   it("binds receiver-owned userland authority to its declared resource namespace", () => {
     const authorization = attestation({
       effect: {

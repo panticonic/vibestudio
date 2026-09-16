@@ -529,12 +529,16 @@ export function attestWorkspaceDoRpc(
       ? attestation
       : attestDirectRpc({
           ...input,
+          // Service admission names the target, independently of a method's
+          // receiver-owned resource (including opaque handles).
+          resourceKey: attestation.audience,
           capability: targetCapability,
           effect: { kind: "open" },
           tier: targetTier,
         });
   if (target !== attestation) {
     attestation.grants = Object.freeze([...attestation.grants, ...target.grants]);
+    attestation.locks = Object.freeze([...(attestation.locks ?? []), ...(target.locks ?? [])]);
   }
   return {
     ...attestation,

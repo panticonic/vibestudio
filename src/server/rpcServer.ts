@@ -4231,7 +4231,7 @@ export class RpcServer {
                       workspaceAuthority.principals,
                       workspaceAuthority.capability
                     ),
-                    resourceKey: result.resourceKey,
+                    resourceKey: result.audience,
                     context: result.context,
                     grants: result.grants,
                     locks: result.locks,

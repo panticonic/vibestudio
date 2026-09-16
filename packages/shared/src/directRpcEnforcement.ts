@@ -320,7 +320,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
         attestation.targetRequirement,
         attestation.targetCapability
       ),
-      resourceKey: input.resourceKey,
+      resourceKey: input.audience,
       grants: attestation.grants,
       locks: attestation.locks,
       now,
@@ -334,7 +334,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
         reason: `${method}: ${targetDecision.reason} (${targetDecision.code})`,
         failure: authorityFailureForDecision(targetDecision, {
           capability: attestation.targetCapability,
-          resourceKey: input.resourceKey,
+          resourceKey: input.audience,
           tier: attestation.targetTier,
         }),
       };
