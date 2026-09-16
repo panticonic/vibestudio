@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Alias, ResolverFunction } from "vite";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 
-const RUNNER_OWNED_DEPENDENCIES = new Set(["vitest"]);
+const RUNNER_OWNED_DEPENDENCIES = new Set(["vitest", "@vitest/browser"]);
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
