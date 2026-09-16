@@ -7,8 +7,8 @@
  * returning to upstream is a version change rather than a rename.
  */
 export const IROH_ANDROID_REPAIR = Object.freeze({
-  version: "1.1.0-cancel.1",
+  version: "1.1.0-cancel.2",
   coordinate: "computer.iroh:iroh-android",
   archiveUrl:
-    "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.1/iroh-android-maven-1.1.0-cancel.1.tar.gz",
+    "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/iroh-android-maven-1.1.0-cancel.2.tar.gz",
 });

@@ -3,8 +3,8 @@
  * which is still what iOS and the wrapper resolve.
  *
  * It is no longer what every target *runs*: the Node platform packages and the
- * Android AAR are overridden onto a build carrying the stream-cancellation
- * repair, because upstream holds its stream mutex across network waits. Those
+ * Android AAR are overridden onto a build carrying stream and endpoint-readiness
+ * cancellation repairs. Those
  * substitutions are enforced where they are resolved -- root `pnpm.overrides`
  * plus the lockfile for Node, and `apps/mobile/android/gradle/verification-
  * metadata.xml` for the AAR -- so read the digests below as upstream's, not as

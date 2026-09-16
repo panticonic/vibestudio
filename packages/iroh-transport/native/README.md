@@ -2,7 +2,7 @@
 
 ## Endpoint readiness cancellation
 
-The installed `1.1.0-cancel.1` binaries repair stream cancellation but still
+The previous `1.1.0-cancel.1` binaries repair stream cancellation but still
 leave `Endpoint.online()` pending after endpoint closure. A JavaScript timeout
 does not cancel that native wait; replacing endpoints after a relay timeout can
 therefore accumulate native tasks and prevent clean process exit.
@@ -26,10 +26,11 @@ NAPI_RS_NATIVE_LIBRARY_PATH=/path/to/repaired/iroh.node \
   pnpm exec tsx scripts/test-iroh-readiness.ts
 ```
 
-This readiness repair is not in the currently pinned published binaries.
-Build and publish a new coherent native release before updating production
-pins; never overwrite `1.1.0-cancel.1` or substitute a local development binary
-for the shipping artifact.
+The desktop and Android pins now select the published `1.1.0-cancel.2` repair.
+Apple adoption still requires a matching generated Swift package as well as
+the XCFramework; the app's Apple dependency remains upstream. Never overwrite
+either published repair version or substitute a local development binary for
+the shipping artifact.
 
 ## Stream cancellation
 
