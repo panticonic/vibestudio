@@ -7,6 +7,9 @@ conversation can contain interactive UI. Integrating third-party code follows
 the same principle—expose useful capabilities with explicit
 [permission boundaries](docs/permission-system.md), not blanket access.
 
+For the same runtime in a standalone website, see
+[Base's website authoring guide](https://github.com/panticonic/vibestudio-base/blob/main/skills/workspace-dev/WEBSITES.md).
+
 ## Quick Start
 
 ```tsx

@@ -54,8 +54,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "Disconnect this document and retire its RPC calls, streams and borrowed clients."
     ),
     workspaceConnection: namespaceEntry(
-      ["connected", "available", "subscribe"],
-      "Connection state can be observed without accessing a workspace."
+      ["connected", "available", "kind", "status", "error", "subscribe"],
+      "Observe connection state without workspace access. status is unavailable, disconnected, connecting, connected or disconnecting; error is the latest failed action's message or null. subscribe returns an unsubscribe function."
     ),
     // Entries whose description is panel-specific (member arrays shared with core).
     workspace: namespaceEntry(

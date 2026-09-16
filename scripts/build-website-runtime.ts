@@ -159,14 +159,12 @@ try {
         types: [],
         skipLibCheck: false,
       },
-      files: [standaloneTypes],
+      files: [standaloneTypes, path.join(temporary, "connection.d.ts")],
     })
   );
-  execFileSync(path.join(hostRoot, "node_modules/typescript/bin/tsc"), ["-p", validationConfig], {
-    stdio: "inherit",
-  });
   const code = result.outputFiles![0]!.contents;
   const digest = createHash("sha256").update(code).update(declaration).digest("hex");
+  const runtimeVersion = `0.1.0-website.${digest.slice(0, 16)}`;
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, "index.js"), code);
   fs.writeFileSync(path.join(output, "index.d.ts"), declaration);
@@ -175,7 +173,7 @@ try {
     JSON.stringify(
       {
         name: "@vibestudio/runtime",
-        version: `0.1.0-website.${digest.slice(0, 16)}`,
+        version: runtimeVersion,
         type: "module",
         description: "The shared Vibestudio panel and connected website runtime",
         exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
@@ -216,7 +214,95 @@ try {
   );
   fs.writeFileSync(
     path.join(output, "README.md"),
-    "# Vibestudio runtime\n\nThis package bundles the same complete API as installed Vibestudio panels. Importing it outside Vibestudio performs no workspace operations. Call `connectWorkspace()` from an explicit Connect action; `workspaceConnection` reports availability and connection state. Every operation fails while disconnected.\n"
+    "# Vibestudio runtime\n\nThe shared API for installed panels and connected websites; no rendered controls. Call `connectWorkspace()` directly from a user action; `workspaceConnection` exposes `available`, `connected`, `status`, `error` and `subscribe`. Never auto-connect or retry. The page connects to its containing workspace inside Vibestudio; ordinary browsers have no bridge. Workspace operations fail while disconnected. For the standard React control use the separately packaged `@workspace/react/connection` entry.\n"
+  );
+
+  // Package the focused React entry independently. Its runtime and React stay
+  // external: the application supplies both, so there is only one connection.
+  const reactEntry = path.join(workspaceRoot, "packages/react/src/WorkspaceConnection.tsx");
+  const reactOutput = path.join(output, "react");
+  const reactResult = await build({
+    entryPoints: [reactEntry],
+    outfile: path.join(reactOutput, "connection.js"),
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    minify: true,
+    jsx: "automatic",
+    tsconfig: configPath,
+    external: ["@workspace/runtime", "react", "react/jsx-runtime"],
+    write: false,
+    metafile: true,
+  });
+  const allowedReactImports = new Set(["@workspace/runtime", "react", "react/jsx-runtime"]);
+  if (Object.keys(reactResult.metafile!.inputs).length !== 1)
+    throw new Error("Website React control unexpectedly bundled a dependency");
+  for (const file of Object.values(reactResult.metafile!.outputs)) {
+    if (file.imports.some((item) => !item.external || !allowedReactImports.has(item.path)))
+      throw new Error("Website React control must depend only on the shared runtime and React");
+  }
+  // The JS peer is external. Resolve its types from the same authoring toolchain
+  // used by create:website, rather than the production-only dependency projection.
+  const reactConfigPath = path.join(temporary, "react-tsconfig.json");
+  fs.writeFileSync(
+    reactConfigPath,
+    JSON.stringify({
+      extends: configPath,
+      compilerOptions: {
+        paths: {
+          ...paths,
+          react: [path.join(hostRoot, "node_modules/@types/react")],
+          "react/*": [path.join(hostRoot, "node_modules/@types/react/*")],
+        },
+      },
+      files: [reactEntry],
+    })
+  );
+  const [reactDeclaration] = generateDtsBundle(
+    [
+      {
+        filePath: reactEntry,
+        libraries: { importedLibraries: ["react"], allowedTypesLibraries: [] },
+        output: { noBanner: true, exportReferencedTypes: false },
+      },
+    ],
+    { preferredConfigPath: reactConfigPath }
+  );
+  if (!reactDeclaration) throw new Error("Website React declarations are empty");
+  fs.writeFileSync(path.join(temporary, "connection.d.ts"), reactDeclaration);
+  execFileSync(path.join(hostRoot, "node_modules/typescript/bin/tsc"), ["-p", validationConfig], {
+    stdio: "inherit",
+  });
+  const reactCode = reactResult.outputFiles![0]!.contents;
+  const reactDigest = createHash("sha256")
+    .update(reactCode)
+    .update(reactDeclaration)
+    .update(runtimeVersion)
+    .digest("hex");
+  fs.mkdirSync(reactOutput, { recursive: true });
+  fs.writeFileSync(path.join(reactOutput, "connection.js"), reactCode);
+  fs.writeFileSync(path.join(reactOutput, "connection.d.ts"), reactDeclaration);
+  fs.writeFileSync(
+    path.join(reactOutput, "package.json"),
+    JSON.stringify(
+      {
+        name: "@vibestudio/react",
+        version: `0.1.0-website.${reactDigest.slice(0, 16)}`,
+        type: "module",
+        description: "Vibestudio React connection control for standalone websites",
+        exports: { "./connection": { types: "./connection.d.ts", default: "./connection.js" } },
+        peerDependencies: { "@workspace/runtime": runtimeVersion, react: "^19.0.0" },
+        license: JSON.parse(fs.readFileSync(path.join(hostRoot, "package.json"), "utf8")).license,
+        files: ["connection.js", "connection.d.ts", "README.md"],
+      },
+      null,
+      2
+    ) + "\n"
+  );
+  fs.writeFileSync(
+    path.join(reactOutput, "README.md"),
+    "# Vibestudio React connection\n\nInstall this package as `@workspace/react` alongside the matching runtime package installed as `@workspace/runtime` and your application's React 19. Import `{ WorkspaceConnection }` from `@workspace/react/connection`. This focused entry uses the application's runtime and React, never bundled copies. It renders connection status and explicit Connect/Disconnect actions; approval remains host-owned. Mounting does not connect and unmounting does not disconnect.\n"
   );
   console.log(
     JSON.stringify({

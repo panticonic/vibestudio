@@ -18,9 +18,14 @@ const name = value("--name") ?? "workspace-enabled-website";
 if (!/^[a-z][a-z0-9-]*$/.test(name))
   throw new Error("Website name must be lowercase letters, numbers and hyphens");
 const manifest = JSON.parse(fs.readFileSync(path.join(sdk, "package.json"), "utf8"));
+const reactSdk = path.join(sdk, "react");
+const reactManifest = JSON.parse(fs.readFileSync(path.join(reactSdk, "package.json"), "utf8"));
 if (
   manifest.name !== "@vibestudio/runtime" ||
-  !/^0\.1\.0-website\.[a-f0-9]{16}$/.test(manifest.version)
+  !/^0\.1\.0-website\.[a-f0-9]{16}$/.test(manifest.version) ||
+  reactManifest.name !== "@vibestudio/react" ||
+  !/^0\.1\.0-website\.[a-f0-9]{16}$/.test(reactManifest.version) ||
+  reactManifest.peerDependencies?.["@workspace/runtime"] !== manifest.version
 )
   throw new Error("Build the standalone shared SDK with pnpm build:website-runtime first");
 if (fs.existsSync(target))
@@ -29,16 +34,29 @@ fs.mkdirSync(target, { recursive: true });
 fs.cpSync(path.join(root, "resources/website-scaffold"), target, { recursive: true });
 const vendor = path.join(target, "vendor");
 fs.mkdirSync(vendor);
-const packed = JSON.parse(
-  execFileSync("npm", ["pack", sdk, "--pack-destination", vendor, "--json", "--ignore-scripts"], {
-    encoding: "utf8",
-  })
-);
-const tarball = packed[0].filename as string;
-if (path.basename(tarball) !== tarball) throw new Error("Invalid package artifact filename");
-const sha256 = createHash("sha256")
-  .update(fs.readFileSync(path.join(vendor, tarball)))
-  .digest("hex");
+const packages = [
+  { dependency: "@workspace/runtime", directory: sdk, manifest },
+  { dependency: "@workspace/react", directory: reactSdk, manifest: reactManifest },
+].map(({ dependency, directory, manifest: packageManifest }) => {
+  const packed = JSON.parse(
+    execFileSync(
+      "npm",
+      ["pack", directory, "--pack-destination", vendor, "--json", "--ignore-scripts"],
+      { encoding: "utf8" }
+    )
+  );
+  const tarball = packed[0].filename as string;
+  if (path.basename(tarball) !== tarball) throw new Error("Invalid package artifact filename");
+  return {
+    dependency,
+    name: packageManifest.name,
+    version: packageManifest.version,
+    artifact: `vendor/${tarball}`,
+    sha256: createHash("sha256")
+      .update(fs.readFileSync(path.join(vendor, tarball)))
+      .digest("hex"),
+  };
+});
 const installedVersion = (dependency: string) =>
   JSON.parse(fs.readFileSync(path.join(root, "node_modules", dependency, "package.json"), "utf8"))
     .version as string;
@@ -53,7 +71,9 @@ fs.writeFileSync(
       scripts: { "type-check": "tsc --noEmit", build: "npm run type-check && node build.mjs" },
       vibestudio: { displayName: name, entry: "index.tsx" },
       dependencies: {
-        "@workspace/runtime": `file:vendor/${tarball}`,
+        ...Object.fromEntries(
+          packages.map(({ dependency, artifact }) => [dependency, `file:${artifact}`])
+        ),
         react: installedVersion("react"),
         "react-dom": installedVersion("react-dom"),
       },
@@ -68,14 +88,7 @@ fs.writeFileSync(
     2
   ) + "\n"
 );
-fs.writeFileSync(
-  path.join(target, "sdk.json"),
-  JSON.stringify(
-    { name: manifest.name, version: manifest.version, artifact: `vendor/${tarball}`, sha256 },
-    null,
-    2
-  ) + "\n"
-);
+fs.writeFileSync(path.join(target, "sdk.json"), JSON.stringify({ packages }, null, 2) + "\n");
 fs.writeFileSync(path.join(target, ".gitignore"), "node_modules/\n");
 execFileSync(
   "npm",
@@ -85,8 +98,7 @@ execFileSync(
 console.log(
   JSON.stringify({
     directory: target,
-    sdkVersion: manifest.version,
-    sdkSha256: sha256,
+    packages,
     build: "npm ci && npm run build",
   })
 );

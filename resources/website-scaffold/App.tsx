@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { WorkspaceConnection } from "@workspace/react/connection";
 import {
-  connectWorkspace,
-  disconnectWorkspace,
   templates,
   workspaces,
   contextId,
@@ -61,13 +60,19 @@ export default function App() {
     }
     const unsubscribe = workspaceConnection.subscribe(() => {
       setConnected(workspaceConnection.connected);
-      if (!workspaceConnection.connected) {
+      if (workspaceConnection.connected) {
+        try {
+          readPending();
+        } catch (error) {
+          setStatus(String(error));
+        }
+      } else {
         ++operation.current;
         invalidateConversation();
         setBusy(false);
         setInspection(null);
         setPending(null);
-        setStatus("Workspace access ended. Connect again to continue.");
+        setStatus("");
       }
     });
     return () => {
@@ -78,23 +83,6 @@ export default function App() {
       unsubscribe();
     };
   }, []);
-  async function connect() {
-    const current = ++operation.current;
-    setBusy(true);
-    setStatus("Waiting for workspace connection approval…");
-    try {
-      await connectWorkspace();
-      if (current === operation.current) {
-        readPending();
-        setStatus("Connected. Resource requests are approved separately.");
-      }
-    } catch (error) {
-      if (current === operation.current)
-        setStatus(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (current === operation.current) setBusy(false);
-    }
-  }
   async function inspectTemplate() {
     const current = ++operation.current;
     setBusy(true);
@@ -239,16 +227,8 @@ export default function App() {
       <p>
         This page starts with no workspace access. Connecting requires your approval in Vibestudio.
       </p>
-      {!workspaceConnection.available ? (
-        <p>
-          Open this URL in a Vibestudio browser panel to connect. You can still read the page in any
-          browser.
-        </p>
-      ) : !connected ? (
-        <button disabled={busy} onClick={() => void connect()}>
-          Connect to workspace
-        </button>
-      ) : (
+      <WorkspaceConnection />
+      {connected && (
         <div className="actions">
           <label>
             Template source URL
@@ -262,16 +242,6 @@ export default function App() {
           <button disabled={busy || !templateUrl.trim()} onClick={() => void inspectTemplate()}>
             Inspect template
           </button>
-          {workspaceConnection.kind === "website" && (
-            <button
-              onClick={() => {
-                subscriptionAbort.current?.abort();
-                void disconnectWorkspace().catch((error: unknown) => setStatus(String(error)));
-              }}
-            >
-              Disconnect
-            </button>
-          )}
         </div>
       )}
       <p role="status" aria-live="polite">
@@ -299,7 +269,7 @@ export default function App() {
           <h2>{inspection.presentation?.name ?? "Verified template"}</h2>
           <p>{inspection.presentation?.description}</p>
           <p>
-            {inspection.repositories.length} repositories · {inspection.files.length} files
+            {inspection.repositories.length} repositories
           </p>
           <p>
             Exact Git commit: <code>{inspection.pin.commit}</code>
