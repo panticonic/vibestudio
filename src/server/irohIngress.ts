@@ -7,7 +7,6 @@ import type {
 const ADMISSION_REJECTED = 0x210n;
 const SERVER_STOPPED = 0x211n;
 const CONNECTION_LIMIT = 0x212n;
-const DEFAULT_ONLINE_TIMEOUT_MS = 15_000;
 const DEFAULT_CATASTROPHIC_CONNECTION_CEILING = 65_536;
 const REBIND_BACKOFF_MAX_MS = 5_000;
 
@@ -21,7 +20,6 @@ export interface IrohIngressOptions<
   admitPeer(endpointId: string): boolean | Promise<boolean>;
   attach(connection: Connection): Promise<void>;
   waitUntilOnline?(endpoint: Endpoint): Promise<void>;
-  onlineTimeoutMs?: number;
   log?(message: string): void;
 }
 
@@ -35,6 +33,8 @@ export interface IrohIngress {
  * Owns one server endpoint and its full-handshake accept loop. Admission is
  * deliberately before `attach`: rejected peers can never open the lifecycle
  * stream or consume application framing/authentication budgets.
+ * Relay discovery stays on the bound endpoint: Iroh owns reconnecting it when
+ * the network returns. The native readiness wait must reject when it closes.
  */
 export function startIrohIngress<
   Connection extends IrohPhysicalConnection,
@@ -43,10 +43,6 @@ export function startIrohIngress<
   const maximum = options.maxConnections ?? DEFAULT_CATASTROPHIC_CONNECTION_CEILING;
   if (!Number.isSafeInteger(maximum) || maximum < 1) {
     throw new Error("Iroh ingress maxConnections must be a positive safe integer");
-  }
-  const onlineTimeoutMs = options.onlineTimeoutMs ?? DEFAULT_ONLINE_TIMEOUT_MS;
-  if (!Number.isSafeInteger(onlineTimeoutMs) || onlineTimeoutMs < 1) {
-    throw new Error("Iroh ingress onlineTimeoutMs must be a positive safe integer");
   }
   const live = new Set<Connection>();
   const closedEndpoints = new WeakSet<object>();
@@ -133,25 +129,6 @@ export function startIrohIngress<
     }
   }
 
-  async function awaitOnline(owner: Endpoint): Promise<void> {
-    if (options.waitUntilOnline) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const deadline = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(new Error(`Iroh endpoint did not become online within ${onlineTimeoutMs}ms`)),
-            onlineTimeoutMs
-          );
-          timer.unref?.();
-        });
-        await Promise.race([options.waitUntilOnline(owner), deadline]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-  }
-
   const waitForRebind = async (attempt: number): Promise<void> => {
     const delayMs = Math.min(REBIND_BACKOFF_MAX_MS, 50 * 2 ** Math.min(attempt, 7));
     await new Promise<void>((resolve) => {
@@ -190,7 +167,8 @@ export function startIrohIngress<
         }
         endpointId = owner.endpointId;
         endpoint = owner;
-        await awaitOnline(owner);
+        await options.waitUntilOnline?.(owner);
+        if (stopped) break;
         rebindAttempt = 0;
         if (!readySettled) {
           readySettled = true;
@@ -229,8 +207,11 @@ export function startIrohIngress<
     },
     ready,
     async stop() {
-      if (stopped) return;
       stopped = true;
+      if (!readySettled) {
+        readySettled = true;
+        rejectReady(new Error("Iroh ingress stopped before becoming ready"));
+      }
       wakeBackoff?.();
       for (const connection of live) {
         connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));

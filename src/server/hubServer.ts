@@ -2173,6 +2173,7 @@ async function startHubControlTransport(
   rpcServer.initHandlers();
 
   const relayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+  console.warn(`[iroh-hub] Connecting to relays: ${relayUrls.join(", ")}`);
   const secretKey = loadOrCreateNodeEndpointSecret(path.join(reachRoot, "endpoint.key"));
   const { startIrohIngress } = await import("./irohIngress.js");
   const ingress = startIrohIngress({

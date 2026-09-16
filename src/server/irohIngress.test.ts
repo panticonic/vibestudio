@@ -166,11 +166,14 @@ describe("Iroh server ingress", () => {
     await ingress.stop();
   });
 
-  it("bounds relay discovery and releases an endpoint that cannot become online", async () => {
+  it("keeps the same endpoint through a relay outage and becomes ready on recovery", async () => {
+    vi.useFakeTimers();
+    const online = deferred<void>();
+    const waiting = deferred<IrohPhysicalConnection | null>();
     const endpoint = {
       endpointId: "d".repeat(64),
-      accept: vi.fn(),
-      close: vi.fn(async () => undefined),
+      accept: vi.fn(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
     } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
     const binding = {
       bind: vi.fn(async () => endpoint),
@@ -179,30 +182,64 @@ describe("Iroh server ingress", () => {
       binding,
       admitPeer: () => true,
       attach: async () => undefined,
-      waitUntilOnline: () => new Promise(() => undefined),
-      onlineTimeoutMs: 5,
+      waitUntilOnline: () => online.promise,
     });
 
-    await expect(ingress.ready).rejects.toThrow(/did not become online within 5ms/u);
-    expect(endpoint.accept).not.toHaveBeenCalled();
-    expect(endpoint.close).toHaveBeenCalledOnce();
-    await ingress.stop();
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(endpoint.accept).not.toHaveBeenCalled();
+      expect(endpoint.close).not.toHaveBeenCalled();
+      expect(binding.bind).toHaveBeenCalledOnce();
+      online.resolve();
+      await ingress.ready;
+      expect(endpoint.accept).toHaveBeenCalledOnce();
+    } finally {
+      online.resolve();
+      await ingress.stop();
+      vi.useRealTimers();
+    }
     expect(endpoint.close).toHaveBeenCalledOnce();
   });
 
-  it("rejects an invalid online deadline before binding", () => {
-    const binding = { bind: vi.fn() } as unknown as IrohEndpointBinding<
-      IrohPhysicalConnection,
-      IrohPhysicalEndpoint<IrohPhysicalConnection>
-    >;
-    expect(() =>
-      startIrohIngress({
-        binding,
-        admitPeer: () => true,
-        attach: async () => undefined,
-        onlineTimeoutMs: 0,
-      })
-    ).toThrow(/onlineTimeoutMs must be a positive safe integer/u);
-    expect(binding.bind).not.toHaveBeenCalled();
+  it("cancels pending relay discovery and settles readiness when stopped", async () => {
+    let rejectOnline!: (error: Error) => void;
+    const online = new Promise<void>((_resolve, reject) => {
+      rejectOnline = reject;
+    });
+    const endpoint = {
+      endpointId: "d".repeat(64),
+      accept: vi.fn(),
+      close: vi.fn(async () => rejectOnline(new Error("endpoint closed"))),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const waitUntilOnline = vi.fn(() => online);
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer: () => true,
+      attach: async () => undefined,
+      waitUntilOnline,
+    });
+    const rejected = expect(ingress.ready).rejects.toThrow("stopped before becoming ready");
+    await vi.waitFor(() => expect(waitUntilOnline).toHaveBeenCalledOnce());
+    await ingress.stop();
+    await rejected;
+    await ingress.stop();
+    expect(endpoint.close).toHaveBeenCalledOnce();
+    expect(endpoint.accept).not.toHaveBeenCalled();
+  });
+
+  it("reports a binding failure without retrying a broken configuration", async () => {
+    const binding = {
+      bind: vi.fn(async () => {
+        throw new Error("invalid relay configuration");
+      }),
+    };
+    const ingress = startIrohIngress({
+      binding,
+      admitPeer: () => true,
+      attach: async () => undefined,
+    });
+    await expect(ingress.ready).rejects.toThrow("invalid relay configuration");
+    await ingress.stop();
+    expect(binding.bind).toHaveBeenCalledOnce();
   });
 });

@@ -51,7 +51,12 @@ type BootstrapConnectionState = {
   pendingPairLink?: string | null;
   pendingPairConfirmed?: boolean;
   pairingLinkError?: string | null;
-  startupError?: { message: string; detail?: string; logPath?: string } | null;
+  startupError?: {
+    message: string;
+    detail?: string;
+    diagnostics?: string;
+    logPath?: string;
+  } | null;
   serverLogPath?: string | null;
   startupProgress?: StartupConnectionProgress | null;
 };
@@ -918,6 +923,16 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
     actions.append(log);
   }
   approvalsContainer.append(actions);
+  if (failure?.diagnostics) {
+    const details = document.createElement("details");
+    details.className = "startup-diagnostics";
+    const summary = document.createElement("summary");
+    summary.textContent = "Error details";
+    const content = document.createElement("pre");
+    content.textContent = failure.diagnostics;
+    details.append(summary, content);
+    approvalsContainer.append(details);
+  }
 }
 
 let launchGateStarted = false;

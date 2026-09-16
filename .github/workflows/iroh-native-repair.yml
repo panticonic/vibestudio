@@ -86,7 +86,7 @@ jobs:
 
       # Only a natively-executable target can run the cancellation regression.
       # Cross-built artifacts are validated when they reach a matching host.
-      - name: Verify stream cancellation
+      - name: Verify endpoint and stream cancellation
         if: matrix.platform == 'linux-x64-gnu' || matrix.platform == 'darwin-arm64' || matrix.platform == 'win32-x64-msvc'
         shell: bash
         env:

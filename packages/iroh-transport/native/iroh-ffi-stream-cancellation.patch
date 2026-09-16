@@ -43,7 +43,7 @@ index cc85295..029caa1 100644
  tracing = "0.1.40"
  tracing-subscriber = { version = "0.3.17" }
 diff --git a/iroh-js/src/endpoint.rs b/iroh-js/src/endpoint.rs
-index d4fb502..a6cc1c0 100644
+index d4fb502..0cc4090 100644
 --- a/iroh-js/src/endpoint.rs
 +++ b/iroh-js/src/endpoint.rs
 @@ -4,6 +4,7 @@ use iroh::endpoint::{self, presets, presets::Preset as _};
@@ -51,24 +51,42 @@ index d4fb502..a6cc1c0 100644
  use napi_derive::napi;
  use tokio::sync::Mutex;
 +use tokio_util::sync::CancellationToken;
- 
+
  use crate::{EndpointAddr, RelayMode, SecretKey, WatchHandle, path, watch};
- 
-@@ -842,11 +843,11 @@ impl BiStream {
+
+@@ -392,10 +393,14 @@ impl Endpoint {
+             .collect()
+     }
+
+-    /// Resolves once the endpoint has a usable home relay.
++    /// Resolves once the endpoint has a usable home relay, or rejects on close.
+     #[napi]
+-    pub async fn online(&self) {
+-        self.inner.online().await;
++    pub async fn online(&self) -> Result<()> {
++        tokio::select! {
++            biased;
++            _ = self.inner.closed() => Err(anyhow::anyhow!("Endpoint closed before becoming online").into()),
++            _ = self.inner.online() => Ok(()),
++        }
+     }
+
+     /// Insert (or replace) a relay configuration at runtime.
+@@ -842,11 +847,11 @@ impl BiStream {
  /// The outgoing half of a QUIC stream.
  #[derive(Clone)]
  #[napi]
 -pub struct SendStream(Arc<Mutex<endpoint::SendStream>>);
 +pub struct SendStream(Arc<Mutex<endpoint::SendStream>>, CancellationToken);
- 
+
  impl SendStream {
      fn new(s: endpoint::SendStream) -> Self {
 -        SendStream(Arc::new(Mutex::new(s)))
 +        SendStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -854,18 +855,32 @@ impl SendStream {
+
+@@ -854,18 +859,32 @@ impl SendStream {
  impl SendStream {
      #[napi]
      pub async fn write(&self, buf: Vec<u8>) -> Result<i64> {
@@ -86,7 +104,7 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn write_all(&self, buf: Vec<u8>) -> Result<()> {
 -        let mut s = self.0.lock().await;
@@ -107,9 +125,9 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -879,6 +894,11 @@ impl SendStream {
+@@ -879,6 +898,11 @@ impl SendStream {
      pub async fn reset(&self, error_code: BigInt) -> Result<()> {
          let code =
              endpoint::VarInt::from_u64(error_code.get_u64().1).map_err(anyhow::Error::from)?;
@@ -121,8 +139,8 @@ index d4fb502..a6cc1c0 100644
          let mut s = self.0.lock().await;
          s.reset(code).map_err(|e| anyhow::anyhow!("{e:?}"))?;
          Ok(())
-@@ -899,9 +919,15 @@ impl SendStream {
- 
+@@ -899,9 +923,15 @@ impl SendStream {
+
      #[napi]
      pub async fn stopped(&self) -> Result<Option<i64>> {
 -        let s = self.0.lock().await;
@@ -138,23 +156,23 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -913,11 +939,11 @@ impl SendStream {
+@@ -913,11 +943,11 @@ impl SendStream {
  /// The incoming half of a QUIC stream.
  #[derive(Clone)]
  #[napi]
 -pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>);
 +pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>, CancellationToken);
- 
+
  impl RecvStream {
      fn new(s: endpoint::RecvStream) -> Self {
 -        RecvStream(Arc::new(Mutex::new(s)))
 +        RecvStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -925,35 +951,56 @@ impl RecvStream {
+
+@@ -925,35 +955,56 @@ impl RecvStream {
  impl RecvStream {
      #[napi]
      pub async fn read(&self, size_limit: u32) -> Result<Vec<u8>> {
@@ -184,7 +202,7 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn read_exact(&self, size: u32) -> Result<Vec<u8>> {
 -        let mut buf = vec![0u8; size as usize];
@@ -207,7 +225,7 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn read_to_end(&self, size_limit: u32) -> Result<Vec<u8>> {
 -        let mut r = self.0.lock().await;
@@ -230,9 +248,9 @@ index d4fb502..a6cc1c0 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -971,6 +1018,11 @@ impl RecvStream {
+@@ -971,6 +1022,11 @@ impl RecvStream {
      pub async fn stop(&self, error_code: BigInt) -> Result<()> {
          let code =
              endpoint::VarInt::from_u64(error_code.get_u64().1).map_err(anyhow::Error::from)?;
@@ -244,8 +262,8 @@ index d4fb502..a6cc1c0 100644
          let mut r = self.0.lock().await;
          r.stop(code).map_err(|e| anyhow::anyhow!("{e:?}"))?;
          Ok(())
-@@ -978,11 +1030,19 @@ impl RecvStream {
- 
+@@ -978,11 +1034,19 @@ impl RecvStream {
+
      #[napi]
      pub async fn received_reset(&self) -> Result<Option<i64>> {
 -        let mut r = self.0.lock().await;
@@ -270,8 +288,28 @@ index d4fb502..a6cc1c0 100644
 +        }
      }
  }
+diff --git a/iroh-js/test/endpoint.mjs b/iroh-js/test/endpoint.mjs
+index 7093797..3f3fb26 100644
+--- a/iroh-js/test/endpoint.mjs
++++ b/iroh-js/test/endpoint.mjs
+@@ -29,6 +29,15 @@ async function bindClient() {
+ }
+
+ suite('endpoint', () => {
++  test('close cancels pending online waits, including calls after close', async () => {
++    const ep = await bindMinimal()
++    const waits = Array.from({ length: 8 }, () =>
++      assert.rejects(ep.online(), /Endpoint closed before becoming online/))
++    await ep.close()
++    await Promise.all(waits)
++    await assert.rejects(ep.online(), /Endpoint closed before becoming online/)
++  })
++
+   test('builder + preset: id, addr, sockets, secretKey, close', async () => {
+     const ep = await bindMinimal()
+     const id = ep.id()
 diff --git a/src/endpoint.rs b/src/endpoint.rs
-index 46ac9a8..19c5905 100644
+index 46ac9a8..bb87e78 100644
 --- a/src/endpoint.rs
 +++ b/src/endpoint.rs
 @@ -5,6 +5,7 @@ use iroh::{
@@ -279,24 +317,42 @@ index 46ac9a8..19c5905 100644
  };
  use tokio::sync::Mutex;
 +use tokio_util::sync::CancellationToken;
- 
+
  use crate::{
      AddrChangeCallback, CallbackError, Connecting, EndpointAddr, EndpointId, HomeRelayCallback,
-@@ -724,11 +725,11 @@ impl BiStream {
- 
+@@ -440,10 +441,14 @@ impl Endpoint {
+             .collect()
+     }
+
+-    /// Resolves once the endpoint has a usable home relay.
++    /// Resolves once the endpoint has a usable home relay, or rejects on close.
+     #[uniffi::method(async_runtime = "tokio")]
+-    pub async fn online(&self) {
+-        self.inner.online().await;
++    pub async fn online(&self) -> Result<(), IrohError> {
++        tokio::select! {
++            biased;
++            _ = self.inner.closed() => Err(anyhow::anyhow!("Endpoint closed before becoming online").into()),
++            _ = self.inner.online() => Ok(()),
++        }
+     }
+
+     /// Insert (or replace) a relay configuration at runtime.
+@@ -724,11 +729,11 @@ impl BiStream {
+
  /// The outgoing half of a QUIC stream.
  #[derive(Clone, uniffi::Object)]
 -pub struct SendStream(Arc<Mutex<endpoint::SendStream>>);
 +pub struct SendStream(Arc<Mutex<endpoint::SendStream>>, CancellationToken);
- 
+
  impl SendStream {
      fn new(s: endpoint::SendStream) -> Self {
 -        SendStream(Arc::new(Mutex::new(s)))
 +        SendStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -737,17 +738,31 @@ impl SendStream {
+
+@@ -737,17 +742,31 @@ impl SendStream {
      /// Write some bytes, returning the number actually written.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn write(&self, buf: &[u8]) -> Result<u64, IrohError> {
@@ -314,7 +370,7 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      /// Write all bytes, looping as needed.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn write_all(&self, buf: &[u8]) -> Result<(), IrohError> {
@@ -332,9 +388,9 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      /// Signal that no more data will be sent on this stream.
-@@ -762,6 +777,11 @@ impl SendStream {
+@@ -762,6 +781,11 @@ impl SendStream {
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn reset(&self, error_code: u64) -> Result<(), IrohError> {
          let error_code = endpoint::VarInt::from_u64(error_code)?;
@@ -346,8 +402,8 @@ index 46ac9a8..19c5905 100644
          let mut s = self.0.lock().await;
          s.reset(error_code)?;
          Ok(())
-@@ -783,9 +803,15 @@ impl SendStream {
- 
+@@ -783,9 +807,15 @@ impl SendStream {
+
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn stopped(&self) -> Result<Option<u64>, IrohError> {
 -        let s = self.0.lock().await;
@@ -363,23 +419,23 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      #[uniffi::method(async_runtime = "tokio")]
-@@ -797,11 +823,11 @@ impl SendStream {
- 
+@@ -797,11 +827,11 @@ impl SendStream {
+
  /// The incoming half of a QUIC stream.
  #[derive(Clone, uniffi::Object)]
 -pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>);
 +pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>, CancellationToken);
- 
+
  impl RecvStream {
      fn new(s: endpoint::RecvStream) -> Self {
 -        RecvStream(Arc::new(Mutex::new(s)))
 +        RecvStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -810,29 +836,50 @@ impl RecvStream {
+
+@@ -810,29 +840,50 @@ impl RecvStream {
      /// Read up to `size_limit` bytes into a fresh buffer.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read(&self, size_limit: u32) -> Result<Vec<u8>, IrohError> {
@@ -403,7 +459,7 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      /// Read exactly `size` bytes, erroring if the stream ends early.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read_exact(&self, size: u32) -> Result<Vec<u8>, IrohError> {
@@ -423,7 +479,7 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      /// Read until end-of-stream, with `size_limit` as a maximum.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read_to_end(&self, size_limit: u32) -> Result<Vec<u8>, IrohError> {
@@ -441,9 +497,9 @@ index 46ac9a8..19c5905 100644
 +            } => result,
 +        }
      }
- 
+
      #[uniffi::method(async_runtime = "tokio")]
-@@ -852,6 +899,11 @@ impl RecvStream {
+@@ -852,6 +903,11 @@ impl RecvStream {
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn stop(&self, error_code: u64) -> Result<(), IrohError> {
          let error_code = endpoint::VarInt::from_u64(error_code)?;
@@ -455,8 +511,8 @@ index 46ac9a8..19c5905 100644
          let mut r = self.0.lock().await;
          r.stop(error_code)?;
          Ok(())
-@@ -859,9 +911,17 @@ impl RecvStream {
- 
+@@ -859,9 +915,17 @@ impl RecvStream {
+
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn received_reset(&self) -> Result<Option<u64>, IrohError> {
 -        let mut r = self.0.lock().await;
@@ -475,7 +531,7 @@ index 46ac9a8..19c5905 100644
 +        }
      }
  }
- 
+
 diff --git a/iroh-js/test/stream-cancellation.mjs b/iroh-js/test/stream-cancellation.mjs
 new file mode 100644
 index 0000000..08c123a

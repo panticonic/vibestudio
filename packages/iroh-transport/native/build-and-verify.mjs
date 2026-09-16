@@ -39,7 +39,11 @@ const receipt = {
   node: process.version,
   artifact,
   artifactSha256: sha256(readFileSync(artifact)),
-  validation: ["upstream endpoint tests", "native stream cancellation tests", "UniFFI cargo check"],
+  validation: [
+    "endpoint tests including readiness cancellation",
+    "native stream cancellation tests",
+    "UniFFI cargo check",
+  ],
   scope: "Local acceptance artifact; not a published or installed binding release",
 };
 writeFileSync(join(output, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);

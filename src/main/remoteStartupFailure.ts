@@ -13,7 +13,7 @@ export function remoteStartupFailurePresentation(
   freshPairing: boolean
 ): RemoteStartupFailurePresentation {
   const cause = error instanceof Error ? error.message : String(error);
-  const message = `Could not connect to the paired server: ${cause}`;
+  const message = "Could not connect to the paired server";
   if (/pairing link was not used/i.test(cause)) {
     return {
       message,

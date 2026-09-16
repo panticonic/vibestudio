@@ -252,7 +252,12 @@ loadCentralEnv();
 const centralData = new CentralDataManager();
 let startupMode: StartupMode;
 let workspaceId: string = "unknown";
-let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
+let bootstrapStartupError: {
+  message: string;
+  detail?: string;
+  diagnostics?: string;
+  logPath?: string;
+} | null = null;
 let retryWorkspaceName: string | null = crashLoopWorkspaceName;
 
 if (localServerCrashLoopCode) {
@@ -276,8 +281,9 @@ try {
   }
   startupMode = { kind: "pending" };
   bootstrapStartupError = {
-    message: error instanceof Error ? error.message : String(error),
-    detail: formatUnknownError(error),
+    message: "Could not initialize the workspace",
+    detail: "Review the error details, then retry or choose another workspace.",
+    diagnostics: formatUnknownError(error),
   };
 }
 
@@ -2121,10 +2127,9 @@ app.on("ready", async () => {
         } catch (error) {
           bootstrapWorkspaceRpcReady = false;
           bootstrapStartupError = {
-            message: `Could not open workspace “${choice.name}”: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            detail: formatUnknownError(error),
+            message: `Could not open workspace “${choice.name}”`,
+            detail: "Review the error details, then retry or choose another workspace.",
+            diagnostics: formatUnknownError(error),
           };
           pushBootstrapConnectionState();
           return;
@@ -3194,12 +3199,11 @@ app.on("ready", async () => {
         : null;
       bootstrapWorkspaceRpcReady = false;
       bootstrapStartupError = {
-        message: remoteStartupFailed
-          ? remoteFailure!.message
-          : `Could not start the workspace: ${message}`,
+        message: remoteStartupFailed ? remoteFailure!.message : "Could not start the workspace",
         detail: remoteStartupFailed
           ? remoteFailure!.detail
           : "Retry the startup, or choose another server or workspace.",
+        diagnostics: formatUnknownError(error),
         ...(bootstrapConnectionKind === "local" && startupMode.kind === "local"
           ? { logPath: getLocalHubLogPath() }
           : {}),

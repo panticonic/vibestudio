@@ -1,4 +1,37 @@
-# Iroh native stream cancellation repair
+# Iroh native lifecycle repairs
+
+## Endpoint readiness cancellation
+
+The installed `1.1.0-cancel.1` binaries repair stream cancellation but still
+leave `Endpoint.online()` pending after endpoint closure. A JavaScript timeout
+does not cancel that native wait; replacing endpoints after a relay timeout can
+therefore accumulate native tasks and prevent clean process exit.
+
+The reviewed source patch now races readiness against Iroh's existing
+`Endpoint.closed()` future inside Rust, in both Node and UniFFI. Closure wins
+if both are ready. The losing readiness future is dropped before returning an
+error to the caller. This adds no timer or application cancellation channel.
+Node retains `Promise<void>` (with rejection on close); regenerated UniFFI
+bindings must include the new fallible result when building mobile artifacts.
+
+Server ingress now lets Iroh reconnect the same endpoint through an outage;
+elapsed time alone does not retire it. Binding failures still fail startup.
+The native endpoint regression covers concurrent readiness waits and calls
+after closure. The owned relay acceptance test additionally holds a real relay
+connection unresponsive for 16 seconds, restores it, and requires recovery
+without rebinding and natural process exit:
+
+```sh
+NAPI_RS_NATIVE_LIBRARY_PATH=/path/to/repaired/iroh.node \
+  pnpm exec tsx scripts/test-iroh-readiness.ts
+```
+
+This readiness repair is not in the currently pinned published binaries.
+Build and publish a new coherent native release before updating production
+pins; never overwrite `1.1.0-cancel.1` or substitute a local development binary
+for the shipping artifact.
+
+## Stream cancellation
 
 The pinned Iroh FFI 1.1.0 binding holds each stream mutex across network waits.
 Consequently `RecvStream.stop()` cannot interrupt a pending read, and
@@ -114,7 +147,7 @@ a substitute for this repair or an available coherent dependency release.
 `@number0/iroh-<platform>` package from the same reviewed inputs, and
 `.github/workflows/iroh-native-repair.yml` runs it across the five desktop
 targets `check-electron-package-boundary.mjs` enforces. Only the native artifact
-differs: `@number0/iroh` requires its platform package *by name* and returns
+differs: `@number0/iroh` requires its platform package _by name_ and returns
 whatever that package exports, so the JavaScript, types, and API surface stay
 upstream's. The emitted manifest reproduces upstream's shape exactly apart from
 name and version.

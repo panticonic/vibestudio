@@ -146,6 +146,8 @@
       .launch-header {
         display: grid;
         justify-items: start;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .launch-mark {
         width: 40px;
@@ -246,6 +248,23 @@
         background: var(--surface);
         font-size: 11px;
         overflow-wrap: anywhere;
+      }
+      .startup-diagnostics {
+        min-width: 0;
+        color: var(--text-muted);
+        font-size: 13px;
+      }
+      .startup-diagnostics summary {
+        cursor: pointer;
+      }
+      .startup-diagnostics pre {
+        max-height: 240px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        line-height: 1.5;
+        user-select: text;
       }
       .field-grid {
         display: grid;

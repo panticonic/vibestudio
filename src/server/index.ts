@@ -5075,6 +5075,7 @@ async function main() {
         const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
         const { startIrohIngress } = await import("./irohIngress.js");
         const relayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+        console.warn(`[iroh-workspace] Connecting to relays: ${relayUrls.join(", ")}`);
         const secretKey = loadOrCreateNodeEndpointSecret(workspaceIrohIdentityFile);
         const ingress = startIrohIngress({
           binding: createNodeEndpointBinding({ secretKey, relayUrls }),
