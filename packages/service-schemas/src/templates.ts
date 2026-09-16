@@ -7,6 +7,7 @@ import {
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import {
+  WorkspaceTemplateDependencySchema,
   WorkspaceGitCommitSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -351,6 +352,45 @@ export const templatesMethods = defineServiceMethods({
         nextPage: z.number().int().nullable(),
       })
       .strict(),
+    access: READ,
+  },
+  authoringSetup: {
+    website: { kind: "closed", reason: "Reads private workspace publication metadata." } as const,
+    description:
+      "Read template identity, upstream, dependencies, and declared publication contents from one workspace state.",
+    args: z.tuple([]),
+    returns: z
+      .object({
+        name: z.string(),
+        description: z.string(),
+        upstream: WorkspaceTemplatePinSchema.nullable(),
+        dependencies: z.array(WorkspaceTemplateDependencySchema),
+        parts: z.array(
+          z
+            .object({
+              repoPath: z.string(),
+              ownership: z.enum(["authored", "inherited", "unlisted"]),
+              inheritedFrom: z.string().optional(),
+            })
+            .strict()
+        ),
+      })
+      .strict(),
+    access: READ,
+  },
+  publicationVersion: {
+    website: { kind: "closed", reason: "Reads the selected GitHub repository's tags." } as const,
+    description: "Suggest the next stable patch version from all existing repository tags.",
+    args: z.tuple([
+      z
+        .object({
+          owner: z.string().min(1),
+          name: z.string().min(1),
+          credentialId: z.string().optional(),
+        })
+        .strict(),
+    ]),
+    returns: z.object({ latest: z.string().nullable(), suggested: z.string() }).strict(),
     access: READ,
   },
   authoringUpstream: {

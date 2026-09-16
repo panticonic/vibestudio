@@ -21,6 +21,10 @@ describe("templates contract", () => {
       "resolveSource",
       "inspect",
       "inspectAuthoring",
+      "publicationRepositories",
+      "authoringSetup",
+      "publicationVersion",
+      "authoringUpstream",
       "authoringParts",
       "publishAuthoring",
     ]);
