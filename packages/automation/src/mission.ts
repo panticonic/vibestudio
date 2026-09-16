@@ -196,6 +196,7 @@ export interface MissionRunRecord {
  * fact; elapsed time is never evidence that a turn did or did not run. */
 export type AutomationExecutorRunStatus =
   | { state: "not-found" }
+  | { state: "queued"; channelId: string }
   | {
       state: "running";
       channelId: string;
