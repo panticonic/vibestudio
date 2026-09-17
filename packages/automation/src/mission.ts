@@ -45,7 +45,7 @@ export interface MissionAuthorityPlanReference {
 export type MissionAgentAction =
   | { kind: "prompt"; text: string }
   | {
-      kind: "eval";
+      kind: "eval" | "watch";
       code: string;
       syntax?: "javascript" | "typescript" | "jsx" | "tsx";
       timeoutMs?: number;
@@ -237,7 +237,7 @@ function validateExecution(execution: MissionExecution): void {
     if (execution.action.kind === "prompt" && !execution.action.text.trim()) {
       throw new Error("Prompt automation requires prompt text");
     }
-    if (execution.action.kind === "eval") {
+    if (execution.action.kind === "eval" || execution.action.kind === "watch") {
       if (!execution.action.code.trim()) throw new Error("Eval automation requires inline code");
       if (
         execution.action.timeoutMs !== undefined &&

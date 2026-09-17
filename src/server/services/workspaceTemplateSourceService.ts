@@ -1,3 +1,4 @@
+import { parseWorkspaceSystemEpochEnvelope } from "@vibestudio/workspace/configParser";
 import {
   composeDeclaredTemplateLayers,
   enumerateRootTemplateRepositories,
@@ -112,6 +113,14 @@ export function createWorkspaceTemplateSourceService(deps: {
       resolveLocal: async (ctx, [url]) => {
         requireReviewedSourceConsumer(ctx.caller);
         return deps.resolveLocal(url);
+      },
+      readEpoch: async (ctx, [pin]) => {
+        requireReviewedSourceConsumer(ctx.caller);
+        const snapshot = await deps.acquire(pin);
+        const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+        if (!bytes)
+          throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
+        return parseWorkspaceSystemEpochEnvelope(Buffer.from(bytes).toString("utf8"));
       },
       inspectExact: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);

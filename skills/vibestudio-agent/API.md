@@ -702,4 +702,5 @@ Authority principals: `code`, `host`
 | `workspaceTemplateSource.composeExact` | Acquire an exact template tree using the supplied layer pins, resolving newly introduced dependencies once. |
 | `workspaceTemplateSource.localRegistry` | Read the instance-designated local template registry, if one is configured. |
 | `workspaceTemplateSource.resolveLocal` | Resolve a canonical source URL to this instance's designated exact local pin, if present. |
+| `workspaceTemplateSource.readEpoch` | Read only the compatibility epoch from an exact source, including future manifest schemas. |
 | `workspaceTemplateSource.inspectExact` | Acquire and verify one exact workspace source without exposing its host transport. |

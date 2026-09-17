@@ -17,10 +17,10 @@ initPanels:
   - source: panels/example
 `;
 
-function snapshot() {
+function snapshot(manifest = sourceManifest) {
   const files = [{ path: "meta/vibestudio.yml" }, { path: "panels/example/index.tsx" }];
   const descriptors = files.map((file) => {
-    const content = file.path === "meta/vibestudio.yml" ? sourceManifest : "{}";
+    const content = file.path === "meta/vibestudio.yml" ? manifest : "{}";
     return {
       ...file,
       contentHash: sha256HexSyncText(content),
@@ -33,7 +33,7 @@ function snapshot() {
     snapshot: canonicalSnapshotDigest(descriptors.map((file) => ({ ...file, mode: 0o100644 }))),
     files: descriptors,
     readFile: (path: string) =>
-      path === "meta/vibestudio.yml" ? Buffer.from(sourceManifest) : Buffer.from("{}"),
+      path === "meta/vibestudio.yml" ? Buffer.from(manifest) : Buffer.from("{}"),
   };
 }
 
@@ -169,6 +169,26 @@ describe("workspaceTemplateSource", () => {
         "inspectExact",
         [first]
       )
+    ).rejects.toThrow(/reviewed source consumer/);
+  });
+  it("reads a foreign epoch without interpreting that epoch's manifest schema", async () => {
+    const foreignEpoch = WORKSPACE_SYSTEM_EPOCH + 1;
+    const acquire = vi.fn(async () =>
+      snapshot(`systemEpoch: ${foreignEpoch}\nfutureSchema: { unknownToday: true }\n`)
+    );
+    const service = createWorkspaceTemplateSourceService({
+      put: vi.fn(),
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire,
+      resolveLocal: () => null,
+      localRegistry: () => null,
+    });
+    const ctx = { caller: createVerifiedCaller("shell:user-1", "shell") };
+    const pin = { url: "https://example.invalid/source.git", ref: "main", commit: "a".repeat(40) };
+    await expect(service.handler(ctx, "readEpoch", [pin])).resolves.toBe(foreignEpoch);
+    await expect(service.handler(ctx, "inspectExact", [pin])).rejects.toThrow();
+    await expect(
+      service.handler({ caller: createVerifiedCaller("other", "app") }, "readEpoch", [pin])
     ).rejects.toThrow(/reviewed source consumer/);
   });
 });

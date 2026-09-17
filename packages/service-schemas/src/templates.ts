@@ -194,7 +194,58 @@ export const templateUpdateReviewSchema = z
   .strict();
 export type TemplateUpdateReview = z.infer<typeof templateUpdateReviewSchema>;
 
+export const templateUpdateCheckSchema = z
+  .object({
+    source: WorkspaceTemplatePinSchema,
+    checkedAt: z.number(),
+    status: z.enum(["current", "available", "different-epoch", "error"]),
+    target: WorkspaceTemplatePinSchema.optional(),
+    targetEpoch: z.number().int().nonnegative().optional(),
+    error: z.string().optional(),
+  })
+  .strict();
+export const templateUpdateStatusSchema = z
+  .object({
+    workspaceEpoch: z.number().int().nonnegative(),
+    checks: z.array(templateUpdateCheckSchema),
+  })
+  .strict();
+export type TemplateUpdateStatus = z.infer<typeof templateUpdateStatusSchema>;
+
 export const templatesMethods = defineServiceMethods({
+  updateSignal: {
+    description:
+      "Check upstream and return a model-free automation signal only for unannounced updates.",
+    website: { kind: "closed", reason: "Workspace update automation is private." } as const,
+    args: z.tuple([]),
+    returns: z
+      .object({ protocol: z.literal("automation-signal.v1"), prompt: z.string().nullable() })
+      .strict(),
+    access: READ,
+  },
+  acknowledgeUpdates: {
+    description:
+      "Record exact updates after the agent has successfully notified the user; does not apply updates.",
+    website: { kind: "closed", reason: "Workspace update automation is private." } as const,
+    args: z.tuple([z.object({ targets: z.array(WorkspaceTemplatePinSchema) }).strict()]),
+    returns: z.void(),
+    access: WRITE,
+  },
+  updateStatus: {
+    description: "Read cached upstream availability without preparing or applying an update.",
+    website: { kind: "closed", reason: "Workspace source provenance is private." } as const,
+    args: z.tuple([]),
+    returns: templateUpdateStatusSchema,
+    access: READ,
+  },
+  checkUpdates: {
+    description:
+      "Check recorded template sources for upstream changes without modifying workspace content.",
+    website: { kind: "closed", reason: "Workspace source provenance is private." } as const,
+    args: z.tuple([]),
+    returns: templateUpdateStatusSchema,
+    access: READ,
+  },
   installed: {
     description: "List the exact template sources recorded in this workspace.",
     website: {
@@ -202,7 +253,11 @@ export const templatesMethods = defineServiceMethods({
       reason: "Workspace source provenance is private to its members.",
     } as const,
     args: z.tuple([]),
-    returns: z.array(templateInspectionSchema),
+    returns: z.array(
+      templateInspectionSchema.extend({
+        relationship: z.enum(["upstream", "direct", "transitive"]),
+      })
+    ),
     access: READ,
   },
   inspectContribution: {
@@ -515,6 +570,23 @@ export const workspaceTemplateSourceMethods = defineServiceMethods({
       "Resolve a canonical source URL to this instance's designated exact local pin, if present.",
     args: z.tuple([z.string().url()]),
     returns: WorkspaceTemplatePinSchema.nullable(),
+    access: READ,
+  },
+  readEpoch: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Verified source consumers read only the stable compatibility envelope; foreign source is never activated.",
+    },
+    authority: { principals: ["user", "code"] },
+    website: { kind: "closed", reason: "Exact workspace source metadata is private." } as const,
+    description:
+      "Read only the compatibility epoch from an exact source, including future manifest schemas.",
+    args: z.tuple([WorkspaceTemplatePinSchema]),
+    returns: z.number().int().nonnegative(),
     access: READ,
   },
   inspectExact: {
