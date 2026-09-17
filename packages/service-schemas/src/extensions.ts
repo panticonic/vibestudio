@@ -92,7 +92,8 @@ export const extensionsMethods = defineServiceMethods({
       "Invoke a public provider-namespaced method on the extension selected for a manifest provider slot. Provider methods explicitly marked private are unavailable through this route.",
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     returns: JsonValueSchema,
-    access: INVOKE_ACCESS,
+    // Dispatch is read-only; the host checks the selected provider method’s canonical access.
+    access: READ_ACCESS,
     examples: [{ args: ["claudeCode", "prepare", [{ channelId: "chan_123" }]] }],
   },
   // invokeStream intentionally declares no return schema: the result is a raw

@@ -71,6 +71,10 @@ export const gitTemplatePublishInputSchema = z
   .object({
     operationId: z.string().trim().min(1),
     expectedMainEventId: z.string().trim().min(1),
+    expectedRemoteCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .nullable(),
     templateName: z.string().trim().min(1),
     version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
     manifest: z.string().min(1),
@@ -94,6 +98,30 @@ export const gitTemplatePublishInputSchema = z
   })
   .strict();
 export type GitTemplatePublishInput = z.infer<typeof gitTemplatePublishInputSchema>;
+
+export const templatePublicationReviewSchema = z
+  .object({
+    remoteCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .nullable(),
+    changedFiles: z.array(
+      z
+        .object({
+          path: z.string(),
+          kind: z.enum(["added", "removed", "changed"]),
+          oldHash: z.string().optional(),
+          newHash: z.string().optional(),
+          binary: z.boolean(),
+          tooLarge: z.boolean(),
+          oldMode: z.number().nullable(),
+          newMode: z.number().nullable(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+export type TemplatePublicationReview = z.infer<typeof templatePublicationReviewSchema>;
 
 export const gitTemplatePublishResultSchema = z
   .object({

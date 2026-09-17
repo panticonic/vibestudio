@@ -280,7 +280,8 @@ export type ServiceMethodSchemas = Record<string, MethodSchema>;
  * table for client derivation while checking the table's shape.
  */
 export function defineServiceMethods<const M extends ServiceMethodSchemas>(methods: M): M {
-  for (const [name, method] of Object.entries(methods)) validateWebsiteMethodPolicy(method.website, name);
+  for (const [name, method] of Object.entries(methods))
+    validateWebsiteMethodPolicy(method.website, name);
   return methods;
 }
 
@@ -506,12 +507,14 @@ function schemaFailure(
 }
 
 function expectedCallShape(service: string, method: string, definition: MethodSchema): string {
-  const tupleItems = (
-    definition.args as unknown as {
-      _def?: { items?: readonly z.ZodTypeAny[] };
-    }
-  )._def?.items;
-  if (!tupleItems) return `${service}.${method}(...)`;
+  const tuples = argsTupleOptions(definition.args);
+  const first = tuples?.[0];
+  if (!first) return `${service}.${method}(...)`;
+  if (tuples && tuples.length > 1)
+    return tuples
+      .map((tuple) => expectedCallShape(service, method, { ...definition, args: tuple }))
+      .join(" or ");
+  const tupleItems = first.items;
   const args = tupleItems.map((schema, index) => {
     const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape;
     if (!shape) return `arg${index + 1}`;

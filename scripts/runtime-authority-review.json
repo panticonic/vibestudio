@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:0a0614432d8d1b84195a511c7cf10db19526266ed7d27236664f3022554bfc6c",
+  "censusDigest": "sha256:70892c2f08b89c9e4676812ed7a84ad29aea0d976e1a95354bc3116c88ee0e11",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -1005,6 +1005,10 @@
     "host:phoneNativeEndpoint.readiness": {
       "review": "exact-account-paired-mobile-readiness",
       "change": "Only the exact approved phone-provisioning provider may query the fixed mobileWorkspace.readiness method on the exact paired mobile connection belonging to the initiating account. This read does not install, pair, mint credentials, or grant authority; the public mobile.devices.read gate remains authoritative."
+    },
+    "host:extensions.invokeProvider": {
+      "review": "canonical-provider-method-read-only-containment",
+      "change": "Provider dispatch performs routing only. Read-only admission is checked against the exact host-owned provider method schema in ExtensionHost before executing the selected implementation; write and unknown methods fail closed. This removes the blanket write classification that rejected upstream status queries. Provider contracts replace the previous names-only inventory, and the real dispatcher regression checks reads, writes and unknown methods. No capability grant or credential authority is added."
     }
   }
 }

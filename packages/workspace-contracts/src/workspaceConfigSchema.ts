@@ -1,3 +1,4 @@
+import { WorkspaceAutomationsSchema } from "./automations.js";
 import { z } from "zod";
 import {
   WORKSPACE_SERVICE_PRINCIPALS,
@@ -388,6 +389,7 @@ export const WorkspaceConfigSchema = z
         z.object({ source: z.string(), stateArgs: WorkspaceJsonObjectSchema.optional() }).strict()
       )
       .optional(),
+    defaultAutomations: WorkspaceAutomationsSchema.optional(),
     panelRestorePolicy: z.enum(["focused", "none"]).optional(),
     defaultAgentConfig: z
       .object({

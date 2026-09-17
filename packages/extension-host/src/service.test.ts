@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -103,7 +105,8 @@ function makeHost(
     getContextIdForCaller?: (callerId: string) => string | null;
     resolveProviderExtensionName?: (provider: string) => string | null;
     providerSlots?: readonly string[];
-    providerContracts?: ExtensionHostDeps["providerContracts"];
+    providerContracts?: Record<string, readonly string[]>;
+    providerMethodAccess?: Record<string, Record<string, { sensitivity: "read" | "write" }>>;
     sourceProviderContracts?: Record<string, { methods: string[] }>;
     activeProviderContracts?: Record<string, { methods: string[] }>;
     candidateProviderContracts?: Record<string, { methods: string[] }>;
@@ -321,7 +324,21 @@ function makeHost(
     getContextIdForCaller: overrides.getContextIdForCaller,
     resolveProviderExtensionName: overrides.resolveProviderExtensionName ?? (() => null),
     providerSlots: overrides.providerSlots ?? [],
-    providerContracts: overrides.providerContracts ?? {},
+    providerContracts: Object.fromEntries(
+      Object.entries(overrides.providerContracts ?? {}).map(([provider, methods]) => [
+        provider,
+        Object.fromEntries(
+          methods.map((method) => [
+            method,
+            {
+              args: z.tuple([]),
+              website: { kind: "closed", reason: "test" } as const,
+              access: overrides.providerMethodAccess?.[provider]?.[method],
+            },
+          ])
+        ),
+      ])
+    ),
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "extensions/git-tools/package.json"
         ? fs.readFileSync(path.join(extensionNode.path, "package.json"), "utf8")
@@ -441,6 +458,39 @@ describe("ExtensionHost invocation attribution", () => {
         }),
       ]
     );
+  });
+
+  it("routes read-only provider queries but rejects writes and unknown methods", async () => {
+    const extensionTransport = { call: vi.fn(async () => "ok") };
+    const { host } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: () => "@workspace-extensions/git-tools",
+      providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      providerMethodAccess: {
+        gitInterop: {
+          upstreamStatus: { sensitivity: "read" },
+          publishRepo: { sensitivity: "write" },
+        },
+      },
+      activeProviderContracts: { gitInterop: { methods: ["upstreamStatus", "publishRepo"] } },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    const ctx = { ...panelCtx("panel-1"), readOnly: true };
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(host.createServiceDefinition());
+    dispatcher.markInitialized();
+    await expect(
+      dispatcher.dispatch(ctx, "extensions", "invokeProvider", [
+        "gitInterop",
+        "upstreamStatus",
+        [[]],
+      ])
+    ).resolves.toBe("ok");
+    for (const method of ["publishRepo", "unknown"])
+      await expect(
+        dispatcher.dispatch(ctx, "extensions", "invokeProvider", ["gitInterop", method, []])
+      ).rejects.toMatchObject({ code: "EVAL_READ_ONLY" });
+    expect(extensionTransport.call).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a nested authority acquisition for the original runtime to resume", async () => {

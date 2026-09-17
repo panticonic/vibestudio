@@ -350,7 +350,9 @@ export interface ExtensionHostDeps {
    * then by method. An implementing extension must declare the exact contract
    * in its manifest; the approved build carries that declaration.
    */
-  providerContracts: Readonly<Record<string, readonly string[]>>;
+  providerContracts: Readonly<
+    Record<string, import("@vibestudio/shared/typedServiceClient").ServiceMethodSchemas>
+  >;
   privateProviderMethods?: Readonly<Record<string, readonly string[]>>;
 }
 
@@ -723,9 +725,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   ): void {
     for (const [provider, declaration] of Object.entries(declarations)) {
       const expected = this.deps.providerContracts[provider];
-      if (expected && !sameStringArray(declaration.methods, expected)) {
+      if (expected && !sameStringArray(declaration.methods, Object.keys(expected))) {
         throw new UnitManifestError(
-          `Extension ${unitName} providerContracts.${provider}.methods must exactly match the host contract: ${expected.join(", ")}`,
+          `Extension ${unitName} providerContracts.${provider}.methods must exactly match the host contract: ${Object.keys(expected).join(", ")}`,
           "MANIFEST_PROVIDER_CONTRACT"
         );
       }
@@ -1134,6 +1136,17 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     method: string,
     args: unknown[]
   ): Promise<unknown> {
+    if (
+      ctx.readOnly &&
+      this.deps.providerContracts[provider]?.[method]?.access?.sensitivity !== "read"
+    ) {
+      throw new ServiceError(
+        "extensions",
+        "invokeProvider",
+        `Provider method ${provider}.${method} is not declared read-only.`,
+        "EVAL_READ_ONLY"
+      );
+    }
     const name = this.deps.resolveProviderExtensionName(provider);
     if (!name) {
       throw new ServiceError(
@@ -1239,7 +1252,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     for (const [provider, declaration] of Object.entries(details.providerContracts)) {
       const expected = this.deps.providerContracts[provider];
-      if (expected && !sameStringArray(declaration.methods, expected)) {
+      if (expected && !sameStringArray(declaration.methods, Object.keys(expected))) {
         throw new ServiceError(
           "extensions",
           operation,

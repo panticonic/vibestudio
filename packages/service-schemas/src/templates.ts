@@ -1,3 +1,5 @@
+import { templatePublicationReviewSchema } from "./gitInterop.js";
+import { missionRecordSchema } from "./missions.js";
 import { WorkspaceSourceReviewSchema } from "@vibestudio/workspace-contracts/workspaceSource";
 import { vcsMergeCoordinateSchema } from "./vcs.js";
 import { z } from "zod";
@@ -116,6 +118,21 @@ const destinationSchema = z
     name: z.string().trim().min(1),
   })
   .strict();
+const publicationRequestSchema = z
+  .object({
+    commandId,
+    intent: authoringIntentSchema,
+    expectedFingerprint: digest,
+    version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
+    destination: destinationSchema,
+    credentialId: z.string().trim().min(1).optional(),
+    creation: z
+      .object({ private: z.boolean().optional(), description: z.string().optional() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const templatePublicationSchema = z
   .object({
     operationId: z.string(),
@@ -213,6 +230,14 @@ export const templateUpdateStatusSchema = z
 export type TemplateUpdateStatus = z.infer<typeof templateUpdateStatusSchema>;
 
 export const templatesMethods = defineServiceMethods({
+  updateAssistant: {
+    description:
+      "Read the current user's provisioned workspace update automation, including paused or retired state.",
+    website: { kind: "closed", reason: "Workspace automations are private." } as const,
+    args: z.tuple([]),
+    returns: missionRecordSchema.nullable(),
+    access: READ,
+  },
   updateSignal: {
     description:
       "Check upstream and return a model-free automation signal only for unannounced updates.",
@@ -477,6 +502,17 @@ export const templatesMethods = defineServiceMethods({
     ),
     access: READ,
   },
+  reviewPublication: {
+    website: {
+      kind: "closed",
+      reason: "Reads private publication source and upstream contents.",
+    } as const,
+    description:
+      "Check publication access and compare the exact release with upstream without publishing.",
+    args: z.tuple([publicationRequestSchema]),
+    returns: templatePublicationReviewSchema,
+    access: READ,
+  },
   publishAuthoring: {
     website: {
       kind: "closed",
@@ -485,20 +521,12 @@ export const templatesMethods = defineServiceMethods({
     } as const,
     description: "Revalidate and publish a reviewed workspace template snapshot.",
     args: z.tuple([
-      z
-        .object({
-          commandId,
-          intent: authoringIntentSchema,
-          expectedFingerprint: digest,
-          version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
-          destination: destinationSchema,
-          credentialId: z.string().trim().min(1).optional(),
-          creation: z
-            .object({ private: z.boolean().optional(), description: z.string().optional() })
-            .strict()
-            .optional(),
-        })
-        .strict(),
+      publicationRequestSchema.extend({
+        expectedRemoteCommit: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/u)
+          .nullable(),
+      }),
     ]),
     returns: templatePublicationSchema,
     access: WRITE,

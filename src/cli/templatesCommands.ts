@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   templateAuthoringInspectionSchema,
+  templatesMethods,
   templateContributionPlanSchema,
   type TemplateAuthoringInspection,
   type TemplateLocator,
@@ -322,14 +323,19 @@ export const templatesCommands: CliCommand[] = [
   },
   {
     group: "templates",
-    name: "author-publish",
-    summary: "Publish an unchanged receipt as an immutable workspace snapshot",
+    name: "author-review",
+    summary: "Check account access and compare a release with its upstream before publishing",
     flags: [
       VERSION,
       OWNER,
       REPOSITORY,
       PROVIDER,
       PRIVATE,
+      {
+        name: "create",
+        takesValue: false,
+        description: "Create a new repository instead of publishing to an existing one",
+      },
       DESCRIPTION,
       CREDENTIAL_ID,
       COMMAND_ID,
@@ -341,7 +347,7 @@ export const templatesCommands: CliCommand[] = [
         inv,
         async (c) => {
           const plan = readReceipt(inv, "authoring", templateAuthoringInspectionSchema);
-          const publication = await c.publishAuthoring({
+          const request: Parameters<TemplatesClient["reviewPublication"]>[0] = {
             commandId: commandId(inv),
             intent: plan.request,
             expectedFingerprint: plan.fingerprint,
@@ -352,16 +358,48 @@ export const templatesCommands: CliCommand[] = [
               owner: requiredFlag(inv, "owner"),
               name: requiredFlag(inv, "repository"),
             },
-            creation: {
-              private: inv.flags["private"] === true,
-              ...(typeof inv.flags["description"] === "string"
-                ? { description: inv.flags["description"] }
-                : {}),
-            },
+            ...(inv.flags["create"] === true
+              ? {
+                  creation: {
+                    private: inv.flags["private"] === true,
+                    ...(typeof inv.flags["description"] === "string"
+                      ? { description: inv.flags["description"] }
+                      : {}),
+                  },
+                }
+              : {}),
             ...(typeof inv.flags["credential-id"] === "string"
               ? { credentialId: inv.flags["credential-id"] }
               : {}),
-          });
+          };
+          const review = await c.reviewPublication(request);
+          const reviewed = { ...request, expectedRemoteCommit: review.remoteCommit };
+          saveReceipt(inv, "publication-review", reviewed);
+          return review;
+        },
+        (review) => {
+          console.log(
+            `Compared with ${review.remoteCommit ?? "empty repository"}: ${review.changedFiles.length} changed files`
+          );
+          for (const file of review.changedFiles) console.log(`  ${file.kind}: ${file.path}`);
+        }
+      ),
+  },
+  {
+    group: "templates",
+    name: "author-publish",
+    summary: "Publish the exact reviewed release; reject changed workspace or upstream source",
+    flags: [RECEIPT, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (c) => {
+          const request = readReceipt(
+            inv,
+            "publication-review",
+            templatesMethods.publishAuthoring.args.items[0]
+          );
+          const publication = await c.publishAuthoring(request);
           saveReceipt(inv, "publication", publication);
           return publication;
         },

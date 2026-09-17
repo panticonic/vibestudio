@@ -22,6 +22,32 @@ function layer(
 }
 
 describe("mergeTemplateManifests", () => {
+  it("inherits named automation defaults and lets a dependent suppress one without losing others", () => {
+    const automation = {
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      name: "Updates",
+      summary: "Check updates",
+      action: { kind: "watch", code: "return signal();" },
+      trigger: { kind: "schedule", everyMs: 21600000 },
+      operations: [],
+    };
+    const base = layer(
+      "base",
+      {},
+      { defaultAutomations: { updates: automation, other: automation } }
+    );
+    expect(
+      mergeTemplateManifests([base, layer("personal", {})]).document["defaultAutomations"]
+    ).toEqual({ updates: automation, other: automation });
+    expect(
+      mergeTemplateManifests([
+        base,
+        layer("personal", {}, { defaultAutomations: { updates: null } }),
+      ]).document["defaultAutomations"]
+    ).toEqual({ updates: null, other: automation });
+  });
+
   it("declares both layers' repositories so the base's files are not left unowned", () => {
     const merged = mergeTemplateManifests([
       layer("base", { repositories: ["meta", "panels/chat"] }),

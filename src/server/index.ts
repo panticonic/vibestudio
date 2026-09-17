@@ -20,7 +20,7 @@ import * as fs from "fs";
 import { resolveRequiredAppRoot } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
+import { gitInteropProviderMethods } from "@vibestudio/service-schemas/gitInterop";
 import { randomBytes, randomUUID } from "crypto";
 import {
   canonicalEntityId,
@@ -1743,6 +1743,7 @@ async function main() {
    * a batch nothing will ever publish.
    */
   let startupExtensionStaging: Promise<void> | null = null;
+  let reconcileDefaultAutomations: () => Promise<void> = async () => {};
   let startupElectronArtifactPreparation: Promise<
     import("./appHost.js").ElectronHostReadiness
   > | null = null;
@@ -2010,7 +2011,9 @@ async function main() {
               pendingStartupMetaConfigReload = true;
               return;
             }
-            void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change");
+            void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change").then(
+              reconcileDefaultAutomations
+            );
             syncDeclaredRemotesForSource().catch((err: unknown) =>
               console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
             );
@@ -5642,7 +5645,7 @@ async function main() {
           workspaceProviderExtensionPackageName(workspaceConfig, provider),
         providerSlots: WORKSPACE_EXTENSION_PROVIDER_NAMES,
         providerContracts: {
-          gitInterop: GIT_INTEROP_PROVIDER_METHOD_NAMES,
+          gitInterop: gitInteropProviderMethods,
         },
         privateProviderMethods: {
           gitInterop: ["cloneRepo", "remoteDefaultBranch", "reconcileUpstreams"],
@@ -6898,6 +6901,31 @@ async function main() {
   console.log(
     `[Perf] workspace service container started at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
+  const { createWorkspaceAutomationProvisioner } =
+    await import("./services/workspaceAutomationProvisioning.js");
+  const automationProvisioner = createWorkspaceAutomationProvisioner({
+    config: () => workspaceConfig,
+    members: () =>
+      listWorkspaceMemberUserIds().flatMap((userId) => {
+        const user = userStore.getUser(userId);
+        return user ? [{ userId, handle: user.handle }] : [];
+      }),
+    runtime: () => assertPresent(runtimeServiceInternal),
+    entity: (id) => getEntityStore().resolveRecord(id),
+    dispatch: (ref, method, ...args) =>
+      container
+        .get<import("./doDispatch.js").DODispatch>("doDispatch")
+        .dispatch(ref, method, ...args),
+    failed: (id, userId, error) =>
+      console.warn(`[Automations] Could not provision ${id} for ${userId}:`, error),
+  });
+  reconcileDefaultAutomations = () => automationProvisioner.reconcile();
+  container
+    .get<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+    .server.setOnClientAuthenticate((_id, kind) => {
+      if (kind === "shell" && initialWorkspaceUnitReconcileComplete)
+        void reconcileDefaultAutomations();
+    });
   // Template panel intent is a workspace fact, committed once together
   // with its reservations and slots. Native clients only observe that tree.
   const initialPanelDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
@@ -7278,6 +7306,7 @@ async function main() {
       // later human decision/application and therefore remains detached.
       await Promise.resolve(startupExtensionStaging);
       await prepareWorkspaceCreationReview();
+      void reconcileDefaultAutomations();
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));

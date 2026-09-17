@@ -18,6 +18,7 @@ export default defineConfig(async () => {
     includeDevelopmentDependencies: true,
   });
   return {
+    esbuild: { jsx: "automatic" },
     resolve: {
       alias: [
         ...(await userlandDependencyAliases(__dirname, workspaceRoot)),

@@ -291,3 +291,9 @@ describe("describeArgsValidationError (the one argument-validation formatter)", 
     expect(maxArgsArity(z.object({}))).toBe(null);
   });
 });
+
+
+it("shows each supported positional call shape for union arguments", async () => {
+  const client = createTypedServiceClient("git", { status: { website: { kind: "closed", reason: "test" }, args: z.union([z.tuple([z.array(z.string())]), z.tuple([z.array(z.string()), z.object({ refresh: z.boolean() })])]) } }, vi.fn());
+  await expect((client.status as (...args: unknown[]) => Promise<unknown>)()).rejects.toThrow("git.status(arg1) or git.status(arg1, { refresh })");
+});

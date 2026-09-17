@@ -42,7 +42,7 @@
     "dist:linux": "pnpm generate:workspace-template-release && pnpm build && electron-builder --linux",
     "generate:brand-assets": "node scripts/generate-brand-assets.mjs",
     "generate:agent-docs": "node scripts/generate-agent-cli-docs.mjs",
-    "check:agent-docs": "node scripts/generate-agent-cli-docs.mjs --check",
+    "check:agent-docs": "node scripts/generate-agent-cli-docs.mjs --check && node --import tsx scripts/generate-template-skill-contract.mjs --check",
     "generate:runtime-docs": "node scripts/generate-runtime-docs.mjs",
     "generate:system-epoch": "node scripts/generate-system-epoch.mjs",
     "check:system-epoch": "node scripts/generate-system-epoch.mjs --check",

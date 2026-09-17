@@ -41,6 +41,7 @@ export const MERGED_RECORD_SETTINGS = [
   "trust",
   "hostTargets",
   "defaultAgentConfig",
+  "defaultAutomations",
 ] as const;
 
 function plainRecord(value: unknown): Record<string, unknown> | null {

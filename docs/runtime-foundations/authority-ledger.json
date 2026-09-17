@@ -16036,7 +16036,7 @@
         "user",
         "host"
       ],
-      "sensitivity": "write",
+      "sensitivity": "read",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -16057,8 +16057,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:extensions.invokeProvider),allOf(capability(user,service:extensions.invokeProvider),workspace-member),allOf(capability(code,service:extensions.invokeProvider),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "canonical-provider-method-read-only-containment",
+        "change": "Provider dispatch performs routing only. Read-only admission is checked against the exact host-owned provider method schema in ExtensionHost before executing the selected implementation; write and unknown methods fail closed. This removes the blanket write classification that rejected upstream status queries. Provider contracts replace the previous names-only inventory, and the real dispatcher regression checks reads, writes and unknown methods. No capability grant or credential authority is added."
       },
       "capability": "service:extensions.invokeProvider",
       "parityAssertion": "generated-census:host-authority"

@@ -11,7 +11,8 @@
     "./sourceDirs": "./src/sourceDirs.ts",
     "./types": "./src/types.ts",
     "./workspaceSource": "./src/workspaceSource.ts",
-    "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts"
+    "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts",
+    "./automations": "./src/automations.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace-contracts/src"

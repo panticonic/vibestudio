@@ -1,3 +1,8 @@
+import {
+  operationIntentSchema,
+  agentActionSchema,
+  triggerSchema,
+} from "@vibestudio/workspace-contracts/automations";
 import { z } from "zod";
 import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
@@ -19,15 +24,6 @@ const executionImageSchema = z
   })
   .strict();
 
-const operationIntentSchema = z
-  .object({
-    service: z.string().min(1).max(256),
-    method: z.string().min(1).max(256),
-    args: z.array(z.unknown()).max(64).optional(),
-    use: z.enum(["action", "conditional"]),
-  })
-  .strict();
-
 const authorityPlanReferenceSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -37,28 +33,6 @@ const authorityPlanReferenceSchema = z
     catalogDigest: hex64,
   })
   .strict();
-
-const agentActionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("prompt"), text: z.string().min(1).max(24_000) }).strict(),
-  z
-    .object({
-      kind: z.literal("eval"),
-      code: z.string().min(1).max(96_000),
-      syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
-      timeoutMs: z.number().int().positive().max(86_400_000).optional(),
-      reset: z.boolean().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("watch"),
-      code: z.string().min(1).max(96_000),
-      syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
-      timeoutMs: z.number().int().positive().max(86_400_000).optional(),
-      reset: z.boolean().optional(),
-    })
-    .strict(),
-]);
 
 const executionSchema = z.discriminatedUnion("kind", [
   z
@@ -87,29 +61,6 @@ const executionSchema = z.discriminatedUnion("kind", [
         z.object({ mode: z.literal("fresh") }).strict(),
       ]),
       operations: z.array(operationIntentSchema).max(256),
-    })
-    .strict(),
-]);
-
-const triggerSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("manual") }).strict(),
-  z
-    .object({
-      kind: z.literal("schedule"),
-      everyMs: z.number().int().min(60_000),
-      anchorAt: z.number().int().nonnegative().optional(),
-      jitterMs: z.number().int().nonnegative().optional(),
-      untilAt: z.number().int().nonnegative().optional(),
-      maxRuns: z.number().int().positive().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cron"),
-      expression: z.string().min(1).max(512),
-      timezone: z.string().min(1).max(128),
-      untilAt: z.number().int().nonnegative().optional(),
-      maxRuns: z.number().int().positive().optional(),
     })
     .strict(),
 ]);
@@ -283,6 +234,29 @@ const AUTOMATION_AUTHORS: ServiceAuthorityPolicy = {
 const HOST_CODE: ServiceAuthorityPolicy = { principals: ["host", "code"] };
 
 export const missionsMethods = defineReceiverServiceMethods({
+  getDefault: read(
+    "Read this user's installed automation for a stable workspace default ID.",
+    z.tuple([z.string().min(1)]),
+    missionRecordSchema.nullable()
+  ),
+  provisionDefault: {
+    website: {
+      kind: "closed",
+      reason: "Workspace defaults are private member automations.",
+    } as const,
+    capability: "missions.edit",
+    tier: open(
+      "mission.create",
+      "Installs a declared default once without replacing user configuration."
+    ),
+    description:
+      "Provision one named workspace default, preserving any installed or retired definition.",
+    args: z.tuple([z.string().min(1), createInputSchema]),
+    returns: missionRecordSchema,
+    authority: AUTOMATION_AUTHORS,
+    access: { sensitivity: "write" },
+  },
+
   overview: read(
     "Page visible automations with bounded recent runs and failures.",
     z.tuple([overviewOptionsSchema]),

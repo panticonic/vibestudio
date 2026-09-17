@@ -1,3 +1,4 @@
+import type { WorkspaceAutomation } from "./automations.js";
 /**
  * Configuration types for Vibestudio.
  *
@@ -496,6 +497,8 @@ export interface WorkspaceConfig {
    * Example: [{ source: "panels/chat", stateArgs: { initialPrompt: "Hello", systemPrompt: "You are..." } }]
    */
   initPanels?: InitPanelEntry[];
+  /** Named defaults provisioned once per member. Null suppresses an inherited default. */
+  defaultAutomations?: Record<string, WorkspaceAutomation | null>;
   /**
    * Startup/reconnect view restoration policy.
    * - "focused" (default): restore/load only the focused panel view.
