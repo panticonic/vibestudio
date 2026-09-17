@@ -605,8 +605,10 @@ async function establishFreshPairSession(
       controlClient.call(svc, method, args)
     );
     const pair = await hub.ensureUserWorkspaces();
+    // A server-wide invite has no workspace target. Start in Personal, just
+    // like local startup; System is the shell's source, not the default focus.
     const requested = await hub.routeWorkspace({
-      workspaceId: issued.workspaceId ?? pair.system.workspaceId,
+      workspaceId: issued.workspaceId ?? pair.personal.workspaceId,
     });
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });
     const { code: _code, ...stableHubReach } = pairing;
