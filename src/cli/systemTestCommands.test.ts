@@ -264,7 +264,7 @@ describe("system-test startup preparation", () => {
   it("returns terminal doctor failures without masking them as startup settling", async () => {
     const result = {
       ok: false,
-      checks: [{ name: "model", ok: false, detail: "required Spark model is unavailable" }],
+      checks: [{ name: "model", ok: false, detail: "required Luna model is unavailable" }],
     };
     let reads = 0;
 

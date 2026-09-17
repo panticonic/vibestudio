@@ -114,9 +114,9 @@ also carries `overBaseline`, the comparison against the isolated ceiling, so a
 run that was merely slow still leaves a record behind a pass.
 
 The default agentic test route starts with
-`openai-codex:gpt-5.3-codex-spark` and automatically falls back to
-`openai-codex:gpt-5.6-luna` at low thinking effort only when Spark reports
-`usage_limit_terminal`. Do not stop or manually rerun solely because Spark's
+`openai-codex:gpt-5.6-luna` and automatically falls back to
+`openai-codex:gpt-5.6-sol` at low thinking effort only when Luna reports
+`usage_limit_terminal`. Do not stop or manually rerun solely because Luna's
 quota is exhausted; inspect the completed run to confirm whether the configured
 fallback also failed. Passing `--model` intentionally disables this fallback
 for a single-model diagnostic run.

@@ -493,8 +493,8 @@ describe("runtimeService system-test agent execution policy", () => {
       null,
       null,
       null,
-      systemTestCasePolicy("openai-codex:gpt-5.3-codex-spark", {
-        model: "openai-codex:gpt-5.6-luna",
+      systemTestCasePolicy("openai-codex:gpt-5.6-luna", {
+        model: "openai-codex:gpt-5.6-sol",
         thinkingLevel: "low",
         on: ["usage_limit_terminal"],
         scope: "all-turns",
@@ -522,9 +522,9 @@ describe("runtimeService system-test agent execution policy", () => {
       expect.objectContaining({
         stateArgs: {
           agentConfig: {
-            model: "openai-codex:gpt-5.3-codex-spark",
+            model: "openai-codex:gpt-5.6-luna",
             approvalLevel: 2,
-            fallbackModel: "openai-codex:gpt-5.6-luna",
+            fallbackModel: "openai-codex:gpt-5.6-sol",
             fallbackThinkingLevel: "low",
             fallbackOn: ["usage_limit_terminal"],
             fallbackScope: "all-turns",

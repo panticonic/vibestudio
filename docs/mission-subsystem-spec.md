@@ -48,7 +48,7 @@ agents). Canonical shape:
       "declaredOrigins": ["https://backups.example.com"]
     },
     "model": {                          // model configuration
-      "modelId": "openai-codex:gpt-5.3-codex-spark",
+      "modelId": "openai-codex:gpt-5.6-luna",
       "params": { "reasoningEffort": "medium" }   // canonical-JSON, sorted keys
     },
     "trigger": {                        // when it runs

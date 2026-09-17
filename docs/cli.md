@@ -26,7 +26,7 @@ standalone server from `src/server/index.ts`.
 ```sh
 pnpm server:live --help
 pnpm system-test --instance test-a doctor --approve-startup \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 ```
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
@@ -157,10 +157,10 @@ explicit per-test authority policy and full-auto agent configuration:
 
 ```sh
 pnpm system-test --instance system-test doctor --approve-startup \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 pnpm system-test --instance system-test list --json
 pnpm system-test --instance system-test run TEST_NAME \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 pnpm system-test --instance system-test stop
 ```
 
@@ -354,14 +354,14 @@ detached run can be polled or cancelled from a later CLI invocation:
 
 ```sh
 vibestudio system-test doctor --approve-startup \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 vibestudio system-test list --json
 vibestudio system-test run eval-return-value \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 vibestudio system-test run --category smoke \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 vibestudio system-test run --all --detach \
-  --model openai-codex:gpt-5.3-codex-spark
+  --model openai-codex:gpt-5.6-luna
 vibestudio system-test runs
 vibestudio system-test status <run-id> --wait
 vibestudio system-test wait <run-id>
@@ -392,13 +392,13 @@ instances isolate workspace state; separate named agent sessions provide truly
 parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
-The default system-test route uses `openai-codex:gpt-5.3-codex-spark` and falls
-back to `openai-codex:gpt-5.6-luna` at `low` thinking effort only when Spark
+The default system-test route uses `openai-codex:gpt-5.6-luna` and falls
+back to `openai-codex:gpt-5.6-sol` at `low` thinking effort only when Luna
 terminates with `usage_limit_terminal`. `doctor` checks both models, every
 spawned workspace agent receives the same exact route, and run metadata records
 it. This includes auxiliary agents created inside panel and worker contexts:
 the host replaces their model, approval, and fallback configuration with the
-case policy. Other provider failures remain visible and do not activate Luna.
+case policy. Other provider failures remain visible and do not activate Sol.
 
 Passing `--model REF` deliberately selects a single-model diagnostic run and
 disables the default fallback. Keep explicit model overrides in automation only

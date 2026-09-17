@@ -677,7 +677,7 @@ store. A crash without a self-summary restarts from digest alone.
 ### 8.6 Model selection and degradation ladder
 
 - Host config key **`systemWatcher.model`**, default
-  **`openai-codex:gpt-5.3-codex-spark`** — pinned in hub config (host-owned,
+  **`openai-codex:gpt-5.6-luna`** — pinned in hub config (host-owned,
   not workspace config), same pinning pattern as `system-test run --model REF`
   flowing into session `extraConfig.model`.
 - Unavailable (provider error, auth failure, or 3 consecutive failed turns) →

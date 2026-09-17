@@ -32,9 +32,10 @@ vibestudio system-test run --all --concurrency 4
 Useful flags:
 
 - `--model REF` explicitly overrides the canonical policy for a model-specific
-  investigation. Ordinary runs use `openai-codex:gpt-5.3-codex-spark`. The runner
-  never silently falls back to another model; model-specific subagent
-  scenarios configure their child model explicitly.
+  investigation. Ordinary runs use `openai-codex:gpt-5.6-luna` and fall back to
+  `openai-codex:gpt-5.6-sol` at low effort only when Luna reports
+  `usage_limit_terminal`. Explicit model overrides disable that fallback;
+  model-specific subagent scenarios configure their child model explicitly.
 - If `doctor` reports that the selected `openai-codex` subscription credential
   is expired and cannot refresh, do not bypass the failure with a different
   prompt or hidden token. Ask the operator to run
