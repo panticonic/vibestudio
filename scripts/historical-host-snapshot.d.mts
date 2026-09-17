@@ -6,6 +6,7 @@ export interface HistoricalHostSnapshotInput {
   executable: string;
   appVersion: string;
   platform?: NodeJS.Platform;
+  runtimeMode?: "node" | "electron-node";
 }
 
 export interface HistoricalHostMarker {

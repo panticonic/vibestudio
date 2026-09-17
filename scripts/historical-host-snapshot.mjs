@@ -154,7 +154,10 @@ export function publishHistoricalHostSnapshot(input) {
   try {
     const retainedApp = path.join(staging, "app");
     copyArtifactTree(artifactRoot, retainedApp, [path.resolve(input.centralDataPath), staging]);
-    const electronExecutable = bundledElectronExecutable(artifactRoot, platform);
+    const electronExecutable =
+      input.runtimeMode === "electron-node" && pathIsInside(artifactRoot, executable)
+        ? executable
+        : bundledElectronExecutable(artifactRoot, platform);
     let retainedExecutable;
     let runtimeMode = "node";
     if (electronExecutable) {
@@ -241,7 +244,9 @@ function parseCli(argv) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const options = parseCli(process.argv.slice(2));
   const repositoryRoot = path.resolve(options["artifact-root"] ?? artifactRootFromModuleUrl());
-  const manifest = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
+  const manifest = options["app-version"]
+    ? { version: options["app-version"] }
+    : JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
   const result = publishHistoricalHostSnapshot({
     centralDataPath: path.resolve(options["central-data"] ?? defaultCentralDataPath()),
     artifactRoot: repositoryRoot,
@@ -250,7 +255,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       options["server-entry"] ?? path.join(repositoryRoot, "dist", "server.mjs")
     ),
     executable: path.resolve(options.executable ?? process.execPath),
-    appVersion: manifest.version,
+    appVersion: options["app-version"] ?? manifest.version,
+    runtimeMode: options["runtime-mode"],
   });
   console.log(`Retained Vibestudio ${manifest.version} host at ${result.destination}`);
 }

@@ -1872,6 +1872,10 @@ app.on("ready", async () => {
     developerIdSigned: () => hasDeveloperIdSignature(app.getPath("exe")),
     brewUpgrade: () => brewCaskUpgrade(),
     runCommand: (argv, options) => runUpgradeCommand(argv, options),
+    prepareInstall: async () => {
+      const { retainInstalledWorkspaceHost } = await import("./retainWorkspaceHost.js");
+      await retainInstalledWorkspaceHost();
+    },
     installer: () => ({
       // electron-updater refuses to download a release it has not resolved
       // itself, so its own check runs here rather than duplicating the feed.

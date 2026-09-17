@@ -92,6 +92,8 @@ export interface ReleaseUpdateControllerDeps {
     options: { elevate: boolean }
   ) => Promise<{ code: number | null; stderr: string }>;
   installer?: () => ReleaseUpdateInstaller;
+  /** Preserve the outgoing workspace host before any installer can replace it. */
+  prepareInstall: () => Promise<void>;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   setTimeout?: typeof globalThis.setTimeout;
@@ -343,11 +345,12 @@ export function createReleaseUpdateController(
         throw new Error("This installation updates from the releases page.");
       }
       if (installInFlight) return installInFlight;
-      installInFlight = (
-        delivery.kind === "in-app"
+      installInFlight = (async () => {
+        await deps.prepareInstall();
+        return delivery.kind === "in-app"
           ? installInApp()
-          : installThroughPackageManager(delivery.upgrade, delivery.elevate)
-      ).finally(() => {
+          : installThroughPackageManager(delivery.upgrade, delivery.elevate);
+      })().finally(() => {
         installInFlight = null;
       });
       return installInFlight;

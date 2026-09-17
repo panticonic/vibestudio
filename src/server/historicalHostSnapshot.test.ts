@@ -175,3 +175,22 @@ describe("historical host snapshots", () => {
     expect(fs.existsSync(path.join(input.central, "host-versions", ".2.previous"))).toBe(false);
   });
 });
+
+it("retains a packaged Electron executable with its entire application tree", () => {
+  const input = fixture("2.4.1", "server");
+  const executable = path.join(input.app, "vibestudio");
+  fs.copyFileSync(input.executable, executable);
+  fs.chmodSync(executable, 0o755);
+  const result = publishHistoricalHostSnapshot({
+    centralDataPath: input.central,
+    artifactRoot: input.app,
+    appRoot: input.app,
+    serverEntry: path.join(input.app, "dist", "server.mjs"),
+    executable,
+    appVersion: "2.4.1",
+    runtimeMode: "electron-node",
+  });
+  expect(result.marker.runtimeMode).toBe("electron-node");
+  expect(result.marker.executable).toBe(path.join("app", "vibestudio"));
+  expect(fs.existsSync(path.join(result.destination, result.marker.serverEntry))).toBe(true);
+});

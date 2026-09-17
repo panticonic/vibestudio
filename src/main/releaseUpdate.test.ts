@@ -105,6 +105,7 @@ function harness(
     } as never,
     currentVersion: "0.1.34",
     packaged: true,
+    prepareInstall: async () => {},
     platform: "linux",
     linuxUpgrade: () => linuxUpgradeCommandFor("deb"),
     canElevate: () => true,
@@ -179,4 +180,32 @@ describe("release update controller", () => {
   it("is absent for an unpackaged launch", () => {
     expect(harness({ packaged: false }).controller).toBeNull();
   });
+});
+
+it("does not invoke an installer when retaining the workspace host fails", async () => {
+  const runCommand = vi.fn();
+  const { controller } = harness({
+    prepareInstall: async () => {
+      throw new Error("Could not preserve workspace host");
+    },
+    runCommand,
+  });
+  await controller!.checkNow("startup");
+  await expect(controller!.requestInstall()).rejects.toThrow("Could not preserve workspace host");
+  expect(runCommand).not.toHaveBeenCalled();
+});
+it("preserves the outgoing host before invoking the package manager", async () => {
+  const order: string[] = [];
+  const { controller } = harness({
+    prepareInstall: async () => {
+      order.push("retain");
+    },
+    runCommand: async () => {
+      order.push("install");
+      return { code: 0, stderr: "" };
+    },
+  });
+  await controller!.checkNow("startup");
+  await controller!.requestInstall();
+  expect(order).toEqual(["retain", "install"]);
 });
