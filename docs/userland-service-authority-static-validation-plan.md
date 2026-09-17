@@ -1,5 +1,7 @@
 # Exact-state static validation of userland service authority
 
+Related proposal (2026-09-17): [Holistic authority and capability static checking](holistic-authority-static-checking-plan.md) extends this exact-state design to implementation effects, credential prerequisites, transport conformance, agent calls, and compatibility. It preserves this document's immutable-input and atomic-revalidation rules; its implementation inventory distinguishes existing code from proposed work.
+
 > Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Exact-state analysis remains subordinate detail. Static declarations and generated findings do not confer OS authority.
 
 Status: implementation plan, revision 3 (2026-08-01). Revision 2 incorporated
