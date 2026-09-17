@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import https from "node:https";
-import { ensureAdb, vibestudioCacheDir } from "./lib/android-platform-tools.mjs";
+import { ensureAdb, platformToolsVersion, vibestudioCacheDir } from "./lib/android-platform-tools.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
