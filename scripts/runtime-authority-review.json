@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:c5f331146e08a9d0f68737ece7ad4c94b5059d721215ee53387b2e2d8ff42b84",
+  "censusDigest": "sha256:0a0614432d8d1b84195a511c7cf10db19526266ed7d27236664f3022554bfc6c",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -104,7 +104,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -608,11 +608,11 @@
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.setWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-change",
@@ -624,7 +624,7 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.removeWorkspaceMember": {
       "review": "workspace-membership-owned-removal",
@@ -997,6 +997,14 @@
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
+    },
+    "host:phoneNativeEndpoint.prepare": {
+      "review": "exact-account-desktop-tool-preparation",
+      "change": "Only the exact approved phone-provisioning provider may prepare pinned, checksum-verified Android tools on a live desktop belonging to the initiating account. The public mobile.provision gate remains authoritative; no arbitrary process, URL, or method can be supplied."
+    },
+    "host:phoneNativeEndpoint.readiness": {
+      "review": "exact-account-paired-mobile-readiness",
+      "change": "Only the exact approved phone-provisioning provider may query the fixed mobileWorkspace.readiness method on the exact paired mobile connection belonging to the initiating account. This read does not install, pair, mint credentials, or grant authority; the public mobile.devices.read gate remains authoritative."
     }
   }
 }

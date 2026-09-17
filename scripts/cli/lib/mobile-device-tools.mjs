@@ -1,6 +1,12 @@
 export const RELEASE_ANDROID_PACKAGE = "app.vibestudio.mobile";
 export const INTERNAL_ANDROID_PACKAGE = "app.vibestudio.mobile.internal";
 
+export function compatibleAndroidApp(installedApps, expectedVersion) {
+  return [RELEASE_ANDROID_PACKAGE, INTERNAL_ANDROID_PACKAGE]
+    .map((packageId) => installedApps.find((app) => app.packageId === packageId))
+    .find((app) => app && versionsCompatible(app.versionName, expectedVersion));
+}
+
 export function parseAdbDevices(output) {
   return String(output)
     .split(/\r?\n/)

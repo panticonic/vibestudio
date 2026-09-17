@@ -3536,6 +3536,17 @@ export class RpcServer {
     return this.connections.getPrimaryBridge(callerId);
   }
 
+  /** Whether the currently routed endpoint has published this ordinary RPC method. */
+  hasClientMethod(callerId: string, method: string): boolean {
+    const client = this.pickPrimary(callerId);
+    return Boolean(
+      client &&
+      this.endpointExposures
+        .get(client)
+        ?.some((entry) => entry.kind === "method" && entry.name === method)
+    );
+  }
+
   /** Send a message to a specific caller by ID */
   sendToClient(callerId: string, msg: WsServerMessage): void {
     for (const client of this.getCallerConnections(callerId)) {

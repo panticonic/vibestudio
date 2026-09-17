@@ -1,3 +1,4 @@
+import { PhoneWorkspaceReadinessSchema } from "@vibestudio/service-schemas/phoneProvisioning";
 import { phoneNativeEndpointMethods } from "@vibestudio/service-schemas/phoneNativeEndpoint";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
@@ -16,12 +17,14 @@ interface ConnectedClient {
 }
 
 interface ClientBridge {
+  stream(callerId: string, method: string, args: unknown[]): Promise<Response>;
   call(callerId: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
 export interface PhoneNativeEndpointDeps {
   getUserConnections(userId: string): readonly ConnectedClient[];
   getClientBridge(callerId: string): ClientBridge | undefined;
+  hasClientMethod(callerId: string, method: string): boolean;
 }
 
 function requireProvider(ctx: ServiceContext): string {
@@ -81,6 +84,31 @@ export function createPhoneNativeEndpointService(deps: PhoneNativeEndpointDeps):
           platform: connection.clientPlatform?.trim() || null,
         }));
       }
+      if (method === "readiness") {
+        const { deviceId } = args[0] as { deviceId: string };
+        const clientId = `shell:${deviceId}`;
+        const connection = deps
+          .getUserConnections(userId)
+          .find(
+            (connection) =>
+              connection.userId === userId &&
+              connection.caller.runtime.kind === "shell" &&
+              connection.caller.runtime.id === clientId &&
+              connection.clientPlatform === "mobile"
+          );
+        const bridge = connection && deps.getClientBridge(clientId);
+        if (!bridge)
+          return {
+            status: "opening",
+            message: "Waiting for the phone to connect. Keep it awake and online.",
+          };
+        if (!deps.hasClientMethod(clientId, "mobileWorkspace.readiness")) {
+          return { status: "opening", message: "Phone paired. Loading the workspace app…" };
+        }
+        return PhoneWorkspaceReadinessSchema.parse(
+          await bridge.call(clientId, "mobileWorkspace.readiness", [])
+        );
+      }
       const input = args[0] as {
         clientId: string;
         query?: unknown;
@@ -93,8 +121,11 @@ export function createPhoneNativeEndpointService(deps: PhoneNativeEndpointDeps):
       if (method === "devices") {
         return bridge.call(input.clientId, "desktopPhoneProvider.devices", [input.query]);
       }
+      if (method === "prepare") {
+        return bridge.call(input.clientId, "desktopPhoneProvider.prepare", [input.input]);
+      }
       if (method === "provision") {
-        return bridge.call(input.clientId, "desktopPhoneProvider.provision", [input.input]);
+        return bridge.stream(input.clientId, "desktopPhoneProvider.provision", [input.input]);
       }
       throw new Error(`Unknown phoneNativeEndpoint method: ${method}`);
     },

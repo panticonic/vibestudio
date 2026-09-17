@@ -108,6 +108,7 @@ function makeDispatcher(opts: {
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
   const serverClient = {
+    exposeHostStream: vi.fn(),
     exposeHostMethod: vi.fn(),
     call: opts.call ?? vi.fn(async () => ({ ok: "shell" })),
     callTarget: vi.fn(async () => ({ ok: "target" })),

@@ -23791,6 +23791,50 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:phoneNativeEndpoint.prepare",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "prepare",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.prepare"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.prepare),workspace-member)",
+      "r3b": {
+        "review": "exact-account-desktop-tool-preparation",
+        "change": "Only the exact approved phone-provisioning provider may prepare pinned, checksum-verified Android tools on a live desktop belonging to the initiating account. The public mobile.provision gate remains authoritative; no arbitrary process, URL, or method can be supplied."
+      },
+      "capability": "service:phoneNativeEndpoint.prepare",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:phoneNativeEndpoint.providers",
       "rpcPlane": "host-service",
       "owner": "phoneNativeEndpoint",
@@ -23876,6 +23920,50 @@
         "change": "Forwards only the typed desktopPhoneProvider.provision input to one live account-owned desktop after exact approved provider verification. The public Base provider's mobile.provision decision is the sole user-facing gate; no generic connected-client conduit remains."
       },
       "capability": "service:phoneNativeEndpoint.provision",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:phoneNativeEndpoint.readiness",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "readiness",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.readiness"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.readiness),workspace-member)",
+      "r3b": {
+        "review": "exact-account-paired-mobile-readiness",
+        "change": "Only the exact approved phone-provisioning provider may query the fixed mobileWorkspace.readiness method on the exact paired mobile connection belonging to the initiating account. This read does not install, pair, mint credentials, or grant authority; the public mobile.devices.read gate remains authoritative."
+      },
+      "capability": "service:phoneNativeEndpoint.readiness",
       "parityAssertion": "generated-census:host-authority"
     },
     {

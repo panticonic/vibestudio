@@ -58,6 +58,7 @@ function fakeClient(
     invalidateEndpointGeneration(generation: number, reason: string) {
       invalidations.push({ generation, reason });
     },
+    exposeHostStream: vi.fn(),
     exposeHostMethod: vi.fn(),
     call: vi.fn(),
     callTarget: vi.fn(),

@@ -1,9 +1,19 @@
+import { consumePhoneSetup } from "@vibestudio/service-schemas/clients/phoneSetupStream";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { createPhoneProvisioningService } from "./phoneProvisioningService.js";
+
+async function provision(
+  definition: ReturnType<typeof createPhoneProvisioningService>,
+  input: object
+) {
+  return consumePhoneSetup(
+    (await definition.handler({} as never, "provision", [input])) as Response
+  );
+}
 
 const roots: string[] = [];
 
@@ -77,6 +87,73 @@ function hubControlClient() {
 }
 
 describe("desktop phone provisioning service", () => {
+  it.each([
+    { state: "unauthorized", kind: "physical", expected: "accept its USB debugging prompt" },
+    { state: "offline", kind: "physical", expected: "reconnect its USB cable" },
+    { state: "offline", kind: "emulator", expected: "emulator to finish starting" },
+  ])(
+    "explains recovery for a $state $kind before creating an invite",
+    async ({ state, kind, expected }) => {
+      const hub = hubControlClient();
+      const runScript = vi.fn(async () => ({
+        stdout: JSON.stringify({
+          devices: [
+            {
+              platform: "android",
+              deviceId: "android-1",
+              state,
+              kind,
+              ready: false,
+              installedApps: [],
+              compatibleAppInstalled: false,
+            },
+          ],
+          issues: [],
+        }),
+        stderr: "",
+      }));
+      const definition = createPhoneProvisioningService({
+        appRoot: "/nonexistent/vibestudio-test-root",
+        appVersion: "0.1.34",
+        workspaceName: "current-workspace",
+        resolveScriptPath: (name) => name,
+        runScript,
+        hubControlClient: hub,
+      });
+      await expect(provision(definition, { platform: "android" })).rejects.toThrow(expected);
+      expect(runScript).toHaveBeenCalledTimes(2);
+      expect(hub.call).not.toHaveBeenCalled();
+    }
+  );
+
+  it("preserves discovery failures instead of asking the user to reconnect a phone", async () => {
+    const hub = hubControlClient();
+    const definition = createPhoneProvisioningService({
+      appRoot: "/nonexistent/vibestudio-test-root",
+      appVersion: "0.1.34",
+      workspaceName: "current-workspace",
+      resolveScriptPath: (name) => name,
+      runScript: async () => ({
+        stdout: JSON.stringify({
+          devices: [],
+          issues: [
+            {
+              code: "tooling-unavailable",
+              message: "Android tools are missing.",
+              action: "Install platform-tools on this desktop.",
+            },
+          ],
+        }),
+        stderr: "",
+      }),
+      hubControlClient: hub,
+    });
+    await expect(provision(definition, { platform: "android" })).rejects.toThrow(
+      "Android tools are missing. Install platform-tools on this desktop."
+    );
+    expect(hub.call).not.toHaveBeenCalled();
+  });
+
   it("registers its aliased receiver methods from colocated semantic capabilities", () => {
     const definition = createPhoneProvisioningService({
       appRoot: "/nonexistent/vibestudio-test-root",
@@ -111,21 +188,21 @@ describe("desktop phone provisioning service", () => {
       hubControlClient: hub,
     });
 
-    const result = await definition.handler({} as never, "provision", [
-      { platform: "android", deviceId: "android-1", mode: "auto" },
-    ]);
+    const result = await provision(definition, {
+      platform: "android",
+      deviceId: "android-1",
+      mode: "auto",
+    });
 
-    expect(runScript).toHaveBeenCalledWith("mobile-install.mjs", [
-      "--platform",
-      "android",
-      "--launch",
-      "--device",
-      "android-1",
-      "--from-source",
-    ]);
+    expect(runScript).toHaveBeenCalledWith(
+      "mobile-install.mjs",
+      ["--platform", "android", "--launch", "--device", "android-1", "--from-source"],
+      { signal: expect.any(AbortSignal) }
+    );
     expect(result).toMatchObject({
       installStatus: "installed",
       pairingStatus: "paired",
+      workspaceStatus: "opening",
       workspace: "current-workspace",
       pairedDevice: { deviceId: "paired-mobile" },
     });
@@ -153,16 +230,12 @@ describe("desktop phone provisioning service", () => {
       hubControlClient: hubControlClient(),
     });
 
-    await definition.handler({} as never, "provision", [
-      { platform: "android", deviceId: "android-1", mode: "release" },
-    ]);
+    await provision(definition, { platform: "android", deviceId: "android-1", mode: "release" });
 
-    expect(runScript).toHaveBeenCalledWith("mobile-install.mjs", [
-      "--platform",
-      "android",
-      "--launch",
-      "--device",
-      "android-1",
-    ]);
+    expect(runScript).toHaveBeenCalledWith(
+      "mobile-install.mjs",
+      ["--platform", "android", "--launch", "--device", "android-1"],
+      { signal: expect.any(AbortSignal) }
+    );
   });
 });

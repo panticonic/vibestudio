@@ -185,7 +185,6 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "electron-builder-squirrel-windows": "26.15.3",
-    "extract-zip": "2.0.1",
     "husky": "^9.1.7",
     "ignore": "7.0.5",
     "jsdom": "^29.0.1",
@@ -299,6 +298,7 @@
     "ws": "^8.21.1",
     "yaml": "^2.9.0",
     "zod": "^3.25.76",
-    "zod-to-json-schema": "^3.25.0"
+    "zod-to-json-schema": "^3.25.0",
+    "extract-zip": "2.0.1"
   }
 }

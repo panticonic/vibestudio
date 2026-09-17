@@ -1992,7 +1992,15 @@ export async function executeHubControl(
         : state.identityDb.listDevicesForUser(subject.userId);
     respond({
       serverId: state.deviceAuthStore.getServerId(),
-      devices: visibleDevices.map(({ refreshTokenHash: _secret, ...device }) => device),
+      devices: visibleDevices.map((device) => ({
+        deviceId: device.deviceId,
+        userId: device.userId,
+        label: device.label,
+        platform: device.platform,
+        createdAt: device.createdAt,
+        lastUsedAt: device.lastUsedAt,
+        revokedAt: device.revokedAt,
+      })),
     });
     return;
   }

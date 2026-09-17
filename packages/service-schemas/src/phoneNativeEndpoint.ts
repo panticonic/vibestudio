@@ -1,3 +1,4 @@
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -5,7 +6,8 @@ import {
   PhoneDeviceQuerySchema,
   PhoneProviderSchema,
   PhoneProvisionArgsSchema,
-  PhoneProvisioningResultSchema,
+  PhoneWorkspaceReadinessSchema,
+  PhoneWorkspaceQuerySchema,
 } from "./phoneProvisioning.js";
 
 const nonEmpty = z.string().min(1);
@@ -31,8 +33,13 @@ export type PhoneNativeDesktop = z.infer<typeof PhoneNativeDesktopSchema>;
  * generic method/argument conduit and carries no independent user gate. */
 export const phoneNativeEndpointMethods = defineServiceMethods({
   desktops: {
-    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTransport,
+    agentFacing: false,
     description: "List live desktop endpoints on the initiating user's account.",
     args: z.tuple([]),
     returns: z.array(PhoneNativeDesktopSchema),
@@ -40,8 +47,13 @@ export const phoneNativeEndpointMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   providers: {
-    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTransport,
+    agentFacing: false,
     description: "Read phone capabilities from one exact connected desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty }).strict()]),
     returns: z.array(PhoneProviderSchema),
@@ -49,20 +61,65 @@ export const phoneNativeEndpointMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   devices: {
-    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTransport,
+    agentFacing: false,
     description: "Discover phones through one exact connected desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty, query: PhoneDeviceQuerySchema }).strict()]),
     returns: PhoneDeviceDiscoverySchema,
     authority: { principals: ["code"] },
     access: { sensitivity: "read" },
   },
-  provision: {
-    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+  prepare: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTransport,
+    agentFacing: false,
+    description: "Prepare phone tools on one exact desktop.",
+    args: z.tuple([
+      z
+        .object({
+          clientId: nonEmpty,
+          input: PhoneProvisionArgsSchema.pick({ providerId: true, platform: true }),
+        })
+        .strict(),
+    ]),
+    returns: z.object({ ready: z.literal(true) }),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "admin" },
+  },
+  readiness: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: openTransport,
+    agentFacing: false,
+    description: "Query the authenticated mobile workspace connection.",
+    args: z.tuple([PhoneWorkspaceQuerySchema]),
+    returns: PhoneWorkspaceReadinessSchema,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "read" },
+  },
+  provision: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: openTransport,
+    agentFacing: false,
     description: "Run the typed native install-and-pair effect on one exact desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty, input: PhoneProvisionArgsSchema }).strict()]),
-    returns: PhoneProvisioningResultSchema,
+    returns: StreamResponseSchema,
     authority: { principals: ["code"] },
     access: { sensitivity: "admin" },
   },

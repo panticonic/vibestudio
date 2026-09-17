@@ -5521,6 +5521,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "phoneNativeEndpoint.prepare": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "phoneNativeEndpoint.providers": {
     tier: {
       tier: "open",
@@ -5534,6 +5546,18 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "phoneNativeEndpoint.provision": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "phoneNativeEndpoint.readiness": {
     tier: {
       tier: "open",
       session: "family",

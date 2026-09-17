@@ -260,7 +260,14 @@ export async function establishIrohConnection(
     throw error;
   }
   const callerId = session.callerId() || "shell:pending";
-  const rpc = createRpcClient({ selfId: callerId, callerKind: "shell", transport: session });
+  // The server distinguishes native bootstrap from the loaded workspace host
+  // using its live method declarations, including mobileWorkspace.readiness.
+  const rpc = createRpcClient({
+    selfId: callerId,
+    callerKind: "shell",
+    transport: session,
+    publishExposures: true,
+  });
   const removeLifecycle = registerLifecycle(transport);
   return {
     rpc,

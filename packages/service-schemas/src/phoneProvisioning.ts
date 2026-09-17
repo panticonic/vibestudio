@@ -1,6 +1,7 @@
 /** Desktop-owned phone discovery, installation, and secure pairing launch. */
 
 import { z } from "zod";
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
@@ -76,6 +77,7 @@ export const PhoneProvisioningResultSchema = z.object({
   installStatus: z.enum(["installed", "already-compatible"]),
   compatibleAppInstalled: z.literal(true),
   pairingStatus: z.literal("paired"),
+  workspaceStatus: z.literal("opening"),
   pairedDevice: z
     .object({
       deviceId: z.string().min(1),
@@ -105,9 +107,19 @@ export const PhoneProvisionArgsSchema = z
   .strict();
 export type PhoneProvisionArgs = z.infer<typeof PhoneProvisionArgsSchema>;
 
+export const PhoneWorkspaceReadinessSchema = z.object({
+  status: z.enum(["opening", "ready", "failed"]),
+  message: z.string(),
+});
+export const PhoneWorkspaceQuerySchema = z.object({ deviceId: z.string().min(1) }).strict();
+
 export const phoneProvisioningMethods = defineReceiverServiceMethods({
   providers: {
-    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "List account-scoped desktop capability providers that can access phones attached to them.",
     args: z.tuple([]),
@@ -126,7 +138,11 @@ export const phoneProvisioningMethods = defineReceiverServiceMethods({
     },
   },
   devices: {
-    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Discover Android and iOS devices through the selected desktop, including readiness and compatible app state.",
     args: z.tuple([PhoneDeviceQuerySchema]),
@@ -144,12 +160,62 @@ export const phoneProvisioningMethods = defineReceiverServiceMethods({
         "Builtin policy invokes the receiver-owned native device endpoint over account-bound transport.",
     },
   },
-  provision: {
-    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+  readiness: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
-      "Install when needed, immediately pair through the selected desktop, and wait for the new device to join the current account.",
+      "Check the paired phone's actual workspace and panel host readiness. Safe to repeat without installing or pairing again.",
+    args: z.tuple([PhoneWorkspaceQuerySchema]),
+    returns: PhoneWorkspaceReadinessSchema,
+    access: readAccess,
+    authority: USER_CODE_HOST,
+    capability: "mobile.devices.read",
+    presentation: MOBILE_DEVICES_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "phoneProvisioning.read",
+      rationale:
+        "Builtin policy invokes the receiver-owned native device endpoint over account-bound transport.",
+    },
+  },
+  prepare: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    description:
+      "Prepare verified Android tools on the desktop before discovering devices. No SDK or terminal setup is needed.",
+    args: z.tuple([PhoneProvisionArgsSchema.pick({ providerId: true, platform: true })]),
+    returns: z.object({ ready: z.literal(true) }),
+    access: adminAccess,
+    authority: USER_CODE_HOST,
+    capability: "mobile.provision",
+    presentation: MOBILE_PROVISION_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "phoneProvisioning.provision",
+      rationale:
+        "Builtin policy invokes the exact receiver-owned native install and pairing endpoint on the selected desktop.",
+    },
+  },
+  provision: {
+    website: {
+      kind: "closed",
+      reason:
+        "The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    description:
+      "Stream installation and pairing progress. Use the phone-setup helper to consume this stream, then verify workspace readiness. Pairing alone is not completion.",
     args: z.tuple([PhoneProvisionArgsSchema]),
-    returns: PhoneProvisioningResultSchema,
+    returns: StreamResponseSchema,
     access: adminAccess,
     authority: USER_CODE_HOST,
     capability: "mobile.provision",

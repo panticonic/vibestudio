@@ -1,3 +1,7 @@
+import {
+  phoneSetupStream,
+  type PhoneSetupEvent,
+} from "@vibestudio/service-schemas/clients/phoneSetupStream";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -39,7 +43,7 @@ export interface PhoneProvisioningServiceDeps {
   runScript?: (
     name: string,
     args: string[],
-    options?: { sensitive?: boolean }
+    options?: { sensitive?: boolean; signal?: AbortSignal }
   ) => Promise<ScriptResult>;
   hubControlClient: {
     call(service: string, method: string, args: unknown[]): Promise<unknown>;
@@ -50,7 +54,11 @@ export interface PhoneProvisioningServiceDeps {
 }
 
 function defaultRunner(deps: PhoneProvisioningServiceDeps) {
-  return async (name: string, args: string[], options: { sensitive?: boolean } = {}) =>
+  return async (
+    name: string,
+    args: string[],
+    options: { sensitive?: boolean; signal?: AbortSignal } = {}
+  ) =>
     await new Promise<ScriptResult>((resolve, reject) => {
       const script = deps.resolveScriptPath(name);
       const child = spawn(process.execPath, [script, ...args], {
@@ -58,6 +66,7 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
         env: mobileCliEnvironment(deps.appRoot, deps.appVersion),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        signal: options.signal,
       });
       let stdout = "";
       let stderr = "";
@@ -65,8 +74,15 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
         (current + chunk.toString()).slice(-1024 * 1024);
       child.stdout.on("data", (chunk: Buffer) => (stdout = append(stdout, chunk)));
       child.stderr.on("data", (chunk: Buffer) => (stderr = append(stderr, chunk)));
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
+      let processError: Error | undefined;
+      child.once("error", (error) => {
+        processError = error;
+      });
+      child.once("close", (code, signal) => {
+        if (processError) {
+          reject(processError);
+          return;
+        }
         if (code === 0) resolve({ stdout, stderr });
         else {
           const detail = options.sensitive ? "" : `: ${(stderr || stdout).trim()}`;
@@ -144,13 +160,59 @@ export function createPhoneProvisioningService(
     return { devices, issues };
   }
 
-  async function provision(input: PhoneProvisionArgs) {
+  async function prepare(input: Pick<PhoneProvisionArgs, "platform">, signal?: AbortSignal) {
+    await runScript("mobile-device.mjs", ["prepare", "--platform", input.platform, "--json"], {
+      signal,
+    });
+    return { ready: true as const };
+  }
+
+  async function provision(
+    input: PhoneProvisionArgs,
+    emit: (event: PhoneSetupEvent) => void,
+    signal: AbortSignal
+  ) {
+    emit({
+      type: "progress",
+      phase: "preparing-tools",
+      message: "Preparing phone tools on your desktop…",
+    });
+    await prepare(input, signal);
+    signal.throwIfAborted();
+    emit({ type: "progress", phase: "checking-device", message: "Checking your phone…" });
     const before = await discover(input.platform);
     const ready = before.devices.filter(
       (device) => device.ready && (!input.deviceId || device.deviceId === input.deviceId)
     );
     if (ready.length === 0) {
-      throw new Error("The selected phone is not connected, ready, and authorized");
+      const device = input.deviceId
+        ? before.devices.find((candidate) => candidate.deviceId === input.deviceId)
+        : before.devices.length === 1
+          ? before.devices[0]
+          : undefined;
+      if (device?.state === "unauthorized") {
+        throw new Error("Unlock the phone and accept its USB debugging prompt, then try again.");
+      }
+      if (device?.kind === "emulator" || device?.kind === "simulator") {
+        throw new Error("Wait for the emulator to finish starting, then try again.");
+      }
+      if (device?.state === "offline") {
+        throw new Error(
+          "The phone is offline. Unlock it and reconnect its USB cable, then try again."
+        );
+      }
+      if (before.issues.length > 0) {
+        throw new Error(
+          before.issues
+            .map((issue) => [issue.message, issue.action].filter(Boolean).join(" "))
+            .join("\n")
+        );
+      }
+      throw new Error(
+        input.platform === "android"
+          ? "No ready phone was found. Connect and unlock your phone, enable USB debugging, then check for devices again."
+          : "No ready iPhone was found. Connect and unlock your phone, trust this Mac, then check for devices again."
+      );
     }
     if (!input.deviceId && ready.length > 1) {
       throw new Error("More than one phone is ready; select one before provisioning");
@@ -175,7 +237,14 @@ export function createPhoneProvisioningService(
         (mode === "auto" && sourcePlatforms.includes(input.platform));
       const installArgs = ["--platform", input.platform, "--launch", "--device", selected.deviceId];
       if (useSource) installArgs.push("--from-source");
-      await runScript("mobile-install.mjs", installArgs);
+      emit({
+        type: "progress",
+        phase: "installing",
+        message: useSource
+          ? "Building and installing the phone app. The first build can take several minutes…"
+          : "Downloading and installing the phone app…",
+      });
+      await runScript("mobile-install.mjs", installArgs, { signal });
       installStatus = "installed";
 
       if (input.platform === "android") {
@@ -191,6 +260,12 @@ export function createPhoneProvisioningService(
       }
     }
 
+    signal.throwIfAborted();
+    emit({
+      type: "progress",
+      phase: "pairing",
+      message: "Connecting your phone securely. Keep it unlocked…",
+    });
     const beforePairing = z
       .object({ devices: z.array(HubDeviceSchema) })
       .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
@@ -221,10 +296,11 @@ export function createPhoneProvisioningService(
       selected.deviceId,
       "--json",
     ];
-    await runScript("mobile-device.mjs", connectArgs, { sensitive: true });
+    await runScript("mobile-device.mjs", connectArgs, { sensitive: true, signal });
 
     const deadline = now() + pairingTimeoutMs;
     while (now() < deadline) {
+      signal.throwIfAborted();
       const current = z
         .object({ devices: z.array(HubDeviceSchema) })
         .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
@@ -233,13 +309,14 @@ export function createPhoneProvisioningService(
       );
       if (pairedDevice) {
         return PhoneProvisioningResultSchema.parse({
-          providerId: localProviderId,
+          providerId: input.providerId ?? localProviderId,
           platform: input.platform,
           workspace: invite.workspace,
           attachedDeviceId: selected.deviceId,
           installStatus,
           compatibleAppInstalled: true,
           pairingStatus: "paired",
+          workspaceStatus: "opening",
           pairedDevice: {
             deviceId: pairedDevice.deviceId,
             label: pairedDevice.label,
@@ -259,7 +336,12 @@ export function createPhoneProvisioningService(
     name: "desktopPhoneProvider",
     description: "Desktop-bound phone discovery, installation, and pairing launch",
     authority: { principals: ["host"] },
-    methods: phoneProvisioningMethods,
+    methods: {
+      providers: phoneProvisioningMethods.providers,
+      devices: phoneProvisioningMethods.devices,
+      prepare: phoneProvisioningMethods.prepare,
+      provision: phoneProvisioningMethods.provision,
+    },
     handler: async (_ctx, method, args) => {
       switch (method) {
         case "providers":
@@ -277,8 +359,13 @@ export function createPhoneProvisioningService(
           const query = args[0] as { platform?: PhonePlatform } | undefined;
           return await discover(query?.platform);
         }
+        case "prepare":
+          return prepare(args[0] as PhoneProvisionArgs);
         case "provision":
-          return await provision(args[0] as PhoneProvisionArgs);
+          return phoneSetupStream(async (emit, signal) => {
+            const result = await provision(args[0] as PhoneProvisionArgs, emit, signal);
+            emit({ type: "paired", result });
+          });
         default:
           throw new Error(`Unknown phoneProvisioning method: ${method}`);
       }

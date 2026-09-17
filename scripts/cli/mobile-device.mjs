@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
-import os from "node:os";
+import { ensureAdb, resolveAdb } from "./lib/android-platform-tools.mjs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import {
   RELEASE_ANDROID_PACKAGE,
   parseAdbDevices,
   parseAndroidPackageVersion,
-  versionsCompatible,
+  compatibleAndroidApp,
 } from "./lib/mobile-device-tools.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -89,60 +89,12 @@ async function run(command, args, options = {}) {
   });
 }
 
-async function isExecutable(candidate) {
-  try {
-    await run(candidate, ["version"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
 }
 
 function androidShellCommand(args) {
   return args.map(shellQuote).join(" ");
-}
-
-function findCachedAdb(root, depth = 0) {
-  if (depth > 7 || !fs.existsSync(root)) return null;
-  let entries;
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const executable = process.platform === "win32" ? "adb.exe" : "adb";
-  for (const entry of entries) {
-    const candidate = path.join(root, entry.name);
-    if (entry.isFile() && entry.name === executable) return candidate;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const candidate = findCachedAdb(path.join(root, entry.name), depth + 1);
-    if (candidate) return candidate;
-  }
-  return null;
-}
-
-async function resolveAdb() {
-  const executable = process.platform === "win32" ? "adb.exe" : "adb";
-  const candidates = [
-    process.env.ADB,
-    process.env.ANDROID_SDK_ROOT &&
-      path.join(process.env.ANDROID_SDK_ROOT, "platform-tools", executable),
-    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, "platform-tools", executable),
-    findCachedAdb(path.join(os.homedir(), ".cache", "vibestudio")),
-    executable,
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (await isExecutable(candidate)) return candidate;
-  }
-  throw new Error(
-    "Android platform-tools are unavailable. Run `vibestudio mobile install`; it resolves the pinned tools automatically."
-  );
 }
 
 async function installedAndroidApps(adb, deviceId) {
@@ -174,9 +126,7 @@ async function androidDevices() {
       kind: raw.deviceId.startsWith("emulator-") ? "emulator" : "physical",
       ready: raw.state === "device",
       installedApps,
-      compatibleAppInstalled: installedApps.some((app) =>
-        versionsCompatible(app.versionName, expectedVersion)
-      ),
+      compatibleAppInstalled: !!compatibleAndroidApp(installedApps, expectedVersion),
     });
   }
   return devices;
@@ -238,7 +188,7 @@ async function discover(options) {
           message: error instanceof Error ? error.message : String(error),
           action:
             options.platform === "android"
-              ? "Connect and unlock the phone, enable USB debugging, then run mobile install."
+              ? "Choose Prepare tools and find phones in phone setup, then check again."
               : "Install Xcode, trust the phone, and configure an Apple development team.",
         },
       ],
@@ -265,10 +215,12 @@ async function connectAndroid(options) {
     );
   }
   const packageId =
-    options.packageId ??
-    device.installedApps.find((app) => app.packageId === RELEASE_ANDROID_PACKAGE)?.packageId ??
-    device.installedApps.find((app) => app.packageId === INTERNAL_ANDROID_PACKAGE)?.packageId;
-  if (!packageId) throw new Error("Vibestudio is not installed on the selected Android device.");
+    options.packageId ?? compatibleAndroidApp(device.installedApps, expectedVersion)?.packageId;
+  if (!packageId) {
+    throw new Error(
+      `Install Vibestudio ${expectedVersion} on the selected Android device before pairing.`
+    );
+  }
   // Provision through a component protected by android.permission.DUMP.
   // adb's shell principal holds that permission; arbitrary apps and browser
   // pages do not. The mobile bootstrap consumes the resulting one-use approval
@@ -342,11 +294,16 @@ async function main() {
     printHelp();
     return;
   }
+  if (options.action === "prepare") {
+    if (options.platform === "android") await ensureAdb();
+    console.log(JSON.stringify({ ready: true }));
+    return;
+  }
   if (options.action === "devices") {
     console.log(JSON.stringify(await discover(options)));
     return;
   }
-  if (options.action !== "connect") throw new Error("Expected devices or connect");
+  if (options.action !== "connect") throw new Error("Expected prepare, devices or connect");
   if (!options.pairUrl) throw new Error("connect requires --pair");
   const result =
     options.platform === "android" ? await connectAndroid(options) : await connectIos(options);

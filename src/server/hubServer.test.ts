@@ -887,6 +887,33 @@ describe("hub RPC pairing surfacing (§5)", () => {
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
 
+  it("returns the public device contract without credential or transport internals", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    try {
+      const respond = vi.fn();
+      await executeHubControl(
+        state,
+        {
+          userId: rootUserId,
+          deviceId: rootDeviceId,
+          handle: "root",
+          role: "root",
+        },
+        "listDevices",
+        [],
+        respond
+      );
+      const result = hubControlMethods.listDevices.returns.parse(respond.mock.calls[0]?.[0]);
+      expect(result.devices).toHaveLength(1);
+      expect(result.devices[0]).toMatchObject({ deviceId: rootDeviceId, label: "root-cli" });
+      expect(result.devices[0]).not.toHaveProperty("refreshTokenHash");
+      expect(result.devices[0]).not.toHaveProperty("transport");
+    } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
   it("retains committed creation through audit failure and reconciles the exact operation after retry", async () => {
     const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
     const central = new CentralDataManager({ databasePath: state.identityDbPath });

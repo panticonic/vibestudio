@@ -11744,6 +11744,25 @@
         "capability": null,
         "presentation": null
       },
+      "prepare": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "providers": {
         "authority": {
           "principals": [
@@ -11771,6 +11790,25 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "readiness": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
         },
         "tier": {
           "tier": "open",

@@ -319,6 +319,7 @@ function VibestudioMobileHostBootstrap() {
     setApprovals([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
+    setStatus("Preparing your workspace...");
     try {
       for (;;) {
         const launch = await launchClient.launch("react-native");
@@ -433,7 +434,7 @@ function VibestudioMobileHostBootstrap() {
   const connectFromInviteAttempt = useCallback(
     async (connect) => {
       setBusy(true);
-      setStatus("Pairing over a secure Iroh pipe...");
+      setStatus("Connecting securely to your workspace...");
       let connection = null;
       try {
         connection = await pairViaIroh(connect.pairing);
@@ -642,7 +643,7 @@ function VibestudioMobileHostBootstrap() {
             <VibestudioLogo size={44} variant="tile" />
             <View style={styles.brandText}>
               <Text style={styles.eyebrow}>Vibestudio</Text>
-              <Text style={styles.title}>Mobile Host</Text>
+              <Text style={styles.title}>Your workspace</Text>
             </View>
           </View>
           <View style={styles.statusPanel}>

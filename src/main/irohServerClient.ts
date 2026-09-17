@@ -52,7 +52,10 @@ import type {
   ServerClient,
   ServerMessageListener,
 } from "./serverClient.js";
-import { exposeServerOriginatedHostMethod } from "./serverClient.js";
+import {
+  exposeServerOriginatedHostMethod,
+  exposeServerOriginatedHostStream,
+} from "./serverClient.js";
 import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 
 export interface IrohServerClientArgs {
@@ -401,6 +404,9 @@ export async function createIrohServerClient(
     },
     invalidateEndpointGeneration(generation, reason): void {
       lifecycleTransport?.invalidateEndpointGeneration(generation, reason);
+    },
+    exposeHostStream(method, handler): void {
+      exposeServerOriginatedHostStream(rpc, method, handler);
     },
     exposeHostMethod(method: string, handler: HostServiceHandler): void {
       exposeServerOriginatedHostMethod(rpc, method, handler);

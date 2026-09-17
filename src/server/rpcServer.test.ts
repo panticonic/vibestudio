@@ -6121,6 +6121,7 @@ describe("website dynamic endpoint admission", () => {
     const allowed = (kind: "method" | "stream" = "method", method = "run") =>
       host.checkRelayAuth("panel:website", "panel", "panel:nav-b", method, kind).ok;
     expect(allowed()).toBe(false);
+    expect(server.hasClientMethod("panel:nav-b", "run")).toBe(false);
     const declaration: import("@vibestudio/rpc").RpcExposure = {
       type: "exposure",
       entries: [
@@ -6148,6 +6149,8 @@ describe("website dynamic endpoint admission", () => {
       message: declaration,
     });
     await host.handleRpc(receiver, declaration, envelope);
+    expect(server.hasClientMethod("panel:nav-b", "run")).toBe(true);
+    expect(server.hasClientMethod("panel:nav-b", "changed")).toBe(false);
     expect(receiver.ws.close).not.toHaveBeenCalled();
     expect(allowed()).toBe(true);
     expect(allowed("stream")).toBe(false);

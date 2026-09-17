@@ -62,6 +62,59 @@ export function exposeServerOriginatedHostMethod(
   );
 }
 
+export type HostStreamHandler = (
+  request: Pick<RpcRequestContext, "args" | "signal">
+) => Response | Promise<Response>;
+
+/** Stream the dispatched Response with the same server-only boundary as ordinary host calls. */
+export function exposeServerOriginatedHostStream(
+  rpc: RpcClient,
+  method: string,
+  handler: HostStreamHandler
+): void {
+  rpc.exposeStreaming(
+    method,
+    async (request, sink) => {
+      if (!isAuthenticatedServerCaller(request.caller)) {
+        throw new Error(`Host method "${method}" accepts calls only from the authenticated server`);
+      }
+      const response = await handler({ args: request.args, signal: request.signal });
+      const reader = response.body?.getReader();
+      const cancel = () => {
+        void reader?.cancel().catch(() => {});
+      };
+      request.signal.addEventListener("abort", cancel, { once: true });
+      let bytesIn = 0;
+      try {
+        request.signal.throwIfAborted();
+        await sink({
+          kind: "head",
+          status: response.status,
+          statusText: response.statusText,
+          headerPairs: [...response.headers.entries()],
+          finalUrl: response.url,
+        });
+        while (reader && !request.signal.aborted) {
+          const next = await reader.read();
+          if (next.done) break;
+          bytesIn += next.value.byteLength;
+          await sink({ kind: "chunk", bytes: next.value });
+        }
+        request.signal.throwIfAborted();
+        await sink({ kind: "end", bytesIn });
+      } finally {
+        request.signal.removeEventListener("abort", cancel);
+        await reader?.cancel().catch(() => {});
+        reader?.releaseLock();
+      }
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+}
+
 /**
  * A dedicated logical session for a single desktop panel principal. The host
  * (ipcDispatcher) relays the panel webview's RAW envelopes over it, so it carries
@@ -113,6 +166,7 @@ export interface ServerClient {
    * boundary; only the canonical `main` server may enter the host dispatcher.
    */
   exposeHostMethod(method: string, handler: HostServiceHandler): void;
+  exposeHostStream(method: string, handler: HostStreamHandler): void;
   /** Call a backend service via the server */
   call(
     service: string,
@@ -437,6 +491,9 @@ export async function createServerClient(
         await ui.close();
         throw error;
       }
+    },
+    exposeHostStream(method, handler): void {
+      exposeServerOriginatedHostStream(rpc, method, handler);
     },
     exposeHostMethod(method, handler): void {
       exposeServerOriginatedHostMethod(rpc, method, handler);

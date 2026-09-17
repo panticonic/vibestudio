@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import https from "node:https";
-import os from "node:os";
+import { ensureAdb, vibestudioCacheDir } from "./lib/android-platform-tools.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
@@ -34,18 +34,6 @@ const defaultArtifactUrl =
   process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
 const defaultChecksumUrl =
   process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS-android`;
-const platformToolsVersion = "36.0.0";
-const platformToolsPins = {
-  linux: {
-    archive: "platform-tools_r36.0.0-linux.zip",
-    sha256: "0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8",
-  },
-  darwin: {
-    archive: "platform-tools_r36.0.0-darwin.zip",
-    sha256: "d3e9fa1df3345cf728586908426615a60863d2632f73f1ce14f0f1349ef000fd",
-  },
-};
-
 function readXcconfig(file) {
   if (!fs.existsSync(file)) return {};
   const values = {};
@@ -441,73 +429,6 @@ async function sha256File(file) {
     stream.on("end", resolve);
   });
   return hash.digest("hex");
-}
-
-function vibestudioCacheDir() {
-  const base =
-    process.env.XDG_CACHE_HOME ||
-    (process.platform === "darwin"
-      ? path.join(process.env.HOME ?? os.tmpdir(), "Library", "Caches")
-      : path.join(process.env.HOME ?? os.tmpdir(), ".cache"));
-  return path.join(base, "vibestudio");
-}
-
-function adbExecutableName() {
-  return process.platform === "win32" ? "adb.exe" : "adb";
-}
-
-async function commandWorks(command, args) {
-  try {
-    await runCapture(command, args);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function ensureAdb() {
-  if (await commandWorks("adb", ["version"])) return "adb";
-
-  const pin = platformToolsPins[process.platform];
-  if (!pin) {
-    throw new Error(
-      "adb is not on PATH and Vibestudio has no pinned platform-tools archive for this OS. " +
-        "Install Android platform-tools and retry."
-    );
-  }
-
-  const root = path.join(vibestudioCacheDir(), "android-platform-tools", platformToolsVersion);
-  const adbPath = path.join(root, "platform-tools", adbExecutableName());
-  if (fs.existsSync(adbPath) && (await commandWorks(adbPath, ["version"]))) return adbPath;
-
-  const downloads = path.join(root, "downloads");
-  const archivePath = path.join(downloads, pin.archive);
-  const url = `https://dl.google.com/android/repository/${pin.archive}`;
-  await fsp.mkdir(downloads, { recursive: true });
-  if (!fs.existsSync(archivePath)) {
-    console.log(
-      `[mobile-install] Downloading Android platform-tools ${platformToolsVersion}: ${url}`
-    );
-    await downloadFile(url, archivePath);
-  }
-  const actual = await sha256File(archivePath);
-  if (actual !== pin.sha256) {
-    throw new Error(
-      `platform-tools SHA-256 mismatch for ${pin.archive}: expected ${pin.sha256}, got ${actual}`
-    );
-  }
-
-  const extractDir = path.join(root, "extracting");
-  await fsp.rm(extractDir, { recursive: true, force: true });
-  await fsp.mkdir(extractDir, { recursive: true });
-  await run("unzip", ["-q", archivePath, "-d", extractDir]);
-  await fsp.rm(path.join(root, "platform-tools"), { recursive: true, force: true });
-  await fsp.rename(path.join(extractDir, "platform-tools"), path.join(root, "platform-tools"));
-  await fsp.rm(extractDir, { recursive: true, force: true });
-  if (!(await commandWorks(adbPath, ["version"]))) {
-    throw new Error(`Downloaded adb did not run: ${adbPath}`);
-  }
-  return adbPath;
 }
 
 async function resolveInstallTarget(adbPath, device) {
