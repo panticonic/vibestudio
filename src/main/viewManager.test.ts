@@ -1627,6 +1627,33 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
     });
 
+    it("keeps a panel materialized during workspace review hidden until the review closes", () => {
+      vm.createView({
+        id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.setShellOverlayActive(true);
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bindingId: "binding-test",
+        panelId: "panel-new",
+        bounds: { x: 280, y: 40, width: 900, height: 700 },
+      });
+      const panel = vm.createView({ id: "panel-new", type: "panel" });
+      vm.attachDeclaredPanelSlot("panel-new");
+      vm.setViewVisible("panel-new", true);
+      vm.refreshActivePanelSlots();
+      vm.forceRepaint("panel-new");
+      expect(panel.setVisible).not.toHaveBeenCalledWith(true);
+
+      vm.setShellOverlayActive(false);
+      expect(panel.setVisible).toHaveBeenLastCalledWith(true);
+    });
+
     it("rejects binding one panel to two native slots", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vm.createView({ id: "panel-1", type: "panel" });
