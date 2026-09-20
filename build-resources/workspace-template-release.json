@@ -3,8 +3,8 @@
   "workspaceTemplates": {
     "base": {
       "url": "git+https://github.com/panticonic/vibestudio-base.git",
-      "ref": "refs/tags/v0.3.50",
-      "commit": "86330650070215144ccdd9d468a8d9205a966850"
+      "ref": "refs/tags/v0.3.52",
+      "commit": "f2137bb4bbb6ee94f6249a1588dca84a7de624a5"
     },
     "personal": {
       "url": "git+https://github.com/panticonic/vibestudio-personal.git",
@@ -13,8 +13,8 @@
     },
     "system": {
       "url": "git+https://github.com/panticonic/vibestudio-system.git",
-      "ref": "refs/tags/v0.3.53",
-      "commit": "7cd6e14699b84c250d0b6a6b0e23f694563fb129"
+      "ref": "refs/tags/v0.3.55",
+      "commit": "19590275dc81661f7148c65c217072d6614a93f5"
     }
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Adopt exact publication receipts for the three canonical workspace templates. */
+/** Adopt exact publication receipts for canonical workspace templates. */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,10 +27,15 @@ export function adoptWorkspaceReleaseReceipts({ current, templates }) {
     ? parseTemplateReleaseArtifact(current)
     : { format: "vibestudio-template-release/1" };
   if (templates) {
-    if (roles.some((role) => !templates[role]))
-      throw new Error("Adopt Base, Personal and System receipts together");
     artifact.workspaceTemplates = DefaultWorkspaceTemplatesSchema.parse(
-      Object.fromEntries(roles.map((role) => [role, pinFromReceipt(templates[role])]))
+      Object.fromEntries(
+        roles.map((role) => [
+          role,
+          templates[role]
+            ? pinFromReceipt(templates[role])
+            : artifact.workspaceTemplates?.[role],
+        ])
+      )
     );
   }
   return parseTemplateReleaseArtifact(artifact);
@@ -59,7 +64,11 @@ export function generateWorkspaceRelease(args, output = destination) {
   const artifact = adoptWorkspaceReleaseReceipts({
     current: fs.existsSync(output) ? JSON.parse(fs.readFileSync(output, "utf8")) : undefined,
     templates: hasTemplates
-      ? Object.fromEntries(roles.map((role) => [role, receipts[`--${role}-receipt`]]))
+      ? Object.fromEntries(
+          roles
+            .filter((role) => receipts[`--${role}-receipt`])
+            .map((role) => [role, receipts[`--${role}-receipt`]])
+        )
       : undefined,
   });
   if (hasReceipts) {

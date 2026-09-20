@@ -22,10 +22,20 @@ test("adopts all three canonical templates", () => {
   for (const role of Object.keys(templates))
     assert.equal(result.workspaceTemplates[role].commit, templates[role].commit);
 });
-test("requires the complete template set", () => {
+test("retains existing pins for templates without new receipts", () => {
+  const current = adoptWorkspaceReleaseReceipts({ templates });
+  const result = adoptWorkspaceReleaseReceipts({
+    current,
+    templates: { base: receipt("base", "e") },
+  });
+  assert.equal(result.workspaceTemplates.base.commit, "e".repeat(40));
+  assert.deepEqual(result.workspaceTemplates.personal, current.workspaceTemplates.personal);
+  assert.deepEqual(result.workspaceTemplates.system, current.workspaceTemplates.system);
+});
+test("requires an exact pin for every template when creating the artifact", () => {
   assert.throws(
     () => adoptWorkspaceReleaseReceipts({ templates: { base: templates.base } }),
-    /together/
+    /invalid_type/
   );
 });
 test("validates every publication receipt before adopting the set", () => {
