@@ -11,12 +11,12 @@ import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // archive: it resolves this host's own native dependencies (node-pty, esbuild,
 // ripgrep's fetched binary) instead of shipping every platform's copy.
 //
-// The monorepo root stays private; this script synthesizes each package.json and
-// assembles its file tree. Host @vibestudio/* packages are vendored under
+// The monorepo root stays private; this script synthesizes the server package.json
+// and assembles its file tree. Host @vibestudio/* packages are vendored under
 // vendor/ and copied into node_modules by postinstall. @workspace/* packages are
 // not host dependencies; userland is acquired from the exact external Base
 // release and built by the runtime workspace build system. Userland dependencies
-// include packages that require Node >=22.13, so the generated packages declare
+// include packages that require Node >=22.13, so the generated package declares
 // the same floor.
 //
 // Run AFTER `pnpm build`:  node scripts/build-server-npm-package.mjs
@@ -114,9 +114,16 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
     path.join(root, "scripts/vibestudio-server-shim.mjs")
   );
   // Passthrough CLI commands resolve these scripts relative to the installed
-  // package root. Keep the complete tree (including cli/lib/) in both npm
-  // packages so documented commands work outside a source checkout.
+  // package root. Keep the CLI tree and its shared script imports together.
   copyTree(path.join(repoRoot, "scripts/cli"), path.join(root, "scripts/cli"), defaultSkip);
+  for (const script of [
+    "host-build-generations.mjs",
+    "server-runtime-artifacts.mjs",
+    "owned-process-tree.mjs",
+    "owned-process-identity.mjs",
+  ]) {
+    copyFile(`scripts/${script}`, path.join(root, "scripts", script));
+  }
   assertPassthroughScriptsStaged(root);
 
   // Vendor the host's @vibestudio/* packages under vendor/ (NOT node_modules). A
@@ -168,6 +175,10 @@ export function assertPassthroughScriptsStaged(root) {
     "scripts/cli/lib/config-paths.mjs",
     "scripts/cli/lib/smoke-remote-server.mjs",
     "scripts/cli/lib/mobile-native-android.mjs",
+    "scripts/host-build-generations.mjs",
+    "scripts/server-runtime-artifacts.mjs",
+    "scripts/owned-process-tree.mjs",
+    "scripts/owned-process-identity.mjs",
   ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   if (missing.length > 0) {

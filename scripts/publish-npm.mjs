@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// npm publish helper for the public @panticonic packages.
+// Manual npm publish helper for the headless server package.
 // Real publishes require a granular token with bypass 2FA enabled.
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -13,20 +13,11 @@ const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let tokenUserConfigPath = null;
 let resolvedAuthToken = undefined;
-const packages = [
-  {
-    id: "server",
-    name: "@panticonic/vibestudio-server",
-    dir: path.join(repoRoot, "dist-packages", "server"),
-    smokePrefix: path.join(os.tmpdir(), "vibestudio-npm-server-check"),
-  },
-  {
-    id: "app",
-    name: "@panticonic/vibestudio",
-    dir: path.join(repoRoot, "dist-packages", "app"),
-    smokePrefix: path.join(os.tmpdir(), "vibestudio-npm-app-check"),
-  },
-];
+const serverPackage = {
+  name: "@panticonic/vibestudio-server",
+  dir: path.join(repoRoot, "dist-packages", "server"),
+  smokePrefix: path.join(os.tmpdir(), "vibestudio-npm-server-check"),
+};
 
 try {
   await main();
@@ -41,11 +32,6 @@ async function main() {
   if (options.help) {
     printUsage();
     return;
-  }
-
-  const selected = selectPackages(options.package);
-  if (!selected.length) {
-    throw new Error(`No packages selected for --package=${options.package}`);
   }
 
   const publishToken = getAuthToken();
@@ -70,7 +56,7 @@ async function main() {
   if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
   if (!options.skipStage) run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
 
-  const manifests = selected.map((pkg) => validateStagedPackage(pkg));
+  const manifests = [validateStagedPackage(serverPackage)];
   const publishQueue = manifests.filter((entry) => {
     const existing = npmView(entry.pkg.name, entry.version);
     if (existing === entry.version) {
@@ -123,7 +109,7 @@ async function main() {
       console.error(
         `\n[publish-npm] Publish failed for ${entry.pkg.name}. After fixing auth, rerun the staged flow:`
       );
-      console.error(`  pnpm publish:npm:staged -- --package ${entry.pkg.id}`);
+      console.error("  pnpm publish:server-npm:staged");
       process.exit(result.status ?? 1);
     }
   }
@@ -146,7 +132,6 @@ function parseArgs(argv) {
     dryRunOnly: false,
     help: false,
     installSmoke: true,
-    package: "both",
     skipBuild: false,
     skipDryRun: false,
     skipStage: false,
@@ -165,10 +150,6 @@ function parseArgs(argv) {
       options.installSmoke = true;
     } else if (arg === "--skip-install-smoke") {
       options.installSmoke = false;
-    } else if (arg === "--package") {
-      options.package = requireValue(argv, ++i, arg);
-    } else if (arg.startsWith("--package=")) {
-      options.package = arg.slice("--package=".length);
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
     } else if (arg === "--skip-dry-run") {
@@ -184,9 +165,6 @@ function parseArgs(argv) {
     }
   }
 
-  if (!["both", "server", "app"].includes(options.package)) {
-    throw new Error("--package must be one of: both, server, app");
-  }
   if (!options.tag) throw new Error("--tag must not be empty");
   return options;
 }
@@ -198,12 +176,11 @@ function requireValue(argv, index, flag) {
 }
 
 function printUsage() {
-  console.log(`Usage: pnpm publish:npm [-- options]
+  console.log(`Usage: pnpm publish:server-npm [-- options]
 
-Build, stage, dry-run, publish, verify, and install-smoke the public npm packages.
+Build, stage, dry-run, publish, verify, and install-smoke the headless server npm package.
 
 Options:
-  --package both|server|app  Package(s) to publish. Default: both
   --skip-build              Reuse the current dist/ build
   --skip-stage              Reuse dist-packages/
   --skip-dry-run            Publish without npm publish --dry-run
@@ -212,8 +189,7 @@ Options:
   --tag <tag>               npm dist-tag. Default: latest
 
 Common reruns:
-  pnpm publish:npm:staged
-  pnpm publish:npm:staged -- --package app
+  pnpm publish:server-npm:staged
 
 Auth:
   For direct publish, npm requires a TOTP code or a granular access token with
@@ -224,11 +200,6 @@ Auth:
   This stores the token at ${npmTokenFilePath()} with mode 0600. You can also
   export NPM_TOKEN or NODE_AUTH_TOKEN for one shell instead.
 `);
-}
-
-function selectPackages(selection) {
-  if (selection === "both") return packages;
-  return packages.filter((pkg) => pkg.id === selection);
 }
 
 function publishArgs({ dryRun, tag }) {
@@ -541,7 +512,7 @@ function twoFactorHelp() {
 [publish-npm] For this repo, create a granular token with read/write package access
 [publish-npm] for the @panticonic scope or all packages/scopes, then save it once:
 [publish-npm]   pnpm setup:npm-token
-[publish-npm]   pnpm publish:npm:staged -- --package server
+[publish-npm]   pnpm publish:server-npm:staged
 [publish-npm] Do not paste the token into chat.`;
 }
 

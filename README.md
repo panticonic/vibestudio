@@ -331,13 +331,13 @@ ports, ready files, CLI credentials, and sessions. The checkout-scoped lock
 prevents two launchers from competing for one instance, while different
 instances run concurrently. Stopping one never targets another hub.
 
-MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. Workspace cleanup also runs through MXC; no Rust toolchain or app-owned native helper is required. Source builds stage the executor for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run:
+MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. Workspace cleanup also runs through MXC; no Rust toolchain or app-owned native helper is required. Source builds stage the executor for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging the headless server npm package or installers, download the native artifacts from a successful CI run:
 
 ```bash
 gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts
 ```
 
-Generic npm packages require the complete Linux x64/ARM64, Apple Silicon macOS, and Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched MXC inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
+The headless server npm package requires the complete Linux x64/ARM64, Apple Silicon macOS, and Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched MXC inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
 
 The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release. See [native isolation CI](docs/native-isolation-ci.md) for the acceptance matrix, standard-user checks, installer gates, and Windows 11 runner setup.
 
@@ -351,10 +351,10 @@ Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its O
 - `pnpm bootstrap` - Install the complete host and userland workspace graph
 - `pnpm dev:iroh` - Build, start an isolated local hub, and launch Electron through Iroh
 - `pnpm build` - Production build
-- `pnpm stage:npm` - Build and stage the public npm packages under `dist-packages/`
-- `pnpm setup:npm-token` - Save the local npm publish token used by the release script
-- `pnpm publish:npm` - Build, stage, dry-run, publish, verify, and install-smoke the npm packages
-- `pnpm publish:npm:staged` - Reuse `dist/` and `dist-packages/` for an auth-only publish retry
+- `pnpm stage:server-npm` - Build and stage the optional headless server npm package under `dist-packages/server/`
+- `pnpm setup:npm-token` - Save the local token for manual headless server npm releases
+- `pnpm publish:server-npm` - Build, stage, dry-run, publish, verify, and install-smoke the headless server package
+- `pnpm publish:server-npm:staged` - Reuse the staged server package for an auth-only publish retry
 - `pnpm type-check:cloudflare` - Type-check the callback/apex Cloudflare Worker
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker

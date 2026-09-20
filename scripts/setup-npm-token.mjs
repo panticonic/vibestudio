@@ -46,7 +46,7 @@ async function main() {
   }
 
   console.log(`[setup-npm-token] Saved npm publish token to ${tokenFile}`);
-  console.log("[setup-npm-token] Next publish command: pnpm publish:npm");
+  console.log("[setup-npm-token] Next publish command: pnpm publish:server-npm");
 }
 
 function parseArgs(argv) {
@@ -85,7 +85,7 @@ Create an npm granular token with package read/write access and bypass 2FA
 enabled for the @panticonic scope, then run:
 
   pnpm setup:npm-token
-  pnpm publish:npm
+  pnpm publish:server-npm
 `);
 }
 

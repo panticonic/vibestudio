@@ -163,7 +163,6 @@ jobs:
           src/server/historicalHostSnapshot.test.ts
           src/server/historicalWorkspaceHost.test.ts
           src/server/hubServer.test.ts
-          tests/npmUpdateLauncher.test.ts
           packages/extension-host/src/atomicStorage.test.ts
           src/server/storage/blobCas.test.ts
 
