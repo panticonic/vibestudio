@@ -1,7 +1,9 @@
 # Holistic authority and capability static checking
 
-Status: proposed implementation plan, 2026-09-17. This document specifies work
-still to do; it is not a claim that the guarantees below already hold.
+Status: superseded as an implementation plan by
+[Static checking for declared authority](authority-static-checking-scope.md),
+2026-09-20. Retained as design history; its full runtime cutover is not the
+accepted route to the static missing-capability goal.
 
 ## Decision
 

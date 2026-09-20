@@ -267,6 +267,23 @@ export function inferEventsClientCapabilities(source, serviceMethods) {
  */
 export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
   const capabilities = new Set();
+  const memberPath = (expression) => {
+    const members = [];
+    while (!ts.isIdentifier(expression)) {
+      if (ts.isPropertyAccessExpression(expression)) {
+        members.push(expression.name.text);
+      } else if (
+        ts.isElementAccessExpression(expression) &&
+        ts.isStringLiteralLikeNode(expression.argumentExpression)
+      ) {
+        members.push(expression.argumentExpression.text);
+      } else {
+        return null;
+      }
+      expression = expression.expression;
+    }
+    return { root: expression.text, members: members.reverse() };
+  };
   for (const parsed of sourceFilesFor(source)) {
     const clients = new Map();
     const collect = (node) => {
@@ -286,17 +303,13 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
     walkNodes(parsed, collect);
 
     const inspect = (node) => {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression)
-      ) {
-        const service = clients.get(node.expression.expression.text);
-        if (service) {
-          const capability = `service:${service}.${node.expression.name.text}`;
-          if (hostCapabilities.has(capability)) capabilities.add(capability);
-        }
-      }
+      if (!ts.isCallExpression(node)) return;
+      const selected = memberPath(node.expression);
+      if (!selected || selected.members.length === 0) return;
+      const service = clients.get(selected.root);
+      if (!service) return;
+      const capability = `service:${service}.${selected.members.join(".")}`;
+      if (hostCapabilities.has(capability)) capabilities.add(capability);
     };
     walkNodes(parsed, inspect);
   }

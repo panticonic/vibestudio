@@ -9,6 +9,7 @@ import {
   inferExtensionContextCapabilities,
   inferHostedRuntimeCapabilities,
   inferTypedServiceClientCapabilities,
+  inferUnitTransportCapabilities,
   inferWorkspaceServiceCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
@@ -16,10 +17,22 @@ import {
 import developmentTemplateConfig from "../../src/dev/developmentTemplateConfig.cjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(
-  repositoryRoot,
-  "base"
-);
+const templateCheckouts =
+  developmentTemplateConfig.requireDevelopmentTemplateCheckouts(repositoryRoot).checkouts;
+
+function* shippedUnitDirectories() {
+  for (const [template, checkout] of Object.entries(templateCheckouts)) {
+    for (const root of ["about", "apps", "panels"]) {
+      const directory = path.join(checkout, root);
+      if (!fs.existsSync(directory)) continue;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          yield { name: `${template}/${root}/${entry.name}`, directory: path.join(directory, entry.name) };
+        }
+      }
+    }
+  }
+}
 
 describe("inferWorkspaceServiceCapabilities", () => {
   const selectors = new Map([
@@ -78,21 +91,6 @@ describe("inferWorkspaceServiceCapabilities", () => {
   });
 });
 
-function sourceTreeContains(directory, pattern) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const child = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (sourceTreeContains(child, pattern)) return true;
-    } else if (
-      /\.(?:ts|tsx|js|jsx)$/.test(entry.name) &&
-      pattern.test(fs.readFileSync(child, "utf8"))
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 describe("inferTypedServiceClientCapabilities", () => {
   const host = new Set([
     "service:autofill.confirmSave",
@@ -112,6 +110,23 @@ describe("inferTypedServiceClientCapabilities", () => {
     );
 
     assert.deepEqual([...inferred], ["service:autofill.confirmSave"]);
+  });
+
+  it("charges literal element access and nested dotted methods", () => {
+    const inferred = inferTypedServiceClientCapabilities(
+      `
+        const autofillClient = createTypedServiceClient("autofill", autofillMethods, call);
+        autofillClient["confirmSave"]("panel", "save");
+        autofillClient.passwords.list();
+        autofillClient[methodName]("panel");
+      `,
+      new Set([...host, "service:autofill.passwords.list"])
+    );
+
+    assert.deepEqual([...inferred], [
+      "service:autofill.confirmSave",
+      "service:autofill.passwords.list",
+    ]);
   });
 
   it("walks deeply generated executable syntax without consuming the JavaScript stack", () => {
@@ -258,46 +273,29 @@ describe("declared host-method capability dependencies", () => {
 
   it("keeps every shipped panel-navigation manifest closed over its semantic commit", () => {
     const missing = [];
-    for (const root of ["about", "apps", "panels"]) {
-      const directory = path.join(userlandRoot, root);
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const manifestPath = path.join(directory, entry.name, "package.json");
-        if (!fs.existsSync(manifestPath)) continue;
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-        const requests = new Set(
-          (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
-        );
-        if (requests.has("workspace.runtime-state.manage") && !requests.has("context.boundary")) {
-          missing.push(`${root}/${entry.name}`);
-        }
+    for (const unit of shippedUnitDirectories()) {
+      const manifestPath = path.join(unit.directory, "package.json");
+      if (!fs.existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const requests = new Set(
+        (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
+      );
+      if (requests.has("workspace.runtime-state.manage") && !requests.has("context.boundary")) {
+        missing.push(unit.name);
       }
     }
     assert.deepEqual(missing, []);
   });
 
-  it("declares semantic navigation authority for every buildPanelLink caller", () => {
-    const missing = [];
-    for (const root of ["about", "apps", "panels"]) {
-      const directory = path.join(userlandRoot, root);
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const unitDirectory = path.join(directory, entry.name);
-        const manifestUrl = path.join(unitDirectory, "package.json");
-        if (
-          !fs.existsSync(manifestUrl) ||
-          !sourceTreeContains(unitDirectory, /\bbuildPanelLink\b/)
-        ) {
-          continue;
-        }
-        const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
-        const requests = new Set(
-          (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
-        );
-        if (!requests.has("workspace.runtime-state.manage")) missing.push(`${root}/${entry.name}`);
+  it("does not charge pure panel-link construction as navigation authority", () => {
+    const inferred = inferUnitTransportCapabilities(
+      `const href = buildPanelLink("panels/chat", {stateArgs: {initialPrompt: "hello"}});`,
+      {
+        hostCapabilities: new Set(["service:workspace-state.slot.commitPreparedNavigation"]),
+        serviceMethods: new Map(),
       }
-    }
-    assert.deepEqual(missing, []);
+    );
+    assert.deepEqual([...inferred], ["context.boundary"]);
   });
 
   it("adds code prerequisites transitively to inferred unit authority", () => {

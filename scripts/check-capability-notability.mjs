@@ -17,7 +17,8 @@ import { parse as parseYaml } from "yaml";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "base");
+const templateCheckouts =
+  developmentTemplateConfig.requireDevelopmentTemplateCheckouts(root).checkouts;
 
 const { reviewedCapabilityNotability } = await import(
   path.join(root, "packages/shared/src/authority/capabilityNotability.ts")
@@ -75,18 +76,19 @@ function visitPackageManifests(directory) {
   }
 }
 
-visitPackageManifests(userlandRoot);
+for (const checkout of Object.values(templateCheckouts)) visitPackageManifests(checkout);
 
 // Dynamic workspace-service envelopes are authored by the workspace, so their
 // review classification belongs beside the service's action and presentation.
 // This is the same declaration the live build and install review consume.
 const workspaceServiceDeclarationGaps = [];
-for (const relativeConfigPath of ["meta/vibestudio.yml"]) {
-  const workspaceConfigPath = path.join(userlandRoot, relativeConfigPath);
+for (const [templateName, checkout] of Object.entries(templateCheckouts)) {
+  const relativeConfigPath = "meta/vibestudio.yml";
+  const workspaceConfigPath = path.join(checkout, relativeConfigPath);
   const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
   for (const service of workspaceConfig.services ?? []) {
     const capability = `workspace-service:${service.name}`;
-    const source = `${relativeConfigPath} services.${service.name}.notability`;
+    const source = `${templateName}/${relativeConfigPath} services.${service.name}.notability`;
     if (service.notability !== "headline" && service.notability !== "everyday") {
       workspaceServiceDeclarationGaps.push({ capability, source });
     }
