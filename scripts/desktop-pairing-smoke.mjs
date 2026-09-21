@@ -1497,7 +1497,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
             continue;
           }
         } else {
-          if (!rendered.text.includes("Jump to a panel")) {
+          if (!rendered.text.includes("New Panel")) {
             await sleep(250);
             continue;
           }
@@ -1665,7 +1665,7 @@ async function waitForSystemNewPanel(app, timeoutMs) {
     if (
       latest.readiness?.terminal &&
       latest.readiness.nativeSlotBound &&
-      latest.text.includes("Jump to a panel")
+      latest.text.includes("New Panel")
     ) {
       return { ...latest, workspaceInstallApprovals };
     }
@@ -2263,10 +2263,7 @@ async function main() {
     if (!workspaceIconLoaded)
       throw new Error("System workspace icon bytes did not render in chrome");
     console.log("[desktop-smoke] Workspace-owned icon bytes rendered in native chrome");
-    if (
-      renderedPanel.panel.source !== "about/new" ||
-      !renderedPanel.text.includes("Jump to a panel")
-    )
+    if (renderedPanel.panel.source !== "about/new" || !renderedPanel.text.includes("New Panel"))
       throw new Error("System's own initial New panel did not render");
     const panelIds = new Set((await getPanelTree(electronApp)).map((panel) => panel.id));
     const newPanel = await createAndWaitForNewPanel(
