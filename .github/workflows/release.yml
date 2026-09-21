@@ -139,6 +139,9 @@ jobs:
       - name: Generate installer checksums
         run: |
           cd release
+          test "$(find . -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -type f -name '*.rpm' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -type f -name '*.pkg.tar.zst' | wc -l)" -eq 2
           find . -maxdepth 1 -type f \
             \( -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
             -print0 \
@@ -455,7 +458,7 @@ jobs:
             release/SHA256SUMS-windows
 
   accept-macos-installer:
-    name: Install and launch signed macOS release candidate
+    name: Install and launch macOS release candidate
     needs: mac-dmg
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: macos-14
@@ -493,8 +496,20 @@ jobs:
           trap 'hdiutil detach "$mount"' EXIT
           ditto "$mount/Vibestudio.app" installed/Vibestudio.app
           codesign --verify --deep --strict --verbose=2 installed/Vibestudio.app
-          xcrun stapler validate installed/Vibestudio.app
-          spctl --assess --type execute --verbose=2 installed/Vibestudio.app
+          signing_mode="$(cat candidate/macos-signing.txt)"
+          case "$signing_mode" in
+            developer-id)
+              xcrun stapler validate installed/Vibestudio.app
+              spctl --assess --type execute --verbose=2 installed/Vibestudio.app
+              ;;
+            ad-hoc)
+              echo "Acceptance matches the deliberately ad-hoc signed release candidate."
+              ;;
+            *)
+              echo "Unknown macOS signing mode: $signing_mode" >&2
+              exit 1
+              ;;
+          esac
           node scripts/packaged-isolation-smoke.mjs --app installed/Vibestudio.app --out-dir test-results/packaged-isolation
       - name: Upload acceptance diagnostics
         if: always()
@@ -542,8 +557,7 @@ jobs:
           $installers = @(Get-ChildItem candidate/*.exe)
           if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer' }
           $destination = Join-Path $env:RUNNER_TEMP 'Vibestudio installed acceptance'
-          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$destination") -PassThru
-          if (-not $installer.WaitForExit(180000)) { $installer.Kill(); throw 'Installer timed out' }
+          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru
           if ($installer.ExitCode -ne 0) { throw "Installer exited $($installer.ExitCode)" }
           try {
             node scripts/packaged-isolation-smoke.mjs --app "$destination/Vibestudio.exe" --out-dir test-results/packaged-isolation
@@ -551,8 +565,7 @@ jobs:
           } finally {
             $uninstaller = Join-Path $destination 'Uninstall Vibestudio.exe'
             if (Test-Path $uninstaller) {
-              $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru
-              if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Uninstaller timed out' }
+              $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
               if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
             }
           }

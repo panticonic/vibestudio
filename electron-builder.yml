@@ -193,6 +193,9 @@ rpm:
   afterRemove: build-resources/linux/after-remove.sh
 
 pacman:
+  # electron-builder's generic `${ext}` for this target is `pacman`, while
+  # Arch package managers and release tooling expect the native suffix.
+  artifactName: vibestudio-${version}-${arch}.pkg.tar.zst
   afterInstall: build-resources/linux/after-install.sh
   afterRemove: build-resources/linux/after-remove.sh
 
