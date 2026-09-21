@@ -60,7 +60,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  * imports are ordinary userland units, and their npm dependencies have to be
  * resolvable or the RN runner cannot load them at all.
  */
-function userlandDependencyModules(templateRoots) {
+function userlandDependencyModules(selectedTemplates) {
   const { register } = require(require.resolve("tsx/cjs/api", { paths: [repoRoot] }));
   const unregister = register();
   try {
@@ -70,10 +70,11 @@ function userlandDependencyModules(templateRoots) {
     const { composeDevelopmentTemplateCheckouts } = require(
       path.join(repoRoot, "src/dev/developmentTemplateComposition.ts")
     );
-    const composition = composeDevelopmentTemplateCheckouts([
-      templateRoots.base,
-      templateRoots.system,
-    ]);
+    const composition = composeDevelopmentTemplateCheckouts(
+      selectedTemplates.sources
+        .filter(({ id }) => id === "base" || id === "system")
+        .map(({ id, url }) => ({ checkout: selectedTemplates.checkouts[id], url }))
+    );
     return prepareUserlandDependencyProjection({
       appRoot: repoRoot,
       workspaceRoot: composition.root,
@@ -93,13 +94,14 @@ const { requireDevelopmentTemplateCheckouts } = require(
   path.join(repoRoot, "src/dev/developmentTemplateConfig.cjs")
 );
 
-const templateRoots = requireDevelopmentTemplateCheckouts(repoRoot).checkouts;
+const selectedTemplates = requireDevelopmentTemplateCheckouts(repoRoot);
+const templateRoots = selectedTemplates.checkouts;
 const mobileRoot = path.join(templateRoots.system, "apps", "mobile");
 const hostModules = path.join(repoRoot, "node_modules");
 const packageSource = (name) => path.join(repoRoot, "packages", name, "src");
 
 module.exports = (async () => {
-  const projection = await userlandDependencyModules(templateRoots);
+  const projection = await userlandDependencyModules(selectedTemplates);
   // The projection is a lease on the content-addressed cache, recorded durably.
   // Holding it for the run is the point; keeping it after the run would pin the
   // entry against pruning forever.
