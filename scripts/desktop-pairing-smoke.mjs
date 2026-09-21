@@ -1439,12 +1439,14 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
           throw new Error(
             `Initial Personal pane does not fill its workspace: ${JSON.stringify(layout)}`
           );
-        const rendered = await evaluateElectron(
-          app,
-          async ({ webContents }, id) => {
-            const contents = webContents.fromId(id);
-            if (!contents) throw new Error("Personal panel WebContents is missing");
-            const observation = await contents.executeJavaScript(`(() => {
+        let rendered;
+        try {
+          rendered = await evaluateElectron(
+            app,
+            async ({ webContents }, id) => {
+              const contents = webContents.fromId(id);
+              if (!contents) throw new Error("Personal panel WebContents is missing");
+              return contents.executeJavaScript(`(() => {
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
               const setup = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
@@ -1462,14 +1464,15 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
                   setup.querySelector('[aria-label="Refresh setup overview"]'))
               };
             })()`);
-            return {
-              ...observation,
-              image: (await contents.capturePage()).toPNG().toString("base64"),
-            };
-          },
-          snapshot.presentation.webContentsId,
-          "reading the captured Personal panel experience"
-        );
+            },
+            snapshot.presentation.webContentsId,
+            "reading the Personal panel experience"
+          );
+        } catch (error) {
+          if (!isTransientDesktopObservation(error)) throw error;
+          await sleep(250);
+          continue;
+        }
         const observed = {
           source: rendered.source,
           configuredPrompt: rendered.configuredPrompt,
@@ -1479,7 +1482,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
         };
         if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
           latestObservation = observed;
-          console.log(`[desktop-smoke] Captured Personal panel: ${JSON.stringify(observed)}`);
+          console.log(`[desktop-smoke] Observed Personal panel: ${JSON.stringify(observed)}`);
         }
         if (rendered.source !== expectedSource) {
           await sleep(250);
@@ -1514,7 +1517,24 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
           artifactRoot,
           `personal-${expectedSource.split("/").at(-1)}-${Date.now()}.png`
         );
-        await fsp.writeFile(screenshotPath, Buffer.from(rendered.image, "base64"), { mode: 0o600 });
+        let image;
+        try {
+          image = await evaluateElectron(
+            app,
+            async ({ webContents }, id) => {
+              const contents = webContents.fromId(id);
+              if (!contents) throw new Error("Personal panel WebContents is missing");
+              return (await contents.capturePage()).toPNG().toString("base64");
+            },
+            snapshot.presentation.webContentsId,
+            "capturing the ready Personal panel"
+          );
+        } catch (error) {
+          if (!isTransientDesktopObservation(error)) throw error;
+          await sleep(250);
+          continue;
+        }
+        await fsp.writeFile(screenshotPath, Buffer.from(image, "base64"), { mode: 0o600 });
         return {
           ...layout,
           nativeWidth: slot.bounds.width,
@@ -1819,6 +1839,18 @@ async function closeElectron(app) {
     pid = app.process()?.pid;
   } catch {
     pid = undefined;
+  }
+  if (process.platform === "win32" && typeof pid === "number") {
+    // Electron owns renderer and utility children that can keep the profile
+    // lockfile open after its main process exits. Retire the owned tree while
+    // its root still identifies those children.
+    const result = await terminateOwnedProcessTree(pid);
+    if (!result.gone) throw new Error(result.detail ?? "Electron process tree survived cleanup");
+    await Promise.race([
+      app.close().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+    return;
   }
   try {
     await Promise.race([
