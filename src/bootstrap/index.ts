@@ -24,7 +24,6 @@ import {
   type StartupConnectionProgress,
 } from "../startupConnectionProgress.js";
 import { startupTimeline, type BootstrapTimelinePhase } from "./startupTimeline.js";
-import { createStartupProgressDeadline } from "./startupProgressDeadline.js";
 
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -121,7 +120,6 @@ let startupWaitBeganAt = 0;
  * Startup fails on host *silence*, not on elapsed time — see the module for
  * why a slow-but-progressing startup must be allowed to finish.
  */
-const startupDeadline = createStartupProgressDeadline();
 
 function scheduleRefresh(): void {
   launchRefreshLoop.request();
@@ -584,7 +582,6 @@ async function runConnectionAction(actionId: string, action: () => Promise<void>
   if (connectionBusyAction) return;
   connectionBusyAction = actionId;
   startupWaitBeganAt = Date.now();
-  startupDeadline.restart();
   connectionHandoff = connectionHandoffFor(actionId);
   connectionError = null;
   startupWaitDone = false;
@@ -877,7 +874,6 @@ function dismissPairButton(label: string): HTMLButtonElement {
 
 function renderStartingWorkspace(): void {
   if (!startupWaitBeganAt) startupWaitBeganAt = Date.now();
-  startupDeadline.restartIfIdle();
   connectionHandoff = {
     title: "Starting workspace",
     detail: "Preparing the selected workspace and startup approval gate...",
@@ -955,7 +951,6 @@ async function applyBootstrapState(
   state: BootstrapConnectionState
 ): Promise<"terminal" | "waiting"> {
   connectionState = state;
-  startupDeadline.note(state);
   if (state.mode === "failed") {
     startupWaitDone = true;
     stopBootstrapConnectionStateWatch();
@@ -1006,40 +1001,10 @@ async function pollConnectedBootstrapState(
   // begun. It must not render or schedule from that stale result.
   if (!isCurrent() || startupWaitDone) return "terminal";
   if (!isBootstrapConnectionState(state)) {
-    if (!startupDeadline.stalled()) return "waiting";
-    startupWaitDone = true;
-    stopBootstrapConnectionStateWatch();
-    renderStartupFailure({
-      mode: "failed",
-      connectionKind: connectionState?.connectionKind ?? null,
-      localWorkspaces: [],
-      lastLocalWorkspaceName: null,
-      startupError: {
-        message: "Workspace startup stopped responding.",
-        detail:
-          "The host did not report progress. Retry startup or choose another server or workspace.",
-      },
-      serverLogPath: connectionState?.serverLogPath,
-    });
-    return "terminal";
+    return "waiting";
   }
   if ((await applyBootstrapState(state)) === "terminal") return "terminal";
-  if (!isCurrent() || startupWaitDone) return "terminal";
-  if (!startupDeadline.stalled()) return "waiting";
-  startupWaitDone = true;
-  stopBootstrapConnectionStateWatch();
-  renderStartupFailure({
-    ...state,
-    mode: "failed",
-    startupError: {
-      message: "Workspace startup stopped making progress.",
-      detail:
-        "The host reported no new startup progress for several minutes. Retry startup, inspect the server log, or choose another workspace.",
-      ...(state.startupError?.logPath ? { logPath: state.startupError.logPath } : {}),
-      ...(state.serverLogPath ? { logPath: state.serverLogPath } : {}),
-    },
-  });
-  return "terminal";
+  return "waiting";
 }
 
 /** Host-pushed state transitions land immediately (no poll latency). */
@@ -1076,8 +1041,6 @@ async function init(): Promise<void> {
   if (isBootstrapConnectionState(state) && state.mode === "starting") {
     connectionState = state;
     startupWaitBeganAt = Date.now();
-    startupDeadline.restart();
-    startupDeadline.note(state);
     renderStartingWorkspace();
     waitForConnectedBootstrapState();
     return;
