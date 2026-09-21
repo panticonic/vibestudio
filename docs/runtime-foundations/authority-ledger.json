@@ -34778,6 +34778,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspaceTemplateSource.readEpoch",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "readEpoch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "Verified source consumers read only the stable compatibility envelope; foreign source is never activated.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.readEpoch"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.readEpoch),workspace-member),allOf(capability(code,service:workspaceTemplateSource.readEpoch),workspace-member))",
+      "r3b": {
+        "review": "verified-exact-source-compatibility-read",
+        "change": "Reads only the compatibility epoch from an exact pinned template source, including sources with newer manifest schemas. The receiver limits callers to authenticated user or code principals and does not activate the source, expose its files, or mutate a workspace."
+      },
+      "capability": "service:workspaceTemplateSource.readEpoch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspaceTemplateSource.resolveLocal",
       "rpcPlane": "host-service",
       "owner": "workspaceTemplateSource",

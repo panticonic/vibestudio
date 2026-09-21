@@ -7,6 +7,10 @@ import YAML from "yaml";
 import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
 import { deriveE2eRootTemplate } from "./e2eRootTemplate.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import {
+  parseTemplateManifestContent,
+  rootRuntimeFromTemplateManifest,
+} from "@vibestudio/workspace/templateManifest";
 
 const roots: string[] = [];
 let previousSharedCache: string | undefined;
@@ -115,8 +119,11 @@ it("derives explicit Personal and ordinary project roots from canonical template
     presentation: { name: "personal" },
     repositories: ["panels/chat"],
   });
-  const runtime = YAML.parse(
-    fs.readFileSync(path.join(derived.materializedSource, "meta/vibestudio.yml"), "utf8")
+  const runtime = rootRuntimeFromTemplateManifest(
+    parseTemplateManifestContent(
+      fs.readFileSync(path.join(derived.materializedSource, "meta/vibestudio.yml"), "utf8"),
+      WORKSPACE_SYSTEM_EPOCH
+    )
   );
   expect(runtime.initPanels).toEqual([
     { source: "panels/chat", stateArgs: { initialPrompt: "Preserve the opening turn" } },

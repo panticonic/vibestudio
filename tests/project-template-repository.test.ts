@@ -29,8 +29,6 @@ function fixture(): { workspace: string; checkout: string } {
         "  description: Test template",
         "  repositories:",
         "    - apps/one",
-        "  files:",
-        "    - package.json",
         "apps:",
         "  - source: apps/one",
         "",
@@ -98,7 +96,10 @@ describe("template repository exchange", () => {
   it("requires the reviewed exact plan to remain current", () => {
     const fx = fixture();
     const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
-    fs.writeFileSync(path.join(fx.workspace, "package.json"), "changed after review\n");
+    fs.writeFileSync(
+      path.join(fx.workspace, "apps", "one", "package.json"),
+      "changed after review\n"
+    );
     expect(() => applyTemplateRepositoryExchange(plan)).toThrow("changed after review");
   });
 
@@ -146,7 +147,9 @@ describe("template repository exchange", () => {
     );
     fs.copyFileSync(manifestPath, path.join(fx.checkout, "meta", "vibestudio.yml"));
     const before = fs.readFileSync(path.join(fx.checkout, "meta", "vibestudio.yml"), "utf8");
-    expect(() => planTemplateRepositoryExchange({ ...fx, direction: "export" })).toThrow(/Unrecognized key.*templates/);
+    expect(() => planTemplateRepositoryExchange({ ...fx, direction: "export" })).toThrow(
+      /"keys": \[\s*"templates"/u
+    );
     expect(fs.readFileSync(path.join(fx.checkout, "meta", "vibestudio.yml"), "utf8")).toBe(before);
   });
 });

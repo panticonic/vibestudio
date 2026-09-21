@@ -342,13 +342,16 @@ export class DevelopmentExecutor {
     const owned = this.children.get(runId);
     if (!owned) return;
     this.signalOwned(owned.child, "SIGTERM");
+    const stopped = owned.exit.catch((error: unknown) => {
+      if ((error as { code?: unknown })?.code !== "ECANCELLED") throw error;
+    });
     const graceful = await Promise.race([
-      owned.exit.then(() => true),
+      stopped.then(() => true),
       new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
     if (!graceful) {
       this.signalOwned(owned.child, "SIGKILL");
-      await owned.exit;
+      await stopped;
     }
   }
 

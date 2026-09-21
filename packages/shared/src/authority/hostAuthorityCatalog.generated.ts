@@ -8730,6 +8730,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspaceTemplateSource.readEpoch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Verified source consumers read only the stable compatibility envelope; foreign source is never activated.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workspaceTemplateSource.resolveLocal": {
     tier: {
       tier: "open",

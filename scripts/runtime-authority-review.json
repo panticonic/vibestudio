@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:70892c2f08b89c9e4676812ed7a84ad29aea0d976e1a95354bc3116c88ee0e11",
+  "censusDigest": "sha256:7b074b3a39415a705af12451292ede5a2eb1e1304a61fa5b1f340761b977f946",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -997,6 +997,10 @@
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
+    },
+    "host:workspaceTemplateSource.readEpoch": {
+      "review": "verified-exact-source-compatibility-read",
+      "change": "Reads only the compatibility epoch from an exact pinned template source, including sources with newer manifest schemas. The receiver limits callers to authenticated user or code principals and does not activate the source, expose its files, or mutate a workspace."
     },
     "host:phoneNativeEndpoint.prepare": {
       "review": "exact-account-desktop-tool-preparation",

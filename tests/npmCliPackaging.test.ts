@@ -9,9 +9,7 @@ import {
   stageNativeIsolationArtifacts,
   stageNodeRuntimeArtifacts,
 } from "../scripts/build-server-npm-package.mjs";
-import {
-  NATIVE_ISOLATION_TARGETS,
-} from "../scripts/native-isolation-artifacts.mjs";
+import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
   it("stages every standalone server boot artifact", () => {
@@ -58,6 +56,10 @@ describe("npm CLI packaging", () => {
       "scripts/cli/lib/connect-grammar.generated.mjs",
       "scripts/cli/lib/config-paths.mjs",
       "scripts/cli/lib/mobile-native-android.mjs",
+      "scripts/host-build-generations.mjs",
+      "scripts/server-runtime-artifacts.mjs",
+      "scripts/owned-process-tree.mjs",
+      "scripts/owned-process-identity.mjs",
     ]) {
       const target = path.join(root, relative);
       mkdirSync(path.dirname(target), { recursive: true });

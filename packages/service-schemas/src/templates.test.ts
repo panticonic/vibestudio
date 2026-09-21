@@ -9,6 +9,7 @@ import {
 describe("templates contract", () => {
   it("contains discovery, inspection, and publication operations", () => {
     expect(Object.keys(templatesMethods)).toEqual([
+      "updateAssistant",
       "updateSignal",
       "acknowledgeUpdates",
       "updateStatus",
@@ -30,6 +31,7 @@ describe("templates contract", () => {
       "publicationVersion",
       "authoringUpstream",
       "authoringParts",
+      "reviewPublication",
       "publishAuthoring",
     ]);
   });

@@ -474,7 +474,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       [
         "console.log('owned-process-ready');",
         "if (require('node:fs').existsSync('retry-ok')) process.exit(0);",
-        "process.on('SIGTERM', () => process.exit(0));",
+        "process.on('SIGTERM', () => process.exit(143));",
         "setInterval(() => {}, 1000);",
       ].join("\n")
     );

@@ -11,9 +11,9 @@ import * as path from "node:path";
  * the whole tree at the first `unlink` it is refused — which silently
  * stranded tens of gigabytes of instance state per killed run.
  *
- * Each refusal names the exact path it could not remove, so granting the
- * owner write permission on that one directory and retrying makes
- * progress without walking the tree speculatively.
+ * Node's recursive removal can report the tree root even when a nested
+ * directory caused the refusal. On permission failure, unseal the surviving
+ * directories in the owned tree and retry removal.
  */
 export function removeSealedTree(
   target: string,
@@ -26,36 +26,31 @@ export function removeSealedTree(
   const rmSync = deps.rmSync ?? fs.rmSync;
   const chmodSync = deps.chmodSync ?? fs.chmodSync;
   const lstatSync = deps.lstatSync ?? fs.lstatSync;
-  const unsealed = new Set<string>();
-  for (;;) {
-    try {
-      rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-      return;
-    } catch (error) {
-      const refused = sealedDirectory(error, lstatSync);
-      // Refuse to loop on a directory that stayed unremovable after being
-      // unsealed: the next attempt would fail identically.
-      if (!refused || unsealed.has(refused)) throw error;
-      unsealed.add(refused);
-      chmodSync(refused, 0o700);
-    }
+  try {
+    rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch (error) {
+    const refusal = error as NodeJS.ErrnoException;
+    if (refusal?.code !== "EACCES" && refusal?.code !== "EPERM") throw error;
+    unsealDirectories(target, lstatSync, chmodSync);
+    rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 }
 
-/** The directory whose missing write permission refused this removal, if any. */
-function sealedDirectory(error: unknown, lstatSync: typeof fs.lstatSync): string | undefined {
-  const candidate = error as NodeJS.ErrnoException;
-  if (candidate?.code !== "EACCES" && candidate?.code !== "EPERM") return undefined;
-  if (typeof candidate.path !== "string" || candidate.path.length === 0) return undefined;
-  // Removing an entry needs write permission on its parent; removing the
-  // sealed directory itself needs it on the directory.
-  const entry = candidate.path;
+function unsealDirectories(
+  entry: string,
+  lstatSync: typeof fs.lstatSync,
+  chmodSync: typeof fs.chmodSync
+): void {
+  let stat: fs.Stats;
   try {
-    if (lstatSync(entry).isDirectory()) return entry;
-  } catch {
-    // The entry is gone or unreadable; its parent is still the thing that
-    // refused us.
+    stat = lstatSync(entry);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
   }
-  const parent = path.dirname(entry);
-  return parent === entry ? undefined : parent;
+  if (!stat.isDirectory()) return;
+  if ((stat.mode & 0o700) !== 0o700) chmodSync(entry, stat.mode | 0o700);
+  for (const child of fs.readdirSync(entry, { withFileTypes: true })) {
+    if (child.isDirectory()) unsealDirectories(path.join(entry, child.name), lstatSync, chmodSync);
+  }
 }
