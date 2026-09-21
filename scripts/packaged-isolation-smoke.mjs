@@ -119,7 +119,10 @@ export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = 
     );
   const thrown = lines.findIndex((line) => /^\s*(?:[A-Za-z_$][\w$]*Error|Fatal)\b/.test(line));
   const selected = thrown >= 0 ? lines.slice(thrown) : lines.slice(-maxLines);
-  return selected.join("\n").replace(/vibestudio:\/\/\S+/gu, "[redacted app link]").trim();
+  return selected
+    .join("\n")
+    .replace(/vibestudio:\/\/\S+/gu, "[redacted app link]")
+    .trim();
 }
 
 /**
@@ -355,24 +358,23 @@ export async function runPackagedIsolationSmoke(options) {
       await delay(200);
     }
     if (!ready) throw new Error(`Packaged workspace readiness timed out: ${server.tail()}`);
-    if (!ready.workspaces.some((workspace) => workspace.running && workspace.ephemeral))
-      throw new Error("Packaged ready file has no running ephemeral workspace");
+    if (!ready.workspaces.some((workspace) => workspace.name === "dev" && workspace.running))
+      throw new Error("Packaged ready file has no running bootstrap workspace");
     result.workspace = {
       ready: true,
       running: ready.workspaces.filter((workspace) => workspace.running).length,
     };
+    // The packaged server persists its workspace inside this smoke's isolated
+    // instance root. The fixture owner removes that whole root after shutdown.
     const workspaces = path.join(environment.VIBESTUDIO_INSTANCE_ROOT, "workspaces");
     const liveStorage = await fs.readdir(workspaces);
-    const advertisedNames = ready.workspaces.map((workspace) => workspace.name);
-    const ephemeralStorage = liveStorage.filter((name) => !advertisedNames.includes(name));
-    if (ephemeralStorage.length !== result.workspace.running)
-      throw new Error("Ready packaged workspace has no distinct ephemeral storage directory");
-    for (const name of ephemeralStorage) {
-      if (
-        !(await fs.stat(path.join(workspaces, name, "source", "meta", "vibestudio.yml"))).isFile()
-      )
-        throw new Error("Ready packaged workspace has no materialized configuration");
-    }
+    if (liveStorage.length !== 1 || liveStorage[0] !== "dev")
+      throw new Error(
+        `Packaged instance has unexpected workspace storage: ${liveStorage.join(", ")}`
+      );
+    const workspaceConfig = path.join(workspaces, "dev", "source", "meta", "vibestudio.yml");
+    if (!(await fs.stat(workspaceConfig)).isFile())
+      throw new Error("Ready packaged workspace has no materialized configuration");
     server.child.send("packaged-smoke-stop");
     if (!(await awaitExit(server.child, 30000)))
       throw new Error(`Packaged ordered shutdown timed out: ${server.tail()}`);
@@ -382,38 +384,12 @@ export async function runPackagedIsolationSmoke(options) {
       );
     result.workspace.shutdown = true;
     server = undefined;
-    const remaining = await fs.readdir(workspaces).catch((error) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
-    // Advertised workspace reaches deliberately survive ephemeral disk removal:
-    // the hub's stable Iroh identity belongs to "dev", not "dev-<disk nonce>".
-    // Validate that only that exact host-owned identity remains, never guest
-    // storage or pending .delete receipts.
-    for (const name of remaining) {
-      if (!advertisedNames.includes(name) || ephemeralStorage.includes(name))
-        throw new Error(`Packaged shutdown left workspace storage: ${name}`);
-      for (const [relative, expected] of [
-        ["", "reach"],
-        ["reach", "iroh"],
-      ]) {
-        const entries = await fs.readdir(path.join(workspaces, name, relative));
-        if (entries.length !== 1 || entries[0] !== expected)
-          throw new Error(
-            `Packaged shutdown left unexpected advertised workspace data: ${name}/${relative}`
-          );
-      }
-      const identities = await fs.readdir(path.join(workspaces, name, "reach", "iroh"));
-      // server/index.ts creates the callback identity at boot; endpoint.key is
-      // created lazily when the advertised Iroh transport is first needed.
-      if (
-        !identities.includes("callback-relay-identity.pem") ||
-        identities.some((entry) => !["endpoint.key", "callback-relay-identity.pem"].includes(entry))
-      )
-        throw new Error(`Unexpected host reach identity files: ${identities.join(", ")}`);
-    }
-    result.workspace.ephemeralStorageRemoved = true;
-    result.workspace.retainedHostReachIdentities = remaining.length;
+    const remaining = await fs.readdir(workspaces);
+    if (remaining.length !== 1 || remaining[0] !== "dev")
+      throw new Error(`Packaged shutdown changed workspace storage: ${remaining.join(", ")}`);
+    if (!(await fs.stat(workspaceConfig)).isFile())
+      throw new Error("Packaged shutdown removed the persistent workspace configuration");
+    result.workspace.persistedAcrossShutdown = true;
     await fs.writeFile(path.join(outDir, "report.json"), JSON.stringify(result, null, 2), {
       mode: 0o600,
     });
