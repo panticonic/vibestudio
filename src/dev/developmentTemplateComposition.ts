@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,16 +21,12 @@ export interface DevelopmentTemplateComposition {
  * discarded with the tool process.
  */
 export function composeDevelopmentTemplateCheckouts(
-  checkouts: readonly string[]
+  sources: readonly { checkout: string; url: string }[]
 ): DevelopmentTemplateComposition {
-  if (checkouts.length === 0) throw new Error("Template composition needs at least one checkout");
-  const roots = checkouts.map((checkout) => fs.realpathSync(path.resolve(checkout)));
-  const layers = roots.map((root) => ({
-    label: fs.existsSync(path.join(root, ".git"))
-      ? execFileSync("git", ["remote", "get-url", "origin"], { cwd: root, encoding: "utf8" })
-          .trim()
-          .replace(/^git@github.com:/, "https://github.com/")
-      : root,
+  if (sources.length === 0) throw new Error("Template composition needs at least one checkout");
+  const roots = sources.map(({ checkout }) => fs.realpathSync(path.resolve(checkout)));
+  const layers = roots.map((root, index) => ({
+    label: sources[index]!.url,
     manifest: parseTemplateManifestContent(
       fs.readFileSync(path.join(root, "meta", "vibestudio.yml"), "utf8"),
       WORKSPACE_SYSTEM_EPOCH

@@ -79,6 +79,7 @@ describe("development template configuration", () => {
         expect.objectContaining({
           id: "system-testing",
           role: "development",
+          url: "git+https://example.test/system-testing.git",
           consumers: ["personal", "system"],
         }),
         expect.objectContaining({ id: "examples", role: "catalog" }),

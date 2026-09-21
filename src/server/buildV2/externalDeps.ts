@@ -707,12 +707,6 @@ function getExtensionRuntimeDepsBaseDir(): string {
   return path.join(getSharedDerivedDataPath(), "extension-runtime-deps");
 }
 
-function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolean {
-  if (!(error instanceof Error)) return false;
-  const code = (error as NodeJS.ErrnoException).code;
-  return typeof code === "string" && codes.includes(code);
-}
-
 function validateNpmSpecMap(kind: string, specs: Record<string, string>): void {
   // Reject any version specifier that npm would interpret as a non-registry
   // source (file:, git+ssh://, https://, github:, npm:, local paths). Panel
@@ -1445,7 +1439,10 @@ async function ensureDepsInstalledOnce(
     try {
       await fs.promises.rename(tmpDir, cacheDir);
     } catch (err: unknown) {
-      if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
+      // The destination's existence establishes a competing publication.
+      // Windows can report that same collision as EPERM, so the error code
+      // alone cannot distinguish a winner from a failed source rename.
+      if (fs.existsSync(cacheDir)) {
         // Another process won — verify its receipt before use.
         if (await isReusableExternalDepsCache(cacheDir)) {
           try {

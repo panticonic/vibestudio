@@ -19,10 +19,14 @@ if (workspaceArgumentIndex < 0) {
   const selected = requireDevelopmentTemplateCheckouts(appRoot);
   const checkouts = selected.checkouts;
   // Every catalog source compiles against Base like any other template.
-  const templates = selected.sources.map(({ id }) => [id, checkouts[id]] as [string, string]);
-  for (const [name, checkout] of templates) {
+  const base = selected.sources.find(({ id }) => id === "base")!;
+  for (const source of selected.sources) {
+    const name = source.id;
     const composition = composeDevelopmentTemplateCheckouts(
-      name === "base" ? [checkouts.base] : [checkouts.base, checkout]
+      (name === "base" ? [base] : [base, source]).map(({ id, url }) => ({
+        checkout: checkouts[id],
+        url,
+      }))
     );
     try {
       execFileSync(

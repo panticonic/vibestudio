@@ -54,7 +54,10 @@ export default defineConfig(async () => {
     throw new Error(`Unknown VIBESTUDIO_USERLAND_TEMPLATE ${JSON.stringify(template)}`);
   }
   const composition = composeDevelopmentTemplateCheckouts(
-    template === "base" ? [selected.checkouts.base] : [selected.checkouts.base, testSourceRoot]
+    (template === "base"
+      ? selected.sources.filter(({ id }) => id === "base")
+      : selected.sources.filter(({ id }) => id === "base" || id === template)
+    ).map(({ id, url }) => ({ checkout: selected.checkouts[id], url }))
   );
   process.once("exit", composition.release);
   const workspaceRoot = composition.root;

@@ -37,7 +37,7 @@ function assertGitCheckout(checkout, name = "template") {
   }
 }
 
-function canonicalRemoteUrl(value) {
+function canonicalRemoteUrl(value, { stripGitSuffix = true } = {}) {
   const remote = value.startsWith("git+") ? value.slice(4) : value;
   const scp = /^git@([^:]+):(.+)$/u.exec(remote);
   const ssh = /^ssh:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/u.exec(remote);
@@ -54,7 +54,8 @@ function canonicalRemoteUrl(value) {
   url.password = "";
   url.search = "";
   url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/u, "");
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  if (stripGitSuffix) url.pathname = url.pathname.replace(/\.git$/u, "");
   return `${url.protocol}//${url.host.toLowerCase()}${url.pathname}`;
 }
 
@@ -96,7 +97,9 @@ function catalogEntry(value, expectedRole) {
     role,
     name,
     description,
-    url: `git+${canonicalRemoteUrl(url)}`,
+    // Preserve the repository's declared URL identity. The suffix-insensitive
+    // form above is only for comparing checkout origins.
+    url: `git+${canonicalRemoteUrl(url, { stripGitSuffix: false })}`,
     ...(Array.isArray(value.tags) ? { tags: value.tags } : {}),
     ...(typeof value.recommended === "boolean" ? { recommended: value.recommended } : {}),
     ...(expectedRole === "development" ? { consumers: [...new Set(consumers)] } : {}),

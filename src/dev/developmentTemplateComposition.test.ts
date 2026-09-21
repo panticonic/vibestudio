@@ -38,7 +38,10 @@ describe("composeDevelopmentTemplateCheckouts", () => {
       { "panels/tour/package.json": "{}", "panels/tour/PERSONAL.md": "personal" }
     );
 
-    const composition = composeDevelopmentTemplateCheckouts([base, personal]);
+    const composition = composeDevelopmentTemplateCheckouts([
+      { checkout: base, url: "git+https://example.test/base.git" },
+      { checkout: personal, url: "git+https://example.test/personal.git" },
+    ]);
     roots.push(composition.root);
     const parsed = parseTemplateManifestContent(
       fs.readFileSync(path.join(composition.root, "meta", "vibestudio.yml"), "utf8"),

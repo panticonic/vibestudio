@@ -402,7 +402,9 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     try {
       await fs.promises.rename(tmpDir, sharedDir);
     } catch (error) {
-      if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+      // A published destination means another writer won the race. Windows
+      // may report EPERM for this collision rather than EEXIST.
+      if (!fs.existsSync(sharedDir)) throw error;
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     }
   } catch (error) {
@@ -915,7 +917,7 @@ export async function getOrHydrate(
         try {
           await fs.promises.rename(tmpDir, localDir);
         } catch (error) {
-          if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+          if (!fs.existsSync(localDir)) throw error;
           promoted = false;
           await fs.promises.rm(tmpDir, { recursive: true, force: true });
         }
@@ -1270,7 +1272,7 @@ export async function put(
   try {
     await fs.promises.rename(tmpDir, dir);
   } catch (err: unknown) {
-    if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
+    if (fs.existsSync(dir)) {
       // Another build may have won the race. Accept it only after the same
       // manifest + execution-identity verification used by normal reads.
       if (fs.existsSync(metadataPath)) {

@@ -438,7 +438,9 @@ export async function discoverTrackedGitSnapshot(
     .sort(naturalVersionCompare);
   const ref = matches.at(-1);
   if (!ref) {
-    throw new Error(`Git track ${options.track} did not match any fetched tag`);
+    throw new Error(
+      `Git track ${options.track} for ${options.label} (${options.url}) did not match any fetched tag`
+    );
   }
   await options.git.checkout(options.dir, ref, { force: true });
   const commit = await options.git.getCurrentCommit(options.dir);
