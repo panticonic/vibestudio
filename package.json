@@ -2,7 +2,7 @@
   "type": "module",
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "private": true,
   "bin": {
     "vibestudio": "scripts/vibestudio-cli-shim.mjs",
@@ -124,7 +124,10 @@
     "typescript",
     "panel"
   ],
-  "author": "Gabriel Pickard",
+  "author": {
+    "name": "Gabriel Pickard",
+    "email": "wergomat@gmail.com"
+  },
   "license": "MIT",
   "packageManager": "pnpm@10.12.4",
   "engines": {
@@ -300,5 +303,12 @@
     "zod": "^3.25.76",
     "zod-to-json-schema": "^3.25.0",
     "extract-zip": "2.0.1"
+  },
+  "optionalDependencies": {
+    "@number0/iroh-darwin-arm64": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-darwin-arm64-1.1.0-cancel.2.tgz",
+    "@number0/iroh-linux-arm64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.2.tgz",
+    "@number0/iroh-linux-x64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.2.tgz",
+    "@number0/iroh-win32-arm64-msvc": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.2.tgz",
+    "@number0/iroh-win32-x64-msvc": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz"
   }
 }

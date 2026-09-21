@@ -1,5 +1,17 @@
 nodeLinker: hoisted
 
+# Desktop releases cross-package x64 and arm64 installers from one Linux
+# runner. Keep both native payloads installed so electron-builder can select
+# the artifact for each target architecture.
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - glibc
+
 packages:
   - "packages/*"
   - "apps/*"

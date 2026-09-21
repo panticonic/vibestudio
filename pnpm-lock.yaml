@@ -421,6 +421,22 @@ importers:
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.7)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+    optionalDependencies:
+      '@number0/iroh-darwin-arm64':
+        specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-darwin-arm64-1.1.0-cancel.2.tgz
+        version: '@panticonic/iroh-darwin-arm64@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-darwin-arm64-1.1.0-cancel.2.tgz'
+      '@number0/iroh-linux-arm64-gnu':
+        specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.2.tgz
+        version: '@panticonic/iroh-linux-arm64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.2.tgz'
+      '@number0/iroh-linux-x64-gnu':
+        specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.2.tgz
+        version: '@panticonic/iroh-linux-x64-gnu@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.2.tgz'
+      '@number0/iroh-win32-arm64-msvc':
+        specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.2.tgz
+        version: '@panticonic/iroh-win32-arm64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.2.tgz'
+      '@number0/iroh-win32-x64-msvc':
+        specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz
+        version: '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz'
 
   apps/headless-host:
     dependencies:
@@ -12963,9 +12979,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

@@ -322,6 +322,7 @@ jobs:
             # Keep electron-builder from adopting a stray keychain identity on the
             # runner, so an unsigned build is unsigned deliberately rather than by
             # accident.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
             CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
             mkdir -p release && echo ad-hoc > release/macos-signing.txt
           else
