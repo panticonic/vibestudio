@@ -330,6 +330,8 @@ export const BROWSER_DATA_MEMBERS = [
   "updateHistoryTitle",
   "getSearchEngines",
   "setDefaultEngine",
+  "saveSearchEngine",
+  "getSearchSuggestions",
   "listDownloads",
   "listDownloadRecords",
   "upsertDownloadRecord",

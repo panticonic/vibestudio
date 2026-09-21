@@ -54,7 +54,7 @@ function canonicalRemoteUrl(value) {
   url.password = "";
   url.search = "";
   url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/u, "");
+  url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/u, "");
   return `${url.protocol}//${url.host.toLowerCase()}${url.pathname}`;
 }
 

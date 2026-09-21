@@ -89,6 +89,12 @@ describe("development template configuration", () => {
     expect(configuredDevelopmentTemplateRoot(host, {})).toBeUndefined();
   });
 
+  it("recognizes an actions/checkout origin without the optional .git suffix", () => {
+    const { host, root } = collection();
+    git(path.join(root, "base"), "remote", "set-url", "origin", "https://example.test/base");
+    expect(setDevelopmentTemplateRoot(host, root).checkouts.base).toBe(path.join(root, "base"));
+  });
+
   it("supports one explicit collection override", () => {
     const { host, root } = collection();
     expect(

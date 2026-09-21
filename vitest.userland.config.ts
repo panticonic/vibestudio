@@ -205,6 +205,8 @@ export default defineConfig(async () => {
         `${workspaceGlob}/apps/mobile/**`,
         `${workspaceGlob}/**/*.browser.test.ts`,
         `${workspaceGlob}/**/*.browser.test.tsx`,
+        // These files use @workspace/test-runtime and run in workerd, not Vitest.
+        `${workspaceGlob}/**/*.workerd.test.ts`,
       ],
       server: {
         ...baseServer,
