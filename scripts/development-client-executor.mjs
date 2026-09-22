@@ -26,18 +26,16 @@ const repoRoot = process.cwd();
 
 function parseArguments(argv) {
   let instanceId;
-  let workspace;
   let ttlMs = 3_600_000;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--instance") instanceId = argv[(index += 1)];
-    else if (arg === "--workspace") workspace = argv[(index += 1)];
     else if (arg === "--ttl-ms") ttlMs = Number(argv[(index += 1)]);
     else if (arg === "-h" || arg === "--help") return { help: true };
     else throw new Error(`Unknown option ${arg}`);
   }
   if (!instanceId) throw new Error("usage: development-client-executor.mjs --instance ID");
-  return { instanceId, workspace, ttlMs };
+  return { instanceId, ttlMs };
 }
 
 /** Run one instance-scoped CLI command and return its last stdout line. */
@@ -69,25 +67,8 @@ function runInstanceCli(instanceId, command) {
   });
 }
 
-/**
- * The workspace a desktop client belongs in: the account's System, which is
- * where native client code lives and where this instance's CLI already is.
- */
-async function resolveSystemWorkspace(instanceId) {
-  const line = await runInstanceCli(instanceId, ["remote", "workspaces", "--json"]);
-  const listed = JSON.parse(line)?.workspaces ?? [];
-  const system = listed.filter((entry) => entry.privateRole === "system");
-  if (system.length !== 1) {
-    throw new Error(
-      `Expected exactly one system workspace on ${instanceId}, found ${system.length}. ` +
-        "Pass --workspace NAME to choose one explicitly."
-    );
-  }
-  return system[0].name;
-}
-
 /** Mint one device invite from the running instance through its own CLI. */
-function mintPairingLink(instanceId, workspace, ttlMs) {
+function mintPairingLink(instanceId, ttlMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -98,8 +79,6 @@ function mintPairingLink(instanceId, workspace, ttlMs) {
         instanceId,
         "remote",
         "pair-device",
-        "--workspace",
-        workspace,
         "--ttl-ms",
         String(ttlMs),
         "--json",
@@ -136,9 +115,9 @@ async function main() {
     console.log(`Attach an Electron client-device executor to a running instance.
 
 Usage:
-  node scripts/development-client-executor.mjs --instance ID [--workspace NAME] [--ttl-ms MS]
+  node scripts/development-client-executor.mjs --instance ID [--ttl-ms MS]
 
-Pairs into the instance's System workspace unless --workspace names another.
+Pairs this device to the instance account. Workspace selection is independent.
 
 Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     return;
@@ -168,11 +147,8 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
   });
 
   try {
-    const workspace = parsed.workspace ?? (await resolveSystemWorkspace(parsed.instanceId));
-    const deepLink = await mintPairingLink(parsed.instanceId, workspace, parsed.ttlMs);
-    console.log(
-      `[client-executor] minted a device invite for ${workspace} on ${parsed.instanceId}`
-    );
+    const deepLink = await mintPairingLink(parsed.instanceId, parsed.ttlMs);
+    console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
     const secrets = await startEphemeralLinuxSecretService(tempRoot, children);
 
     const userDataDir = path.join(tempRoot, "electron-user-data");

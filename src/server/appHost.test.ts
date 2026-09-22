@@ -1241,6 +1241,40 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/shell")?.status).toBe("available");
   });
 
+  it("rebuilds a current app when its active immutable artifact is missing", async () => {
+    const { host, buildSystem, graphNode } = makeHarness();
+    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
+    const declared = [{ source: "apps/shell", ref: "main" }];
+
+    await host.reconcileDeclared(declared);
+    await host.whenSettled();
+    const built = await buildSystem.getBuild.mock.results[0]!.value;
+    buildSystem.getBuild.mockClear();
+
+    let artifactAvailable = false;
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      artifactAvailable && key === "app-key" ? built : null
+    );
+    buildSystem.getBuild.mockImplementation(async () => {
+      artifactAvailable = true;
+      return built;
+    });
+
+    await host.reconcileDeclared(declared);
+    await host.whenSettled();
+
+    expect(buildSystem.getBuild).toHaveBeenCalledExactlyOnceWith("@workspace-apps/shell", "main");
+    expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
+      activeBundleKey: "app-key",
+      status: "available",
+      lastError: null,
+    });
+    await expect(host.ensureElectronReady()).resolves.toMatchObject({
+      ready: true,
+      buildKey: "app-key",
+    });
+  });
+
   it("prebuilds the selected Electron artifact without admitting or activating it", async () => {
     const { host, buildSystem, eventService, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;

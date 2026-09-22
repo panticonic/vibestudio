@@ -2229,6 +2229,15 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     decl: WorkspaceAppDeclaration
   ): boolean {
     if (entry.status === "error") return true;
+    // Registry state is only a durable pointer to an immutable build. The
+    // artifact store can be recovered independently (for example after an
+    // idle workspace child exits), so matching source/version metadata does
+    // not make an absent artifact runnable. Rebuild it through the ordinary
+    // declaration path instead of leaving every host launch to retry a dead
+    // pointer forever.
+    if (!entry.activeBundleKey || !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)) {
+      return true;
+    }
     return this.unitHost.needsBuildRefresh(entry, {
       sourceRepo: node.relativePath,
       ref: decl.ref,
