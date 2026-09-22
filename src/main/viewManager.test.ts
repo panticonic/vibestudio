@@ -1627,6 +1627,26 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
     });
 
+    it("accepts direct overlay state only from the hosted shell chrome", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const shellView = vm.createView({
+        id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.setViewVisible("panel-1", true);
+
+      const visibilityWrites = vi.mocked(panelView.setVisible).mock.calls.length;
+      vm.setShellOverlayActiveFromShell(shellView.webContents.id + 1, true);
+      expect(panelView.setVisible).toHaveBeenCalledTimes(visibilityWrites);
+
+      vm.setShellOverlayActiveFromShell(shellView.webContents.id, true);
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+    });
+
     it("keeps a panel materialized during workspace review hidden until the review closes", () => {
       vm.createView({
         id: "@workspace-apps/shell",

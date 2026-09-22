@@ -1863,6 +1863,9 @@ app.on("ready", async () => {
   ipcMain.on("vibestudio:shell.chrome-interactive-focus", (event, active: unknown) => {
     applicationWindow.viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
   });
+  ipcMain.on("vibestudio:shell.overlay-active", (event, active: unknown) => {
+    applicationWindow.viewManager?.setShellOverlayActiveFromShell(event.sender.id, active === true);
+  });
   installBootstrapConnectionHandlers();
   releaseUpdateController = createReleaseUpdateController({
     eventService,

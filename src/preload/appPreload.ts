@@ -70,6 +70,11 @@ const vibestudioApp = {
   // operating breadcrumbs, the sidebar, dialogs, or form controls.
   setChromeInteractiveFocus: (active: boolean) =>
     ipcRenderer.send("vibestudio:shell.chrome-interactive-focus", active),
+  // Native panel views sit above the hosted shell in Electron's compositor.
+  // Dialog visibility is therefore a window-host concern, not a workspace RPC:
+  // it must remain writable while the workspace server is unavailable.
+  setShellOverlayActive: (active: boolean) =>
+    ipcRenderer.send("vibestudio:shell.overlay-active", active),
   inspectWorkspaceFolder: () => ipcRenderer.invoke("vibestudio:inspectWorkspaceFolder"),
 };
 

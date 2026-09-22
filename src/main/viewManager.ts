@@ -1781,6 +1781,13 @@ export class ViewManager {
     this.reconcileNativeLayerOrder();
   }
 
+  /** Accept compositor state only from the WebContents that owns shell chrome. */
+  setShellOverlayActiveFromShell(senderWebContentsId: number, active: boolean): void {
+    const shellChrome = this.getShellChromeWebContents();
+    if (!shellChrome || shellChrome.id !== senderWebContentsId) return;
+    this.setShellOverlayActive(active);
+  }
+
   setShellChromeInteractiveFocus(senderWebContentsId: number, active: boolean): void {
     const shellChrome = this.getShellChromeWebContents();
     if (!shellChrome || shellChrome.id !== senderWebContentsId) return;

@@ -118,7 +118,7 @@ export function workspaceConnectionPresentation(
     return {
       title: "Connection ended",
       message:
-        "This device can no longer resume its workspace session. Open connection settings to reconnect or pair again.",
+        "This session can no longer resume. Restart Vibestudio to reconnect with this device, or choose another server in Connection settings.",
       showSpinner: false,
       showSettings: true,
     };
