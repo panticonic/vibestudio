@@ -493,11 +493,10 @@ function schemaFailure(
   error: unknown,
   expectedCall?: string
 ): Error {
-  const detail = error instanceof Error ? error.message : String(error);
   const failure = new Error(
     `Service "${service}" method "${method}" ${boundary} failed schema validation${
       expectedCall ? `. Expected call shape: ${expectedCall}` : ""
-    }: ${detail}`
+    }.`
   ) as Error & { cause?: unknown };
   // ErrorOptions is not declared by every consumer tsconfig even though all
   // supported runtimes allow custom Error properties. Preserve the original

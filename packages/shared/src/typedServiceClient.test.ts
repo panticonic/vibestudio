@@ -67,6 +67,16 @@ describe("createTypedServiceClient", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it("keeps validator internals in the cause instead of the user-facing message", async () => {
+    const client = createTypedServiceClient("demo", methods, async () => null);
+
+    const error = await client.echo(42 as never).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain("ZodError");
+    expect((error as Error).message).not.toContain("invalid_type");
+    expect((error as Error & { cause?: unknown }).cause).toBeInstanceOf(z.ZodError);
+  });
+
   it("renders object request fields in outbound schema errors", async () => {
     const objectMethods = defineServiceMethods({
       inspect: {

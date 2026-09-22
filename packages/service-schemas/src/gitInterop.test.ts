@@ -79,8 +79,8 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
   });
 
-  it("accepts only array-based status queries", () => {
-    expect(gitInteropMethods.upstreamStatus.args.safeParse([[]]).success).toBe(true);
+  it("uses no arguments for all upstreams and a non-empty array for selected repos", () => {
+    expect(gitInteropMethods.upstreamStatus.args.safeParse([]).success).toBe(true);
     expect(
       gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { branch: "release" }])
         .success
@@ -88,15 +88,13 @@ describe("gitInterop canonical contract", () => {
     expect(
       gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { fetch: true }]).success
     ).toBe(false);
-    expect(gitInteropMethods.upstreamStatus.args.safeParse([]).success).toBe(false);
+    expect(gitInteropMethods.upstreamStatus.args.safeParse([[]]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse(["projects/demo", {}]).success).toBe(
       false
     );
     expect(gitInteropMethods.upstreamStatus.args.safeParse([null, {}]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([undefined]).success).toBe(false);
-    expect(gitInteropMethods.upstreamStatus.description).toContain(
-      "git.upstreamStatus([imported.path])"
-    );
+    expect(gitInteropMethods.upstreamStatus.description).toContain("git.upstreamStatus()");
   });
 
   it("models omitted options as shorter tuples that survive JSON transport", () => {
@@ -104,7 +102,7 @@ describe("gitInterop canonical contract", () => {
       [gitInteropMethods.setAutoPush.args, ["projects/demo", true]],
       [gitInteropMethods.pushUpstream.args, ["projects/demo"]],
       [gitInteropMethods.pullUpstream.args, ["projects/demo"]],
-      [gitInteropMethods.upstreamStatus.args, [[]]],
+      [gitInteropMethods.upstreamStatus.args, []],
     ] as const;
 
     for (const [schema, args] of calls) {

@@ -810,23 +810,20 @@ export const gitInteropMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Arguments are positional: call `git.upstreamStatus([imported.path])`, not `git.upstreamStatus([[imported.path]])`. The configured gitInterop provider performs all Git/network work.",
+      "Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Call `git.upstreamStatus()` for every configured upstream, or `git.upstreamStatus([imported.path])` for selected repositories. The configured gitInterop provider performs all Git/network work.",
     args: z.union([
+      z.tuple([]),
       z.tuple([
-        z
-          .array(z.string())
-          .describe("Workspace-relative repos to inspect; pass an empty array for every upstream."),
+        z.array(z.string()).min(1).describe("One or more workspace-relative repos to inspect."),
       ]),
       z.tuple([
-        z
-          .array(z.string())
-          .describe("Workspace-relative repos to inspect; pass an empty array for every upstream."),
+        z.array(z.string()).min(1).describe("One or more workspace-relative repos to inspect."),
         gitUpstreamStatusOptionsSchema,
       ]),
     ]),
     returns: z.array(gitUpstreamStatusRowSchema),
     access: UPSTREAM_STATUS_ACCESS,
-    examples: [{ args: [["projects/bgkit"]] }],
+    examples: [{ args: [] }, { args: [["projects/bgkit"]] }],
   },
   pushUpstream: {
     website: {
