@@ -12,15 +12,33 @@ import { composeDevelopmentTemplateCheckouts } from "../src/dev/developmentTempl
 import { buildNativeIsolation } from "./build-native-isolation.mjs";
 import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
+import { assertTemplateCheckoutHygiene } from "./lib/template-checkout-hygiene.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
+const templateArgumentIndex = process.argv.indexOf("--template");
 if (workspaceArgumentIndex < 0) {
   const selected = requireDevelopmentTemplateCheckouts(appRoot);
+  assertTemplateCheckoutHygiene(selected);
   const checkouts = selected.checkouts;
+  const requestedTemplate =
+    templateArgumentIndex >= 0 ? process.argv[templateArgumentIndex + 1] : undefined;
+  if (templateArgumentIndex >= 0 && !requestedTemplate) {
+    throw new Error("--template requires a template id");
+  }
+  const sources = requestedTemplate
+    ? selected.sources.filter(({ id }) => id === requestedTemplate)
+    : selected.sources;
+  if (requestedTemplate && sources.length === 0) {
+    throw new Error(
+      `Unknown userland template ${JSON.stringify(requestedTemplate)}; expected one of ${selected.sources
+        .map(({ id }) => id)
+        .join(", ")}`
+    );
+  }
   // Every catalog source compiles against Base like any other template.
   const base = selected.sources.find(({ id }) => id === "base")!;
-  for (const source of selected.sources) {
+  for (const source of sources) {
     const name = source.id;
     const composition = composeDevelopmentTemplateCheckouts(
       (name === "base" ? [base] : [base, source]).map(({ id, url }) => ({
@@ -45,6 +63,7 @@ if (workspaceArgumentIndex < 0) {
       composition.release();
     }
   }
+  assertTemplateCheckoutHygiene(selected);
   process.exit(0);
 }
 if (workspaceArgumentIndex >= 0 && !process.argv[workspaceArgumentIndex + 1]) {

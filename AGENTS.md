@@ -37,6 +37,32 @@ inspector/page connection remains live. Instance startup is a blocker only when
 isolated bootstrap itself fails after its supervisor log has been inspected and
 the infrastructure defect cannot be repaired within the task.
 
+## External template verification
+
+Configured Base, Personal, System, and catalog-template checkouts are source inputs,
+not package-manager or test-tool workspaces. Never run Vitest, TypeScript, pnpm, or
+another build tool with one of those checkouts as its working directory. Direct tool
+execution leaves host-owned `node_modules/.vite`, `dist`, or `*.tsbuildinfo` state in
+the external repository and does not reproduce the installed dependency boundary.
+
+From this checkout, run focused template tests through the host-owned projection:
+
+```sh
+pnpm test:userland -- --template base --filter packages/harness/src/tools/eval.test.ts
+```
+
+Use `--test-name` for one test and repeat `--filter` for additional files or unit
+directories. Run a single template composition typecheck with:
+
+```sh
+pnpm type-check:userland -- --template base
+```
+
+These commands keep dependencies, caches, compiler state, and composed source in
+host-owned temporary locations. `pnpm check:template-checkout-hygiene` is the
+enforcement gate; repair the command path instead of ignoring or checking in any
+reported artifact.
+
 ## Headless system tests
 
 When a task asks to verify, diagnose, or repair Vibestudio through the headless
