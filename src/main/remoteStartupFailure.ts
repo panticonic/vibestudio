@@ -28,6 +28,14 @@ export function remoteStartupFailurePresentation(
         "This link cannot be retried. Pairing links are single-use to prevent replay; generate a fresh link on the server or from a paired administrator.",
     };
   }
+  if (/unable to reach .* configured relays|iroh dial .* timed out/i.test(cause)) {
+    return {
+      message: "Could not reach the server",
+      detail: freshPairing
+        ? "No connection was made, so this pairing link was not used. Check that the server is running and reachable, then retry the same link."
+        : "The saved pairing was kept. Check that the server is running and reachable, then retry the connection.",
+    };
+  }
   if (freshPairing) {
     return {
       message,

@@ -245,6 +245,13 @@ class ReconnectingPipe implements IrohClientPipe {
   private closed = false;
   private suspended = false;
   /**
+   * Reconnection is a property of a session that has actually connected.
+   * Before that point, callers are waiting for an initial acquisition and must
+   * receive its bounded failure so startup can present recovery instead of
+   * disappearing into this pipe's background retry loop.
+   */
+  private hasConnected = false;
+  /**
    * Consecutive dial attempts since the last connection that stood up.
    *
    * The retry budget belongs to the pipe, not to one run of `connectLoop`.
@@ -440,10 +447,11 @@ class ReconnectingPipe implements IrohClientPipe {
           // and immediately retracting it.
           connected.disposeObservers();
           await pipe.close().catch(() => undefined);
+          const failure = new Error("physical Iroh connection closed before it was installed");
           this.options.onReconnectResult?.({
             attempt,
             success: false,
-            error: new Error("physical Iroh connection closed before it was installed"),
+            error: failure,
           });
           this.emitReconnect({
             attempt,
@@ -451,9 +459,11 @@ class ReconnectingPipe implements IrohClientPipe {
             reason: "physical Iroh connection closed before it was installed",
           });
           this.setStatus("connecting");
+          if (!this.hasConnected) throw failure;
           continue;
         }
         this.connected = connected;
+        this.hasConnected = true;
         this.connectedSince = this.now();
         this.emitDiagnostics();
         this.setStatus("connected");
@@ -471,6 +481,7 @@ class ReconnectingPipe implements IrohClientPipe {
           reason: failure.message,
         });
         this.setStatus("connecting");
+        if (!this.hasConnected) throw failure;
       }
     }
     throw new Error(

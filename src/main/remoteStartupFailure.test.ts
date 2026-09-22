@@ -28,6 +28,19 @@ describe("remoteStartupFailurePresentation", () => {
     );
   });
 
+  it("makes an unreachable fresh server a safe retry instead of an ambiguous pairing failure", () => {
+    expect(
+      remoteStartupFailurePresentation(
+        new Error("Unable to reach endpoint through 2 configured relays"),
+        true
+      )
+    ).toEqual({
+      message: "Could not reach the server",
+      detail:
+        "No connection was made, so this pairing link was not used. Check that the server is running and reachable, then retry the same link.",
+    });
+  });
+
   it("keeps returning-device recovery separate from one-time pairing", () => {
     expect(remoteStartupFailurePresentation(new Error("Connection lost"), false).detail).toMatch(
       /saved pairing was kept/i

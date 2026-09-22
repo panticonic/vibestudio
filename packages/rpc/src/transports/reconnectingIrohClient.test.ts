@@ -126,7 +126,7 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
-  it("treats a dial dropped before installation as a failed attempt, not a connection", async () => {
+  it("returns a failed initial acquisition and lets an explicit retry connect", async () => {
     // The physical connection is answered and then dropped inside the same
     // turn that installs it, which is the one window where the drop has no
     // live connection to match. Publishing it anyway left a session convinced
@@ -149,6 +149,9 @@ describe("reconnecting Iroh client", () => {
     });
 
     const session = owner.openSession({ connectionId: "drop", getToken: () => "credential" });
+    await expect(session.ready?.()).rejects.toThrow(
+      "physical Iroh connection closed before it was installed"
+    );
     await expect(session.ready?.()).resolves.toBeUndefined();
 
     expect(results[0]).toEqual({ attempt: 1, success: false });
@@ -157,6 +160,30 @@ describe("reconnecting Iroh client", () => {
     // The dead pipe never carried a session.
     expect(dropped.sessions).toHaveLength(0);
     expect(healthy.sessions.length).toBeGreaterThan(0);
+    await owner.close();
+  });
+
+  it("does not turn an unreachable initial peer into an indefinite reconnect loop", async () => {
+    const healthy = new FakePipe();
+    const dial = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Unable to reach peer through configured relays"))
+      .mockResolvedValueOnce(healthy);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: healthy.peerEndpointId,
+      dial,
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+
+    await expect(session.ready?.()).rejects.toThrow("Unable to reach peer");
+    expect(dial).toHaveBeenCalledOnce();
+    await expect(session.ready?.()).resolves.toBeUndefined();
+    expect(dial).toHaveBeenCalledTimes(2);
+
     await owner.close();
   });
 
