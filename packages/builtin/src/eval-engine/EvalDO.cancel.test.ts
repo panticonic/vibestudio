@@ -312,6 +312,30 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).not.toHaveProperty("event");
   });
 
+  it("keeps the outstanding panel inventory across evaluator reconstruction", async () => {
+    const first = await createTestDO(EvalDO);
+    const firstResources = priv<
+      Map<string, { id: string; source: string; kind: "workspace" | "browser" }>
+    >(first.instance, "openPanelResources");
+    firstResources.set("panel:tree/preview", {
+      id: "panel:tree/preview",
+      source: "panels/tour",
+      kind: "workspace",
+    });
+    priv<() => void>(first.instance, "persistOpenPanelResources").call(first.instance);
+
+    const second = await createTestDO(EvalDO, undefined, { db: first.db });
+    expect([...priv<Map<string, unknown>>(second.instance, "openPanelResources").values()]).toEqual(
+      [
+        {
+          id: "panel:tree/preview",
+          source: "panels/tour",
+          kind: "workspace",
+        },
+      ]
+    );
+  });
+
   it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
     vi.useFakeTimers();
     try {

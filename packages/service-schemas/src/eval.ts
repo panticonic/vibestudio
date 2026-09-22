@@ -244,6 +244,23 @@ export const evalRunResultSchema = z
     errorData: z.unknown().optional(),
     /** Keys currently held in the live notebook scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
+    /** Panels opened by this eval kernel and not yet archived through its runtime surface. */
+    panelResources: z
+      .object({
+        open: z
+          .array(
+            z
+              .object({
+                id: z.string(),
+                source: z.string(),
+                kind: z.enum(["workspace", "browser"]),
+              })
+              .strict()
+          )
+          .max(100),
+      })
+      .strict()
+      .optional(),
     /** Notebook incarnation, residency, and exact cold-recovery diagnostics. */
     kernel: evalKernelStatusSchema.optional(),
   })

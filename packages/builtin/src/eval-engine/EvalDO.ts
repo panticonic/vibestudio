@@ -424,6 +424,9 @@ interface RunResult {
   failureCode?: string;
   errorData?: unknown;
   scopeKeys?: string[];
+  panelResources?: {
+    open: Array<{ id: string; source: string; kind: "workspace" | "browser" }>;
+  };
   kernel?: KernelRunStatus;
 }
 
@@ -537,6 +540,13 @@ export class EvalDO extends DurableObjectBase {
    *  ownership bug — refuse loudly rather than silently run under stale identity
    *  (Finding 3). */
   private hostedRuntimeIdentity: { contextId: string; gatewayToken: string } | null = null;
+  /** Panels created through this notebook runtime and not archived through it.
+   * Repeating the inventory in every result keeps resource ownership visible
+   * across cells instead of burying it in the creation receipt. */
+  private readonly openPanelResources = new Map<
+    string,
+    { id: string; source: string; kind: "workspace" | "browser" }
+  >();
   /** Stateless provider/runtime modules shared by EvalDO instances in this isolate.
    * The map and compiler remain host-closure state and are never guest globals. */
   private readonly isolateModuleMap: Record<string, unknown> = {
@@ -571,6 +581,19 @@ export class EvalDO extends DurableObjectBase {
   }
 
   protected override afterSchemaReady(): void {
+    const persistedPanelResources = this.getStateValue("eval_open_panel_resources");
+    if (persistedPanelResources) {
+      try {
+        const entries = JSON.parse(persistedPanelResources) as Array<{
+          id: string;
+          source: string;
+          kind: "workspace" | "browser";
+        }>;
+        for (const entry of entries) this.openPanelResources.set(entry.id, entry);
+      } catch {
+        this.setStateValue("eval_open_panel_resources", "[]");
+      }
+    }
     this.kernelRestarted = this.getStateValue("eval_kernel_incarnation") !== null;
     this.setStateValue(
       "eval_kernel_incarnation",
@@ -587,6 +610,13 @@ export class EvalDO extends DurableObjectBase {
     // no module heap to retain, so carrying these rows across an incarnation
     // would reject a valid rebuild after the workspace head changes.
     if (this.kernelRestarted) this.sql.exec(`DELETE FROM eval_execution_roots`);
+  }
+
+  private persistOpenPanelResources(): void {
+    this.setStateValue(
+      "eval_open_panel_resources",
+      JSON.stringify([...this.openPanelResources.values()].slice(0, 100))
+    );
   }
 
   protected createTables(): void {
@@ -2999,6 +3029,13 @@ export class EvalDO extends DurableObjectBase {
         failureCode: result.failureCode,
         errorData: result.errorData,
         scopeKeys: Object.keys(scopeManager.current),
+        ...(this.openPanelResources.size > 0
+          ? {
+              panelResources: {
+                open: [...this.openPanelResources.values()].slice(0, 100),
+              },
+            }
+          : {}),
       };
     } finally {
       evalNodeCallbackOwnerOpen = false;
@@ -3032,6 +3069,7 @@ export class EvalDO extends DurableObjectBase {
         ? { errorData: this.compactReturnValue(result.errorData, "$lastLargeErrorData") }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
+      ...(result.panelResources ? { panelResources: result.panelResources } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
     if (result.returnValue !== undefined) {
@@ -3052,6 +3090,7 @@ export class EvalDO extends DurableObjectBase {
       ...(compact.errorData !== undefined ? { errorData: compact.errorData } : {}),
       ...(compact.returnValue !== undefined ? { returnValue: compact.returnValue } : {}),
       ...(compact.scopeKeys ? { scopeKeys: compact.scopeKeys.slice(0, 200) } : {}),
+      ...(compact.panelResources ? { panelResources: compact.panelResources } : {}),
       ...(compact.kernel ? { kernel: compact.kernel } : {}),
     };
     encoded = JSON.stringify(fallback);
@@ -3068,6 +3107,7 @@ export class EvalDO extends DurableObjectBase {
         ? { errorData: this.compactReturnValue(result.errorData, "$lastLargeErrorData") }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
+      ...(result.panelResources ? { panelResources: result.panelResources } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
   }
@@ -3679,6 +3719,14 @@ export class EvalDO extends DurableObjectBase {
       rpc: activeRpc,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
+      onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {
+        this.openPanelResources.set(entry.id, entry);
+        this.persistOpenPanelResources();
+      },
+      onClose: (id: string) => {
+        this.openPanelResources.delete(id);
+        this.persistOpenPanelResources();
+      },
       loadModule: async (id: string) => {
         const existing = this.moduleMap[id] ?? this.isolateModuleMap[id];
         if (existing !== undefined) return existing;

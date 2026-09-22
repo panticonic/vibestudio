@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:2263ffe93c9cd5531a8ea35e4c74bfa5ea1a898436c194b898c3a5aaf9d063c5",
+  "censusDigest": "sha256:4ea0e555c0e41972593f8814c80770279fc4a1500a589aacf4f9a670bdd0ef12",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -545,6 +545,10 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities": {
       "review": "host-only-runtime-resource-binding-lookup",
       "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsForEntity": {
+      "review": "host-only-entity-resource-binding-lookup",
+      "change": "Returns the durable host-validated resource relationships already owned by one exact runtime entity so eval can recover structural panel parentage when an orchestrator, rather than the bound panel, owns the lifecycle lineage. The method is a host-only read; it creates no relationship, grants no capability, and supplies no caller-authored parent identity."
     },
     "host:browserEnvironment.listDownloads": {
       "review": "public-download-capability-admission",

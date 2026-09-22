@@ -319,6 +319,15 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1), z.array(z.string().min(1)).max(256)]),
     returns: z.array(z.string().min(1)),
   },
+  runtimeResourceBindingsForEntity: {
+    website: {
+      kind: "closed",
+      reason: "Storage and lifecycle engine entry points are internal implementation authority.",
+    } as const,
+    ...internal("read"),
+    args: z.tuple([z.string().min(1)]),
+    returns: z.array(runtimeResourceBindingSchema),
+  },
   entityFindIncompleteCleanups: {
     website: {
       kind: "closed",

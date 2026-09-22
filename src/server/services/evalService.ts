@@ -14,6 +14,7 @@ import {
 import { AmbiguousDoDispatchError, type HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
 import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
@@ -383,9 +384,11 @@ export function createEvalService(deps: {
    * store (cache-first) — the panel that "owns" this eval. Walks `parentId` up
    * the launch chain: a panel caller resolves to itself; an agent/worker caller
    * resolves to its owning panel (recorded at `runtime.createEntity` from the
-   * verified caller); anything with no panel ancestor → null. Server-
-   * authoritative — never eval user input. Becomes `RunArgs.parent`, from which
-   * the EvalDO derives the portable `parent`/`getParent`.
+   * verified caller). If an orchestrator owns the lifecycle lineage, one exact
+   * host-validated panel-slot resource binding supplies the structural parent;
+   * zero or multiple bindings remain unparented. Server-authoritative — never
+   * eval user input. Becomes `RunArgs.parent`, from which the EvalDO derives the
+   * portable `parent`/`getParent`.
    */
   async function resolveParentPanel(callerId: string): Promise<EvalParentMeta | null> {
     // Shared resolver: walk the entity lineage to the nearest OPEN panel and return its TREE SLOT id
@@ -399,10 +402,28 @@ export function createEvalService(deps: {
       resolveParentId: async (id) =>
         (store.cache.resolve(id) ?? (await store.resolveRecord(id)))?.parentId,
     });
-    if (!slotId) return null;
+    let resolvedSlotId = slotId;
+    if (!resolvedSlotId) {
+      // A resource-bound agent (Quickfire is the canonical example) is not
+      // launched by the panel entity itself: its lifecycle parent is the
+      // orchestrating service. The exact panel-slot binding is nevertheless a
+      // durable host-validated ownership fact. When there is exactly one such
+      // binding, use it as the agent's structural panel parent so implicit
+      // openPanel() calls cannot escape to the workspace root.
+      const boundPanels = (await store.resourceBindingsForEntity(callerId))
+        .filter((binding) => binding.resource.kind === "panel-slot")
+        .map((binding) => asPanelSlotId(binding.resource.id));
+      const uniqueBoundPanels = [...new Set(boundPanels)];
+      if (uniqueBoundPanels.length === 1) resolvedSlotId = uniqueBoundPanels[0];
+    }
+    if (!resolvedSlotId) return null;
     // parentEntityId is only consumed for worker/do parent kinds (createRuntimeParentHandle); a panel
     // parent resolves via getPanelHandle(slotId), so the slot id is the operative identity.
-    return { parentId: slotId, parentEntityId: slotId, parentKind: "panel" };
+    return {
+      parentId: resolvedSlotId,
+      parentEntityId: resolvedSlotId,
+      parentKind: "panel",
+    };
   }
 
   async function resolveOwner(

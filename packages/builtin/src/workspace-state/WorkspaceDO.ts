@@ -999,6 +999,33 @@ export class WorkspaceDO extends DurableObjectBase {
       .map((row) => row.entity_id);
   }
 
+  @schemaRpc()
+  runtimeResourceBindingsForEntity(entityId: string): RuntimeResourceBindingInput[] {
+    return this.sql
+      .exec<{
+        resource_kind: string;
+        resource_id: string;
+        capabilities: string;
+        scope_kind: "entity" | "agent-channel";
+        scope_channel_id: string | null;
+      }>(
+        `SELECT resource_kind, resource_id, capabilities, scope_kind, scope_channel_id
+           FROM runtime_resource_bindings
+          WHERE entity_id = ?
+          ORDER BY resource_kind, resource_id`,
+        entityId
+      )
+      .toArray()
+      .map((row) => ({
+        resource: { kind: row.resource_kind, id: row.resource_id },
+        capabilities: JSON.parse(row.capabilities) as string[],
+        scope:
+          row.scope_kind === "agent-channel"
+            ? { kind: "agent-channel" as const, channelId: row.scope_channel_id! }
+            : { kind: "entity" as const },
+      }));
+  }
+
   /** A retired DO cannot retain runnable lifecycle work: its principal is no
    * longer active, so either row would only create an authorization retry loop. */
   private clearEntityDoLifecycle(row: DbEntityRow): void {

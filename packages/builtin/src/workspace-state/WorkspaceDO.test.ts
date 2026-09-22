@@ -751,8 +751,13 @@ describe("WorkspaceDO runtime resource bindings", () => {
     expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-b", "slot-c"])).toEqual([
       entity.id,
     ]);
+    expect(instance.runtimeResourceBindingsForEntity(entity.id)).toEqual([
+      binding("slot-a"),
+      binding("slot-b"),
+    ]);
     instance.runtimeResourceBindingsRelease(entity.id);
     expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-a"])).toEqual([]);
+    expect(instance.runtimeResourceBindingsForEntity(entity.id)).toEqual([]);
   });
 
   it("removes relationships atomically with entity retirement", () => {

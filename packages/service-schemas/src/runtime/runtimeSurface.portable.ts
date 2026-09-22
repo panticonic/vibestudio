@@ -421,7 +421,7 @@ const PANEL_TREE_NODE_SCHEMA = {
 const PANEL_HANDLE_SCHEMA = {
   type: "object",
   description:
-    "Live panel handle. Scalar fields are last-observed descriptors; methods include observe(), stateArgs, focus(), close(), and CDP automation.",
+    "Live panel handle. `id` is the durable panel-tree slot id; PanelHandle has no separate `slotId` field. Scalar fields are last-observed descriptors; methods include observe(), stateArgs, focus(), archive(), and CDP automation.",
   properties: {
     id: { type: "string" },
     title: { type: "string" },

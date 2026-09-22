@@ -156,6 +156,7 @@ function createHarness(
         // No panel slots in the mock → resolveParentPanel resolves to no owning panel.
         return null;
       }
+      if (method === "runtimeResourceBindingsForEntity") return [];
       if (method === "run") {
         return { success: true, console: "", scopeKeys: [] };
       }
@@ -601,6 +602,86 @@ describe("createEvalService", () => {
     expect((runCall?.args[0] as { parent?: unknown }).parent).toEqual({
       parentId: "panel:tree/p",
       parentEntityId: "panel:tree/p",
+      parentKind: "panel",
+    });
+  });
+
+  it("uses one host-validated panel binding as an orchestrated agent's parent", async () => {
+    const agentId = "do:workers/agent-worker:AiChatWorker:quickfire";
+    const agent: EntityRecord = {
+      id: agentId,
+      kind: "do",
+      source: { repoPath: "workers/agent-worker", effectiveVersion: "v" },
+      contextId: "ctx_panel",
+      className: "AiChatWorker",
+      key: "quickfire",
+      createdAt: 0,
+      status: "active",
+      cleanupComplete: true,
+    };
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const boundPanelIds = ["panel:tree/tour"];
+    const doDispatch = {
+      async dispatchHeld(
+        this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
+        ref: unknown,
+        method: string,
+        ...args: unknown[]
+      ) {
+        return this.dispatch(ref, method, ...args);
+      },
+      async dispatch(_ref: unknown, method: string, ...args: unknown[]) {
+        calls.push({ method, args });
+        if (method === "entityActivate") return undefined;
+        if (method === "entityResolve") return String(args[0]) === agentId ? agent : null;
+        if (method === "slotResolveByEntity") return null;
+        if (method === "runtimeResourceBindingsForEntity")
+          return boundPanelIds.map((id) => ({
+            resource: { kind: "panel-slot", id },
+            capabilities: ["panel.inspect"],
+            scope: { kind: "agent-channel", channelId: "quickfire-channel" },
+          }));
+        if (method === "startRun")
+          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
+        if (method === "executeRun") return { success: true, console: "", scopeKeys: [] };
+        if (method === "getRun") return { status: "done" };
+        throw new Error(`unexpected dispatch ${method}`);
+      },
+    } as unknown as DODispatch;
+    const entityCache = {
+      resolveContext: (id: string) => (id === agentId ? agent.contextId : null),
+      resolve: (id: string) => (id === agentId ? agent : null),
+      resolveActive: (id: string) => (id === agentId ? agent : null),
+      _onActivate() {},
+      _onRetire() {},
+    } as unknown as EntityCache;
+    const entityStore = new WorkspaceEntityStore({
+      doDispatch,
+      workspaceId: "ws",
+      entityCache,
+      materializeExecution: async () => undefined,
+    });
+    const service = createEvalService({
+      doDispatch,
+      entityStore,
+      retireEntity: async () => undefined,
+      tokenManager: { ensureToken: (id: string) => `tok:${id}` } as never,
+      workspaceId: "ws",
+      executionSessions: new AgentExecutionSessionRegistry(),
+      taskAuthorities: new TaskAuthorityRegistry(),
+      kernelLeases: { touch: async () => undefined },
+    });
+
+    await service.handler(
+      activeInvocationContext(authenticatedCaller(agentId, "do"), "quickfire-channel"),
+      "start",
+      [inlineEvalStart({ runId: "run:bound-parent", code: "return 1;" })]
+    );
+
+    const runCall = calls.find((call) => call.method === "startRun");
+    expect((runCall?.args[0] as { parent?: unknown }).parent).toEqual({
+      parentId: "panel:tree/tour",
+      parentEntityId: "panel:tree/tour",
       parentKind: "panel",
     });
   });
@@ -1204,6 +1285,7 @@ function createHeldFailHarness(opts: {
         return getRunResponse;
       }
       if (method === "onEvalComplete") return undefined;
+      if (method === "runtimeResourceBindingsForEntity") return [];
       throw new Error(`unexpected dispatch ${method}`);
     },
   } as unknown as DODispatch;

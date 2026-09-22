@@ -166,6 +166,10 @@ export class WorkspaceEntityStore {
     return this.dispatch<string[]>("runtimeResourceBindingEntities", resourceKind, resourceIds);
   }
 
+  resourceBindingsForEntity(id: string): Promise<RuntimeResourceBindingInput[]> {
+    return this.dispatch<RuntimeResourceBindingInput[]>("runtimeResourceBindingsForEntity", id);
+  }
+
   // --- reads: cache-first, WorkspaceDO fallback ---
 
   /** Owner context for an entity. Cache-first; falls back to the WorkspaceDO. */
