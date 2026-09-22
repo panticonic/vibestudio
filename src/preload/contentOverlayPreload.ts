@@ -46,6 +46,13 @@ contextBridge.exposeInMainWorld("__vibestudioContentOverlay", {
   reportDrag(phase: "start" | "move" | "end", screenX: number, screenY: number) {
     ipcRenderer.send("vibestudio:content-overlay:drag", { phase, screenX, screenY });
   },
+  reportGeometry(
+    action: "toggle-expand" | "resize-start" | "resize-move" | "resize-end",
+    screenX?: number,
+    screenY?: number
+  ) {
+    ipcRenderer.send("vibestudio:content-overlay:geometry", { action, screenX, screenY });
+  },
 });
 
 // Tell main that the preload-side IPC listener is installed. Main uses this

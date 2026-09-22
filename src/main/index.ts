@@ -1,5 +1,6 @@
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
+import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 import {
   app,
   dialog,
@@ -1939,57 +1940,15 @@ app.on("ready", async () => {
     "clipboard-sanitized-write",
   ]);
 
-  const capabilityForElectronPermission = (
-    permission: string
-  ): import("@vibestudio/shared/unitManifest").AppCapability | null => {
-    switch (permission) {
-      case "notifications":
-        return "notifications";
-      case "openExternal":
-        return "open-external";
-      case "clipboard-read":
-      case "clipboard-sanitized-write":
-        return "clipboard";
-      case "fullscreen":
-      case "pointerLock":
-      case "display-capture":
-        return "window-management";
-      default:
-        return null;
-    }
-  };
-
-  const appWebContentsHasPermissionCapability = (
-    contents: WebContents | null | undefined,
-    permission: string
-  ): boolean => {
-    const viewManager = applicationWindow.viewManager;
-    if (!contents || !viewManager) return false;
-    const capability = capabilityForElectronPermission(permission);
-    if (!capability) return false;
-    const viewId = viewManager.findViewIdByWebContentsId(contents.id);
-    if (!viewId) return false;
-    const viewInfo = viewManager.getViewInfo(viewId);
-    return viewInfo?.type === "app" && viewInfo.capabilities.includes(capability);
-  };
-
   const webContentsMayUseSensitivePermission = (
     contents: WebContents | null | undefined,
     permission: string
   ): boolean => {
     const viewManager = applicationWindow.viewManager;
     if (!contents || !viewManager) return false;
-    const viewId = viewManager.findViewIdByWebContentsId(contents.id);
     // Keep the request and check handlers consistent: Chromium may consult the
     // check handler before it reaches the request handler.
-    if (
-      permission === "fullscreen" &&
-      viewId &&
-      viewManager.getViewInfo(viewId)?.type === "browser"
-    ) {
-      return true;
-    }
-    return appWebContentsHasPermissionCapability(contents, permission);
+    return nativeViewMayUsePermission(viewManager, contents.id, permission);
   };
 
   const installPermissionHandlers = (targetSession: Session): void => {

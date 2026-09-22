@@ -66,9 +66,56 @@ export class ShellContentOverlayView {
   private dragStartScreen: { x: number; y: number } | null = null;
   private dragStartPos: { x: number; y: number } | null = null;
   private snapTimer: ReturnType<typeof setInterval> | null = null;
+  private quickfireBounds: ContentOverlayBounds | null = null;
+  private expanded = false;
+  private resizeStart: { x: number; y: number; bounds: ContentOverlayBounds } | null = null;
+
+  private readonly handleGeometry = (event: Electron.IpcMainEvent, payload: unknown) => {
+    if (
+      !this.isOwnSender(event.sender.id) ||
+      this.surface !== "quickfire" ||
+      !this.view ||
+      !this.visible
+    )
+      return;
+    const message = payload as { action?: unknown; screenX?: unknown; screenY?: unknown } | null;
+    if (message?.action === "toggle-expand") {
+      this.expanded = !this.expanded;
+      this.applyBounds();
+      this.pushRender();
+      return;
+    }
+    const x = Number(message?.screenX);
+    const y = Number(message?.screenY);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || this.expanded) return;
+    if (message?.action === "resize-start") {
+      this.resizeStart = { x, y, bounds: this.view.getBounds() };
+    } else if (
+      (message?.action === "resize-move" || message?.action === "resize-end") &&
+      this.resizeStart
+    ) {
+      const start = this.resizeStart;
+      const [windowWidth = 0, windowHeight = 0] = this.window!.getContentSize();
+      this.quickfireBounds = {
+        ...start.bounds,
+        width: Math.min(
+          windowWidth - start.bounds.x,
+          Math.max(360, start.bounds.width + x - start.x)
+        ),
+        height: Math.min(
+          windowHeight - start.bounds.y,
+          Math.max(360, start.bounds.height + y - start.y)
+        ),
+      };
+      if (message.action === "resize-end") this.resizeStart = null;
+      this.applyBounds();
+      this.pushRender();
+    }
+  };
 
   private readonly handleSize = (event: Electron.IpcMainEvent, payload: unknown) => {
     if (!this.isOwnSender(event.sender.id)) return;
+    if (this.quickfireLayout()) return;
     const message = payload as { width?: unknown; height?: unknown } | null;
     const width = Number(message?.width);
     const height = Number(message?.height);
@@ -107,8 +154,8 @@ export class ShellContentOverlayView {
   };
 
   /**
-   * Drag the overlay around the window, then snap it to the nearest anchor
-   * corner on release. The surface reports screen coordinates (stable as the
+   * Drag around the window. Quickfire keeps its dropped position; compact
+   * approval cards snap to an anchor corner. Screen coordinates stay stable as the
    * native view moves under the cursor) so the view tracks the pointer 1:1.
    */
   private readonly handleDrag = (event: Electron.IpcMainEvent, payload: unknown) => {
@@ -118,6 +165,8 @@ export class ShellContentOverlayView {
     const phase = message?.phase;
     const screenX = Number(message?.screenX);
     const screenY = Number(message?.screenY);
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+    if (this.surface === "quickfire" && this.expanded) return;
     if (phase === "start") {
       this.cancelSnap();
       const bounds = this.view.getBounds();
@@ -144,6 +193,11 @@ export class ShellContentOverlayView {
       this.dragging = false;
       this.dragStartScreen = null;
       this.dragStartPos = null;
+      if (this.surface === "quickfire") {
+        this.quickfireBounds = this.view.getBounds();
+        this.pushRender();
+        return;
+      }
       this.corner = this.nearestCorner();
       this.snapToCorner();
     }
@@ -160,6 +214,7 @@ export class ShellContentOverlayView {
     ipcMain.on("vibestudio:content-overlay:intent", this.handleIntent);
     ipcMain.on("vibestudio:content-overlay:ready", this.handleReady);
     ipcMain.on("vibestudio:content-overlay:drag", this.handleDrag);
+    ipcMain.on("vibestudio:content-overlay:geometry", this.handleGeometry);
   }
 
   setWindow(window: BaseWindow): void {
@@ -213,6 +268,7 @@ export class ShellContentOverlayView {
   }
 
   hide(): void {
+    this.resizeStart = null;
     this.visible = false;
     this.cancelSnap();
     this.dragging = false;
@@ -270,6 +326,7 @@ export class ShellContentOverlayView {
     ipcMain.removeListener("vibestudio:content-overlay:intent", this.handleIntent);
     ipcMain.removeListener("vibestudio:content-overlay:ready", this.handleReady);
     ipcMain.removeListener("vibestudio:content-overlay:drag", this.handleDrag);
+    ipcMain.removeListener("vibestudio:content-overlay:geometry", this.handleGeometry);
     if (this.view && !this.view.webContents.isDestroyed()) {
       if (this.window) this.window.contentView.removeChildView(this.view);
       this.view.webContents.close();
@@ -355,12 +412,16 @@ export class ShellContentOverlayView {
     if (!this.loaded || !this.surface || !this.theme || !this.anchor) return;
     const maxWidth = this.maxWidthForAnchor(this.anchor);
     const maxHeight = Math.max(MIN_HEIGHT, Math.round(this.anchor.height - 2 * ANCHOR_MARGIN));
+    const layout = this.quickfireLayout();
     this.view.webContents.send("vibestudio:content-overlay:render", {
       surface: this.surface,
       props: this.props,
       theme: this.theme,
       maxWidth,
       maxHeight,
+      ...(layout
+        ? { layout: { width: layout.width, height: layout.height, expanded: this.expanded } }
+        : {}),
     });
   }
 
@@ -375,9 +436,28 @@ export class ShellContentOverlayView {
     if (!this.view || !this.anchor || !this.window) return;
     // Don't fight an active drag (or the size-report it triggers).
     if (this.dragging) return;
+    const layout = this.quickfireLayout();
+    if (layout) {
+      this.view.setBounds(layout);
+      return;
+    }
     const { width, height } = this.currentSize();
     const { x, y } = this.cornerTarget(width, height);
     this.view.setBounds({ x, y, width, height });
+  }
+
+  private quickfireLayout(): ContentOverlayBounds | null {
+    if (this.surface !== "quickfire" || !this.window) return null;
+    const [windowWidth = 0, windowHeight = 0] = this.window.getContentSize();
+    if (this.expanded) return { x: 0, y: 0, width: windowWidth, height: windowHeight };
+    if (!this.quickfireBounds) return null;
+    const width = Math.min(this.quickfireBounds.width, windowWidth);
+    const height = Math.min(this.quickfireBounds.height, windowHeight);
+    return {
+      ...this.clampToWindow(this.quickfireBounds.x, this.quickfireBounds.y, width, height),
+      width,
+      height,
+    };
   }
 
   /** The overlay's width/height for the current anchor + reported content. */
