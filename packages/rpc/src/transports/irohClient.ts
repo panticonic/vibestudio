@@ -50,7 +50,6 @@ import type {
   ClientPlatform,
   DeviceCredential,
   OAuthCallbackMode,
-  PairingContext,
 } from "../protocol/wsProtocol.js";
 import { secureRandomUuid } from "../randomId.js";
 
@@ -126,7 +125,7 @@ export interface IrohClientSessionOptions {
   clientPlatform?: ClientPlatform;
   oauthCallbackMode?: OAuthCallbackMode;
   getToken(): string | Promise<string>;
-  onPaired?(credential: DeviceCredential, context?: PairingContext): void | Promise<void>;
+  onPaired?(credential: DeviceCredential): void | Promise<void>;
   onRecovery?(kind: RecoveryKind): void | Promise<void>;
   onTerminalClose?(error: Error): void;
 }
@@ -419,7 +418,7 @@ class ClientSession implements IrohClientSession {
     }
     this.authenticatedCallerId = result.callerId ?? null;
     if (result.deviceCredential) {
-      await this.options.onPaired?.(result.deviceCredential, result.pairingContext);
+      await this.options.onPaired?.(result.deviceCredential);
     }
     const recovery: RecoveryKind =
       this.lastServerBootId !== null && this.lastServerBootId !== result.serverBootId

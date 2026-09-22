@@ -659,35 +659,29 @@ describe("transport-specific credential redemption", () => {
     return { ...identity, tokenManager, entities, redeem };
   }
 
-  it.each([true, false])(
-    "delegates pairing redemption with optional workspace suggestion (suggested: %s)",
-    async (suggested) => {
-      const { deviceAuthStore, rootId, workspaceId: availableWorkspaceId, redeem } = hubFixture();
-      const workspaceId = suggested ? availableWorkspaceId : null;
-      const { code } = deviceAuthStore.createPairingInvite(60_000, {
-        workspaceId,
-        userId: rootId!,
-      });
-      const result = await redeem(code, {
-        clientLabel: "laptop",
-        clientPlatform: "desktop",
-        transport: { kind: "local" },
-      });
-      expect(result).toMatchObject({
-        callerKind: "shell",
-        subject: { userId: rootId, handle: "root" },
-      });
-      if (workspaceId) expect(result).toHaveProperty("pairingContext", { workspaceId });
-      else expect(result).not.toHaveProperty("pairingContext");
-      expect(
-        result && "deviceCredential" in result ? result.deviceCredential.deviceId : null
-      ).toMatch(/^dev_/);
-      await expect(redeem(code, { transport: { kind: "local" } })).rejects.toMatchObject({
-        code: "PAIRING_CODE_INVALID_OR_EXPIRED",
-      });
-      expect(deviceAuthStore.listDevices()).toHaveLength(1);
-    }
-  );
+  it("delegates account pairing redemption without workspace navigation context", async () => {
+    const { deviceAuthStore, rootId, redeem } = hubFixture();
+    const { code } = deviceAuthStore.createPairingInvite(60_000, {
+      userId: rootId!,
+    });
+    const result = await redeem(code, {
+      clientLabel: "laptop",
+      clientPlatform: "desktop",
+      transport: { kind: "local" },
+    });
+    expect(result).toMatchObject({
+      callerKind: "shell",
+      subject: { userId: rootId, handle: "root" },
+    });
+    expect(result).not.toHaveProperty("pairingContext");
+    expect(
+      result && "deviceCredential" in result ? result.deviceCredential.deviceId : null
+    ).toMatch(/^dev_/);
+    await expect(redeem(code, { transport: { kind: "local" } })).rejects.toMatchObject({
+      code: "PAIRING_CODE_INVALID_OR_EXPIRED",
+    });
+    expect(deviceAuthStore.listDevices()).toHaveLength(1);
+  });
 
   it("validates a returning device without issuing another credential", async () => {
     const touchDevice = vi.fn(async () => undefined);
@@ -742,7 +736,6 @@ describe("transport-specific credential redemption", () => {
 
     const workspace = workspaceFixture();
     const invite = workspace.deviceAuthStore.createPairingInvite(60_000, {
-      workspaceId: workspace.workspaceId,
       userId: workspace.rootId!,
     });
     await expect(

@@ -45,11 +45,7 @@ const entries = [
 
 beforeEach(() => vi.clearAllMocks());
 describe("remote startup workspace focus", () => {
-  it.each([
-    [undefined, "personal-id", "Personal"],
-    ["project-id", "project-id", "Project"],
-    ["system-id", "system-id", "System"],
-  ])("pairs with target %s while hosting the shell in System", async (target, focus, name) => {
+  it("pairs the account into Personal while hosting the shell in System", async () => {
     const hub = {
       call: vi.fn(async (_service: string, method: string, args: unknown[]) => {
         if (method === "ensureUserWorkspaces") return pair;
@@ -83,10 +79,7 @@ describe("remote startup workspace focus", () => {
     };
     mocks.connect
       .mockImplementationOnce(async (_reach, options) => {
-        options.onPaired(
-          { deviceId: "device-test", refreshToken: "test-token" },
-          target ? { workspaceId: target } : undefined
-        );
+        options.onPaired({ deviceId: "device-test", refreshToken: "test-token" });
         return hub;
       })
       .mockResolvedValue(workspace);
@@ -96,9 +89,14 @@ describe("remote startup workspace focus", () => {
       centralData: {} as CentralDataManager,
     });
     try {
-      expect(connection.initialFocusedWorkspaceId).toBe(focus);
+      expect(connection.initialFocusedWorkspaceId).toBe("personal-id");
       expect(connection.workspaceId).toBe("system-id");
-      expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ workspaceName: name }));
+      expect(mocks.save).toHaveBeenCalledWith(
+        expect.not.objectContaining({ workspaceName: expect.anything() })
+      );
+      expect(mocks.save).toHaveBeenCalledWith(
+        expect.not.objectContaining({ workspacePairing: expect.anything() })
+      );
       expect(mocks.connect).toHaveBeenLastCalledWith(workspaceReach, expect.any(Object));
     } finally {
       await connection.close();

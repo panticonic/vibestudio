@@ -1,10 +1,6 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  HubWorkspaceRouteSchema,
-  type HubWorkspaceRoute,
-} from "@vibestudio/service-schemas/hubControl";
 import type { ViewManager } from "../viewManager.js";
 import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
@@ -86,28 +82,6 @@ export function saveStoredRemote(value: StoredRemote): void {
   persistOrWarn("could not persist remote pairing", () => saveDeviceCredential(value));
 }
 
-/** Persist a device-specific workspace route before the desktop relaunches. */
-export function persistStoredRemoteWorkspaceRoute(rawRoute: HubWorkspaceRoute): boolean {
-  const existing = loadStoredRemotePairingFromStore();
-  if (!existing) return false;
-  const route = HubWorkspaceRouteSchema.parse(rawRoute);
-  if (route.serverId !== existing.serverId) {
-    throw new Error("Workspace route changed the paired server identity");
-  }
-  const storedReach = (reach: HubWorkspaceRoute["workspaceReach"]) => ({
-    endpointId: reach.endpointId,
-    relays: [...reach.relays],
-    v: reach.v,
-  });
-  saveDeviceCredential({
-    ...existing,
-    workspaceName: route.workspace,
-    controlPairing: existing.controlPairing,
-    workspacePairing: storedReach(route.workspaceReach),
-  });
-  return true;
-}
-
 export function createRemoteCredService(deps: {
   getServerClient?: () => ServerClient | null;
   /**
@@ -147,7 +121,6 @@ export function createRemoteCredService(deps: {
             (client?.isConnected() ?? false),
           bootstrap: stored ? "device" : "none",
           deviceId: stored?.deviceId,
-          workspaceName: stored?.workspaceName,
         };
       },
       pair: (ctx, [{ link, label }]) => {

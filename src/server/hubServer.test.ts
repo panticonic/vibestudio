@@ -847,8 +847,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
       appRoot: "/app",
       args: {},
       bootstrapWorkspaceId: runtime.workspaceId,
-      // Seeded so invite-workspace inference can resolve the running workspace
-      // by name without spawning (the runtime is already in `runtimes`).
       centralData: makeHubCentralData([
         { name: runtime.name, workspaceId: runtime.workspaceId, lastOpened: 1000 },
       ]),
@@ -1276,7 +1274,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
     const invite = state.deviceAuthStore.createPairingInvite(30_000, {
-      workspaceId: runtime.workspaceId,
       userId: rootUserId,
       intent: "pair-device",
     });
@@ -1317,7 +1314,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
     });
     const paired = ["phone", "laptop"].map((label) => {
       const invite = state.deviceAuthStore.createPairingInvite(30_000, {
-        workspaceId: runtime.workspaceId,
         userId: member.id,
         intent: "pair-device",
       });

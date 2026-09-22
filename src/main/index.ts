@@ -2361,7 +2361,7 @@ app.on("ready", async () => {
     // from empty → connected). This mirrors what ServerClient's own
     // onConnectionStatusChanged callback will emit a few moments later
     // once the WS lifecycle begins.
-    const remoteHost = !skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspaceName : undefined;
+    const remoteHost = !skipRemotePairingLaunch ? storedRemoteAtLaunch?.serverId : undefined;
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
     workspaceConnection.begin(isRemoteSession ? "remote" : "local");
     pushBootstrapConnectionState();

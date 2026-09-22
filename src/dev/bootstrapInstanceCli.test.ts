@@ -225,15 +225,13 @@ describe("bootstrapInstanceCliFromDevice", () => {
       workspaceId: "ws_system",
     });
 
-    // The account's own workspaces are prepared first and System is opened —
-    // where the account's tooling lives, and what a desktop client routes its
-    // own connection to. The invite's workspace is a preference, not the
-    // shape of the account.
+    // The account's own workspaces are prepared first and this development
+    // client explicitly opens System, where the account's tooling lives.
     expect(calls).toEqual([
       {
         deviceId: `dev_${"A".repeat(24)}`,
         method: "hubControl.pairDevice",
-        args: [{ workspace: "dev" }],
+        args: [],
       },
       {
         deviceId: `dev_${"C".repeat(24)}`,

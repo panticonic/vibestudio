@@ -60,7 +60,6 @@ function hubControlClient() {
     call: vi.fn(async (_service: string, method: string) => {
       if (method === "pairDevice") {
         return {
-          workspace: "current-workspace",
           pairing: { deepLink: "vibestudio://connect?test" },
         };
       }
@@ -206,9 +205,7 @@ describe("desktop phone provisioning service", () => {
       workspace: "current-workspace",
       pairedDevice: { deviceId: "paired-mobile" },
     });
-    expect(hub.call).toHaveBeenCalledWith("hubControl", "pairDevice", [
-      { workspace: "current-workspace" },
-    ]);
+    expect(hub.call).toHaveBeenCalledWith("hubControl", "pairDevice", []);
   });
 
   it("honors an explicit release request even when mobile source is available", async () => {

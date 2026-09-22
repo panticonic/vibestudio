@@ -295,7 +295,6 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
                 ...(message.serverBootId ? { serverBootId: message.serverBootId } : {}),
                 ...(message.sessionDirty ? { sessionDirty: true } : {}),
                 ...(message.deviceCredential ? { deviceCredential: message.deviceCredential } : {}),
-                ...(message.pairingContext ? { pairingContext: message.pairingContext } : {}),
               }
             : {
                 t: IROH_SESSION_OPEN_RESULT,

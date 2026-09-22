@@ -207,11 +207,8 @@ async function remoteInviteUser(inv: ParsedInvocation): Promise<number> {
 async function remotePairDevice(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const workspace =
-      typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : undefined;
     const ttlMs = ttlFrom(inv);
     const result = await pairRemoteDevice(requirePairedCredentials(), {
-      ...(workspace ? { workspace } : {}),
       ...(ttlMs ? { ttlMs } : {}),
     });
     printResult(result, { json, human: () => printPairingInvite(result.pairing) });
@@ -719,9 +716,8 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "pair-device",
     summary: "Invite another device for the current account",
-    usage: "vibestudio remote pair-device [--workspace <name>] [--ttl-ms <milliseconds>]",
+    usage: "vibestudio remote pair-device [--ttl-ms <milliseconds>]",
     flags: [
-      { name: "workspace", takesValue: true, description: "Workspace opened after pairing" },
       { name: "ttl-ms", takesValue: true, description: "Invite lifetime (30000-3600000 ms)" },
       JSON_FLAG,
     ],

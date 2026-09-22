@@ -21,7 +21,6 @@ function makeStore(now?: () => number): {
   store: DeviceAuthStore;
   db: IdentityDb;
   userId: string;
-  workspaceId: string;
   serverIdPath: string;
 } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-device-auth-"));
@@ -29,20 +28,19 @@ function makeStore(now?: () => number): {
   const databasePath = path.join(dir, "identity.db");
   const nowOpt = now ? { now } : {};
   const central = new CentralDataManager({ databasePath, ...nowOpt });
-  const workspaceId = central.addWorkspace("test").workspaceId;
   central.close();
   const db = new IdentityDb({ path: databasePath, readOnly: false, ...nowOpt });
   const userId = new UserStore(db, now).createRoot({ handle: "root", displayName: "Root" }).id;
   const store = new DeviceAuthStore({ db, serverIdPath, ...nowOpt });
-  return { store, db, userId, workspaceId, serverIdPath };
+  return { store, db, userId, serverIdPath };
 }
 
 describe("DeviceAuthStore", () => {
   it("pairs a device, persists only refresh-token hashes, and refresh-validates after reload", () => {
     let now = 1000;
-    const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
+    const { store, db, userId, serverIdPath } = makeStore(() => now);
 
-    const invite = store.createPairingInvite(undefined, { workspaceId, userId });
+    const invite = store.createPairingInvite(undefined, { userId });
     expect(invite.code).toMatch(/^[A-Za-z0-9_-]{21}[AQgw]$/);
     const credential = store.completePairing({
       transport: { kind: "local" },
@@ -53,7 +51,6 @@ describe("DeviceAuthStore", () => {
     expect(credential.deviceId).toMatch(/^dev_/);
     expect(credential.refreshToken).toBeTruthy();
     expect(credential.userId).toBe(userId);
-    expect(credential.workspaceId).toBe(workspaceId);
     expect(() =>
       store.completePairing({ transport: { kind: "local" }, code: invite.code })
     ).toThrow(/invalid or expired/i);
@@ -78,9 +75,9 @@ describe("DeviceAuthStore", () => {
 
   it("rejects expired, invalid, and revoked credentials", () => {
     let now = 1000;
-    const { store, userId, workspaceId } = makeStore(() => now);
+    const { store, userId } = makeStore(() => now);
 
-    const expiredInvite = store.createPairingInvite(10, { workspaceId, userId });
+    const expiredInvite = store.createPairingInvite(10, { userId });
     now = 1011;
     expect(() =>
       store.completePairing({ transport: { kind: "local" }, code: expiredInvite.code })
@@ -167,15 +164,15 @@ describe("DeviceAuthStore", () => {
 
   it("defaults pairing codes to a one hour lifetime", () => {
     let now = 1000;
-    const { store, userId, workspaceId } = makeStore(() => now);
+    const { store, userId } = makeStore(() => now);
 
-    const invite = store.createPairingInvite(undefined, { workspaceId, userId });
+    const invite = store.createPairingInvite(undefined, { userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS - 1;
     expect(store.completePairing({ transport: { kind: "local" }, code: invite.code }).userId).toBe(
       userId
     );
 
-    const expiredInvite = store.createPairingInvite(undefined, { workspaceId, userId });
+    const expiredInvite = store.createPairingInvite(undefined, { userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS + 1;
     expect(() =>
       store.completePairing({ transport: { kind: "local" }, code: expiredInvite.code })
@@ -183,8 +180,8 @@ describe("DeviceAuthStore", () => {
   });
 
   it("keeps pending pairing codes and their absolute deadline across hub restart", () => {
-    const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => 1000);
-    const invite = store.createPairingInvite(60_000, { workspaceId, userId });
+    const { store, db, userId, serverIdPath } = makeStore(() => 1000);
+    const invite = store.createPairingInvite(60_000, { userId });
 
     const restarted = new DeviceAuthStore({ db, serverIdPath, now: () => 2000 });
     expect(restarted.hasLivePairingInvite()).toBe(true);
@@ -193,13 +190,12 @@ describe("DeviceAuthStore", () => {
       code: invite.code,
     });
     expect(credential.userId).toBe(userId);
-    expect(credential.workspaceId).toBe(workspaceId);
   });
 
   it("rejects a consumed invite while preserving its device route and refresh credential", () => {
     const now = 1000;
-    const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
-    const invite = store.createPairingInvite(60_000, { workspaceId, userId });
+    const { store, db, userId, serverIdPath } = makeStore(() => now);
+    const invite = store.createPairingInvite(60_000, { userId });
     const first = store.completePairing({
       transport: { kind: "local" },
       code: invite.code,
@@ -215,7 +211,6 @@ describe("DeviceAuthStore", () => {
       })
     ).toThrow(/invalid or expired/i);
     expect(restarted.listDevices()).toHaveLength(1);
-    expect(first.workspaceId).toBe(workspaceId);
     expect(
       restarted.validateRefresh(first.deviceId, first.refreshToken, { kind: "local" }).userId
     ).toBe(userId);
@@ -227,7 +222,7 @@ describe("DeviceAuthStore", () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-root-pairing-"));
       const databasePath = path.join(dir, "identity.db");
       const central = new CentralDataManager({ databasePath });
-      const workspaceId = projectRequested ? central.addWorkspace("test").workspaceId : null;
+      if (projectRequested) central.addWorkspace("test");
       expect(central.listWorkspaces()).toHaveLength(projectRequested ? 1 : 0);
       central.close();
       const db = new IdentityDb({ path: databasePath, readOnly: false });
@@ -246,7 +241,6 @@ describe("DeviceAuthStore", () => {
       expect(db.hasUsers()).toBe(false);
 
       const wrongIntent = store.createPairingInvite(60_000, {
-        workspaceId,
         intent: "pair-device",
       });
       expect(() =>
@@ -260,7 +254,6 @@ describe("DeviceAuthStore", () => {
       expect(db.hasUsers()).toBe(false);
 
       const invite = store.createPairingInvite(60_000, {
-        workspaceId,
         intent: "root-bootstrap",
       });
       expect(() =>
@@ -283,15 +276,14 @@ describe("DeviceAuthStore", () => {
       });
       expect(createCalls).toBe(1);
       expect(users.getUser(credential.userId)?.role).toBe("root");
-      expect(credential.workspaceId).toBe(workspaceId);
-      expect(db.listWorkspacesForUser(credential.userId)).toEqual(workspaceId ? [workspaceId] : []);
+      expect(db.listWorkspacesForUser(credential.userId)).toEqual([]);
       db.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   );
 
   it("cancels an unreturned code and rolls back its unactivated invited user", () => {
-    const { store, db, userId, workspaceId } = makeStore(() => 1000);
+    const { store, db, userId } = makeStore(() => 1000);
     const users = new UserStore(db, () => 1000);
     const invited = users.inviteUser({
       handle: "mara",
@@ -300,7 +292,6 @@ describe("DeviceAuthStore", () => {
       createdBy: userId,
     });
     const invite = store.createPairingInvite(60_000, {
-      workspaceId,
       userId: invited.id,
       intent: "invite-user",
     });
@@ -444,7 +435,7 @@ describe("DeviceAuthStore hub/child ownership", () => {
     const dbPath = path.join(dir, "identity.db");
     const serverIdPath = path.join(dir, "server-id.json");
     const central = new CentralDataManager({ databasePath: dbPath });
-    const workspaceId = central.addWorkspace("test").workspaceId;
+    central.addWorkspace("test");
     central.close();
     const hubDb = new IdentityDb({ path: dbPath, readOnly: false });
     const userId = new UserStore(hubDb).createRoot({ handle: "root", displayName: "Root" }).id;
@@ -464,7 +455,7 @@ describe("DeviceAuthStore hub/child ownership", () => {
       entityId: "session:one",
     });
 
-    expect(() => child.createPairingInvite(60_000, { workspaceId, userId })).toThrow(/read-only/i);
+    expect(() => child.createPairingInvite(60_000, { userId })).toThrow(/read-only/i);
     expect(() =>
       child.mintAgentCredential({
         entityId: "session:two",

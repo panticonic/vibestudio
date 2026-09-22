@@ -67,7 +67,6 @@ export const WorkspaceChildDeviceInviteInputSchema = z
   .strict();
 export const WorkspaceChildDeviceInviteResultSchema = z
   .object({
-    workspace: z.string().min(1),
     pairing: HubPairingInviteSchema,
   })
   .strict();

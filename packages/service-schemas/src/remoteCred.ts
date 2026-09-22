@@ -31,7 +31,6 @@ export const RemoteCredCurrentSchema = z.object({
   // (§8c), along with the URL, token-preview, and nested-hub fields they carried.
   bootstrap: z.enum(["device", "none"]),
   deviceId: z.string().optional(),
-  workspaceName: z.string().optional(),
 });
 export type RemoteCredCurrent = z.infer<typeof RemoteCredCurrentSchema>;
 
@@ -45,7 +44,11 @@ const OkResultSchema = z.object({ ok: z.boolean() });
 
 export const remoteCredMethods = defineServiceMethods({
   getCurrent: {
-    website: {"kind":"closed","reason":"The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "remote-client.read",
     tier: {
       tier: "open",
@@ -66,13 +69,17 @@ export const remoteCredMethods = defineServiceMethods({
       },
     },
     description:
-      "Report the locally stored remote-server credential: whether it's configured/active, the bootstrap kind (device|none), the paired device id, and the workspace name.",
+      "Report the locally stored remote-server credential: whether it's configured/active, the bootstrap kind (device|none), and the paired device id.",
     args: z.tuple([]),
     returns: RemoteCredCurrentSchema,
     access: readAccess,
   },
   pair: {
-    website: {"kind":"closed","reason":"The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "remote-client.connect",
     tier: {
       tier: "gated",
@@ -97,7 +104,11 @@ export const remoteCredMethods = defineServiceMethods({
     access: adminAccess,
   },
   reconnectNow: {
-    website: {"kind":"closed","reason":"The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "remote-client.connect",
     tier: {
       tier: "gated",
@@ -122,7 +133,11 @@ export const remoteCredMethods = defineServiceMethods({
     access: writeAccess,
   },
   clear: {
-    website: {"kind":"closed","reason":"The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "remote-client.clear",
     tier: {
       tier: "critical",
@@ -148,7 +163,11 @@ export const remoteCredMethods = defineServiceMethods({
     access: destructiveAccess,
   },
   relaunch: {
-    website: {"kind":"closed","reason":"The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The remoteCred receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "remote-client.connect",
     tier: {
       tier: "gated",

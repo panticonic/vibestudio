@@ -652,16 +652,10 @@ export const hubControlMethods = defineServiceMethods({
       },
     },
     description: "Mint another device invite for the authenticated account.",
-    args: z.tuple([
-      z
-        .object({ workspace: z.string().min(1).optional(), ttlMs: pairingTtl })
-        .strict()
-        .optional(),
-    ]),
+    args: z.tuple([z.object({ ttlMs: pairingTtl }).strict().optional()]),
     returns: z.object({
       userId: z.string(),
       handle: z.string(),
-      workspace: z.string(),
       pairing: HubPairingInviteSchema,
     }),
     access: writeAccess,

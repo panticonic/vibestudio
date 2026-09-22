@@ -57,12 +57,6 @@ const iroh: DeviceCredentialEntry = {
     relays: ["https://relay-a.example/"],
     v: 5,
   },
-  workspacePairing: {
-    endpointId: "bb".repeat(32),
-    relays: ["https://relay-a.example/"],
-    v: 5,
-  },
-  workspaceName: "dev",
   deviceId: REMOTE_DEVICE_ID,
   refreshToken: REMOTE_REFRESH_TOKEN,
   pairedAt: 5678,
@@ -77,12 +71,6 @@ const iroh2: DeviceCredentialEntry = {
     relays: ["https://relay-b.example/"],
     v: 5,
   },
-  workspacePairing: {
-    endpointId: "dd".repeat(32),
-    relays: ["https://relay-b.example/"],
-    v: 5,
-  },
-  workspaceName: "second",
   deviceId: `dev_${"q".repeat(24)}`,
   refreshToken: "c".repeat(43),
   pairedAt: 9999,
@@ -162,6 +150,19 @@ describe("deviceCredentialStore", () => {
     expect(() => store.preflightPairing()).not.toThrow();
   });
 
+  it("migrates legacy workspace-bound remotes into account credentials", () => {
+    const legacy = {
+      ...iroh,
+      workspaceName: "system-old-route",
+      workspacePairing: {
+        endpointId: "bb".repeat(32),
+        relays: ["https://relay-a.example/"],
+        v: 5,
+      },
+    };
+    expect(parseDeviceCredentialDocument(doc([legacy as never]))).toEqual(doc([iroh]));
+  });
+
   it("fails loud for stale document shapes and structurally invalid records", () => {
     const { store, filePath } = makeStore(xorCipher);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -188,52 +189,15 @@ describe("deviceCredentialStore", () => {
       {
         [loopback.serverId]: { ...loopback, workspaceId: "retired-workspace-binding" },
       },
+      { [iroh.serverId]: { ...iroh, controlPairing: { ...iroh.controlPairing, code: "no" } } },
+      { [iroh.serverId]: { ...iroh, controlPairing: { ...iroh.controlPairing, v: 1 } } },
       {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, code: "must-not-persist" },
-        },
+        [iroh.serverId]: { ...iroh, controlPairing: { ...iroh.controlPairing, endpointId: "aa" } },
       },
       {
         [iroh.serverId]: {
           ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, v: undefined },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, relays: undefined },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, v: 1 },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, endpointId: "AA".repeat(32) },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, endpointId: "aa" },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, relays: ["http://relay.example/"] },
-        },
-      },
-      {
-        [iroh.serverId]: {
-          ...iroh,
-          workspacePairing: { ...iroh.workspacePairing, srv: "remote" },
+          controlPairing: { ...iroh.controlPairing, relays: ["http://relay.example/"] },
         },
       },
     ];

@@ -4934,13 +4934,12 @@ describe("RpcServer caller identity", () => {
     expect(authResults).not.toContainEqual(expect.objectContaining({ success: true }));
   });
 
-  it("returns the fresh pairing target with the issued credential", async () => {
+  it("returns the freshly issued account credential", async () => {
     const { server } = createServer({
       redeemPairingCredential: async () => ({
         callerId: "shell:dev_fresh",
         callerKind: "shell",
         deviceCredential: { deviceId: "dev_fresh", refreshToken: "refresh-secret" },
-        pairingContext: { workspaceId: "workspace-1" },
         subject: { userId: "usr_alice", handle: "alice" },
       }),
     });
@@ -4961,7 +4960,6 @@ describe("RpcServer caller identity", () => {
         type: "ws:auth-result",
         success: true,
         deviceCredential: { deviceId: "dev_fresh", refreshToken: "refresh-secret" },
-        pairingContext: { workspaceId: "workspace-1" },
       })
     );
   });

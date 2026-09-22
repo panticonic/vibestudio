@@ -2,10 +2,10 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 16 is the current schema. The explicitly enumerated final
+ * Version 17 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 16;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 17;
 
 // No foreign key to workspaces: deletion must retain retry/deduplication evidence.
 const WORKSPACE_CREATION_OPERATIONS_SQL = `CREATE TABLE workspace_creation_operations (
@@ -38,7 +38,11 @@ const WORKSPACE_RPC_POLICY_SQL = `CREATE TABLE workspace_rpc_policy (
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
   objects: [
-    { type: "table", name: "workspace_creation_operations", sql: WORKSPACE_CREATION_OPERATIONS_SQL },
+    {
+      type: "table",
+      name: "workspace_creation_operations",
+      sql: WORKSPACE_CREATION_OPERATIONS_SQL,
+    },
     {
       type: "table",
       name: "users",
@@ -103,7 +107,6 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE pairing_codes (
         code TEXT PRIMARY KEY,
         user_id TEXT,
-        workspace_id TEXT REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
         intent TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
@@ -216,9 +219,31 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
   {
+    fromVersion: 16,
+    toVersion: 17,
+    migrate(db) {
+      // Pairing authenticates a device to an account. Existing unredeemed
+      // capabilities remain valid, but their former navigation suggestion is
+      // deliberately discarded.
+      db.exec(`ALTER TABLE pairing_codes RENAME TO pairing_codes_v16;
+        CREATE TABLE pairing_codes (
+          code TEXT PRIMARY KEY,
+          user_id TEXT,
+          intent TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        INSERT INTO pairing_codes (code, user_id, intent, created_at, expires_at)
+          SELECT code, user_id, intent, created_at, expires_at FROM pairing_codes_v16;
+        DROP TABLE pairing_codes_v16`);
+    },
+  },
+  {
     fromVersion: 15,
     toVersion: 16,
-    migrate(db) { db.exec(WORKSPACE_CREATION_OPERATIONS_SQL); },
+    migrate(db) {
+      db.exec(WORKSPACE_CREATION_OPERATIONS_SQL);
+    },
   },
   {
     fromVersion: 14,
@@ -235,7 +260,8 @@ export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] =
           created_at INTEGER NOT NULL,
           expires_at INTEGER NOT NULL
         );
-        INSERT INTO pairing_codes SELECT * FROM pairing_codes_v14;
+        INSERT INTO pairing_codes (code, user_id, workspace_id, intent, created_at, expires_at)
+          SELECT code, user_id, NULL, intent, created_at, expires_at FROM pairing_codes_v14;
         DROP TABLE pairing_codes_v14`);
     },
   },

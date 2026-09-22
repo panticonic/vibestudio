@@ -109,9 +109,9 @@ and launches the client under `xvfb-run` — owning its own HOME, XDG
 directories, Chromium profile, D-Bus session and keyring, so it touches nothing
 of yours. It needs `xvfb-run`, `dbus-daemon`, and `gnome-keyring-daemon`.
 
-A desktop client pairs its workspace connection to the user's System workspace,
-which is the same workspace the system-test CLI opens, so attach the client
-first and then run the tests that need its executor:
+A desktop client pairs to the account, focuses Personal, and opens System as
+its trusted app source. The system-test CLI also explicitly opens System, so
+attach the client first and then run the tests that need its executor:
 
 ```bash
 pnpm system-test --instance ID run TEST_NAME

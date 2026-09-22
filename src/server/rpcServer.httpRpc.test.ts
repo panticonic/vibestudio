@@ -851,7 +851,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       });
     });
 
-    it("accepts async refresh credentials before upgrade and preserves pairing metadata", async () => {
+    it("accepts async account pairing credentials before upgrade", async () => {
       await gateway.stop();
       await setup.server.stop();
       const redeemPairingCredential = vi.fn(
@@ -870,7 +870,6 @@ describe("RpcServer HTTP POST /rpc", () => {
                   deviceId: "paired-device",
                   refreshToken: "fresh-refresh-token",
                 },
-                pairingContext: { workspaceId: "workspace-1" },
                 subject: { userId: "user-1", handle: "user1" },
               }
             : null

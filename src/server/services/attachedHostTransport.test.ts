@@ -298,8 +298,8 @@ describe("attached-host HTTP routed connectivity", () => {
       code: "EATTACHED_BOOTSTRAP_REVOKED",
     });
     expect(close).toHaveBeenCalledOnce();
-    // Revocation addresses the child's own hub control plane, not the
-    // workspace its paired credential names.
+    // Revocation addresses the child's own hub control plane, not the CLI's
+    // separately selected workspace route.
     expect(revoke).toHaveBeenCalledWith(
       { ...credentials, url: "http://127.0.0.1:4311" },
       credentials.deviceId

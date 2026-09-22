@@ -114,17 +114,14 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   };
 
   const closeClient = async (client: ConnectedClient): Promise<void> => {
-    const results = await Promise.allSettled([
-      client.pipe.close(),
-      client.endpoint.close(),
-    ]);
+    const results = await Promise.allSettled([client.pipe.close(), client.endpoint.close()]);
     const failures = results.filter(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
+      (result): result is PromiseRejectedResult => result.status === "rejected"
     );
     if (failures.length > 0) {
       throw new AggregateError(
         failures.map((failure) => failure.reason),
-        "Failed to close an Iroh test client",
+        "Failed to close an Iroh test client"
       );
     }
     clients.delete(client);
@@ -134,7 +131,6 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const root = userStore.getByHandle("root");
     if (!root) throw new Error("Iroh smoke root user is missing");
     return deviceAuthStore.createPairingInvite(60_000, {
-      workspaceId,
       userId: root.id,
       intent: "pair-device",
     }).code;

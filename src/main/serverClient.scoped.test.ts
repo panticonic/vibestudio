@@ -122,7 +122,6 @@ async function startRpcHarness() {
                       deviceId: "device-1",
                       refreshToken: "refresh-secret",
                     },
-                    pairingContext: { workspaceId: "workspace-1" },
                   }
                 : {}),
             })
@@ -588,23 +587,15 @@ describe("ServerClient scoped runtime callers", () => {
 
   it("surfaces the auth-result deviceCredential via onPaired (pairing-code bootstrap)", async () => {
     const harness = await startRpcHarness();
-    const paired: Array<{
-      credential: { deviceId: string; refreshToken: string };
-      context?: { workspaceId: string };
-    }> = [];
+    const paired: Array<{ deviceId: string; refreshToken: string }> = [];
     const client = await createServerClient(harness.port, "pairing-code", {
-      onPaired: (credential, context) => paired.push({ credential, context }),
+      onPaired: (credential) => paired.push(credential),
     });
     cleanup.push(() => client.close());
 
     await expect
       .poll(() => paired)
-      .toEqual([
-        {
-          credential: { deviceId: "device-1", refreshToken: "refresh-secret" },
-          context: { workspaceId: "workspace-1" },
-        },
-      ]);
+      .toEqual([{ deviceId: "device-1", refreshToken: "refresh-secret" }]);
   });
 
   it("does not invoke onPaired when the auth-result carries no credential", async () => {

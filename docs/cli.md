@@ -195,7 +195,7 @@ vibestudio remote workspaces
 vibestudio remote select dev
 vibestudio terminal start --pair "<compact-payload>"
 vibestudio terminal start
-vibestudio remote pair-device --workspace dev
+vibestudio remote pair-device
 vibestudio remote invite-user --handle alice --workspace dev
 vibestudio remote status
 vibestudio remote logout

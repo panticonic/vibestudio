@@ -742,7 +742,6 @@ function responseForCredential(
     callerId: shellCallerId(credential.deviceId),
     serverId: state.deviceAuthStore.getServerId(),
     serverBootId: state.serverBootId,
-    workspaceId: credential.workspaceId,
   };
 }
 
@@ -909,33 +908,6 @@ export function buildHubReadyPayload(
   });
 }
 
-/**
- * Infer the single target workspace when an invite omits one — narrowed to the
- * VIEWER's visible set (WP2 §4) so an admin's invite never defaults to a
- * workspace they cannot see.
- */
-function resolveInviteWorkspace(state: HubRuntimeState, viewer: HubSubject, raw: unknown): string {
-  if (typeof raw === "string" && raw.trim()) return normalizeWorkspaceName(raw);
-  const workspaces = listHubWorkspaces(state, viewer);
-  const visibleNames = new Set(
-    workspaces
-      .map((entry) => entry["name"])
-      .filter((name): name is string => typeof name === "string")
-  );
-  const runningWorkspaces = Array.from(state.runtimes.keys()).filter((name) =>
-    visibleNames.has(name)
-  );
-  if (runningWorkspaces.length === 1) return normalizeWorkspaceName(runningWorkspaces[0]);
-  if (workspaces.length === 1 && typeof workspaces[0]?.["name"] === "string") {
-    return normalizeWorkspaceName(workspaces[0]["name"]);
-  }
-  throw new Error(
-    workspaces.length === 0
-      ? "No workspace is configured; pass { workspace } after creating one."
-      : "Multiple workspaces are configured; pass { workspace } to mint a workspace-scoped Iroh invite."
-  );
-}
-
 function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
   const runtime = state.runtimes.get(name);
   return !!runtime && !("promise" in runtime) && runtime.child.exitCode === null;
@@ -1091,8 +1063,16 @@ async function completeControlPairing(
     code,
     ...(bootstrapRoot
       ? {
-          createRootUser: () =>
-            state.userStore.createRoot({ handle: "root", displayName: "Root" }).id,
+          createRootUser: () => {
+            const root = state.userStore.createRoot({ handle: "root", displayName: "Root" });
+            // Bootstrap workspace ownership is provisioning state, not pairing
+            // navigation. Keep it in the same identity transaction as root
+            // creation without putting the workspace back into the invite.
+            if (state.bootstrapWorkspaceId) {
+              state.membershipStore.add(root.id, state.bootstrapWorkspaceId, root.id, "admin");
+            }
+            return root.id;
+          },
         }
       : {}),
     label: input.label ?? "Vibestudio client",
@@ -1329,9 +1309,7 @@ async function handleInternalRoute(
       if (!state.membershipStore.has(user.id, boundWorkspaceId)) {
         throw authError("EACCES", "Development client owner is not a workspace member", 403);
       }
-      const workspace = requireWorkspaceName(state, boundWorkspaceId);
       const pairing = state.deviceAuthStore.createPairingInvite(body.ttlMs, {
-        workspaceId: boundWorkspaceId,
         userId: user.id,
         intent: "pair-device",
       });
@@ -1343,7 +1321,6 @@ async function handleInternalRoute(
         throw error;
       }
       sendJson(res, 200, {
-        workspace,
         pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
       });
       return;
@@ -1806,8 +1783,6 @@ export async function executeHubControl(
     if (workspaceNames.length === 0) {
       throw new Error("hubControl.inviteUser requires at least one workspace");
     }
-    const primaryWorkspaceName = workspaceNames[0];
-    if (!primaryWorkspaceName) throw new Error("hubControl.inviteUser requires a workspace");
     // Resolve every workspace to its opaque id BEFORE creating the user so
     // an unknown name fails the whole invite, not half of it.
     const workspaceIds = workspaceNames.map((name) => requireWorkspaceAdmin(state, subject, name));
@@ -1825,7 +1800,6 @@ export async function executeHubControl(
         state.membershipStore.add(invited.id, workspaceId, subject.userId);
       }
       pairing = state.deviceAuthStore.createPairingInvite(ttlMs, {
-        workspaceId: requireWorkspaceId(state, primaryWorkspaceName),
         userId: invited.id,
         intent: "invite-user",
       });
@@ -1874,10 +1848,7 @@ export async function executeHubControl(
     // is bound to the caller's own userId, never someone else's.
     const opts = asRecord(args[0]) ?? {};
     const ttlMs = pairingTtl(opts["ttlMs"]);
-    const workspace = resolveInviteWorkspace(state, subject, opts["workspace"]);
-    const workspaceId = requireMemberWorkspaceId(state, subject, workspace);
     const pairing = state.deviceAuthStore.createPairingInvite(ttlMs, {
-      workspaceId,
       userId: subject.userId,
       intent: "pair-device",
     });
@@ -1891,7 +1862,6 @@ export async function executeHubControl(
     respond({
       userId: subject.userId,
       handle: subject.handle,
-      workspace,
       pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
     });
     return;
@@ -3237,7 +3207,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
         hasRoot: () => identityDb.hasUsers(),
         createPairing: () =>
           deviceAuthStore.createPairingInvite(DEFAULT_PAIRING_CODE_TTL_MS, {
-            workspaceId: bootstrapWorkspaceId,
             intent: "root-bootstrap",
           }),
         armPairing: async (pairing) => {

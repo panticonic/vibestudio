@@ -63,10 +63,7 @@ export interface IssuedDeviceCredential {
   platform?: string;
 }
 
-export interface PairedDeviceCredential extends IssuedDeviceCredential {
-  /** Exact workspace suggested by the invite, or account-only pairing. */
-  workspaceId: string | null;
-}
+export type PairedDeviceCredential = IssuedDeviceCredential;
 
 /** Presentable one-time pairing secret. */
 export interface PairingInvite {
@@ -110,7 +107,7 @@ export class DeviceAuthStore {
 
   createPairingInvite(
     ttlMs = DEFAULT_PAIRING_CODE_TTL_MS,
-    opts: { workspaceId: string | null; userId?: string; intent?: PairingCodeIntent }
+    opts: { userId?: string; intent?: PairingCodeIntent } = {}
   ): PairingInvite {
     const code = randomBase64Url(16);
     const codeHash = hashSecret(code);
@@ -118,7 +115,6 @@ export class DeviceAuthStore {
     const expiresAt = createdAt + ttlMs;
     this.db.insertPairingInvite({
       code: codeHash,
-      workspaceId: opts.workspaceId,
       intent: opts?.intent ?? "pair-device",
       createdAt,
       expiresAt,
@@ -183,7 +179,6 @@ export class DeviceAuthStore {
     return {
       deviceId: completed.device.deviceId,
       refreshToken: completed.refreshToken,
-      workspaceId: completed.workspaceId,
       userId: completed.device.userId,
       label: completed.device.label,
       ...(completed.device.platform ? { platform: completed.device.platform } : {}),
@@ -276,7 +271,7 @@ export class DeviceAuthStore {
     return this.db.hasLivePairingInvite(now);
   }
 
-  /** Whether durable pairing state has ever been created for this workspace hub. */
+  /** Whether this server has ever issued a durable device credential. */
   hasEverPaired(): boolean {
     return this.db.listDevices().length > 0;
   }

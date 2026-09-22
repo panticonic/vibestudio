@@ -3,7 +3,6 @@ export { WS_STREAM_REQUEST_BODY_CAPABILITY } from "@vibestudio/rpc/protocol/wsPr
 export type {
   ClientPlatform,
   DeviceCredential,
-  PairingContext,
   ToolExecutionResult,
   WsAuthMessage,
   WsRpcMessage,

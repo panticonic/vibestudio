@@ -19,7 +19,6 @@ import type {
   ClientPlatform,
   DeviceCredential,
   OAuthCallbackMode,
-  PairingContext,
 } from "@vibestudio/rpc/protocol/wsProtocol";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
 import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
@@ -275,7 +274,7 @@ export interface ServerClientOptions {
    * can authenticate with `refresh:<deviceId>:<refreshToken>` instead of
    * re-pairing.
    */
-  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
+  onPaired?: (credential: DeviceCredential) => void;
 }
 
 export async function createServerClient(
@@ -307,7 +306,7 @@ export async function createServerClient(
       for (const listener of recoveryListeners) await listener(kind);
     },
     onAuthResult: (msg) => {
-      if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential, msg.pairingContext);
+      if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential);
     },
     adapter: {
       now: () => Date.now(),

@@ -38,8 +38,6 @@ export type StoredRemote = DeviceCredentialBase & {
   transport: "iroh";
   endpointSecret: string;
   controlPairing: StoredPairing;
-  workspacePairing: StoredPairing;
-  workspaceName: string;
 };
 
 export type DeviceCredentialEntry = LoopbackDeviceCredential | StoredRemote;
@@ -94,19 +92,10 @@ function isEntry(value: unknown): value is DeviceCredentialEntry {
   if (v.transport === "loopback") {
     if (Object.keys(v).some((key) => !allowedBase.has(key))) return false;
   } else {
-    const allowedRemote = new Set([
-      ...allowedBase,
-      "controlPairing",
-      "workspacePairing",
-      "workspaceName",
-      "endpointSecret",
-    ]);
+    const allowedRemote = new Set([...allowedBase, "controlPairing", "endpointSecret"]);
     if (Object.keys(v).some((key) => !allowedRemote.has(key))) return false;
-    if (!isStoredPairing(v.controlPairing) || !isStoredPairing(v.workspacePairing)) return false;
+    if (!isStoredPairing(v.controlPairing)) return false;
     if (typeof v.endpointSecret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(v.endpointSecret)) {
-      return false;
-    }
-    if (typeof v.workspaceName !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(v.workspaceName)) {
       return false;
     }
   }
@@ -126,13 +115,24 @@ function isStoredPairing(value: unknown): value is StoredPairing {
   return true;
 }
 
-function isEntries(value: unknown): value is DeviceCredentialEntries {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (!entries.every(([serverId, entry]) => isEntry(entry) && entry.serverId === serverId)) {
-    return false;
+function parseEntries(value: unknown): DeviceCredentialEntries | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const parsed: DeviceCredentialEntries = {};
+  for (const [serverId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const candidate = raw as Record<string, unknown>;
+    const canonical =
+      candidate["transport"] === "iroh"
+        ? Object.fromEntries(
+            Object.entries(candidate).filter(
+              ([key]) => key !== "workspacePairing" && key !== "workspaceName"
+            )
+          )
+        : candidate;
+    if (!isEntry(canonical) || canonical.serverId !== serverId) return null;
+    parsed[serverId] = canonical;
   }
-  return true;
+  return parsed;
 }
 
 export function parseDeviceCredentialDocument(value: unknown): DeviceCredentialDocument | null {
@@ -141,17 +141,18 @@ export function parseDeviceCredentialDocument(value: unknown): DeviceCredentialD
   if (Object.keys(record).some((key) => key !== "entries" && key !== "currentRemoteServerId")) {
     return null;
   }
-  if (!isEntries(record["entries"])) return null;
+  const entries = parseEntries(record["entries"]);
+  if (!entries) return null;
   const current = record["currentRemoteServerId"];
   if (
     current !== undefined &&
-    (typeof current !== "string" || record["entries"][current]?.transport !== "iroh")
+    (typeof current !== "string" || entries[current]?.transport !== "iroh")
   ) {
     return null;
   }
   return {
     ...(typeof current === "string" ? { currentRemoteServerId: current } : {}),
-    entries: record["entries"],
+    entries,
   };
 }
 

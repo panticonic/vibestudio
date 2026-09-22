@@ -272,19 +272,9 @@ export function createPhoneProvisioningService(
     const knownDeviceIds = new Set(beforePairing.devices.map((device) => device.deviceId));
     const invite = z
       .object({
-        workspace: z.string().min(1),
         pairing: z.object({ deepLink: z.string().min(1) }),
       })
-      .parse(
-        await deps.hubControlClient.call("hubControl", "pairDevice", [
-          { workspace: deps.workspaceName },
-        ])
-      );
-    if (invite.workspace !== deps.workspaceName) {
-      throw new Error(
-        `The phone invite targeted ${invite.workspace}, not the selected workspace ${deps.workspaceName}`
-      );
-    }
+      .parse(await deps.hubControlClient.call("hubControl", "pairDevice", []));
 
     const connectArgs = [
       "connect",
@@ -311,7 +301,7 @@ export function createPhoneProvisioningService(
         return PhoneProvisioningResultSchema.parse({
           providerId: input.providerId ?? localProviderId,
           platform: input.platform,
-          workspace: invite.workspace,
+          workspace: deps.workspaceName,
           attachedDeviceId: selected.deviceId,
           installStatus,
           compatibleAppInstalled: true,

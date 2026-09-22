@@ -18,7 +18,7 @@ import {
 } from "@vibestudio/rpc/transports/irohClient";
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
-import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 export interface IrohRpcClientOptions {
@@ -30,7 +30,7 @@ export interface IrohRpcClientOptions {
   connectionId?: string;
   clientLabel?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
-  onPaired?(credential: DeviceCredential, context?: PairingContext): void | Promise<void>;
+  onPaired?(credential: DeviceCredential): void | Promise<void>;
   onRecovery?(kind: RecoveryKind): void | Promise<void>;
   onTerminalClose?(error: Error): void;
   overallDialDeadlineMs?: number;

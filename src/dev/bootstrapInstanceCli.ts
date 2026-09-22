@@ -14,9 +14,9 @@ import { RpcClient } from "../cli/rpcClient.js";
 import { ConnectionError } from "../cli/output.js";
 
 /**
- * A pairing invite carries whichever workspace minted it, and a development
- * hub's root invite carries none: the account's own workspaces are created by
- * the device that redeems it. Only the credential itself is required here.
+ * Pairing authenticates the device to an account. The account's own workspaces
+ * are created after redemption, and this development client selects one
+ * explicitly below.
  */
 type PairingResponse = {
   deviceId: string;
@@ -139,11 +139,9 @@ async function routeWorkspace(
  * Prepare the account's private workspaces, exactly as a desktop or mobile
  * client does when it pairs.
  *
- * A pairing invite names a workspace, but that name is a preference rather
- * than the account's shape: the desktop routes to `issued.workspaceId ??
- * pair.system.workspaceId`, and mobile selects Personal by default. A CLI that
- * only ever opened the invite's workspace was the one client whose setup
- * differed, which is how headless work ended up somewhere no user runs.
+ * Pairing has no navigation target. This development client explicitly opens
+ * System by default because that is where the account's tooling lives; product
+ * desktop startup independently focuses Personal.
  */
 async function ensureUserWorkspaces(
   input: { gatewayUrl: string; deviceId: string; refreshToken: string },
@@ -329,7 +327,7 @@ export async function bootstrapInstanceCliFromDevice(
   });
   let rawInvite: unknown;
   try {
-    rawInvite = await rpc.call("hubControl.pairDevice", [{ workspace: sponsor.workspaceName }]);
+    rawInvite = await rpc.call("hubControl.pairDevice", []);
   } finally {
     await rpc.close();
   }

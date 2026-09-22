@@ -61,7 +61,6 @@ describe("identity package schema cut", () => {
     const invite = {
       code: "kept-invite",
       userId: "usr_kept",
-      workspaceId: workspace.workspaceId,
       intent: "pair-device" as const,
       createdAt: 1,
       expiresAt: 1000,
@@ -75,9 +74,11 @@ describe("identity package schema cut", () => {
         workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
         intent TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
       );
-      INSERT INTO pairing_codes SELECT * FROM pairing_codes_current;
+      INSERT INTO pairing_codes (code, user_id, workspace_id, intent, created_at, expires_at)
+        SELECT code, user_id, 'ws_kept', intent, created_at, expires_at
+        FROM pairing_codes_current;
       DROP TABLE pairing_codes_current;
-      DROP TABLE workspace_creation_operations; PRAGMA user_version = 14`);
+      PRAGMA user_version = 16`);
     const tables = ["users", "devices", "workspaces", "membership", "pairing_codes"];
     const before = tables.map((table) => old.prepare(`SELECT * FROM ${table}`).all());
     old.close();
@@ -85,21 +86,29 @@ describe("identity package schema cut", () => {
     const migrated = new IdentityDb({ path: databasePath, readOnly: false, now: () => 10 });
     expect(migrated.listPairingCodes()).toEqual([invite]);
     const verified = new DatabaseSync(databasePath);
-    expect(tables.map((table) => verified.prepare(`SELECT * FROM ${table}`).all())).toEqual(before);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+    expect(
+      tables.slice(0, -1).map((table) => verified.prepare(`SELECT * FROM ${table}`).all())
+    ).toEqual(before.slice(0, -1));
+    expect(migrated.listPairingCodes()).toEqual(
+      before.at(-1)?.map(({ workspace_id: _discarded, ...entry }) => ({
+        code: entry["code"],
+        userId: entry["user_id"],
+        intent: entry["intent"],
+        createdAt: entry["created_at"],
+        expiresAt: entry["expires_at"],
+      }))
+    );
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     verified.close();
     migrated.insertPairingInvite({
       code: "account-only",
-      workspaceId: null,
       intent: "root-bootstrap",
       createdAt: 10,
       expiresAt: 1000,
     });
     migrated.close();
     const reader = new IdentityDb({ path: databasePath, readOnly: true, now: () => 10 });
-    expect(
-      reader.listPairingCodes().find((entry) => entry.code === "account-only")?.workspaceId
-    ).toBeNull();
+    expect(reader.listPairingCodes().some((entry) => entry.code === "account-only")).toBe(true);
     reader.close();
   });
 
@@ -131,11 +140,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 16/
+      /schema version is 0, expected 17/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 16/
+      /schema version is 0, expected 17/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -217,7 +226,7 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -272,7 +281,7 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();
@@ -379,7 +388,7 @@ describe("identity package schema cut", () => {
     roots.push(root);
     const databasePath = path.join(root, "identity.db");
     const central = new CentralDataManager({ databasePath });
-    const workspaceId = central.addWorkspace("test").workspaceId;
+    central.addWorkspace("test");
     central.close();
     const identity = new IdentityDb({ path: databasePath, readOnly: false, now: () => 1_000 });
     identity.insertUser({
@@ -393,7 +402,6 @@ describe("identity package schema cut", () => {
     identity.insertPairingInvite({
       code: codeHash,
       userId: "usr_alice",
-      workspaceId,
       intent: "pair-device",
       createdAt: 1_000,
       expiresAt: 61_000,
@@ -410,7 +418,7 @@ describe("identity package schema cut", () => {
       code: codeHash,
       createDevice: () => ({ device, refreshToken: "r".repeat(43) }),
     });
-    expect(completed).toMatchObject({ device, workspaceId });
+    expect(completed).toMatchObject({ device });
     expect(identity.getPairingCode(codeHash)).toBeNull();
     expect(identity.getDeviceForEndpoint(device.transport.endpointId)?.deviceId).toBe(
       device.deviceId
@@ -431,19 +439,18 @@ describe("identity package schema cut", () => {
     roots.push(root);
     const databasePath = path.join(root, "identity.db");
     const central = new CentralDataManager({ databasePath });
-    const workspaceId = central.addWorkspace("test").workspaceId;
+    central.addWorkspace("test");
     central.close();
     const identity = new IdentityDb({ path: databasePath, readOnly: false });
     const codeHash = "d".repeat(64);
     identity.insertPairingInvite({
       code: codeHash,
-      workspaceId,
       intent: "root-bootstrap",
       createdAt: 1,
       expiresAt: 10,
     });
     expect(identity.deleteExpiredPairingInvites(10)).toEqual([
-      { code: codeHash, workspaceId, intent: "root-bootstrap", createdAt: 1, expiresAt: 10 },
+      { code: codeHash, intent: "root-bootstrap", createdAt: 1, expiresAt: 10 },
     ]);
     expect(identity.getPairingCode(codeHash)).toBeNull();
     identity.close();

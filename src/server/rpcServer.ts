@@ -179,7 +179,6 @@ import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type {
   DeviceCredential,
   OAuthCallbackMode,
-  PairingContext,
   RpcCredentialFailureCode,
 } from "@vibestudio/rpc/protocol/wsProtocol";
 import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "@vibestudio/rpc/protocol/wsProtocol";
@@ -345,7 +344,6 @@ interface PendingToolCall {
 interface ResolvedRpcCredential {
   entry: import("@vibestudio/shared/tokenManager").TokenEntry;
   deviceCredential?: DeviceCredential;
-  pairingContext?: PairingContext;
   agentBinding?: import("@vibestudio/identity/types").AgentBinding;
   subject?: UserSubject;
   authorizedBy?: string;
@@ -356,7 +354,6 @@ interface RedeemedRpcPairingCredential {
   callerId: string;
   callerKind: CallerKind;
   deviceCredential?: DeviceCredential;
-  pairingContext?: PairingContext;
   agentBinding?: import("@vibestudio/identity/types").AgentBinding;
   subject?: UserSubject;
 }
@@ -915,7 +912,6 @@ export class RpcServer {
             callerId: string;
             callerKind: CallerKind;
             deviceCredential?: DeviceCredential;
-            pairingContext?: PairingContext;
             /**
              * Entity/context binding for an `agent:`-prefixed credential (§3.2),
              * stamped onto the connection's VerifiedCaller. Host-verified — never
@@ -930,7 +926,6 @@ export class RpcServer {
             callerId: string;
             callerKind: CallerKind;
             deviceCredential?: DeviceCredential;
-            pairingContext?: PairingContext;
             agentBinding?: import("@vibestudio/identity/types").AgentBinding;
             subject?: UserSubject;
           } | null>;
@@ -1897,7 +1892,6 @@ export class RpcServer {
         resolved: {
           entry: resolvedEntry,
           ...(paired?.deviceCredential ? { deviceCredential: paired.deviceCredential } : {}),
-          ...(paired?.pairingContext ? { pairingContext: paired.pairingContext } : {}),
           ...(agentBinding ? { agentBinding } : {}),
           ...(subject ? { subject } : {}),
           ...(connectionGrant?.issuedBy ? { authorizedBy: connectionGrant.issuedBy } : {}),
@@ -1965,8 +1959,7 @@ export class RpcServer {
       ws.close(4006, resolution.message);
       return;
     }
-    const { entry, deviceCredential, pairingContext, agentBinding, subject, authorizedBy } =
-      resolution.resolved;
+    const { entry, deviceCredential, agentBinding, subject, authorizedBy } = resolution.resolved;
     // The literal caller id "shell" is reserved for in-process dispatch.
     // Host clients that authenticate over WS use kind:"shell" with concrete
     // caller ids such as "electron-main", headless-host, or paired devices.
@@ -2215,7 +2208,6 @@ export class RpcServer {
       serverBootId: this.bootId,
       sessionDirty,
       ...(deviceCredential ? { deviceCredential } : {}),
-      ...(pairingContext ? { pairingContext } : {}),
     };
     ws.sendMessage(authResult);
 

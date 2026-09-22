@@ -49,14 +49,8 @@ const sampleStored: StoredRemote = {
     relays: ["https://relay.example/"],
     v: 5,
   },
-  workspacePairing: {
-    endpointId: "bb".repeat(32),
-    relays: ["https://relay.example/"],
-    v: 5,
-  },
   deviceId: SELF_DEVICE_ID,
   refreshToken: "r".repeat(43),
-  workspaceName: "main",
   pairedAt: 123,
 };
 
@@ -113,7 +107,6 @@ describe("remoteCredService", () => {
       configured: true,
       isActive: true,
       deviceId: SELF_DEVICE_ID,
-      workspaceName: "main",
     });
 
     const inactive = createRemoteCredService({});
@@ -137,57 +130,6 @@ describe("remoteCredService", () => {
       deviceId: NEXT_DEVICE_ID,
       refreshToken: NEXT_REFRESH_TOKEN,
     });
-  });
-
-  it("persists the exact workspace reach while retaining the stable control pairing", async () => {
-    mocks.store.value = sampleStored;
-    const { persistStoredRemoteWorkspaceRoute } = await import("./remoteCredService.js");
-    const persisted = persistStoredRemoteWorkspaceRoute({
-      workspace: "second",
-      workspaceId: "ws_second",
-      running: true,
-      serverUrl: "https://hub.example.test/w/second",
-      workspaceReach: {
-        endpointId: "cc".repeat(32),
-        relays: ["https://relay.example/"],
-        v: 5,
-      },
-      serverId: sampleStored.serverId,
-      serverBootId: `boot_${"b".repeat(24)}`,
-    });
-
-    expect(persisted).toBe(true);
-    expect(mocks.store.value).toMatchObject({
-      workspaceName: "second",
-      controlPairing: sampleStored.controlPairing,
-      workspacePairing: {
-        endpointId: "cc".repeat(32),
-        relays: ["https://relay.example/"],
-        v: 5,
-      },
-    });
-  });
-
-  it("refuses to persist a workspace route for another server", async () => {
-    mocks.store.value = sampleStored;
-    const { persistStoredRemoteWorkspaceRoute } = await import("./remoteCredService.js");
-
-    expect(() =>
-      persistStoredRemoteWorkspaceRoute({
-        workspace: "second",
-        workspaceId: "ws_second",
-        running: true,
-        serverUrl: "https://hub.example.test/w/second",
-        workspaceReach: {
-          endpointId: "cc".repeat(32),
-          relays: ["https://relay.example/"],
-          v: 5,
-        },
-        serverId: `srv_${"x".repeat(24)}`,
-        serverBootId: `boot_${"b".repeat(24)}`,
-      })
-    ).toThrow(/server identity/);
-    expect(mocks.store.value).toEqual(sampleStored);
   });
 
   it("keeps the live session usable on save failures but surfaces explicit clear failures", async () => {

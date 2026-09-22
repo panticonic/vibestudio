@@ -471,10 +471,7 @@ async function establishRemoteSession(
       hubControlClient.call(svc, method, args)
     );
     const pair = await hub.ensureUserWorkspaces();
-    const visible = await hub.listWorkspaces();
-    const initialFocusedWorkspaceId =
-      visible.find((entry) => entry.name === stored.workspaceName)?.workspaceId ??
-      pair.personal.workspaceId;
+    const initialFocusedWorkspaceId = pair.personal.workspaceId;
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });
     const serverClient = await supervisor.connect(storedReach(route.workspaceReach), {
       callerId: `shell:${stored.deviceId}`,
@@ -528,8 +525,6 @@ async function establishFreshPairSession(
   const paired: {
     current: {
       credential: { deviceId: string; refreshToken: string };
-      /** Null for a root-bootstrap invite: no workspace exists to bind yet. */
-      workspaceId: string | null;
     } | null;
   } = {
     current: null,
@@ -567,13 +562,9 @@ async function establishFreshPairSession(
       },
       // Persist the issued device credential against the pairing material (minus the
       // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
-      onPaired: (credential, context) => {
+      onPaired: (credential) => {
         if (!paired.current) {
-          // A root-bootstrap invite is bound to no workspace (none exists yet),
-          // so the server sends no pairing context. Throwing here would discard
-          // a credential the one-time code has already been spent on; the
-          // workspace is resolved through ensureUserWorkspaces() below.
-          paired.current = { credential, workspaceId: context?.workspaceId ?? null };
+          paired.current = { credential };
         } else {
           paired.current = { ...paired.current, credential };
         }
@@ -607,20 +598,14 @@ async function establishFreshPairSession(
     const pair = await hub.ensureUserWorkspaces();
     // A server-wide invite has no workspace target. Start in Personal, just
     // like local startup; System is the shell's source, not the default focus.
-    const requested = await hub.routeWorkspace({
-      workspaceId: issued.workspaceId ?? pair.personal.workspaceId,
-    });
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });
     const { code: _code, ...stableHubReach } = pairing;
     const controlPairing = storedReach(stableHubReach);
-    const workspacePairing = storedReach(route.workspaceReach);
     currentStored = {
       serverId: route.serverId,
       transport: "iroh",
       endpointSecret,
       controlPairing,
-      workspacePairing,
-      workspaceName: requested.workspace,
       deviceId: issued.credential.deviceId,
       refreshToken: issued.credential.refreshToken,
       ...(label ? { label } : {}),
@@ -633,7 +618,7 @@ async function establishFreshPairSession(
       return `refresh:${active.deviceId}:${active.refreshToken}`;
     };
     phase("connect-workspace");
-    workspaceClient = await supervisor.connect(currentStored.workspacePairing, {
+    workspaceClient = await supervisor.connect(storedReach(route.workspaceReach), {
       callerId: `shell:${currentStored.deviceId}`,
       getShellToken: auth,
       onPaired: (credential) => {
@@ -666,7 +651,7 @@ async function establishFreshPairSession(
         })
     );
     log.info("[Server] Shell client connected over Iroh (fresh pairing)");
-    return { ...connection, initialFocusedWorkspaceId: requested.workspaceId };
+    return { ...connection, initialFocusedWorkspaceId: pair.personal.workspaceId };
   } catch (error) {
     return throwAfterOwnedCleanup(
       error,

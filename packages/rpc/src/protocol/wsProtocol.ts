@@ -31,11 +31,6 @@ export interface DeviceCredential {
   refreshToken: string;
 }
 
-/** Target selected by the pairing invite that admitted the newly paired device. */
-export interface PairingContext {
-  workspaceId: string;
-}
-
 export interface ToolExecutionResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -106,8 +101,6 @@ interface WsAuthResultBase {
    * reconnect (the server keeps only its hash, so this is the one delivery).
    */
   deviceCredential?: DeviceCredential;
-  /** Present with a freshly issued credential; never repeated on refresh auth. */
-  pairingContext?: PairingContext;
   error?: string;
   errorCode?: RpcAuthenticationFailureCode;
 }

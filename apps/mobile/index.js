@@ -110,7 +110,6 @@ async function pairViaIroh(pairing) {
   smokePhase("embedded-identity-ready");
   const tokenProvider = makeFreshShellTokenProvider(pairing);
   let pairedCredential = null;
-  let pairingContext = null;
   try {
     const connection = await establishIrohConnection(
       pairing,
@@ -118,9 +117,8 @@ async function pairViaIroh(pairing) {
       identity.identityId,
       "client-loopback",
       {
-        onPaired: (credential, context) => {
+        onPaired: (credential) => {
           pairedCredential = credential;
-          pairingContext = context ?? null;
           tokenProvider.setCredential(credential);
         },
       }
@@ -128,7 +126,6 @@ async function pairViaIroh(pairing) {
     const workspaceConnection = await completeFreshMobilePairing({
       controlConnection: connection,
       credential: pairedCredential,
-      pairingContext,
       controlPairing: pairing,
       persistConnection: persistStoredMobileConnection,
       connectWorkspace: async (workspacePairing, credential, controlConnection) => {

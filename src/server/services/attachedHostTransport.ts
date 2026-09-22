@@ -43,10 +43,10 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     /**
      * The child's hub control plane.
      *
-     * A paired credential addresses its workspace, and the control plane is
-     * normally recovered from the machine-wide hub lease — which names this
-     * host, never the isolated child. Revocation would otherwise be asked of
-     * the child's workspace, which does not implement it.
+     * The CLI record contains both an account credential and its explicitly
+     * selected workspace route. The machine-wide control plane names this
+     * host, never the isolated child; revocation must therefore be sent to the
+     * child hub explicitly rather than to its workspace service.
      */
     private readonly childGatewayUrl: string,
     private readonly operations: {

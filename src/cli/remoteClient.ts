@@ -102,7 +102,6 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   const pairedRef: {
     current: {
       credential: { deviceId: string; refreshToken: string };
-      workspaceId?: string;
     } | null;
   } = {
     current: null,
@@ -114,10 +113,8 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     callerId: "shell:pairing",
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
-    onPaired: (credential, context) => {
-      // A pairing need not name a workspace: the account's own pair is the
-      // fallback, which is how the desktop reads it too.
-      pairedRef.current = { credential, ...(context ? { workspaceId: context.workspaceId } : {}) };
+    onPaired: (credential) => {
+      pairedRef.current = { credential };
     },
   });
   let pairedCredential: DeviceCredential | null = null;
@@ -126,15 +123,13 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     await client.ready();
     const paired = pairedRef.current;
     if (!paired) throw new AuthError("pairing did not return a device credential");
-    // Prepare the account's own workspaces before opening one, exactly as a
-    // desktop and a phone do when they pair. The invite's workspace is a
-    // preference rather than the shape of the account, so Personal is what a
-    // pairing that asked for nothing in particular opens.
+    // Pairing authenticates the account. Workspace selection begins only after
+    // that boundary and defaults to the account's Personal workspace.
     const pair = await client.call<{
       personal: { workspaceId: string };
       system: { workspaceId: string };
     }>("hubControl.ensureUserWorkspaces", []);
-    const targetWorkspaceId = paired.workspaceId ?? pair.personal.workspaceId;
+    const targetWorkspaceId = pair.personal.workspaceId;
     const route = await client.call<HubWorkspaceRoute>("hubControl.routeWorkspace", [
       { workspaceId: targetWorkspaceId },
     ]);
@@ -252,8 +247,8 @@ export async function inviteRemoteUser(
 
 export async function pairRemoteDevice(
   creds: DeviceCredential,
-  options: { workspace?: string; ttlMs?: number } = {}
-): Promise<{ userId: string; handle: string; workspace: string; pairing: HubPairingInvite }> {
+  options: { ttlMs?: number } = {}
+): Promise<{ userId: string; handle: string; pairing: HubPairingInvite }> {
   return await withControl(creds, (client) => client.pairDevice(options));
 }
 

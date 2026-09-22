@@ -11,7 +11,7 @@ import {
   createReconnectingIrohClientPipe,
   type LifecycleIrohClientPipe,
 } from "@vibestudio/rpc/transports/reconnectingIrohClient";
-import type { OAuthCallbackMode, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   createMobileEndpointBinding,
   mobileIrohIdentity,
@@ -47,7 +47,7 @@ export interface ShellTokenProvider {
 }
 
 export interface IrohConnectionHandlers {
-  onPaired?: (credential: ShellCredential, context?: PairingContext) => void | Promise<void>;
+  onPaired?: (credential: ShellCredential) => void | Promise<void>;
   onPersistError?: (error: Error) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
 }
@@ -192,10 +192,7 @@ async function waitUntilConnected(
     await Promise.race([
       Promise.all([transport.resume(), session.ready?.()]).then(() => undefined),
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(mobileConnectionRecoveryTimeoutError()),
-          timeoutMs
-        );
+        timer = setTimeout(() => reject(mobileConnectionRecoveryTimeoutError()), timeoutMs);
       }),
     ]);
   } finally {

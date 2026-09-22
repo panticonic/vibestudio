@@ -4,7 +4,6 @@ import type {
   ClientPlatform,
   DeviceCredential,
   OAuthCallbackMode,
-  PairingContext,
   RpcAuthenticationFailureCode,
 } from "./wsProtocol.js";
 
@@ -41,7 +40,6 @@ export interface IrohSessionOpenResultFrame {
   serverBootId?: string;
   sessionDirty?: boolean;
   deviceCredential?: DeviceCredential;
-  pairingContext?: PairingContext;
   error?: string;
   errorCode?: RpcAuthenticationFailureCode;
   terminal?: boolean;

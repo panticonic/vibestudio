@@ -674,7 +674,6 @@ async function createIsolatedDevelopmentManager(input: {
   return {
     async mintClientInvite(ttlMs) {
       const invite = await pairRemoteDevice(credentials, {
-        workspace: credentials.workspaceName,
         ttlMs,
       });
       return invite.pairing.deepLink;

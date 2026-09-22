@@ -34,7 +34,7 @@ import {
 } from "@vibestudio/rpc/transports/irohClient";
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { LifecycleIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
-import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import { EndpointGenerationOwner, type IrohReach } from "@vibestudio/iroh-transport";
 import {
   createNodeEndpointBinding,
@@ -77,7 +77,7 @@ export interface IrohServerClientArgs {
    * redeemed): the durable device credential to persist so `getShellToken` can
    * switch to `refresh:<deviceId>:<refreshToken>` for reconnects.
    */
-  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
+  onPaired?: (credential: DeviceCredential) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: {

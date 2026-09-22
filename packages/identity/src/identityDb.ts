@@ -66,8 +66,6 @@ export interface PairingCodeRow {
   code: string;
   /** Bound user the redeemed device will belong to; absent for root bootstrap. */
   userId?: string;
-  /** Optional workspace suggestion; account bootstrap needs no project. */
-  workspaceId: string | null;
   intent: PairingCodeIntent;
   createdAt: number;
   expiresAt: number;
@@ -618,16 +616,9 @@ export class IdentityDb {
   insertPairingInvite(invite: PairingInviteRow): void {
     this.assertWritable();
     this.stmt(
-      `INSERT INTO pairing_codes (code, user_id, workspace_id, intent, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(
-      invite.code,
-      invite.userId ?? null,
-      invite.workspaceId,
-      invite.intent,
-      invite.createdAt,
-      invite.expiresAt
-    );
+      `INSERT INTO pairing_codes (code, user_id, intent, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(invite.code, invite.userId ?? null, invite.intent, invite.createdAt, invite.expiresAt);
   }
 
   /**
@@ -642,7 +633,6 @@ export class IdentityDb {
   }): {
     device: DeviceRow;
     refreshToken: string;
-    workspaceId: string | null;
   } | null {
     this.assertWritable();
     return this.transaction(() => {
@@ -660,15 +650,6 @@ export class IdentityDb {
       if (!userId) {
         throw new Error("Pairing code is not bound to a user");
       }
-      if (record.intent === "root-bootstrap" && record.workspaceId !== null) {
-        this.addMembership({
-          userId,
-          workspaceId: record.workspaceId,
-          addedBy: userId,
-          addedAt: this.now(),
-          role: "admin",
-        });
-      }
       const issuance = input.createDevice(userId);
       const { device, refreshToken } = issuance;
       this.upsertDevice(device);
@@ -676,7 +657,6 @@ export class IdentityDb {
       return {
         device,
         refreshToken,
-        workspaceId: record.workspaceId,
       };
     });
   }
@@ -855,7 +835,6 @@ function rowToAgentCredential(row: Row): AgentCredentialRow {
 function rowToPairingCode(row: Row): PairingCodeRow {
   return {
     code: row["code"] as string,
-    workspaceId: row["workspace_id"] as string | null,
     intent: row["intent"] as PairingCodeIntent,
     createdAt: row["created_at"] as number,
     expiresAt: row["expires_at"] as number,

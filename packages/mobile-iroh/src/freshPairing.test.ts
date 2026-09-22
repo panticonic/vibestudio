@@ -18,7 +18,6 @@ const workspaceReach = {
   relays: ["https://relay.example/"],
   v: 5 as const,
 };
-const pairingContext = { workspaceId: "ws-b" };
 const route = {
   workspace: "beta",
   workspaceId: "system-private",
@@ -103,7 +102,6 @@ describe("fresh mobile Iroh pairing commit", () => {
     const connection = await completeFreshMobilePairing({
       ...fixtureValue,
       credential,
-      pairingContext,
       controlPairing,
     });
 
@@ -128,8 +126,8 @@ describe("fresh mobile Iroh pairing commit", () => {
       fixtureValue.controlConnection
     );
     expect(fixtureValue.events).toEqual([
-      "persist-paired",
       "hubControl.ensureUserWorkspaces",
+      "persist-paired",
       "hubControl.routeWorkspace",
       "persist-routed",
       "connect-workspace",
@@ -144,21 +142,17 @@ describe("fresh mobile Iroh pairing commit", () => {
 
   it("closes once when credential, route, persistence, or workspace dial fails", async () => {
     const cases = [
-      { credential: null, pairingContext, overrides: {} },
-      { credential, pairingContext: null, overrides: {} },
+      { credential: null, overrides: {} },
       {
         credential,
-        pairingContext,
         overrides: { route: { ...route, workspaceId: "different" } },
       },
       {
         credential,
-        pairingContext,
         overrides: { persist: async () => Promise.reject(new Error("keychain locked")) },
       },
       {
         credential,
-        pairingContext,
         overrides: { connect: async () => Promise.reject(new Error("workspace unavailable")) },
       },
     ] as const;
@@ -169,7 +163,6 @@ describe("fresh mobile Iroh pairing commit", () => {
         completeFreshMobilePairing({
           ...fixtureValue,
           credential: testCase.credential,
-          pairingContext: testCase.pairingContext,
           controlPairing,
         })
       ).rejects.toThrow();
@@ -186,7 +179,6 @@ describe("fresh mobile Iroh pairing commit", () => {
       completeFreshMobilePairing({
         ...fixtureValue,
         credential,
-        pairingContext,
         controlPairing,
       })
     ).rejects.toThrow(/keychain locked.*pipe close failed/u);
