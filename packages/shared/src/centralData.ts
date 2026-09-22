@@ -353,7 +353,7 @@ export class CentralDataManager {
 
   getWorkspaceCreationIntent(name: string): WorkspaceCreationDescriptor | null {
     const row = this.stmt("SELECT creation_intent_json FROM workspaces WHERE name = ?").get(name);
-    if (!row) throw new Error(`Unknown workspace \"${name}\"`);
+    if (!row) throw new Error(`Unknown workspace "${name}"`);
     return parseWorkspaceCreationIntent(row["creation_intent_json"]!);
   }
 
