@@ -4404,6 +4404,26 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "hubControl.setWorkspaceDisplayName": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale: "G3: changing a workspace's presentation is an administrator operation.",
+    },
+    capability: "workspaces.rename",
+    presentation: {
+      title: "Rename a workspace",
+      action: "change a workspace display name",
+      description: "Change the name people see without changing its routing identity.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
   "hubControl.setWorkspaceRpcPolicy": {
     tier: {
       tier: "gated",
@@ -9192,6 +9212,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "files",
     verb: "see",
   },
+  "workspaces.rename": {
+    domain: "automation",
+    verb: "manage",
+  },
   "workspaces.rpcPolicy.read": {
     domain: "sharing",
     verb: "see",
@@ -10134,6 +10158,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "files",
       verb: "see",
+    },
+  },
+  "workspaces.rename": {
+    title: "Rename a workspace",
+    action: "change a workspace display name",
+    description: "Change the name people see without changing its routing identity.",
+    group: "workspace",
+    authorityCategory: {
+      domain: "automation",
+      verb: "manage",
     },
   },
   "workspaces.rpcPolicy.read": {

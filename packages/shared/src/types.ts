@@ -446,6 +446,8 @@ export interface WorkspaceEntry {
    */
   workspaceId: string;
   name: string;
+  /** Optional human-facing label; `name` remains the stable routing and filesystem key. */
+  displayName?: string;
   lastOpened: number;
   /** Hub registry designation; user-facing projections must expose it only to its owner. */
   privateRole?: "personal" | "system";

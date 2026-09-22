@@ -2,10 +2,10 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 17 is the current schema. The explicitly enumerated final
+ * Version 18 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 17;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 18;
 
 // No foreign key to workspaces: deletion must retain retry/deduplication evidence.
 const WORKSPACE_CREATION_OPERATIONS_SQL = `CREATE TABLE workspace_creation_operations (
@@ -147,7 +147,8 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         workspace_id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         last_opened INTEGER NOT NULL,
-        creation_intent_json TEXT
+        creation_intent_json TEXT,
+        display_name TEXT
       )`,
     },
     {
@@ -218,6 +219,13 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 17,
+    toVersion: 18,
+    migrate(db) {
+      db.exec("ALTER TABLE workspaces ADD COLUMN display_name TEXT");
+    },
+  },
   {
     fromVersion: 16,
     toVersion: 17,

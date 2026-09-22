@@ -36,6 +36,24 @@ describe("CentralDataManager SQLite control store", () => {
     db.close();
   }
 
+  it("stores a workspace display name without changing its routing name", () => {
+    const central = manager();
+    const workspace = central.addWorkspace("project-route", "ws_project");
+    expect(central.setWorkspaceDisplayName(workspace.workspaceId, "Project Atlas")).toMatchObject({
+      workspaceId: "ws_project",
+      name: "project-route",
+      displayName: "Project Atlas",
+    });
+    expect(central.listWorkspaces()[0]).toMatchObject({
+      name: "project-route",
+      displayName: "Project Atlas",
+    });
+    expect(central.setWorkspaceDisplayName(workspace.workspaceId, null)).not.toHaveProperty(
+      "displayName"
+    );
+    central.close();
+  });
+
   it("keeps one creation receipt and audit across restart, initialization, deletion, and exact retries", () => {
     const central = manager();
     addCreationUser();

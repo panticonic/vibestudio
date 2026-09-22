@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7b074b3a39415a705af12451292ede5a2eb1e1304a61fa5b1f340761b977f946",
+  "censusDigest": "sha256:2263ffe93c9cd5531a8ea35e4c74bfa5ea1a898436c194b898c3a5aaf9d063c5",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -205,6 +205,10 @@
     "host:hubControl.routeWorkspace": {
       "review": "read-only-exact-workspace-routing",
       "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
+    },
+    "host:hubControl.setWorkspaceDisplayName": {
+      "review": "workspace-admin-display-name-update",
+      "change": "Lets a current administrator of one exact workspace set or clear its bounded human-facing label without changing the stable routing name, workspace identity, membership, runtime state, or filesystem coordinates. The receiver derives the administered workspace from the requested id, enforces live workspace-admin membership, persists only the optional display label, and emits the existing catalog-change projection."
     },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",

@@ -20197,6 +20197,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:hubControl.setWorkspaceDisplayName",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "setWorkspaceDisplayName",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.control",
+      "reviewRationale": "G3: changing a workspace's presentation is an administrator operation.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.setWorkspaceDisplayName"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.setWorkspaceDisplayName),allOf(capability(user,service:hubControl.setWorkspaceDisplayName),workspace-member))",
+      "r3b": {
+        "review": "workspace-admin-display-name-update",
+        "change": "Lets a current administrator of one exact workspace set or clear its bounded human-facing label without changing the stable routing name, workspace identity, membership, runtime state, or filesystem coordinates. The receiver derives the administered workspace from the requested id, enforces live workspace-admin membership, persists only the optional display label, and emits the existing catalog-change projection."
+      },
+      "capability": "service:hubControl.setWorkspaceDisplayName",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:hubControl.setWorkspaceRpcPolicy",
       "rpcPlane": "host-service",
       "owner": "hubControl",

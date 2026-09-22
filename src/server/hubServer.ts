@@ -779,6 +779,7 @@ function listHubWorkspaces(state: HubRuntimeState, viewer: HubSubject | null): H
   const entries: HubWorkspaceEntry[] = visible.map((entry) => {
     return {
       name: entry.name,
+      ...(entry.displayName ? { displayName: entry.displayName } : {}),
       workspaceId: entry.workspaceId,
       lastOpened: entry.lastOpened,
       running: isRuntimeRunning(state, entry.name),
@@ -1681,6 +1682,20 @@ export async function executeHubControl(
     );
     if (removedWorkspaceId) emitWorkspaceCatalogChanged(state);
     respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
+    return;
+  }
+  if (method === "setWorkspaceDisplayName") {
+    const opts = hubControlMethods.setWorkspaceDisplayName.args.parse(args)[0];
+    const name = requireWorkspaceName(state, opts.workspaceId);
+    requireWorkspaceAdmin(state, subject, name);
+    const displayName = opts.displayName?.trim() || null;
+    state.centralData.setWorkspaceDisplayName(opts.workspaceId, displayName);
+    emitWorkspaceCatalogChanged(state);
+    const updated = listHubWorkspaces(state, subject).find(
+      (entry) => entry.workspaceId === opts.workspaceId
+    );
+    if (!updated) throw new Error("Updated workspace is no longer visible");
+    respond(updated);
     return;
   }
   if (method === "addWorkspaceMember") {

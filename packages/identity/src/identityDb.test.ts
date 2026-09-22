@@ -78,16 +78,25 @@ describe("identity package schema cut", () => {
         SELECT code, user_id, 'ws_kept', intent, created_at, expires_at
         FROM pairing_codes_current;
       DROP TABLE pairing_codes_current;
+      ALTER TABLE workspaces DROP COLUMN display_name;
       PRAGMA user_version = 16`);
     const tables = ["users", "devices", "workspaces", "membership", "pairing_codes"];
-    const before = tables.map((table) => old.prepare(`SELECT * FROM ${table}`).all());
+    const rows = (db: DatabaseSync, table: string) =>
+      db
+        .prepare(
+          table === "workspaces"
+            ? "SELECT workspace_id, name, last_opened, creation_intent_json FROM workspaces"
+            : `SELECT * FROM ${table}`
+        )
+        .all();
+    const before = tables.map((table) => rows(old, table));
     old.close();
 
     const migrated = new IdentityDb({ path: databasePath, readOnly: false, now: () => 10 });
     expect(migrated.listPairingCodes()).toEqual([invite]);
     const verified = new DatabaseSync(databasePath);
     expect(
-      tables.slice(0, -1).map((table) => verified.prepare(`SELECT * FROM ${table}`).all())
+      tables.slice(0, -1).map((table) => rows(verified, table))
     ).toEqual(before.slice(0, -1));
     expect(migrated.listPairingCodes()).toEqual(
       before.at(-1)?.map(({ workspace_id: _discarded, ...entry }) => ({
@@ -98,7 +107,7 @@ describe("identity package schema cut", () => {
         expiresAt: entry["expires_at"],
       }))
     );
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
     verified.close();
     migrated.insertPairingInvite({
       code: "account-only",
@@ -140,11 +149,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 17/
+      /schema version is 0, expected 18/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 17/
+      /schema version is 0, expected 18/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -213,7 +222,9 @@ describe("identity package schema cut", () => {
         )
       );
       INSERT INTO control_rooms(room, device_id) VALUES ('old-room', 'old-device');
-      DROP TABLE workspace_creation_operations; PRAGMA user_version = 11;
+      DROP TABLE workspace_creation_operations;
+      ALTER TABLE workspaces DROP COLUMN display_name;
+      PRAGMA user_version = 11;
     `);
     old.close();
 
@@ -226,7 +237,7 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -265,7 +276,7 @@ describe("identity package schema cut", () => {
     const old = new DatabaseSync(databasePath);
     restoreV13Membership(old);
     old.exec(
-      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; PRAGMA user_version = 13"
+      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"
     );
     old.close();
 
@@ -281,7 +292,7 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();
@@ -305,7 +316,7 @@ describe("identity package schema cut", () => {
     const old = new DatabaseSync(databasePath);
     restoreV13Membership(old);
     old.exec(
-      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; PRAGMA user_version = 13"
+      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"
     );
     old.close();
 

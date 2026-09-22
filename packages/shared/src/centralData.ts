@@ -55,6 +55,7 @@ function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
   return {
     workspaceId: row["workspace_id"] as string,
     name: row["name"] as string,
+    ...(row["display_name"] ? { displayName: row["display_name"] as string } : {}),
     lastOpened: row["last_opened"] as number,
     ...(row["private_role"] ? { privateRole: row["private_role"] as "personal" | "system" } : {}),
   };
@@ -120,6 +121,14 @@ export class CentralDataManager {
     )
       .all()
       .map(rowToWorkspace);
+  }
+
+  setWorkspaceDisplayName(workspaceId: string, displayName: string | null): WorkspaceEntry {
+    const row = this.stmt(
+      `UPDATE workspaces SET display_name = ? WHERE workspace_id = ? RETURNING *`
+    ).get(displayName, workspaceId);
+    if (!row) throw new Error(`Unknown workspace id "${workspaceId}"`);
+    return rowToWorkspace(row);
   }
 
   /**

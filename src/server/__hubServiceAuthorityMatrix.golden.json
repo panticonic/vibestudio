@@ -622,6 +622,32 @@
           }
         }
       },
+      "setWorkspaceDisplayName": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: changing a workspace's presentation is an administrator operation."
+        },
+        "capability": "workspaces.rename",
+        "presentation": {
+          "title": "Rename a workspace",
+          "action": "change a workspace display name",
+          "description": "Change the name people see without changing its routing identity.",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
       "setWorkspaceRpcPolicy": {
         "authority": {
           "inherits": true

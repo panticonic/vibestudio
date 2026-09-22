@@ -705,7 +705,12 @@ function fakeRuntime(
  * seeded catalog in a hermetic test; this fake keeps the entries stable.
  */
 function makeHubCentralData(
-  seed: Array<{ name: string; workspaceId: string; lastOpened: number }> = []
+  seed: Array<{
+    name: string;
+    workspaceId: string;
+    lastOpened: number;
+    displayName?: string;
+  }> = []
 ): CentralDataManager {
   const entries = [...seed];
   let ephemeral: {
@@ -753,6 +758,13 @@ function makeHubCentralData(
     },
     touchWorkspace: () => {},
     setLastWorkspaceForUser: () => {},
+    setWorkspaceDisplayName: (workspaceId: string, displayName: string | null) => {
+      const entry = entries.find((candidate) => candidate.workspaceId === workspaceId);
+      if (!entry) throw new Error(`Unknown workspace id "${workspaceId}"`);
+      if (displayName) entry.displayName = displayName;
+      else delete entry.displayName;
+      return entry;
+    },
   } as unknown as CentralDataManager;
 }
 
@@ -1098,6 +1110,59 @@ describe("hub RPC pairing surfacing (§5)", () => {
         policy,
         incomingLocked: false,
       });
+    } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("lets a workspace administrator change only its display name", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    state.centralData = makeHubCentralData([
+      { name: runtime.name, workspaceId: runtime.workspaceId, lastOpened: 1 },
+    ]);
+    const administrator = state.userStore.inviteUser({
+      handle: "workspace_namer",
+      displayName: "Workspace namer",
+      role: "member",
+      createdBy: rootUserId,
+    });
+    state.membershipStore.add(administrator.id, runtime.workspaceId, rootUserId, "admin");
+    const respond = vi.fn();
+    try {
+      await expect(
+        executeHubControl(
+          state,
+          { userId: rootUserId, handle: "root", role: "root" },
+          "setWorkspaceDisplayName",
+          [{ workspaceId: runtime.workspaceId, displayName: "Not allowed" }],
+          respond
+        )
+      ).rejects.toThrow("Requires workspace administrator role");
+      await executeHubControl(
+        state,
+        {
+          userId: administrator.id,
+          handle: administrator.handle,
+          role: administrator.role,
+        },
+        "setWorkspaceDisplayName",
+        [{ workspaceId: runtime.workspaceId, displayName: "Project Atlas" }],
+        respond
+      );
+      expect(respond).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: runtime.workspaceId,
+          name: runtime.name,
+          displayName: "Project Atlas",
+        })
+      );
+      expect(state.centralData.listWorkspaces()[0]?.name).toBe(runtime.name);
+      expect(state.controlTransport!.eventService.emitProjected).toHaveBeenCalledWith(
+        "hub:workspace-catalog-changed",
+        expect.any(Function)
+      );
     } finally {
       state.identityDb.close();
       fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });

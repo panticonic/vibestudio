@@ -30,6 +30,7 @@ export const HubWorkspaceEntrySchema = z
   .object({
     workspaceId: z.string(),
     name: z.string(),
+    displayName: z.string().optional(),
     lastOpened: z.number(),
     running: z.boolean(),
     pendingApprovalCount: z.number().int().nonnegative(),
@@ -412,6 +413,39 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   ...workspaceCreationMethods,
+  setWorkspaceDisplayName: {
+    website: {
+      kind: "closed",
+      reason:
+        "The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    capability: "workspaces.rename",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale: "G3: changing a workspace's presentation is an administrator operation.",
+    },
+    presentation: {
+      title: "Rename a workspace",
+      action: "change a workspace display name",
+      description: "Change the name people see without changing its routing identity.",
+      group: "workspace",
+      authorityCategory: { domain: "automation", verb: "manage" },
+    },
+    description: "Set or clear the human-facing display name of an administered workspace.",
+    args: z.tuple([
+      z
+        .object({
+          workspaceId: z.string().min(1),
+          displayName: z.string().trim().min(1).max(80).nullable(),
+        })
+        .strict(),
+    ]),
+    returns: HubWorkspaceEntrySchema,
+    access: writeAccess,
+  },
   deleteWorkspace: {
     website: {
       kind: "closed",
