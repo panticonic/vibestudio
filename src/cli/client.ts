@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
+import { isConnectPairingInput, isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import {
@@ -84,14 +84,8 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
   const label = typeof inv.flags["label"] === "string" ? inv.flags["label"] : undefined;
   const positional = inv.positionals[0];
   try {
-    if (
-      !positional ||
-      (!positional.startsWith("vibestudio://") &&
-        !positional.startsWith("https://vibestudio.app/p#"))
-    ) {
-      throw new UsageError(
-        "pass a Vibestudio pairing link (https://vibestudio.app/p#... or vibestudio://connect/...)"
-      );
+    if (!positional || !isConnectPairingInput(positional)) {
+      throw new UsageError("pass compact pairing material or a Vibestudio pairing link");
     }
     assertCliProfileIsUnpaired();
     const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
@@ -166,6 +160,7 @@ function ttlFrom(inv: ParsedInvocation): number | undefined {
 
 function printPairingInvite(invite: { pairUrl: string; code: string; expiresAt: number }): void {
   console.log(`Pairing code: ${invite.code}`);
+  console.log(`Connect: ${invite.pairUrl.slice(invite.pairUrl.indexOf("#") + 1)}`);
   console.log(`Pair URL: ${invite.pairUrl}`);
   console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
   console.log();
@@ -462,16 +457,13 @@ function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
   const label = typeof inv.flags["label"] === "string" ? inv.flags["label"] : undefined;
 
   const positional = inv.positionals[0];
-  if (
-    positional?.startsWith("vibestudio://") ||
-    positional?.startsWith("https://vibestudio.app/p#")
-  ) {
+  if (positional && isConnectPairingInput(positional)) {
     if (link)
       throw new UsageError("pass the pairing link once, either positionally or with --pair");
     link = positional;
   } else if (positional) {
     throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link or an https://vibestudio.app/p URL (also accepted via --pair).`
+      `Unexpected argument for terminal start: ${positional}. Pass compact pairing material or a Vibestudio pairing link (also accepted via --pair).`
     );
   }
 
@@ -695,7 +687,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "pair",
     summary: "Save a CLI device credential without launching Electron",
-    usage: 'vibestudio remote pair "<pair-link>"',
+    usage: 'vibestudio remote pair "<pairing-material-or-link>"',
     flags: [
       { name: "label", takesValue: true, description: "Device label shown on the server" },
       JSON_FLAG,

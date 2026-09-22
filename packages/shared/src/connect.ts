@@ -7,6 +7,7 @@ import {
   createConnectDeepLink,
   createConnectLink,
   createConnectPairUrl,
+  isConnectPairingInput,
   parseConnectLink,
   type ConnectLink,
   type ConnectPairing,
@@ -21,6 +22,7 @@ export {
   createConnectDeepLink,
   createConnectLink,
   createConnectPairUrl,
+  isConnectPairingInput,
   parseConnectLink,
 };
 export type { ConnectLink, ConnectPairing };

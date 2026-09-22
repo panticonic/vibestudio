@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink } from "@vibestudio/shared/connect";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
@@ -85,6 +85,15 @@ describe("protocolHandler", () => {
     const secondLink = createConnectDeepLink(pair("C".repeat(21)));
     mocks.handlers.get("second-instance")?.({}, ["--flag", secondLink]);
     expect(mod.getPendingConnectLink()).toEqual(expectedPairing("C".repeat(21)));
+  });
+
+  it("captures bare compact pairing material from process arguments", async () => {
+    const mod = await import("./protocolHandler.js");
+    const payload = createConnectPairUrl(pair("D".repeat(21))).split("#")[1]!;
+
+    mod.enqueueFirstArgvLink(["--flag", payload]);
+
+    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("D".repeat(21)));
   });
 
   it("buffers and dispatches canonical panel locations through the same OS protocol", async () => {

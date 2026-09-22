@@ -1,6 +1,10 @@
 import { app } from "electron";
 import * as path from "path";
-import { type ConnectPairing, parseConnectLink } from "@vibestudio/iroh-transport";
+import {
+  isConnectPairingInput,
+  type ConnectPairing,
+  parseConnectLink,
+} from "@vibestudio/iroh-transport";
 import { parsePanelLocationLink, type PanelLocation } from "@vibestudio/shared/panelLocation";
 import {
   parseShellSurfaceLink,
@@ -48,8 +52,7 @@ export function installEarlyOpenUrlBuffer(): void {
 export function enqueueFirstArgvLink(argv: readonly string[]): void {
   const raw = argv.find(
     (arg) =>
-      typeof arg === "string" &&
-      (arg.startsWith("vibestudio://") || arg.startsWith("https://vibestudio.app/p#"))
+      typeof arg === "string" && (arg.startsWith("vibestudio://") || isConnectPairingInput(arg))
   );
   if (raw) enqueueProtocolLink(raw);
 }

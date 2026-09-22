@@ -11,7 +11,11 @@ import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
 import { PAIR_CONFIRMED_ARG } from "../startupInvocation.js";
-import { createConnectDeepLink, parseConnectLink } from "@vibestudio/iroh-transport";
+import {
+  createConnectDeepLink,
+  isConnectPairingInput,
+  parseConnectLink,
+} from "@vibestudio/iroh-transport";
 import {
   clearStoredRemotePairing as clearStoredRemotePairingInStore,
   loadStoredRemotePairing as loadStoredRemotePairingFromStore,
@@ -159,7 +163,7 @@ export function createRemoteCredService(deps: {
           .filter(
             (arg) =>
               !arg.startsWith("vibestudio://") &&
-              !arg.startsWith("https://vibestudio.app/p#") &&
+              !isConnectPairingInput(arg) &&
               !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
           );
         relaunchArgs.push(deepLink);

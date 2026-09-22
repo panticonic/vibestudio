@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createConnectLink, parseConnectLink, type ConnectPairing } from "./pairing.js";
+import {
+  createConnectLink,
+  encodeConnectPairing,
+  isConnectPairingInput,
+  parseConnectLink,
+  type ConnectPairing,
+} from "./pairing.js";
 import { DEFAULT_IROH_RELAYS, IROH_REACH_VERSION } from "./reach.js";
 
 const pairing: ConnectPairing = {
@@ -17,6 +23,17 @@ describe("Iroh connect link", () => {
 
   it("encodes the public relay profile as a 91-character URL", () => {
     expect(createConnectLink(pairing, "https")).toHaveLength(91);
+  });
+
+  it("accepts the compact pairing material without a URL carrier", () => {
+    const payload = encodeConnectPairing(pairing);
+    expect(payload).toHaveLength(66);
+    expect(isConnectPairingInput(payload)).toBe(true);
+    expect(parseConnectLink(payload)).toEqual({
+      kind: "ok",
+      ...pairing,
+      relays: [...pairing.relays],
+    });
   });
 
   it("round-trips custom relay coordinates inline", () => {

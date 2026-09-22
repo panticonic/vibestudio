@@ -8,6 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";
+import { createConnectPairUrl } from "@vibestudio/shared/connect";
 
 // Mocks must be set up before the startupMode module is imported, so we
 // resetModules + re-import in each test.
@@ -130,6 +131,25 @@ describe("resolveStartupMode interactive desktop policy", () => {
       kind: "pending",
     });
     expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
+  });
+
+  it("opens the chooser when launched with bare compact pairing material", () => {
+    const payload = createConnectPairUrl({
+      endpointId: "ab".repeat(32),
+      relays: ["https://relay.example/"],
+      code: "A".repeat(22),
+      v: 5,
+    }).split("#")[1]!;
+    setArgv([payload]);
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
+      kind: "pending",
+    });
+    expect(mod.workspaceRelaunchArgs("default", ["--foo", payload])).toEqual([
+      "--foo",
+      "--workspace",
+      "default",
+    ]);
   });
 
   it("does not treat Iroh pairing deep links as a headless startup mode", () => {

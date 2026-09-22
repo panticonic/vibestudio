@@ -15,6 +15,7 @@ import { readWorkspaceCreationTemplate } from "@vibestudio/workspace/templateRel
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";
+import { isConnectPairingInput } from "@vibestudio/iroh-transport";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
@@ -130,9 +131,7 @@ function hasExplicitWorkspaceSelection(): boolean {
 }
 
 function hasConnectDeepLinkArg(): boolean {
-  return process.argv.some(
-    (arg) => arg.startsWith("vibestudio://connect") || arg.startsWith("https://vibestudio.app/p#")
-  );
+  return process.argv.some(isConnectPairingInput);
 }
 
 function shouldCreateExplicitWorkspaceIfMissing(): boolean {
@@ -151,8 +150,7 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === CHOOSE_CONNECTION_ARG) continue;
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
     if (arg === DEV_IROH_REMOTE_ARG) continue;
-    if (arg?.startsWith("vibestudio://connect") || arg?.startsWith("https://vibestudio.app/p#"))
-      continue;
+    if (arg !== undefined && isConnectPairingInput(arg)) continue;
     if (arg?.startsWith("vibestudio://panel")) continue;
     if (arg !== undefined) filteredArgs.push(arg);
   }

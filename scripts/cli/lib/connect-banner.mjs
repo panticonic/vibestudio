@@ -31,6 +31,7 @@ export function printConnectBanner({
   if (qrInvite.code !== invite.code) {
     console.log(`  QR code:     ${qrInvite.code}`);
   }
+  console.log(`  Connect:     ${invite.pairUrl.slice(invite.pairUrl.indexOf("#") + 1)}`);
   console.log(`  ${deepLinkLabel}:  ${invite.pairUrl}`);
   if (qrInvite.pairUrl !== invite.pairUrl) {
     console.log(`  QR ${deepLinkLabel}:  ${qrInvite.pairUrl}`);

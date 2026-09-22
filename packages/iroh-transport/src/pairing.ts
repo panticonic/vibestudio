@@ -171,7 +171,9 @@ export function createConnectPairUrl(pairing: ConnectPairing): string {
 export function parseConnectLink(raw: string): ConnectLink {
   const schemePrefix = `${CONNECT_DEEP_LINK_SCHEME}//connect/`;
   let payload: string;
-  if (raw.startsWith(schemePrefix)) {
+  if (/^[A-Za-z0-9_-]+$/u.test(raw)) {
+    payload = raw;
+  } else if (raw.startsWith(schemePrefix)) {
     payload = raw.slice(schemePrefix.length);
     if (!payload || /[/?#]/u.test(payload)) {
       return { kind: "error", reason: "Deep link has malformed compact pairing material" };
@@ -194,4 +196,17 @@ export function parseConnectLink(raw: string): ConnectLink {
     payload = url.hash.slice(1);
   }
   return decodeConnectPairing(payload);
+}
+
+/**
+ * True when an argument is either a pairing-link carrier or valid bare compact
+ * pairing material. Carrier prefixes remain recognizable even when malformed so
+ * launch-time parsing can surface the useful protocol error to the user.
+ */
+export function isConnectPairingInput(raw: string): boolean {
+  return (
+    raw.startsWith(`${CONNECT_DEEP_LINK_SCHEME}//connect`) ||
+    raw.startsWith(`${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}#`) ||
+    decodeConnectPairing(raw).kind === "ok"
+  );
 }

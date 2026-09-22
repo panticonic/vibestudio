@@ -4,6 +4,7 @@ import {
   connectPairingFromLink,
   createConnectDeepLink,
   createConnectPairUrl,
+  isConnectPairingInput,
   isLoopbackHost,
   parseConnectLink,
   selectedWorkspaceNameFromUrl,
@@ -29,6 +30,13 @@ describe("Iroh connect links", () => {
     expect(https).toEqual(scheme);
     if (scheme.kind !== "ok") throw new Error(scheme.reason);
     expect(connectPairingFromLink(scheme)).toEqual(pairing);
+  });
+
+  it("accepts bare compact pairing material as a terminal-friendly carrier", () => {
+    const pairUrl = createConnectPairUrl(pairing);
+    const payload = pairUrl.slice(pairUrl.indexOf("#") + 1);
+    expect(isConnectPairingInput(payload)).toBe(true);
+    expect(parseConnectLink(payload)).toEqual(parseConnectLink(pairUrl));
   });
 
   it("rejects malformed, noncanonical, and credential-bearing reaches", () => {

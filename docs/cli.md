@@ -188,16 +188,25 @@ Pair this terminal, choose a workspace, start the terminal app, and mint
 account-bound device links:
 
 ```sh
+vibestudio remote pair "<compact-payload>"
+# The clickable carrier remains accepted:
 vibestudio remote pair "https://vibestudio.app/p#<compact-payload>"
 vibestudio remote workspaces
 vibestudio remote select dev
-vibestudio terminal start --pair "https://vibestudio.app/p#<compact-payload>"
+vibestudio terminal start --pair "<compact-payload>"
 vibestudio terminal start
 vibestudio remote pair-device --workspace dev
 vibestudio remote invite-user --handle alice --workspace dev
 vibestudio remote status
 vibestudio remote logout
 ```
+
+The compact payload is the terminal-friendly form. It already contains the
+server endpoint identity and one-time secret, and uses the built-in relay set
+when no custom relay coordinates are encoded. The HTTPS and `vibestudio:` forms
+wrap the same payload for browser, QR, and operating-system app handoff. A
+desktop running directly from a source checkout can therefore pair with
+`pnpm start "<compact-payload>"`.
 
 `vibestudio remote ensure-user-workspaces` prepares your private Personal and
 System workspaces through the same host operation used by desktop and mobile.

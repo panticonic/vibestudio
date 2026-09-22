@@ -186,7 +186,9 @@ function createConnectPairUrl(pairing) {
 function parseConnectLink(raw) {
   const schemePrefix = `${CONNECT_DEEP_LINK_SCHEME}//connect/`;
   let payload;
-  if (raw.startsWith(schemePrefix)) {
+  if (/^[A-Za-z0-9_-]+$/u.test(raw)) {
+    payload = raw;
+  } else if (raw.startsWith(schemePrefix)) {
     payload = raw.slice(schemePrefix.length);
     if (!payload || /[/?#]/u.test(payload)) {
       return { kind: "error", reason: "Deep link has malformed compact pairing material" };
@@ -204,6 +206,9 @@ function parseConnectLink(raw) {
     payload = url.hash.slice(1);
   }
   return decodeConnectPairing(payload);
+}
+function isConnectPairingInput(raw) {
+  return raw.startsWith(`${CONNECT_DEEP_LINK_SCHEME}//connect`) || raw.startsWith(`${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}#`) || decodeConnectPairing(raw).kind === "ok";
 }
 
 // packages/iroh-transport/src/releaseSet.ts
@@ -332,6 +337,7 @@ export {
   createConnectDeepLink,
   createConnectLink,
   createConnectPairUrl,
+  isConnectPairingInput,
   isLoopbackHost,
   isSelectedWorkspaceUrl,
   parseConnectLink,
