@@ -1260,13 +1260,12 @@ describe("AppHost", () => {
       return built;
     });
 
-    await host.reconcileDeclared(declared);
-    await host.whenSettled();
+    await host.activateRelease("@workspace-apps/shell");
 
     expect(buildSystem.getBuild).toHaveBeenCalledExactlyOnceWith("@workspace-apps/shell", "main");
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       activeBundleKey: "app-key",
-      status: "available",
+      status: "running",
       lastError: null,
     });
     await expect(host.ensureElectronReady()).resolves.toMatchObject({

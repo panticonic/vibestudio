@@ -1044,10 +1044,29 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async activateRelease(sourceOrName: string): Promise<void> {
-    const prepared = this.findRegistryEntry(sourceOrName);
+    let prepared = this.findRegistryEntry(sourceOrName);
     if (!prepared) throw new Error(`Unknown app: ${sourceOrName}`);
-    if (!prepared.activeBundleKey) throw new Error(`App ${prepared.name} has no active build`);
-    const build = this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey);
+    let build = prepared.activeBundleKey
+      ? this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey)
+      : null;
+    if (!build) {
+      const preparedSourceRepo = prepared.source.repo;
+      const declared = this.lastDeclared.find(
+        (entry) => normalizeRepoPath(entry.source) === normalizeRepoPath(preparedSourceRepo)
+      );
+      if (declared) {
+        // Activation is the final race-free readiness boundary. A workspace
+        // child can recover its durable registry before bootstrap cleanup has
+        // settled the artifact store, so declaration reconciliation alone is
+        // not sufficient: recover the exact approved declaration here too.
+        await this.reconcileHostTargetDeclaration(prepared.target, declared);
+        prepared = this.findRegistryEntry(sourceOrName);
+        build = prepared?.activeBundleKey
+          ? this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey)
+          : null;
+      }
+    }
+    if (!prepared?.activeBundleKey) throw new Error(`App ${sourceOrName} has no active build`);
     if (!build) throw new Error(`Active app build is missing: ${prepared.activeBundleKey}`);
     this.validateBuildForTarget(prepared.name, prepared.target, build);
     const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
