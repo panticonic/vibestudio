@@ -79,6 +79,14 @@ const vibestudioApp = {
 };
 
 contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);
+contextBridge.exposeInMainWorld("__vibestudioNativePanels", {
+  openWorkspace: (workspaceId: string) =>
+    ipcRenderer.invoke("vibestudio:shell.workspace-open", workspaceId),
+  connectNativePanelAdapter: (hello: unknown) =>
+    ipcRenderer.invoke("vibestudio:shell.panels-connect", hello),
+  applyNativePanelSurfaces: (snapshot: unknown) =>
+    ipcRenderer.invoke("vibestudio:shell.panels-apply", snapshot),
+});
 contextBridge.exposeInMainWorld("__vibestudioTransport", appTransport);
 contextBridge.exposeInMainWorld("__vibestudioWorkspaceConnection", {
   getCurrent: () =>

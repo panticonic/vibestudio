@@ -29412,52 +29412,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:view.applyNativePanelSurfaces",
-      "rpcPlane": "host-service",
-      "owner": "view",
-      "method": "applyNativePanelSurfaces",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "view.mutate",
-      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:view.applyNativePanelSurfaces"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:view.applyNativePanelSurfaces),allOf(capability(user,service:view.applyNativePanelSurfaces),workspace-member),allOf(capability(code,service:view.applyNativePanelSurfaces),workspace-member))",
-      "r3b": {
-        "review": "workspace-scoped-native-ui-adapter",
-        "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-      },
-      "capability": "service:view.applyNativePanelSurfaces",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:view.browserForceReload",
       "rpcPlane": "host-service",
       "owner": "view",
@@ -29777,52 +29731,6 @@
         "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.clearNativeBrowserSiteData",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:view.connectNativePanelAdapter",
-      "rpcPlane": "host-service",
-      "owner": "view",
-      "method": "connectNativePanelAdapter",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "view.control",
-      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:view.connectNativePanelAdapter"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:view.connectNativePanelAdapter),allOf(capability(user,service:view.connectNativePanelAdapter),workspace-member),allOf(capability(code,service:view.connectNativePanelAdapter),workspace-member))",
-      "r3b": {
-        "review": "workspace-scoped-native-ui-adapter",
-        "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-      },
-      "capability": "service:view.connectNativePanelAdapter",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -30835,52 +30743,6 @@
         "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setNativeBrowserZoom",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:view.setShellOverlay",
-      "rpcPlane": "host-service",
-      "owner": "view",
-      "method": "setShellOverlay",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "view.mutate",
-      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:view.setShellOverlay"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:view.setShellOverlay),allOf(capability(user,service:view.setShellOverlay),workspace-member),allOf(capability(code,service:view.setShellOverlay),workspace-member))",
-      "r3b": {
-        "review": "workspace-scoped-native-ui-adapter",
-        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-      },
-      "capability": "service:view.setShellOverlay",
       "parityAssertion": "generated-census:host-authority"
     },
     {

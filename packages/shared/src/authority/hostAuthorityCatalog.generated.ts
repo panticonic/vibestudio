@@ -7096,18 +7096,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.applyNativePanelSurfaces": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.browserForceReload": {
     tier: {
       tier: "open",
@@ -7188,18 +7176,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.control",
       rationale:
         "Clears Electron session storage for an origin that is still displayed by the selected browser panel.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.connectNativePanelAdapter": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,
@@ -7461,18 +7437,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.mutate",
       rationale:
         "Applies an already-selected zoom factor to the exact Electron browser webContents.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.setShellOverlay": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,

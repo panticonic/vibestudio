@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:4ea0e555c0e41972593f8814c80770279fc4a1500a589aacf4f9a670bdd0ef12",
+  "censusDigest": "sha256:1ebfdea7a37db6fc7819fa8733093e918f165f156820b97efe99b9f97134ddd7",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -438,14 +438,6 @@
       "review": "single-use-isolated-child-attestation-read",
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
     },
-    "host:view.connectNativePanelAdapter": {
-      "review": "workspace-scoped-native-ui-adapter",
-      "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-    },
-    "host:view.applyNativePanelSurfaces": {
-      "review": "workspace-scoped-native-ui-adapter",
-      "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-    },
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummaries": {
       "review": "host-only-protected-password-inventory",
       "change": "The vault receiver now admits only host principals. Workspace code cannot enumerate even password metadata; Electron uses this method only behind its host-owned credential UI and origin-bound autofill controller."
@@ -707,10 +699,6 @@
       "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.setBounds": {
-      "review": "workspace-scoped-native-ui-adapter",
-      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
-    },
-    "host:view.setShellOverlay": {
       "review": "workspace-scoped-native-ui-adapter",
       "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },

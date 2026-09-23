@@ -112,10 +112,6 @@ export function createDesktopWorkspaceRuntime(deps: {
     | "onAttentionRequired"
     | "onNotificationAction"
   >;
-  view?: Pick<
-    Parameters<typeof createViewService>[0],
-    "authorizeWorkspaceMaterialization" | "onNativeSlotChanged" | "onFocusedWorkspaceChanged"
-  >;
   app?: Pick<
     Parameters<typeof createAppService>[0],
     "shellSurfaces" | "onOpenShellSurface" | "getAppOrchestrator" | "initialFocusedWorkspaceId"
@@ -449,7 +445,6 @@ export function createDesktopWorkspaceRuntime(deps: {
         );
         container.registerRpc(
           createViewService({
-            ...deps.view,
             workspaceId,
             panelOrchestrator: controller.orchestrator,
             panelRegistry: controller.registry,

@@ -11,9 +11,6 @@ export function createViewService(
   deps: {
     workspaceId: string;
     getViewManager: () => ViewManager;
-    authorizeWorkspaceMaterialization?(workspaceId: string): Promise<void>;
-    onFocusedWorkspaceChanged?(workspaceId: string | null): void;
-    onNativeSlotChanged?(nativeId: string, declared: boolean): void;
   } & Partial<Omit<PanelViewMethodDeps, "getViewManager">>
 ): ServiceDefinition {
   const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean => {
@@ -29,18 +26,6 @@ export function createViewService(
   ): void => {
     if (hasViewHostAuthority(vm, callerId, callerKind)) return;
     throw new Error(`view.${method}: caller '${callerId}' cannot host workspace views`);
-  };
-
-  const assertNativePanelSlotHost = (
-    vm: ViewManager,
-    callerId: string,
-    callerKind: string,
-    method: string
-  ): void => {
-    if (hasViewHostAuthority(vm, callerId, callerKind)) {
-      return;
-    }
-    throw new Error(`view.${method}: caller '${callerId}' cannot place native panel slots`);
   };
 
   const assertOwnsOrViewHost = (
@@ -97,54 +82,6 @@ export function createViewService(
       const vm = deps.getViewManager();
       assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setThemeCss");
       vm.setThemeCss(css);
-      return;
-    },
-    connectNativePanelAdapter: (ctx, [hello]) => {
-      const vm = deps.getViewManager();
-      assertNativePanelSlotHost(
-        vm,
-        ctx.caller.runtime.id,
-        ctx.caller.runtime.kind,
-        "connectNativePanelAdapter"
-      );
-      return vm.connectNativePanelAdapter(ctx.caller.runtime.id, hello);
-    },
-    applyNativePanelSurfaces: async (ctx, [snapshot]) => {
-      const vm = deps.getViewManager();
-      assertNativePanelSlotHost(
-        vm,
-        ctx.caller.runtime.id,
-        ctx.caller.runtime.kind,
-        "applyNativePanelSurfaces"
-      );
-      const workspaceIds = new Set(
-        snapshot.surfaces.map((surface) => surface.materialization.workspaceId)
-      );
-      if (snapshot.focusedWorkspaceId) workspaceIds.add(snapshot.focusedWorkspaceId);
-      for (const workspaceId of workspaceIds) {
-        if (deps.authorizeWorkspaceMaterialization)
-          await deps.authorizeWorkspaceMaterialization(workspaceId);
-        else if (workspaceId !== deps.workspaceId)
-          throw new Error("Workspace materialization is not admitted");
-      }
-      const previousPanelIds = new Set(vm.getDeclaredPanelSlotIds());
-      const result = await vm.applyNativePanelSurfaces(ctx.caller.runtime.id, snapshot);
-      if (result.accepted) {
-        deps.onFocusedWorkspaceChanged?.(result.observation.focusedWorkspaceId);
-        const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
-        for (const panelId of previousPanelIds) {
-          if (!currentPanelIds.has(panelId)) deps.onNativeSlotChanged?.(panelId, false);
-        }
-        for (const panelId of currentPanelIds) {
-          if (!previousPanelIds.has(panelId)) deps.onNativeSlotChanged?.(panelId, true);
-        }
-      }
-      return result;
-    },
-    setShellOverlay: (ctx, [active]) => {
-      const vm = deps.getViewManager();
-      assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setShellOverlay");
-      vm.setShellOverlayActive(active);
       return;
     },
     showNativeShellOverlay: (ctx, [options]) => {

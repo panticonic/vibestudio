@@ -118,6 +118,7 @@ it("derives explicit Personal and ordinary project roots from canonical template
   expect(derived.sources.at(-1)?.review).toEqual({
     presentation: { name: "personal" },
     repositories: ["panels/chat"],
+    dependencies: [{ url: "git+https://example.test/base.git" }],
   });
   const runtime = rootRuntimeFromTemplateManifest(
     parseTemplateManifestContent(

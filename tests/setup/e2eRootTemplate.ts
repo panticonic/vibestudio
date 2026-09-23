@@ -263,6 +263,7 @@ export async function deriveE2eRootTemplate(input: {
         review: {
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
           repositories: [...manifest.inventory.repositories],
+          dependencies: [...manifest.dependencies],
         },
       },
     ],

@@ -2372,23 +2372,6 @@
       ]
     },
     "methods": {
-      "applyNativePanelSurfaces": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.mutate",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "browserForceReload": {
         "authority": {
           "inherits": true
@@ -2504,23 +2487,6 @@
           "residency": "native-effect",
           "family": "panel.control",
           "rationale": "Clears Electron session storage for an origin that is still displayed by the selected browser panel."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "connectNativePanelAdapter": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.control",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
         },
         "capability": null,
         "presentation": null
@@ -2911,23 +2877,6 @@
           "residency": "native-effect",
           "family": "panel.mutate",
           "rationale": "Applies an already-selected zoom factor to the exact Electron browser webContents."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "setShellOverlay": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.mutate",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
         },
         "capability": null,
         "presentation": null

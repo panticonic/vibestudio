@@ -1,4 +1,5 @@
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { createNativePanelHost } from "./nativePanelHost.js";
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
 import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 import {
@@ -1866,6 +1867,28 @@ app.on("ready", async () => {
   ipcMain.on("vibestudio:shell.overlay-active", (event, active: unknown) => {
     applicationWindow.viewManager?.setShellOverlayActiveFromShell(event.sender.id, active === true);
   });
+  const nativePanelHost = createNativePanelHost({
+    getViewManager: () => assertPresent(applicationWindow.viewManager),
+    hasWorkspace: (id) => openNativeControllers.has(id),
+    openWorkspace: (id) => ensureDesktopWorkspace(id),
+    onFocusedWorkspaceChanged: (id) => applicationWindow.focusWorkspace(id),
+    onNativeSlotChanged: (nativeId, declared) => {
+      const identity = parseWorkspaceNativeViewId(nativeId);
+      if (!identity) throw new Error("Native panel lacks workspace ownership");
+      const runtime = openNativeControllers.get(identity.workspaceId);
+      if (declared) runtime?.orchestrator.onNativeSlotDeclared(identity.runtimeId);
+      else runtime?.orchestrator.onNativeSlotCleared(identity.runtimeId);
+    },
+  });
+  ipcMain.handle("vibestudio:shell.panels-connect", (event, input: unknown) =>
+    nativePanelHost.connect(event.sender.id, input)
+  );
+  ipcMain.handle("vibestudio:shell.workspace-open", (event, input: unknown) =>
+    nativePanelHost.openWorkspace(event.sender.id, input)
+  );
+  ipcMain.handle("vibestudio:shell.panels-apply", (event, input: unknown) =>
+    nativePanelHost.apply(event.sender.id, input)
+  );
   installBootstrapConnectionHandlers();
   releaseUpdateController = createReleaseUpdateController({
     eventService,
@@ -2491,26 +2514,6 @@ app.on("ready", async () => {
         void approvalAttention?.refresh();
         if (serverClientRef?.getConnectionStatus() !== "connected") return;
         workspaceConnection.transport("connected");
-      },
-      view: {
-        onFocusedWorkspaceChanged: (workspaceId) => applicationWindow.focusWorkspace(workspaceId),
-        authorizeWorkspaceMaterialization: async (workspaceId) => {
-          const members = await conn.hubControlClient.call("hubControl", "listWorkspaces", []);
-          if (
-            !(members as Array<{ workspaceId: string }>).some(
-              (entry) => entry.workspaceId === workspaceId
-            )
-          )
-            throw new Error("Workspace access was removed");
-          await ensureDesktopWorkspace(workspaceId);
-        },
-        onNativeSlotChanged: (nativeId, declared) => {
-          const identity = parseWorkspaceNativeViewId(nativeId);
-          if (!identity) throw new Error("Native panel lacks workspace ownership");
-          const runtime = openNativeControllers.get(identity.workspaceId);
-          if (declared) runtime?.orchestrator.onNativeSlotDeclared(identity.runtimeId);
-          else runtime?.orchestrator.onNativeSlotCleared(identity.runtimeId);
-        },
       },
     });
     systemRuntime = workspaceController;

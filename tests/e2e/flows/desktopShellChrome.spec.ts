@@ -759,12 +759,37 @@ test.describe("Desktop Shell Chrome", () => {
   test("places the native panel exactly in the measured shell panel surface", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsIfNeeded(testApp);
+    const nativeBounds = () =>
+      testApp!.app.evaluate(({ BaseWindow }) =>
+        BaseWindow.getAllWindows().flatMap((window) =>
+          window.contentView.children
+            .filter((view) => view.getVisible())
+            .map((view) => view.getBounds())
+        )
+      );
 
     let lastState: unknown = null;
     try {
       await expect
         .poll(
           async () => {
+            // Settle the isolated fixture's ordinary startup unit reviews through
+            // their UI before measuring visible native content below the chrome.
+            await testApp!.app.evaluate(async ({ webContents }) => {
+              for (const contents of webContents.getAllWebContents()) {
+                if (contents.isDestroyed()) continue;
+                await contents
+                  .executeJavaScript(
+                    `(() => {
+                  const button = [...document.querySelectorAll('[data-approval-card] button')]
+                    .find(node => node.textContent.trim() === 'Add to workspace' && node.getClientRects().length && !node.disabled);
+                  button?.click();
+                })()`
+                  )
+                  .catch(() => undefined);
+              }
+            });
+            const views = await nativeBounds();
             const [panelsResult, slotsResult, layoutResult] = await Promise.allSettled([
               getPanelTree(testApp!),
               getNativePanelSlotDebugInfo(testApp!),
@@ -784,6 +809,7 @@ test.describe("Desktop Shell Chrome", () => {
             lastState = {
               panels,
               slots,
+              views,
               layout,
               errors: {
                 panels: panelsResult.status === "rejected" ? String(panelsResult.reason) : null,
@@ -796,7 +822,9 @@ test.describe("Desktop Shell Chrome", () => {
             const panelIds = new Set(panels.map((panel) => panel.id));
             const slotsMatchSurfaces = slots.every((slot) => {
               const surface = layout.surfaces.find(
-                (candidate) => candidate.nativeSlotId === slot.nativeSlotId
+                (candidate) =>
+                  JSON.stringify([testApp!.workspaceId, candidate.nativeSlotId]) ===
+                  slot.nativeSlotId
               );
               return (
                 surface !== undefined &&
@@ -805,7 +833,14 @@ test.describe("Desktop Shell Chrome", () => {
                 Math.abs(slot.bounds.x - surface.x) <= 1 &&
                 Math.abs(slot.bounds.y - surface.y) <= 1 &&
                 Math.abs(slot.bounds.width - surface.width) <= 1 &&
-                Math.abs(slot.bounds.height - surface.height) <= 1
+                Math.abs(slot.bounds.height - surface.height) <= 1 &&
+                views.some(
+                  (bounds) =>
+                    Math.abs(bounds.x - surface.x) <= 1 &&
+                    Math.abs(bounds.y - surface.y) <= 1 &&
+                    Math.abs(bounds.width - surface.width) <= 1 &&
+                    Math.abs(bounds.height - surface.height) <= 1
+                )
               );
             });
             const chromeDoesNotOverlapSurfaces = layout.surfaces.every((surface) => {
@@ -833,5 +868,88 @@ test.describe("Desktop Shell Chrome", () => {
         `${error instanceof Error ? error.message : String(error)}\nLast native-layout state: ${JSON.stringify(lastState)}\nElectron output tail:\n${outputTail}\nHub output tail:\n${testApp.getHubOutput()}`
       );
     }
+
+    // Drive the host-owned outage state through the real preload subscription.
+    // Native WebContentsViews must move with the shell DOM, not just its sidebar.
+    const before = await getNativePanelSlotDebugInfo(testApp);
+    const publish = async (phase: "reconnecting" | "online") => {
+      await testApp!.app.evaluate(async ({ webContents }, phase) => {
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          const isShell = await contents
+            .executeJavaScript('!!document.querySelector(".workspace-desktop")')
+            .catch(() => false);
+          if (isShell)
+            contents.send("vibestudio:workspace-connection-state", {
+              version: 1,
+              phase,
+              mode: "remote",
+              since: Date.now(),
+            });
+        }
+      }, phase);
+    };
+    await publish("reconnecting");
+    await expect
+      .poll(
+        async () => {
+          const [slots, layout, views] = await Promise.all([
+            getNativePanelSlotDebugInfo(testApp!),
+            getPanelSurfaceLayout(testApp!),
+            nativeBounds(),
+          ]);
+          return (
+            slots.length > 0 &&
+            slots.every((slot) => {
+              const old = before.find((s) => s.nativeSlotId === slot.nativeSlotId);
+              const surface = layout.surfaces.find(
+                (s) => JSON.stringify([testApp!.workspaceId, s.nativeSlotId]) === slot.nativeSlotId
+              );
+              return (
+                old &&
+                surface &&
+                slot.bounds.y > old.bounds.y &&
+                Math.abs(slot.bounds.y - surface.y) <= 1 &&
+                Math.abs(slot.bounds.height - surface.height) <= 1 &&
+                views.some(
+                  (bounds) =>
+                    Math.abs(bounds.x - surface.x) <= 1 &&
+                    Math.abs(bounds.y - surface.y) <= 1 &&
+                    Math.abs(bounds.width - surface.width) <= 1 &&
+                    Math.abs(bounds.height - surface.height) <= 1
+                )
+              );
+            })
+          );
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true);
+    await publish("online");
+    await expect
+      .poll(async () => {
+        const [slots, views] = await Promise.all([
+          getNativePanelSlotDebugInfo(testApp!),
+          nativeBounds(),
+        ]);
+        return (
+          slots.length > 0 &&
+          slots.every((slot) => {
+            const old = before.find((s) => s.nativeSlotId === slot.nativeSlotId);
+            return (
+              old &&
+              Math.abs(slot.bounds.y - old.bounds.y) <= 1 &&
+              views.some(
+                (bounds) =>
+                  Math.abs(bounds.x - old.bounds.x) <= 1 &&
+                  Math.abs(bounds.y - old.bounds.y) <= 1 &&
+                  Math.abs(bounds.width - old.bounds.width) <= 1 &&
+                  Math.abs(bounds.height - old.bounds.height) <= 1
+              )
+            );
+          })
+        );
+      })
+      .toBe(true);
   });
 });

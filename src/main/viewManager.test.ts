@@ -121,6 +121,7 @@ vi.mock("electron", () => {
 
 // Import after mocks are set up
 import { ViewManager } from "./viewManager.js";
+import { createNativePanelHost } from "./nativePanelHost.js";
 
 function declareAndAttachPanelSlot(
   manager: ViewManager,
@@ -1645,6 +1646,98 @@ describe("ViewManager", () => {
 
       vm.setShellOverlayActiveFromShell(shellView.webContents.id, true);
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+    });
+
+    it("applies shell geometry locally and rejects unopened workspaces and foreign senders", async () => {
+      const shell = vm.createView({
+        id: "shell-app",
+        workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const changed = vi.fn();
+      const focused = vi.fn();
+      const openWorkspace = vi.fn(async () => {});
+      const host = createNativePanelHost({
+        getViewManager: () => vm,
+        hasWorkspace: (id) => id === "personal",
+        openWorkspace,
+        onFocusedWorkspaceChanged: focused,
+        onNativeSlotChanged: changed,
+      });
+      const hello = {
+        sealedLaunchIdentity: "@workspace-apps/shell",
+        supportedProtocolVersions: [2],
+      };
+      expect(() => host.connect(-1, hello)).toThrow("only to the hosted shell");
+      await expect(host.openWorkspace(-1, "personal")).rejects.toThrow("only to the hosted shell");
+      expect(openWorkspace).not.toHaveBeenCalled();
+      await host.openWorkspace(shell.webContents.id, "personal");
+      expect(openWorkspace).toHaveBeenCalledWith("personal");
+      const connected = host.connect(shell.webContents.id, hello);
+      if (!connected.accepted) throw new Error("Handshake rejected");
+      const snapshot = {
+        ...connected.handshake,
+        revision: 1,
+        focusedWorkspaceId: "personal",
+        surfaces: [
+          {
+            surfaceId: "primary",
+            materialization: {
+              workspaceId: "personal",
+              runtimeEntityId: "panel",
+              leaseConnectionId: "lease",
+            },
+            visible: true,
+            focused: true,
+            bounds: { x: 272, y: 32, width: 800, height: 600 },
+          },
+        ],
+      };
+      const { sealedLaunchIdentity: _identity, ...desired } = snapshot;
+      expect((await host.apply(shell.webContents.id, desired)).accepted).toBe(true);
+      const panelId = vm.getDeclaredPanelSlotIds()[0]!;
+      const panel = vm.createView({ id: panelId, type: "panel" });
+      vm.attachDeclaredPanelSlot(panelId);
+      const moved = {
+        ...desired,
+        revision: 2,
+        surfaces: desired.surfaces.map((s) => ({
+          ...s,
+          bounds: { ...s.bounds, y: 80, height: 552 },
+        })),
+      };
+      expect((await host.apply(shell.webContents.id, moved)).accepted).toBe(true);
+      expect(panel.setBounds).toHaveBeenLastCalledWith(moved.surfaces[0]!.bounds);
+      expect(changed).toHaveBeenCalledTimes(1);
+      focused.mockClear();
+      expect(await host.apply(shell.webContents.id, desired)).toMatchObject({ accepted: false });
+      expect(focused).not.toHaveBeenCalled();
+      await expect(host.apply(-1, moved)).rejects.toThrow("only to the hosted shell");
+      await expect(
+        host.apply(shell.webContents.id, { ...moved, focusedWorkspaceId: "unknown" })
+      ).rejects.toThrow("not open");
+      await expect(
+        host.apply(shell.webContents.id, {
+          ...moved,
+          surfaces: moved.surfaces.map((surface) => ({
+            ...surface,
+            materialization: { ...surface.materialization, workspaceId: "unknown" },
+          })),
+        })
+      ).rejects.toThrow("not open");
+      expect(
+        (
+          await host.apply(shell.webContents.id, {
+            ...desired,
+            revision: 3,
+            surfaces: [],
+          })
+        ).accepted
+      ).toBe(true);
+      expect(focused).toHaveBeenCalledWith("personal");
+      expect(changed).toHaveBeenLastCalledWith(panelId, false);
     });
 
     it("keeps a panel materialized during workspace review hidden until the review closes", () => {

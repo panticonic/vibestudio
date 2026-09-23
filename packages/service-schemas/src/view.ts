@@ -140,12 +140,6 @@ const VIEW_INPUT_ACCESS: MethodAccessDescriptor = {
 const VIEW_THEME_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
-const VIEW_SLOT_BIND_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
-const VIEW_OVERLAY_TOGGLE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
 const VIEW_OVERLAY_SHOW_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
@@ -212,7 +206,11 @@ export type ContentOverlayTheme = z.infer<typeof ContentOverlayThemeSchema>;
 
 export const coreViewMethods = defineServiceMethods({
   setBounds: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -228,7 +226,11 @@ export const coreViewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", { x: 0, y: 48, width: 800, height: 600 }] }],
   },
   setVisible: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -244,7 +246,11 @@ export const coreViewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", true] }],
   },
   forwardMouseClick: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -261,7 +267,11 @@ export const coreViewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", { x: 120, y: 80 }], returns: true }],
   },
   setThemeCss: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -275,53 +285,12 @@ export const coreViewMethods = defineServiceMethods({
     returns: z.void(),
     access: VIEW_THEME_ACCESS,
   },
-  connectNativePanelAdapter: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description: "Negotiate one generation-fenced native panel-host session.",
-    args: z.tuple([NativePanelAdapterHelloSchema]),
-    returns: NativePanelAdapterHandshakeResultSchema,
-    access: VIEW_SLOT_BIND_ACCESS,
-  },
-  applyNativePanelSurfaces: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description: "Converge the native adapter to one complete desired surface snapshot.",
-    args: z.tuple([NativePanelDesiredSnapshotSchema]),
-    returns: NativePanelApplyResultSchema,
-    access: VIEW_SLOT_BIND_ACCESS,
-  },
-  setShellOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description: "Activate or deactivate the shell overlay layer.",
-    args: z.tuple([z.boolean()]),
-    returns: z.void(),
-    access: VIEW_OVERLAY_TOGGLE_ACCESS,
-  },
   showNativeShellOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -345,7 +314,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   updateNativeShellOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -369,7 +342,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   hideNativeShellOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -385,7 +362,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },
   showContentOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -411,7 +392,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   updateContentOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -439,7 +424,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   hideContentOverlay: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -459,7 +448,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },
   browserNavigate: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -476,7 +469,11 @@ export const coreViewMethods = defineServiceMethods({
     examples: [{ args: ["browser-1", "https://example.com"] }],
   },
   browserGoBack: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -491,7 +488,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_NAV_HISTORY_ACCESS,
   },
   browserGoForward: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -506,7 +507,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_NAV_HISTORY_ACCESS,
   },
   browserReload: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -521,7 +526,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_RELOAD_ACCESS,
   },
   browserForceReload: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -536,7 +545,11 @@ export const coreViewMethods = defineServiceMethods({
     access: VIEW_RELOAD_ACCESS,
   },
   browserStop: {
-    website: {"kind":"closed","reason":"The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The view receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

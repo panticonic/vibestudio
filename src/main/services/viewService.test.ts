@@ -35,31 +35,6 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
           }
         : null
     ),
-    connectNativePanelAdapter: vi.fn(() => ({
-      accepted: true,
-      handshake: {
-        protocolVersion: 2,
-        hostGeneration: "host-1",
-        shellGeneration: "shell-1",
-        sealedLaunchIdentity: appId,
-      },
-    })),
-    applyNativePanelSurfaces: vi.fn<(...args: unknown[]) => Promise<unknown>>(() =>
-      Promise.resolve({
-        accepted: true,
-        observation: {
-          protocolVersion: 2,
-          hostGeneration: "host-1",
-          shellGeneration: "shell-1",
-          desiredRevision: 1,
-          observationRevision: 1,
-          focusedWorkspaceId: null,
-          surfaces: [],
-        },
-      })
-    ),
-    getPanelIdForNativeSlot: vi.fn(() => "panel-1"),
-    getDeclaredPanelSlotIds: vi.fn((): string[] => []),
     setThemeCss: vi.fn(),
     setViewVisible: vi.fn(),
   };
@@ -158,9 +133,6 @@ describe("view service", () => {
     const service = createViewService({
       workspaceId: "workspace-test",
       getViewManager: () => vm as never,
-      authorizeWorkspaceMaterialization: async (id) => {
-        if (id !== "workspace-test") throw new Error("Workspace access was removed");
-      },
     });
 
     await expect(
@@ -174,170 +146,12 @@ describe("view service", () => {
     expect(vm.setThemeCss).not.toHaveBeenCalled();
   });
 
-  it("authorizes empty-workspace focus and changes focus only for accepted snapshots", async () => {
-    const vm = makeViewManager(["panel-hosting"]);
-    const authorize = vi.fn(async (id: string) => {
-      if (id !== "empty-workspace") throw new Error("Workspace access was removed");
-    });
-    const focus = vi.fn();
+  it("does not expose window compositor commands through workspace RPC", () => {
     const service = createViewService({
       workspaceId: "workspace-test",
-      getViewManager: () => vm as never,
-      authorizeWorkspaceMaterialization: authorize,
-      onFocusedWorkspaceChanged: focus,
+      getViewManager: () => makeViewManager() as never,
     });
-    const request = {
-      protocolVersion: 2 as const,
-      hostGeneration: "host-1",
-      shellGeneration: "shell-1",
-      revision: 1,
-      focusedWorkspaceId: "empty-workspace",
-      surfaces: [],
-    };
-    vm.applyNativePanelSurfaces.mockResolvedValueOnce({
-      accepted: true,
-      observation: { ...request, desiredRevision: 1, observationRevision: 1 },
-    });
-    const caller = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
-    await service.handler(caller, "applyNativePanelSurfaces", [request]);
-    expect(authorize).toHaveBeenCalledWith("empty-workspace");
-    expect(focus).toHaveBeenCalledWith("empty-workspace");
-    focus.mockClear();
-    vm.applyNativePanelSurfaces.mockResolvedValueOnce({
-      accepted: false,
-      reason: "stale-revision",
-    });
-    await service.handler(caller, "applyNativePanelSurfaces", [request]);
-    expect(focus).not.toHaveBeenCalled();
-    await expect(
-      service.handler(caller, "applyNativePanelSurfaces", [
-        { ...request, focusedWorkspaceId: "revoked" },
-      ])
-    ).rejects.toThrow("Workspace access was removed");
-    expect(vm.applyNativePanelSurfaces).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows a panel-hosting workspace app to converge one desired snapshot", async () => {
-    const vm = makeViewManager(["panel-hosting"]);
-    const service = createViewService({
-      workspaceId: "workspace-test",
-      getViewManager: () => vm as never,
-      authorizeWorkspaceMaterialization: async (id) => {
-        if (id !== "workspace-test") throw new Error("Workspace access was removed");
-      },
-    });
-    const request = {
-      protocolVersion: 2 as const,
-      hostGeneration: "host-1",
-      shellGeneration: "shell-1",
-      revision: 1,
-      focusedWorkspaceId: null,
-      surfaces: [
-        {
-          surfaceId: "panel-stack:primary",
-          materialization: {
-            workspaceId: "workspace-test",
-            runtimeEntityId: "panel-1",
-            leaseConnectionId: "binding-test",
-          },
-          visible: true,
-          bounds: { x: 10, y: 20, width: 300, height: 200 },
-          focused: true,
-        },
-      ],
-    };
-
-    await expect(
-      service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "applyNativePanelSurfaces",
-        [request]
-      )
-    ).resolves.toMatchObject({ accepted: true });
-
-    expect(vm.applyNativePanelSurfaces).toHaveBeenCalledWith("@workspace-apps/shell", request);
-  });
-
-  it("rejects unauthorized panel-hosting app sources for native panel slots", async () => {
-    const callerId = "app:apps/field-mobile:device-1";
-    const vm = makeViewManager(["panel-hosting"], {
-      id: callerId,
-      source: "apps/field-mobile",
-    });
-    const service = createViewService({
-      workspaceId: "workspace-test",
-      getViewManager: () => vm as never,
-      authorizeWorkspaceMaterialization: async (id) => {
-        if (id !== "workspace-test") throw new Error("Workspace access was removed");
-      },
-    });
-
-    await expect(
-      service.handler(
-        { caller: createVerifiedCaller(callerId, "app") },
-        "applyNativePanelSurfaces",
-        [
-          {
-            protocolVersion: 2,
-            hostGeneration: "host-1",
-            shellGeneration: "shell-1",
-            revision: 1,
-            focusedWorkspaceId: null,
-            surfaces: [],
-          },
-        ]
-      )
-    ).rejects.toThrow(/cannot place native panel slots/);
-
-    expect(vm.applyNativePanelSurfaces).not.toHaveBeenCalled();
-  });
-
-  it("does not project a stale desired snapshot", async () => {
-    const vm = makeViewManager(["panel-hosting"]);
-    vm.applyNativePanelSurfaces.mockResolvedValue({ accepted: false, reason: "stale-revision" });
-    const onNativeSlotCleared = vi.fn();
-    const service = createViewService({
-      workspaceId: "workspace-test",
-      getViewManager: () => vm as never,
-      panelOrchestrator: { onNativeSlotCleared } as never,
-    });
-    const request = {
-      protocolVersion: 2 as const,
-      hostGeneration: "host-1",
-      shellGeneration: "shell-1",
-      revision: 1,
-      focusedWorkspaceId: null,
-      surfaces: [],
-    };
-
-    await expect(
-      service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "applyNativePanelSurfaces",
-        [request]
-      )
-    ).resolves.toEqual({ accepted: false, reason: "stale-revision" });
-    expect(onNativeSlotCleared).not.toHaveBeenCalled();
-  });
-
-  it("rejects bootstrap shell callers for native panel slots", async () => {
-    const vm = makeViewManager(["panel-hosting"]);
-    const service = createViewService({
-      workspaceId: "workspace-test",
-      getViewManager: () => vm as never,
-      authorizeWorkspaceMaterialization: async (id) => {
-        if (id !== "workspace-test") throw new Error("Workspace access was removed");
-      },
-    });
-
-    await expect(
-      service.handler(
-        { caller: createVerifiedCaller("shell", "shell") },
-        "connectNativePanelAdapter",
-        [{ sealedLaunchIdentity: "shell", supportedProtocolVersions: [2] }]
-      )
-    ).rejects.toThrow(/cannot place native panel slots/);
-
-    expect(vm.connectNativePanelAdapter).not.toHaveBeenCalled();
+    for (const name of ["connectNativePanelAdapter", "applyNativePanelSurfaces", "setShellOverlay"])
+      expect(service.methods).not.toHaveProperty(name);
   });
 });
