@@ -2,7 +2,9 @@
   "name": "@vibestudio/webhook-relay",
   "private": true,
   "scripts": {
+    "predev": "node build-website-assets.mjs",
     "dev": "wrangler dev",
+    "predeploy": "node build-website-assets.mjs",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "typecheck:cloudflare": "tsc --noEmit",

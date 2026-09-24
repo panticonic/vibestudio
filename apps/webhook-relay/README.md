@@ -49,7 +49,7 @@ token — relayed verbatim, never re-signed. Lookup is by the explicit
 | Method | Path                                      | Auth                      | Purpose                                                                               |
 | ------ | ----------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------- |
 | GET    | `/healthz` or `/health`                   | none                      | Liveness.                                                                             |
-| GET    | `/`                                       | none                      | Operator/browser sanity landing.                                                      |
+| GET    | `/`                                       | none                      | Vibestudio product overview and desktop getting-started guide.                       |
 | GET    | `/p`                                      | none                      | Pairing trampoline from `https://vibestudio.app/p#...` to `vibestudio://connect/...`. |
 | WS     | `/backhaul?relayId&ts&key&sig`            | P-256 proof of possession | Workspace's persistent backhaul into the registry DO.                                 |
 | POST   | `/i/:subscriptionId`                      | first-writer-wins owner   | Webhook ingress → buffered → delivered over the backhaul.                             |

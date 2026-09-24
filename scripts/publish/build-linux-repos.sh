@@ -121,25 +121,85 @@ if grep -q "PRIVATE KEY" "$OUTPUT_DIR/gpg.key"; then
   exit 1
 fi
 
+SCRIPT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cp "$SCRIPT_ROOT/build-resources/brand/vibestudio-symbol.svg" \
+  "$OUTPUT_DIR/vibestudio-symbol.svg"
+
 cat > "$OUTPUT_DIR/index.html" <<HTML
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>Vibestudio packages</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#110f18">
+<meta name="description" content="Install Vibestudio on Debian, Ubuntu, Fedora, RHEL, and openSUSE using signed Linux packages.">
+<link rel="icon" type="image/svg+xml" href="./vibestudio-symbol.svg">
+<title>Install Vibestudio for Linux</title>
 <style>
- body{font:14px/1.6 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1.25rem}
- pre{background:#f5f5f5;padding:.85rem 1rem;overflow-x:auto;border-radius:6px}
- h2{margin-top:2.25rem}
+ :root{color-scheme:dark;--bg:#110f18;--panel:#1b1724;--line:#342b40;--ink:#f8f5fc;--muted:#b8afc4;--purple:#bb9afa;--pink:#f394bd}
+ *{box-sizing:border-box}
+ html{background:var(--bg);scroll-behavior:smooth}
+ body{margin:0;background:radial-gradient(ellipse at 72% 0,rgba(129,72,190,.19),transparent 36rem),var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+ a{color:#ddcaff}
+ .wrap{width:min(100% - 40px,960px);margin:0 auto}
+ .topbar{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.09)}
+ .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:18px;font-weight:700;letter-spacing:-.04em}
+ .brand img{width:30px;height:30px;display:block}
+ .toplink{font-size:14px;color:#d4c5e8;text-decoration:none}
+ .hero{padding:75px 0 43px;max-width:760px}
+ .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#d6bfff;font-weight:700}
+ h1{font-size:clamp(42px,7vw,68px);letter-spacing:-.06em;line-height:1.05;margin:15px 0 17px}
+ .lede{max-width:670px;font-size:18px;color:#d0c8d8;margin:0}
+ .trust{display:flex;gap:10px;flex-wrap:wrap;margin-top:23px}
+ .badge{border:1px solid #514362;background:rgba(31,25,42,.72);border-radius:999px;padding:5px 11px;color:#e7dff0;font-size:12px}
+ .section-title{font-size:22px;letter-spacing:-.035em;margin:25px 0 16px}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+ .card{min-width:0;padding:22px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(145deg,rgba(37,30,49,.96),rgba(25,21,34,.96));box-shadow:0 18px 54px rgba(0,0,0,.14)}
+ .card-head{display:flex;align-items:center;gap:11px;margin-bottom:15px}
+ .os-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#332643;color:#e2caff;font-size:15px;font-weight:750}
+ h2{font-size:19px;line-height:1.25;letter-spacing:-.03em;margin:0}
+ .card p{color:var(--muted);font-size:14px;margin:0 0 15px}
+ .step-label{margin:17px 0 7px;color:#ddd1eb;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+ pre{max-width:100%;margin:0;padding:14px 15px;border:1px solid #40364c;border-radius:9px;background:#100e15;color:#eee8f5;font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;tab-size:2}
+ .arch{margin-top:20px;padding:19px 22px;border:1px solid var(--line);border-radius:12px;background:rgba(27,23,36,.75);color:var(--muted);font-size:14px}
+ .arch strong{color:var(--ink)}
+ .arch p{margin:4px 0 0}
+ footer{margin-top:56px;padding:20px 0 30px;border-top:1px solid rgba(255,255,255,.09);display:flex;justify-content:space-between;gap:20px;color:#a99fb4;font-size:13px}
+ footer a{color:#d4c5e8;text-decoration:none}
+ @media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding:57px 0 32px}.card{padding:18px}}
+ @media(max-width:420px){.wrap{width:min(100% - 28px,960px)}.topbar{height:66px}.hero{padding-top:45px}.lede{font-size:16px}footer{display:block}footer span{display:block;margin-top:6px}}
 </style>
-<h1>Vibestudio packages</h1>
-<p>Signed apt and dnf repositories. Updates arrive through your package manager.</p>
-<h2>Debian / Ubuntu</h2>
-<pre>sudo install -d -m 0755 /etc/apt/keyrings
+ </head>
+ <body>
+ <header class="wrap topbar">
+   <a class="brand" href="https://vibestudio.app/"><img src="./vibestudio-symbol.svg" alt="">Vibestudio</a>
+   <a class="toplink" href="https://github.com/panticonic/vibestudio/releases">All releases ↗</a>
+ </header>
+ <main class="wrap">
+   <section class="hero" aria-labelledby="page-title">
+     <div class="eyebrow">Linux packages</div>
+     <h1 id="page-title">Vibestudio, at home on Linux.</h1>
+     <p class="lede">Install with the package manager you already use. Signed packages and repository metadata keep updates flowing through your normal system updates.</p>
+     <div class="trust"><span class="badge">Signed repositories</span><span class="badge">Automatic package updates</span><span class="badge">x86_64 and ARM64</span></div>
+   </section>
+   <section aria-labelledby="install-title">
+     <h2 class="section-title" id="install-title">Choose your package manager</h2>
+     <div class="grid">
+       <article class="card">
+         <div class="card-head"><div class="os-icon" aria-hidden="true">D</div><h2>Debian &amp; Ubuntu</h2></div>
+         <p>Add the signed Vibestudio repository, then install and update with APT.</p>
+         <div class="step-label">Run in Terminal</div>
+         <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL $BASE_URL/gpg.key | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
 echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] $BASE_URL/apt $SUITE $COMPONENT" \\
   | sudo tee /etc/apt/sources.list.d/vibestudio.list
-sudo apt update &amp;&amp; sudo apt install vibestudio</pre>
-<h2>Fedora / RHEL / openSUSE</h2>
-<pre>sudo rpm --import $BASE_URL/gpg.key
+sudo apt update &amp;&amp; sudo apt install vibestudio</code></pre>
+       </article>
+       <article class="card">
+         <div class="card-head"><div class="os-icon" aria-hidden="true">F</div><h2>Fedora, RHEL &amp; openSUSE</h2></div>
+         <p>Register the signed repository, then use DNF to install and receive updates.</p>
+         <div class="step-label">Run in Terminal</div>
+         <pre><code>sudo rpm --import $BASE_URL/gpg.key
 sudo tee /etc/yum.repos.d/vibestudio.repo &lt;&lt;'REPO'
 [vibestudio]
 name=Vibestudio
@@ -149,9 +209,15 @@ gpgcheck=1
 repo_gpgcheck=1
 gpgkey=$BASE_URL/gpg.key
 REPO
-sudo dnf install vibestudio</pre>
-<h2>Arch</h2>
-<p>Arch packages are attached to each <a href="https://github.com/panticonic/vibestudio/releases">GitHub release</a>.</p>
+sudo dnf install vibestudio</code></pre>
+       </article>
+     </div>
+     <aside class="arch"><strong>Arch Linux</strong><p>Download the Arch package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
+   </section>
+ </main>
+ <footer class="wrap"><a href="https://vibestudio.app/">Vibestudio</a><span>Questions or issues? <a href="https://github.com/panticonic/vibestudio/issues">Get help on GitHub</a></span></footer>
+ </body>
+</html>
 HTML
 
 log "repositories written to $OUTPUT_DIR"
