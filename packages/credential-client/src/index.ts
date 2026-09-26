@@ -5,6 +5,7 @@ import type {
   ConnectCredentialRequest,
   CredentialStoreSummary,
   DeleteClientConfigRequest,
+  DeriveUrlBoundCredentialRequest,
   GetClientConfigStatusRequest,
   ManagedCredentialSummary,
   ProxyGitHttpRequest,
@@ -13,6 +14,7 @@ import type {
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
+  WebsitePublicationIntent,
 } from "./types.js";
 
 export type {
@@ -27,6 +29,7 @@ export type {
   CredentialInjection,
   CredentialStoreSummary,
   DeleteClientConfigRequest,
+  DeriveUrlBoundCredentialRequest,
   GetClientConfigStatusRequest,
   GrantUrlBoundCredentialRequest,
   ManagedCredentialSummary,
@@ -37,6 +40,7 @@ export type {
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
+  WebsitePublicationIntent,
 } from "./types.js";
 
 export {
@@ -59,10 +63,22 @@ export interface CredentialClient {
   resolveCredential(
     input: ResolveUrlBoundCredentialRequest
   ): Promise<StoredCredentialSummary | null>;
-  fetch(url: string | URL, init?: RequestInit, opts?: { credentialId?: string }): Promise<Response>;
+  deriveCredential(input: DeriveUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;
+  beginWebsitePublication(publication: WebsitePublicationIntent): Promise<void>;
+  publishFetch(
+    publication: WebsitePublicationIntent,
+    url: string | URL,
+    init?: RequestInit,
+    opts?: { credentialId?: string; audiences?: UrlAudience[] }
+  ): Promise<Response>;
+  fetch(
+    url: string | URL,
+    init?: RequestInit,
+    opts?: { credentialId?: string; audiences?: UrlAudience[] }
+  ): Promise<Response>;
   hookForUrl(
     url: string | URL,
-    opts?: { credentialId?: string }
+    opts?: { credentialId?: string; audiences?: UrlAudience[] }
   ): (init?: RequestInit) => Promise<Response>;
   gitHttp(opts?: {
     /**
@@ -155,6 +171,15 @@ export function createCredentialClient(rpc: RpcCaller): CredentialClient {
         input,
       ]);
     },
+    deriveCredential(input) {
+      return rpc.call<StoredCredentialSummary>("main", "credentials.deriveCredential", [input]);
+    },
+    async beginWebsitePublication(publication) {
+      await rpc.call<void>("main", "credentials.beginWebsitePublication", [publication]);
+    },
+    publishFetch(publication, url, init, opts) {
+      return proxyFetch(rpc, url, init, opts, publication);
+    },
     fetch(url, init, opts) {
       return proxyFetch(rpc, url, init, opts);
     },
@@ -176,7 +201,8 @@ export function createCredentialClient(rpc: RpcCaller): CredentialClient {
       const credentialId = credential.id;
       return {
         credentialId,
-        fetch: (url, init) => proxyFetch(rpc, url, init, { credentialId }),
+        fetch: (url, init) =>
+          proxyFetch(rpc, url, init, { credentialId, audiences: descriptor.audiences }),
       };
     },
   };
@@ -280,12 +306,13 @@ export async function proxyFetch(
   rpc: RpcCaller,
   url: string | URL,
   init?: RequestInit,
-  opts?: { credentialId?: string }
+  opts?: { credentialId?: string; audiences?: UrlAudience[] },
+  publication?: WebsitePublicationIntent
 ): Promise<Response> {
   const requestedUrl = url.toString();
   const probe = new Request(requestedUrl, init);
   const headers = Object.fromEntries(probe.headers.entries());
-  const encoded = await encodeRequestBody(init?.body);
+  const encoded = await encodeRequestBody(init?.body, probe);
   const args = {
     url: requestedUrl,
     method: init?.method ?? "GET",
@@ -293,10 +320,16 @@ export async function proxyFetch(
     body: encoded.body,
     bodyBase64: encoded.bodyBase64,
     credentialId: opts?.credentialId,
+    audiences: opts?.audiences,
   };
-  const response = await rpc.stream("main", "credentials.proxyFetch", [args], {
-    signal: init?.signal ?? undefined,
-  });
+  const response = await rpc.stream(
+    "main",
+    publication ? "credentials.publishFetch" : "credentials.proxyFetch",
+    publication ? [args, publication] : [args],
+    {
+      signal: init?.signal ?? undefined,
+    }
+  );
   if (!response.url) {
     Object.defineProperty(response, "url", {
       value: requestedUrl,
@@ -308,7 +341,8 @@ export async function proxyFetch(
 }
 
 async function encodeRequestBody(
-  body: BodyInit | null | undefined
+  body: BodyInit | null | undefined,
+  request?: Request
 ): Promise<{ body?: string; bodyBase64?: string }> {
   if (body === undefined || body === null) return {};
   if (typeof body === "string") return { body };
@@ -321,6 +355,13 @@ async function encodeRequestBody(
   }
   if (typeof Blob !== "undefined" && body instanceof Blob) {
     return { bodyBase64: bytesToBase64(new Uint8Array(await body.arrayBuffer())) };
+  }
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    return {
+      // Read the Request's serialization so the bytes use the same generated
+      // multipart boundary already present in its Content-Type header.
+      bodyBase64: bytesToBase64(new Uint8Array(await request!.arrayBuffer())),
+    };
   }
   throw new TypeError("credentials.fetch does not support streaming request bodies");
 }

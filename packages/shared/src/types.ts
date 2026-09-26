@@ -49,6 +49,20 @@ export interface PackageManifest {
   icon?: string;
   /** Entry file relative to the package root (e.g., `"index.tsx"`, `"index.ts"`). */
   entry?: string;
+  /** Optional portable browser entry built from the same panel package. */
+  website?: {
+    /** Entry file that mounts the application in an ordinary web document. */
+    entry: string;
+    /** Optional public page title used by userland packaging. */
+    title?: string;
+    /** Advisory description of useful workspace behavior. */
+    expects?: string;
+    /** Advisory template sources; versions and pins are evidence, not compatibility gates. */
+    suggestedTemplates?: Array<{
+      label: string;
+      locator: { url: string };
+    }>;
+  };
   /** Extension discriminator block. Presence marks this package as an extension unit. */
   extension?: {
     /** v1 accepts only eager activation (`"*"`). */

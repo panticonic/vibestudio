@@ -11588,6 +11588,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.buildWebsite",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "buildWebsite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Workspace-local compilation into an immutable browser artifact without external publication",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.buildWebsite"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.buildWebsite),allOf(capability(user,service:build.buildWebsite),workspace-member),allOf(capability(code,service:build.buildWebsite),workspace-member))",
+      "r3b": {
+        "review": "exact-source-portable-website-build",
+        "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority."
+      },
+      "capability": "service:build.buildWebsite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.gc",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -11723,6 +11769,52 @@
         "change": null
       },
       "capability": "service:build.getBuild",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:build.getBuildArtifacts",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "getBuildArtifacts",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Returns a content-free manifest for one immutable build already authorized to this workspace",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.getBuildArtifacts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.getBuildArtifacts),allOf(capability(user,service:build.getBuildArtifacts),workspace-member),allOf(capability(code,service:build.getBuildArtifacts),workspace-member))",
+      "r3b": {
+        "review": "immutable-build-artifact-inventory",
+        "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation."
+      },
+      "capability": "service:build.getBuildArtifacts",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -12324,6 +12416,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.readBuildArtifact",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "readBuildArtifact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Streams one integrity-checked member of an immutable build selected by exact key and path",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.readBuildArtifact"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.readBuildArtifact),allOf(capability(user,service:build.readBuildArtifact),workspace-member),allOf(capability(code,service:build.readBuildArtifact),workspace-member))",
+      "r3b": {
+        "review": "immutable-build-artifact-stream",
+        "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use."
+      },
+      "capability": "service:build.readBuildArtifact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.recompute",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -12779,6 +12917,56 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:credentials.beginWebsitePublication",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "beginWebsitePublication",
+      "tier": "critical",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "website.publish",
+      "reviewRationale": "Publishing immutable workspace artifacts to a named external destination requires review of the sealed publication intent",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "operationId"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"website.publish\"}]}",
+      "r3b": {
+        "review": "reviewed-exact-website-publication-intent",
+        "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The short-lived grant authorizes only subsequent matching publication requests and contains no provider credential material."
+      },
+      "capability": "service:credentials.beginWebsitePublication",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:credentials.cancelOAuth",
       "rpcPlane": "host-service",
       "owner": "credentials",
@@ -13014,6 +13202,53 @@
         "change": null
       },
       "capability": "service:credentials.deleteClientConfig",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.deriveCredential",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "deriveCredential",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.control",
+      "reviewRationale": "The source response remains host-held; source credential use and every later derived use retain ordinary exact audience authorization",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:credentials.deriveCredential"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:credentials.deriveCredential),allOf(capability(user,service:credentials.deriveCredential),workspace-member),allOf(capability(code,service:credentials.deriveCredential),workspace-member))",
+      "r3b": {
+        "review": "host-held-short-lived-provider-credential",
+        "change": "Uses an already reviewed website publication operation and an authorized source credential to exchange for a short-lived URL-bound provider credential. Extraction and storage occur in the Host; workspace code receives only a credential summary and cannot observe either secret."
+      },
+      "capability": "service:credentials.deriveCredential",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -13296,6 +13531,53 @@
         "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
       },
       "capability": "service:credentials.proxyGitHttp",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.publishFetch",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "publishFetch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "website.publish",
+      "reviewRationale": "The handler requires a live caller-bound grant for the exact reviewed artifact, provider, destination, and environment",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:credentials.publishFetch"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:credentials.publishFetch),allOf(capability(user,service:credentials.publishFetch),workspace-member),allOf(capability(code,service:credentials.publishFetch),workspace-member))",
+      "r3b": {
+        "review": "caller-bound-reviewed-publication-egress",
+        "change": "Forwards provider API requests only while a live website.publish grant matches the authenticated caller and exact publication intent. Credential bindings must be publish-only, caller-supplied audience ceilings constrain every redirect, and secret injection remains inside the Host egress proxy."
+      },
+      "capability": "service:credentials.publishFetch",
       "parityAssertion": "generated-census:host-authority"
     },
     {

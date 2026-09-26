@@ -6,6 +6,7 @@ import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs"
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
+import { readArtifactBytesAsync } from "../buildV2/buildStore.js";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -61,6 +62,19 @@ export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
   listUnits: () => BuildUnitCatalogEntry[];
 }): ServiceDefinition {
+  const artifactHandle = (build: NonNullable<ReturnType<BuildSystemV2["getBuildByKey"]>>) => ({
+    buildKey: build.buildKey,
+    sourceStateHash: build.sourceStateHash,
+    artifacts: build.artifacts.map(({ content: _content, ...artifact }) => artifact),
+    ...(build.metadata.details.kind === "website-bundle"
+      ? {
+          website: {
+            entryArtifact: build.metadata.details.entryArtifact,
+            declaration: build.metadata.details.declaration,
+          },
+        }
+      : {}),
+  });
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
@@ -79,6 +93,35 @@ export function createBuildService(deps: {
               ...options,
               library: false,
             });
+      },
+      getBuildArtifacts: (_ctx, [key]) => {
+        const build = deps.buildSystem.getBuildByKey(key);
+        if (!build) return null;
+        return artifactHandle(build);
+      },
+      buildWebsite: async (_ctx, [unit, ref]) => {
+        if (!ref.startsWith("ctx:") && !ref.startsWith("state:")) {
+          throw new Error("Website builds require an exact ctx: or state: reference");
+        }
+        const build = await deps.buildSystem.getBuild(unit, ref, {
+          library: false,
+          website: true,
+        });
+        return artifactHandle(build);
+      },
+      readBuildArtifact: async (_ctx, [key, artifactPath]) => {
+        const build = deps.buildSystem.getBuildByKey(key);
+        if (!build) throw new Error(`Unknown immutable build: ${key}`);
+        const artifact = build.artifacts.find((candidate) => candidate.path === artifactPath);
+        if (!artifact) throw new Error(`Build ${key} has no artifact ${artifactPath}`);
+        const bytes = await readArtifactBytesAsync(build, artifact);
+        return new Response(new Uint8Array(bytes), {
+          headers: {
+            "Content-Type": artifact.contentType,
+            "Content-Length": String(bytes.byteLength),
+            ...(artifact.integrity ? { "X-Vibestudio-Integrity": artifact.integrity } : {}),
+          },
+        });
       },
       getTestArtifact: (_ctx, [unit, ref, selection]) =>
         deps.buildSystem.getTestArtifact(unit, ref, selection),

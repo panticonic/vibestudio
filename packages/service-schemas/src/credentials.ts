@@ -146,6 +146,10 @@ const PROXY_ACCESS: MethodAccessDescriptor = {
   ],
 };
 
+const PUBLICATION_REVIEW_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
+
 export const IdentifierSchema = z
   .string()
   .regex(
@@ -248,8 +252,10 @@ export const CredentialBindingSchema = z
     id: IdentifierSchema.describe("Stable id for this binding within the credential."),
     label: z.string().min(1).max(128).optional().describe("Human-readable label for the binding."),
     use: z
-      .enum(["fetch", "git-http", "git-ssh"])
-      .describe("Transport this binding applies to: HTTP fetch, git-over-HTTP, or git-over-SSH."),
+      .enum(["fetch", "publish", "git-http", "git-ssh"])
+      .describe(
+        "Transport this binding applies to: ordinary HTTP fetch, reviewed publication HTTP, git-over-HTTP, or git-over-SSH."
+      ),
     audience: z
       .array(UrlAudienceSchema)
       .min(1)
@@ -284,7 +290,7 @@ const CredentialBindingOutputSchema = z
   .object({
     id: IdentifierSchema,
     label: z.string().min(1).max(128).optional(),
-    use: z.enum(["fetch", "git-http", "git-ssh"]),
+    use: z.enum(["fetch", "publish", "git-http", "git-ssh"]),
     audience: z.array(UrlAudienceOutputSchema).min(1).max(16),
     injection: CredentialInjectionSchema,
     grantResource: z
@@ -560,7 +566,9 @@ export const ConnectCredentialSpecSchema = z
   .object({
     flow: z
       .discriminatedUnion("type", [
-        z.object({ type: z.literal("model-provider-oauth"), providerId: z.string().min(1) }).strict(),
+        z
+          .object({ type: z.literal("model-provider-oauth"), providerId: z.string().min(1) })
+          .strict(),
         z
           .object({
             type: z.literal("oauth2-auth-code-pkce"),
@@ -804,7 +812,7 @@ export const ResolveCredentialParamsSchema = z
       .optional()
       .describe("Resolve the unique active credential with this user-owned label."),
     use: z
-      .enum(["fetch", "git-http", "git-ssh"])
+      .enum(["fetch", "publish", "git-http", "git-ssh"])
       .optional()
       .describe("Transport the credential will be used for. Defaults to 'fetch'."),
   })
@@ -829,11 +837,55 @@ export const ProxyFetchParamsSchema = z
     credentialId: IdentifierSchema.optional().describe(
       "Explicit credential to inject; resolved from the URL when omitted."
     ),
+    audiences: z
+      .array(UrlAudienceSchema)
+      .min(1)
+      .max(32)
+      .optional()
+      .describe(
+        "Additional caller-selected audience ceiling. The host rejects targets outside it even when the stored credential is broader."
+      ),
   })
   .strict()
   .refine((p) => !(p.body !== undefined && p.bodyBase64 !== undefined), {
     message: "credentials.proxyFetch: provide either `body` or `bodyBase64`, not both",
   });
+
+export const WebsitePublicationIntentSchema = z
+  .object({
+    operationId: IdentifierSchema,
+    artifactDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    provider: IdentifierSchema,
+    destination: z.string().trim().min(1).max(512),
+    environment: z.enum(["preview", "production"]),
+  })
+  .strict();
+
+export const DeriveCredentialParamsSchema = z
+  .object({
+    publication: WebsitePublicationIntentSchema,
+    source: z
+      .object({
+        url: z.string().url(),
+        method: z.string().min(1).max(16).optional(),
+        headers: z.record(z.string()).optional(),
+        body: z.string().optional(),
+        credentialId: IdentifierSchema.optional(),
+        audiences: z.array(UrlAudienceSchema).min(1).max(32).optional(),
+      })
+      .strict(),
+    extract: z.object({ jsonPath: z.array(z.string().min(1).max(128)).min(1).max(8) }).strict(),
+    credential: z
+      .object({
+        label: z.string().trim().min(1).max(256),
+        audience: z.array(UrlAudienceSchema).min(1).max(32),
+        injection: CredentialInjectionSchema,
+        expiresInMs: z.number().int().min(1_000).max(3_600_000),
+        metadata: z.record(z.string().max(1024)).optional(),
+      })
+      .strict(),
+  })
+  .strict();
 
 export const ProxyGitHttpParamsSchema = z
   .object({
@@ -851,7 +903,13 @@ export const ProxyGitHttpParamsSchema = z
       ),
     logicalCredential: z
       .object({
-        name: z.string().trim().min(1).max(256).regex(/^[^\u0000-\u001f\u007f]+$/u).describe("Stored credential label declared by workspace config."),
+        name: z
+          .string()
+          .trim()
+          .min(1)
+          .max(256)
+          .regex(/^[^\u0000-\u001f\u007f]+$/u)
+          .describe("Stored credential label declared by workspace config."),
         remoteUrl: z
           .string()
           .url()
@@ -984,7 +1042,7 @@ const CredentialAccessGrantSummarySchema = z
     id: z.string(),
     bindingId: z.string(),
     bindingLabel: z.string().optional(),
-    use: z.enum(["fetch", "git-http", "git-ssh"]),
+    use: z.enum(["fetch", "publish", "git-http", "git-ssh"]),
     resource: z.string(),
     action: z.enum(["read", "write", "use"]),
     scope: z.literal("version"),
@@ -1076,6 +1134,8 @@ export type ForwardOAuthCallbackParams = z.infer<typeof ForwardOAuthCallbackPara
 export type CredentialIdParams = z.infer<typeof CredentialIdParamsSchema>;
 export type ResolveCredentialParams = z.infer<typeof ResolveCredentialParamsSchema>;
 export type ProxyFetchParams = z.infer<typeof ProxyFetchParamsSchema>;
+export type DeriveCredentialParams = z.infer<typeof DeriveCredentialParamsSchema>;
+export type WebsitePublicationIntentParams = z.infer<typeof WebsitePublicationIntentSchema>;
 export type ProxyGitHttpParams = z.infer<typeof ProxyGitHttpParamsSchema>;
 export type AuditParams = z.infer<typeof AuditParamsSchema>;
 export type CredentialProxyFetchRequest = ProxyFetchParams;
@@ -1084,7 +1144,11 @@ export type CredentialAuditParams = AuditParams;
 
 export const credentialsMethods = defineServiceMethods({
   storeCredential: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1124,7 +1188,11 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   connect: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "open",
@@ -1151,7 +1219,11 @@ export const credentialsMethods = defineServiceMethods({
     access: CONNECT_ACCESS,
   },
   configureClient: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "account-providers.configure",
     tier: {
       tier: "open",
@@ -1194,7 +1266,11 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   requestCredentialInput: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "open",
@@ -1239,7 +1315,11 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   getClientConfigStatus: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1256,7 +1336,11 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   deleteClientConfig: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "account-providers.delete",
     tier: {
       tier: "critical",
@@ -1269,7 +1353,8 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Delete account-provider settings",
       action: "delete account-provider settings",
-      description: "Remove saved account-provider settings so new connections can no longer use them.",
+      description:
+        "Remove saved account-provider settings so new connections can no longer use them.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1288,7 +1373,11 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   forwardOAuthCallback: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1314,7 +1403,11 @@ export const credentialsMethods = defineServiceMethods({
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   cancelOAuth: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1339,7 +1432,11 @@ export const credentialsMethods = defineServiceMethods({
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   listStoredCredentials: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1356,7 +1453,11 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   summarizeStoredCredentials: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1373,7 +1474,11 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   inspectStoredCredentials: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "credentials.audit.read",
     tier: {
       tier: "gated",
@@ -1399,7 +1504,11 @@ export const credentialsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   revokeCredential: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.disconnect",
     tier: {
       tier: "critical",
@@ -1431,7 +1540,11 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ credentialId: "cred-123" }] }],
   },
   resolveCredential: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1447,8 +1560,33 @@ export const credentialsMethods = defineServiceMethods({
     access: RESOLVE_CREDENTIAL_ACCESS,
     examples: [{ args: [{ url: "https://api.example.test/v1" }] }],
   },
+  deriveCredential: {
+    website: {
+      kind: "closed",
+      reason:
+        "Derived provider credentials are integration infrastructure and are not exposed directly to websites.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale:
+        "The source response remains host-held; source credential use and every later derived use retain ordinary exact audience authorization",
+    },
+    description:
+      "Fetch a bounded JSON response through mediated egress, extract one secret field inside the host, and store it as a short-lived URL-bound credential without returning the secret to userland.",
+    agentFacing: false,
+    args: z.tuple([DeriveCredentialParamsSchema]),
+    returns: StoredCredentialSummarySchema,
+    access: PROXY_ACCESS,
+  },
   proxyFetch: {
-    website: {"kind":"eligible","rationale":"Proxy use keeps secrets in the host and requires consent for the selected credential and destination."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Proxy use keeps secrets in the host and requires consent for the selected credential and destination.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1465,8 +1603,57 @@ export const credentialsMethods = defineServiceMethods({
     access: PROXY_ACCESS,
     examples: [{ args: [{ url: "https://api.example.com/v1/me", method: "GET" }] }],
   },
+  beginWebsitePublication: {
+    website: { kind: "closed", reason: "Website publication is workspace tooling." } as const,
+    capability: "website.publish",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "Publishing immutable workspace artifacts to a named external destination requires review of the sealed publication intent",
+    },
+    presentation: {
+      title: "Publish a website",
+      action: "publish a website",
+      description: "Upload the reviewed website artifact to the selected online destination.",
+      group: "network",
+      authorityCategory: { domain: "sharing", verb: "act" },
+    },
+    description:
+      "Review and open a short-lived provider-neutral publication operation for one exact artifact and destination.",
+    args: z.tuple([WebsitePublicationIntentSchema]),
+    returns: z.void(),
+    access: PUBLICATION_REVIEW_ACCESS,
+    authority: {
+      requirement: requirementForPrincipals(["code", "user", "host"], "website.publish"),
+      resource: { kind: "argument", index: 0, path: ["operationId"] },
+    },
+  },
+  publishFetch: {
+    website: { kind: "closed", reason: "Website publication is workspace tooling." } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "The handler requires a live caller-bound grant for the exact reviewed artifact, provider, destination, and environment",
+    },
+    description:
+      "Forward one provider API request within an already reviewed exact website publication operation.",
+    agentFacing: false,
+    args: z.tuple([ProxyFetchParamsSchema, WebsitePublicationIntentSchema]),
+    returns: CredentialProxyFetchResponseSchema,
+    access: PROXY_ACCESS,
+  },
   proxyGitHttp: {
-    website: {"kind":"eligible","rationale":"Proxy use keeps secrets in the host and requires consent for the selected credential and destination."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Proxy use keeps secrets in the host and requires consent for the selected credential and destination.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1486,7 +1673,11 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   completeCapture: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1512,7 +1703,11 @@ export const credentialsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   audit: {
-    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "credentials.audit.read",
     tier: {
       tier: "gated",

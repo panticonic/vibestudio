@@ -143,6 +143,55 @@ function makeBuildSystem(): BuildSystemV2 {
 }
 
 describe("build service extension diagnostics", () => {
+  it("builds websites only from exact refs and returns a content-free immutable handle", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.getBuild).mockResolvedValue({
+      buildKey: "website-key",
+      sourceStateHash: "state:exact",
+      artifacts: [
+        {
+          path: "site.js",
+          role: "primary",
+          contentType: "text/javascript",
+          encoding: "utf8",
+          content: "private source",
+          byteLength: 14,
+          integrity: `sha256:${"a".repeat(64)}`,
+        },
+      ],
+      metadata: {
+        details: {
+          kind: "website-bundle",
+          entryArtifact: "site.js",
+          declaration: { entry: "site.tsx", expects: "a useful workspace" },
+        },
+      },
+    } as never);
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "buildWebsite", [
+        "@workspace-panels/site",
+        "main",
+      ])
+    ).rejects.toThrow("exact ctx: or state:");
+    const handle = await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "buildWebsite",
+      ["@workspace-panels/site", "state:exact"]
+    );
+    expect(handle).toMatchObject({
+      buildKey: "website-key",
+      website: { entryArtifact: "site.js", declaration: { expects: "a useful workspace" } },
+      artifacts: [{ path: "site.js", integrity: `sha256:${"a".repeat(64)}` }],
+    });
+    expect(handle).not.toHaveProperty("artifacts.0.content");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-panels/site", "state:exact", {
+      library: false,
+      website: true,
+    });
+  });
+
   it("returns the portable { bundle } contract for library builds", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);

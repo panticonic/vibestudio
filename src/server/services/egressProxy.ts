@@ -19,6 +19,7 @@ import type {
   CredentialBindingUse,
   CredentialGrantAction,
   CredentialUseGrant,
+  UrlAudience,
 } from "@vibestudio/credential-client/types";
 import { credentialLifecycle as credentialLifecycleStatus } from "@vibestudio/credential-client/credentialStatus";
 import {
@@ -479,14 +480,18 @@ export class EgressProxy {
   }
 
   async forwardProxyFetch(
-    params: ProxyFetchRequest<string | Uint8Array>
+    params: ProxyFetchRequest<string | Uint8Array>,
+    credentialUse: CredentialBindingUse = "fetch"
   ): Promise<ProxyFetchResponse> {
     const operation = this.beginOperation(params.caller.runtime.id);
     try {
       let request = params;
       for (let hop = 0; ; hop++) {
         operation.signal.throwIfAborted();
-        const response = await this.forwardProxyFetchHop(request, operation.signal);
+        if (request.audiences && !findMatchingUrlAudience(request.url, request.audiences)) {
+          throw new ForwardRejection(403, "Redirect is outside the caller-bound audience");
+        }
+        const response = await this.forwardProxyFetchHop(request, operation.signal, credentialUse);
         const location = new Headers(response.headerPairs).get("location");
         if (!isRedirectStatus(response.status) || !location) return response;
         if (hop >= 20) throw new ForwardRejection(502, "Too many network redirects");
@@ -499,7 +504,8 @@ export class EgressProxy {
 
   private async forwardProxyFetchHop(
     params: ProxyFetchRequest<string | Uint8Array>,
-    signal: AbortSignal
+    signal: AbortSignal,
+    credentialUse: CredentialBindingUse
   ): Promise<ProxyFetchResponse> {
     const body = params.body;
     const bytesOut =
@@ -511,7 +517,7 @@ export class EgressProxy {
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
       credential: credentialSelection(params.credentialId),
-      credentialUse: "fetch",
+      credentialUse,
       initialBytesOut: bytesOut,
       replaySafe: true,
       execute: async (targetUrl, headers, _authorization, transport) => {
@@ -3489,6 +3495,7 @@ interface ProxyFetchRequest<Body> {
   headers?: Record<string, string>;
   body?: Body;
   credentialId?: string;
+  audiences?: readonly UrlAudience[];
 }
 
 interface ProxyFetchResponse {

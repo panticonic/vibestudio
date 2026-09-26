@@ -51,6 +51,7 @@ import {
   type ConfigureClientParams,
   type CredentialIdParams,
   type DeleteClientConfigParams,
+  type DeriveCredentialParams,
   type GetClientConfigStatusParams,
   type ProxyFetchParams,
   type ProxyGitHttpParams,
@@ -58,6 +59,7 @@ import {
   type RequestCredentialInputParams,
   type ResolveCredentialParams,
   type StoreUrlBoundCredentialParams,
+  type WebsitePublicationIntentParams,
 } from "@vibestudio/service-schemas/credentials";
 
 import type { EgressProxy } from "./egressProxy.js";
@@ -202,6 +204,36 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialStore,
       clientConfigStore,
     });
+  const publicationGrants = new Map<
+    string,
+    { intent: WebsitePublicationIntentParams; expiresAt: number }
+  >();
+
+  const publicationKey = (ctx: ServiceContext, operationId: string) =>
+    `${ctx.caller.runtime.id}\0${operationId}`;
+  const samePublication = (
+    left: WebsitePublicationIntentParams,
+    right: WebsitePublicationIntentParams
+  ) =>
+    left.operationId === right.operationId &&
+    left.artifactDigest === right.artifactDigest &&
+    left.provider === right.provider &&
+    left.destination === right.destination &&
+    left.environment === right.environment;
+  const assertPublicationGrant = (
+    ctx: ServiceContext,
+    publication: WebsitePublicationIntentParams
+  ) => {
+    const key = publicationKey(ctx, publication.operationId);
+    const grant = publicationGrants.get(key);
+    if (!grant || grant.expiresAt <= Date.now()) {
+      publicationGrants.delete(key);
+      throw new Error("Website publication has not been reviewed or its review expired");
+    }
+    if (!samePublication(grant.intent, publication)) {
+      throw new Error("Website publication intent differs from the reviewed operation");
+    }
+  };
 
   type UserlandRuntimeContext = ServiceContext & {
     caller: ServiceContext["caller"] & {
@@ -845,7 +877,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
   async function proxyFetch(
     ctx: ServiceContext,
-    params: ProxyFetchParams
+    params: ProxyFetchParams,
+    credentialUse: "fetch" | "publish" = "fetch"
   ): Promise<{
     status: number;
     statusText: string;
@@ -864,16 +897,29 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!egressProxy) {
       throw new Error("Egress proxy is unavailable");
     }
+    if (
+      params.audiences &&
+      !findMatchingUrlAudience(
+        params.url,
+        params.audiences.map((audience) => ({ match: "exact" as const, ...audience }))
+      )
+    ) {
+      throw new Error("Credential request is outside the caller-bound audience");
+    }
     const requestBody: string | Uint8Array | undefined =
       params.bodyBase64 !== undefined ? Buffer.from(params.bodyBase64, "base64") : params.body;
-    const result = await egressProxy.forwardProxyFetch({
-      caller: ctx.caller,
-      url: params.url,
-      method: params.method,
-      headers: params.headers,
-      body: requestBody,
-      credentialId: params.credentialId,
-    });
+    const result = await egressProxy.forwardProxyFetch(
+      {
+        caller: ctx.caller,
+        url: params.url,
+        method: params.method,
+        headers: params.headers,
+        body: requestBody,
+        credentialId: params.credentialId,
+        audiences: params.audiences?.map((audience) => ({ match: "exact" as const, ...audience })),
+      },
+      credentialUse
+    );
     return {
       status: result.status,
       statusText: result.statusText,
@@ -881,6 +927,81 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       finalUrl: result.finalUrl,
       bodyBase64: Buffer.from(result.body).toString("base64"),
     };
+  }
+
+  async function deriveCredential(
+    ctx: ServiceContext,
+    params: DeriveCredentialParams
+  ): Promise<StoredCredentialSummary> {
+    assertPublicationGrant(ctx, params.publication);
+    const response = await proxyFetch(
+      ctx,
+      {
+        ...params.source,
+        method: params.source.method ?? "GET",
+      },
+      "publish"
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(
+        `Credential derivation source failed: ${response.status} ${response.statusText}`
+      );
+    }
+    const bytes = Buffer.from(response.bodyBase64, "base64");
+    if (bytes.byteLength > 256 * 1024) {
+      throw new Error("Credential derivation response exceeds the 256 KiB limit");
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      throw new Error("Credential derivation source did not return JSON");
+    }
+    for (const segment of params.extract.jsonPath) {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        !Object.prototype.hasOwnProperty.call(value, segment)
+      ) {
+        throw new Error("Credential derivation JSON path is absent");
+      }
+      value = (value as Record<string, unknown>)[segment];
+    }
+    if (typeof value !== "string" || value.length === 0 || value.length > 16_384) {
+      throw new Error("Credential derivation result must be a bounded non-empty string");
+    }
+    const sourceUrl = new URL(params.source.url);
+    return storeCredential(
+      ctx,
+      {
+        label: params.credential.label,
+        audience: params.credential.audience,
+        injection: params.credential.injection,
+        bindings: [
+          {
+            id: "derived-publication",
+            label: "Temporary publication token",
+            use: "publish",
+            audience: params.credential.audience.map((audience) => ({
+              match: "exact" as const,
+              ...audience,
+            })),
+            injection: params.credential.injection,
+          },
+        ],
+        material: { type: "bearer-token", token: value },
+        accountIdentity: { providerUserId: sourceUrl.hostname },
+        scopes: [],
+        expiresAt: Date.now() + params.credential.expiresInMs,
+        metadata: {
+          ...(params.credential.metadata ?? {}),
+          derivedFromOrigin: sourceUrl.origin,
+          derived: "true",
+        },
+      },
+      { approvalDecision: "session", preapprovedUseDecision: "session" }
+    );
   }
 
   async function proxyGitHttp(ctx: ServiceContext, params: ProxyGitHttpParams): Promise<Response> {
@@ -1446,7 +1567,18 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       inspectStoredCredentials: () => inspectStoredCredentials(),
       revokeCredential: (ctx, [input]) => revokeCredential(ctx, input),
       resolveCredential: (ctx, [input]) => resolveCredential(ctx, input),
+      beginWebsitePublication: (ctx, [publication]) => {
+        publicationGrants.set(publicationKey(ctx, publication.operationId), {
+          intent: publication,
+          expiresAt: Date.now() + 30 * 60_000,
+        });
+      },
+      deriveCredential: (ctx, [input]) => deriveCredential(ctx, input),
       proxyFetch: (ctx, [input]) => proxyFetch(ctx, input),
+      publishFetch: (ctx, [input, publication]) => {
+        assertPublicationGrant(ctx, publication);
+        return proxyFetch(ctx, input, "publish");
+      },
       proxyGitHttp: (ctx, [input]) => proxyGitHttp(ctx, input),
       completeCapture: (ctx, [captureId, response]) => {
         // Only the attached desktop shell may answer a capture request.

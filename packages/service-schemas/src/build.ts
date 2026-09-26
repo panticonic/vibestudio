@@ -18,6 +18,7 @@ import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retent
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import { AuthorityResourceScopeSchema, authorityRowSchema } from "./authority.js";
 import { PanelPlacementHintSchema } from "./panel.js";
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 
 export { AuthorityResourceScopeSchema } from "./authority.js";
 
@@ -119,6 +120,23 @@ export const buildArtifactSchema = z
   })
   .strict();
 
+export const buildArtifactManifestEntrySchema = buildArtifactSchema.omit({ content: true });
+export const buildArtifactHandleSchema = z
+  .object({
+    buildKey: z.string().min(1),
+    sourceStateHash: z.string().nullable(),
+    artifacts: z.array(buildArtifactManifestEntrySchema),
+    website: z
+      .object({
+        entryArtifact: z.string().min(1),
+        declaration: z.record(z.unknown()),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type BuildArtifactHandleWire = z.infer<typeof buildArtifactHandleSchema>;
+
 const panelBundlePayloadReportSchema = z
   .object({
     requests: z.number().int().nonnegative(),
@@ -154,7 +172,10 @@ const workspaceRpcEffectResourceSchema = z.discriminatedUnion("kind", [
 
 const workspaceRpcMethodDocSchema = z
   .object({
- website: z.discriminatedUnion("kind", [z.object({ kind: z.literal("closed"), reason: z.string().min(1) }).strict(), z.object({ kind: z.literal("eligible"), rationale: z.string().min(1) }).strict()]),
+    website: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("closed"), reason: z.string().min(1) }).strict(),
+      z.object({ kind: z.literal("eligible"), rationale: z.string().min(1) }).strict(),
+    ]),
     className: z.string(),
     name: z.string(),
     signature: z.string(),
@@ -783,7 +804,11 @@ export interface WorkspaceTestArtifactV1 {
 
 export const buildMethods = defineServiceMethods({
   listUnits: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -799,7 +824,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getBuild: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -833,10 +862,25 @@ export const buildMethods = defineServiceMethods({
             .describe(
               "Execution host for a library bundle ('panel' or 'worker'); required when library is true."
             ),
+          website: z
+            .boolean()
+            .optional()
+            .describe("Build the panel package's portable vibestudio.website.entry."),
         })
-        .refine((o) => !o.library || o.libraryTarget !== undefined, {
-          message:
-            "getBuild: a library build requires an explicit libraryTarget ('panel' or 'worker')",
+        .superRefine((o, context) => {
+          if (o.library && o.libraryTarget === undefined) {
+            context.addIssue({
+              code: "custom",
+              message:
+                "getBuild: a library build requires an explicit libraryTarget ('panel' or 'worker')",
+            });
+          }
+          if (o.library && o.website) {
+            context.addIssue({
+              code: "custom",
+              message: "getBuild: library and website targets are mutually exclusive",
+            });
+          }
         })
         .optional(),
     ]),
@@ -846,8 +890,76 @@ export const buildMethods = defineServiceMethods({
     // semantic state, so read-only evals must be able to load workspace code.
     access: READ_ACCESS,
   },
+  getBuildArtifacts: {
+    website: {
+      kind: "closed",
+      reason:
+        "Build artifacts can disclose private workspace code and are available only to workspace tooling.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Returns a content-free manifest for one immutable build already authorized to this workspace",
+    },
+    description:
+      "Return the content-free artifact manifest for an immutable cached build, or null when the build is unavailable.",
+    args: z.tuple([z.string().min(1)]),
+    returns: buildArtifactHandleSchema.nullable(),
+    access: READ_ACCESS,
+  },
+  buildWebsite: {
+    website: {
+      kind: "closed",
+      reason:
+        "Website compilation can disclose private workspace source and is available only to workspace tooling.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Workspace-local compilation into an immutable browser artifact without external publication",
+    },
+    description:
+      "Build a panel package's manifest-declared portable website entry at an exact workspace ref and return a content-free immutable artifact handle.",
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1).describe("Exact ctx: or state: workspace reference."),
+    ]),
+    returns: buildArtifactHandleSchema,
+    access: READ_ACCESS,
+  },
+  readBuildArtifact: {
+    website: {
+      kind: "closed",
+      reason:
+        "Build artifacts can disclose private workspace code and are available only to workspace tooling.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Streams one integrity-checked member of an immutable build selected by exact key and path",
+    },
+    description:
+      "Stream one integrity-checked artifact from an immutable cached build without exposing a host filesystem path.",
+    agentFacing: false,
+    args: z.tuple([z.string().min(1), z.string().min(1)]),
+    returns: StreamResponseSchema,
+    access: READ_ACCESS,
+  },
   getTestArtifact: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -873,7 +985,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   resolveTestSuite: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -888,7 +1004,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getBuildNpm: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.dependencies.inspect",
     tier: {
       tier: "gated",
@@ -923,7 +1043,11 @@ export const buildMethods = defineServiceMethods({
     access: EXTERNAL_ACQUISITION_ACCESS,
   },
   getBuildMetadata: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -943,7 +1067,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getBuildReport: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1013,7 +1141,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getPerformanceProfile: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1037,7 +1169,11 @@ export const buildMethods = defineServiceMethods({
     ],
   },
   getEffectiveVersion: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1052,7 +1188,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   inspectBuildProvenance: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1067,7 +1207,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listRecentBuildEvents: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1082,7 +1226,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   recompute: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.build-cache.manage",
     tier: {
       tier: "gated",
@@ -1110,7 +1258,11 @@ export const buildMethods = defineServiceMethods({
     access: RECOMPUTE_ACCESS,
   },
   gc: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.build-cache.manage",
     tier: {
       tier: "gated",
@@ -1192,7 +1344,11 @@ export const buildMethods = defineServiceMethods({
     ],
   },
   inspectExecution: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1223,7 +1379,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getAboutPages: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1237,7 +1397,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   hasUnit: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1251,7 +1415,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getPanelMetadata: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1266,7 +1434,11 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listSkills: {
-    website: {"kind":"closed","reason":"The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

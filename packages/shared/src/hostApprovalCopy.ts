@@ -678,6 +678,14 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "files",
   },
   {
+    prefix: "website.publish",
+    authorityCategory: { domain: "sharing", verb: "act" },
+    title: "Publish a website",
+    action: "publish a website",
+    description: "Upload a workspace website to a shared online destination",
+    group: "files",
+  },
+  {
     prefix: "git.pull",
     authorityCategory: { domain: "files", verb: "act" },
     title: "Download workspace updates",

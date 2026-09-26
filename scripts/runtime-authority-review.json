@@ -1,7 +1,31 @@
 {
   "version": 1,
-  "censusDigest": "sha256:6cc25d2c45e5e497c304e7beb8f2d279a6ad49d939bd026f31894b5d45cc7de3",
+  "censusDigest": "sha256:51e4df14d49e11ce241e46a5f7da10e8e1a41ded29d01a3d64b52d2ad243ef11",
   "decisions": {
+    "host:build.buildWebsite": {
+      "review": "exact-source-portable-website-build",
+      "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority."
+    },
+    "host:build.getBuildArtifacts": {
+      "review": "immutable-build-artifact-inventory",
+      "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation."
+    },
+    "host:build.readBuildArtifact": {
+      "review": "immutable-build-artifact-stream",
+      "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use."
+    },
+    "host:credentials.beginWebsitePublication": {
+      "review": "reviewed-exact-website-publication-intent",
+      "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The short-lived grant authorizes only subsequent matching publication requests and contains no provider credential material."
+    },
+    "host:credentials.deriveCredential": {
+      "review": "host-held-short-lived-provider-credential",
+      "change": "Uses an already reviewed website publication operation and an authorized source credential to exchange for a short-lived URL-bound provider credential. Extraction and storage occur in the Host; workspace code receives only a credential summary and cannot observe either secret."
+    },
+    "host:credentials.publishFetch": {
+      "review": "caller-bound-reviewed-publication-egress",
+      "change": "Forwards provider API requests only while a live website.publish grant matches the authenticated caller and exact publication intent. Credential bindings must be publish-only, caller-supplied audience ceilings constrain every redirect, and secret injection remains inside the Host egress proxy."
+    },
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
       "change": "Lets installed agent code pre-acquire predictable operations only within the host-attested authority of its currently active task. The caller cannot name another task, user, or authority ceiling, and ordinary receiver-side authorization remains authoritative."

@@ -264,4 +264,56 @@ describe("buildUnit framework-agnostic panel builds", () => {
     expect(html).toContain('id="root"');
     expect(html).toContain("<title>Hello Svelte</title>");
   }, 60_000);
+
+  it("builds the manifest-declared website entry as self-contained browser artifacts", async () => {
+    scaffoldStubPackages();
+    const panelDir = path.join(workspaceRoot, "panels", "portable-site");
+    writeJson(path.join(panelDir, "package.json"), {
+      name: "@workspace-panels/portable-site",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      vibestudio: {
+        title: "Portable Site",
+        entry: "panel.ts",
+        website: {
+          entry: "site.ts",
+          title: "Public Portable Site",
+          expects: "A workspace with useful tools",
+          suggestedTemplates: [
+            { label: "Starter", locator: { url: "https://example.test/template" } },
+          ],
+        },
+      },
+    });
+    fs.writeFileSync(path.join(panelDir, "panel.ts"), "export default function Panel() {}\n");
+    fs.writeFileSync(
+      path.join(panelDir, "site.ts"),
+      'document.getElementById("root")!.textContent = "portable website";\n'
+    );
+    commit(panelDir, "portable site");
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      graph.get("@workspace-panels/portable-site"),
+      "d".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH,
+      { website: true }
+    );
+
+    expect(result.metadata.details).toEqual({
+      kind: "website-bundle",
+      entryArtifact: expect.stringMatching(/site.*\.js$/),
+      declaration: expect.objectContaining({
+        entry: "site.ts",
+        expects: "A workspace with useful tools",
+      }),
+    });
+    expect(result.artifacts.every((artifact) => artifact.role !== "html")).toBe(true);
+    expect(result.artifacts.find((artifact) => artifact.role === "primary")?.content).toContain(
+      "portable website"
+    );
+  }, 60_000);
 });

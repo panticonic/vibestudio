@@ -1954,6 +1954,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.buildWebsite": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Workspace-local compilation into an immutable browser artifact without external publication",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.gc": {
     tier: {
       tier: "gated",
@@ -1994,6 +2006,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "build.read",
       rationale:
         "Workspace-local compilation into an immutable cache; no publication, install, or external acquisition",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "build.getBuildArtifacts": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Returns a content-free manifest for one immutable build already authorized to this workspace",
     },
     capability: null,
     presentation: null,
@@ -2156,6 +2180,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.readBuildArtifact": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Streams one integrity-checked member of an immutable build selected by exact key and path",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.recompute": {
     tier: {
       tier: "gated",
@@ -2288,6 +2324,27 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "credentials.beginWebsitePublication": {
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "Publishing immutable workspace artifacts to a named external destination requires review of the sealed publication intent",
+    },
+    capability: "website.publish",
+    presentation: {
+      title: "Publish a website",
+      action: "publish a website",
+      description: "Upload the reviewed website artifact to the selected online destination.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
+  },
   "credentials.cancelOAuth": {
     tier: {
       tier: "gated",
@@ -2392,6 +2449,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "credentials.deriveCredential": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale:
+        "The source response remains host-held; source credential use and every later derived use retain ordinary exact audience authorization",
+    },
+    capability: null,
+    presentation: null,
+  },
   "credentials.forwardOAuthCallback": {
     tier: {
       tier: "gated",
@@ -2476,6 +2545,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "credentials.control",
       rationale:
         "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "credentials.publishFetch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "The handler requires a live caller-bound grant for the exact reviewed artifact, provider, destination, and environment",
     },
     capability: null,
     presentation: null,
@@ -8694,8 +8775,10 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "chromiumFetch.openBrowser": ["credential.use"],
   "corsApproval.authorize": ["network.response.read"],
   "credentials.deleteClientConfig": ["account-providers.delete"],
+  "credentials.deriveCredential": ["credential.use"],
   "credentials.proxyFetch": ["credential.use"],
   "credentials.proxyGitHttp": ["credential.use"],
+  "credentials.publishFetch": ["credential.use"],
   "credentials.resolveCredential": ["credential.use"],
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
@@ -9033,6 +9116,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "webhooks.manage": {
     domain: "sharing",
     verb: "manage",
+  },
+  "website.publish": {
+    domain: "sharing",
+    verb: "act",
   },
   "workers.storage.reset": {
     domain: "automation",
@@ -9872,6 +9959,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "sharing",
       verb: "manage",
+    },
+  },
+  "website.publish": {
+    title: "Publish a website",
+    action: "publish a website",
+    description: "Upload the reviewed website artifact to the selected online destination.",
+    group: "network",
+    authorityCategory: {
+      domain: "sharing",
+      verb: "act",
     },
   },
   "workers.storage.reset": {

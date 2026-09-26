@@ -420,6 +420,7 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
  * exports-based dist/ paths to their TypeScript source equivalents.
  */
 const PANEL_CONDITIONS = ["vibestudio-panel", "import", "default"] as const;
+const WEBSITE_CONDITIONS = ["browser", "import", "default"] as const;
 
 function parseGraphImport(
   importPath: string,
@@ -1904,6 +1905,8 @@ export interface BuildUnitOptions {
    * worker/workerd entry instead of a panel entry that bootstraps on load.
    */
   libraryTarget?: LibraryBuildTarget;
+  /** Build the manifest-declared portable website entry as browser artifacts. */
+  website?: boolean;
   /** Build a statically discovered declared test suite as an immutable library artifact. */
   test?: {
     suite: string;
@@ -1937,6 +1940,9 @@ export function effectiveBuildVersion(
       )
       .digest("hex")
       .slice(0, 16)}`;
+  }
+  if (options?.website) {
+    return `${ev}:website:v1`;
   }
   if (options?.library) {
     return `${ev}:lib:${createHash("sha256")
@@ -2123,6 +2129,20 @@ async function doBuild(
           conditionsForLibraryTarget(options.libraryTarget),
           authority,
           options.libraryTarget
+        );
+      } else if (options?.website) {
+        if (node.kind !== "panel") {
+          throw new Error(`website builds require a panel package: ${node.name}`);
+        }
+        return await buildWebsiteBundle(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority
         );
       } else if (node.kind === "worker") {
         return await buildWorker(
@@ -2722,6 +2742,167 @@ function workerTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBu
     `} };`,
     "",
   ].join("\n");
+}
+
+async function buildWebsiteBundle(
+  node: GraphNode,
+  ev: string,
+  buildKey: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourceRoot: string,
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest
+): Promise<BuildResult> {
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root"
+  );
+  try {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(env.sourcePath, "package.json"), "utf8")
+    ) as { vibestudio?: Record<string, unknown>; dependencies?: Record<string, string> };
+    const manifest = packageJson.vibestudio ?? {};
+    const website = manifest["website"];
+    if (!website || typeof website !== "object" || Array.isArray(website)) {
+      throw new Error(`${node.name} does not declare vibestudio.website`);
+    }
+    const declaration = website as Record<string, unknown>;
+    const entry = declaration["entry"];
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      path.posix.isAbsolute(entry.replace(/\\/gu, "/")) ||
+      entry
+        .replace(/\\/gu, "/")
+        .split("/")
+        .some((part) => part === "..")
+    ) {
+      throw new Error(`${node.name} vibestudio.website.entry must be a safe relative path`);
+    }
+    const entryFile = path.resolve(env.sourcePath, entry);
+    if (
+      !entryFile.startsWith(`${path.resolve(env.sourcePath)}${path.sep}`) ||
+      !fs.existsSync(entryFile)
+    ) {
+      throw new Error(`${node.name} website entry does not exist: ${entry}`);
+    }
+
+    const resolved = resolveTemplate(
+      manifest,
+      packageJson.dependencies ?? {},
+      env.sourcePath,
+      sourceRoot
+    );
+    const adapter = getAdapter(resolved.framework);
+    const manifestExternals =
+      manifest["externals"] && typeof manifest["externals"] === "object"
+        ? (manifest["externals"] as Record<string, string>)
+        : {};
+    const externalSpecifiers = expandExternalSpecifiers(manifestExternals);
+    if (externalSpecifiers.length > 0) {
+      throw new Error(`${node.name} website builds cannot leave package imports external`);
+    }
+    const dedupePackages = normalizeManifestSpecList([
+      ...adapter.dedupePackages,
+      ...(Array.isArray(manifest["dedupeModules"])
+        ? manifest["dedupeModules"].filter((value): value is string => typeof value === "string")
+        : []),
+    ]);
+    const plugins: esbuild.Plugin[] = [
+      createWorkspaceResolvePlugin(graph, sourceRoot, WEBSITE_CONDITIONS),
+      createTsExtensionPlugin(sourceRoot),
+      createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
+      createPathShimPlugin(env.resolveDir),
+      createCryptoShimPlugin({ resolveDir: env.resolveDir }),
+    ];
+    const dedupe = createDedupePlugin(env.resolveDir, dedupePackages);
+    if (dedupe) plugins.push(dedupe);
+    if (adapter.plugins) plugins.push(...(await adapter.plugins()));
+    plugins.push(createDependencyEnvironmentResolvePlugin(env.nodePaths, []));
+
+    const options: esbuild.BuildOptions = {
+      absWorkingDir: env.outdir,
+      entryPoints: { site: entryFile },
+      bundle: true,
+      platform: "browser",
+      target: "es2022",
+      format: "esm",
+      splitting: true,
+      define: { "process.env.NODE_ENV": JSON.stringify("production") },
+      minify: true,
+      outdir: env.outdir,
+      sourcemap: false,
+      metafile: true,
+      logLevel: "warning",
+      conditions: [...WEBSITE_CONDITIONS],
+      plugins,
+      nodePaths: env.nodePaths,
+      loader: PANEL_ASSET_LOADERS,
+      assetNames: "assets/[name]-[hash]",
+      entryNames: "[name]-[hash]",
+      chunkNames: "chunk-[hash]",
+    };
+    if (adapter.jsx) options.jsx = adapter.jsx;
+    if (adapter.tsconfigJsx) {
+      options.tsconfigRaw = { compilerOptions: { jsx: adapter.tsconfigJsx } };
+    }
+    const built = await esbuild.build(options);
+    const outputs = Object.entries(built.metafile?.outputs ?? {});
+    const entryOutput = outputs.find(
+      ([outputPath, metadata]) => outputPath.endsWith(".js") && !!metadata.entryPoint
+    )?.[0];
+    if (!entryOutput) throw new Error(`${node.name} website build emitted no entry module`);
+    const entryArtifact = relativeBuildOutputPath(env.outdir, entryOutput);
+    const artifacts: BuildArtifactInput[] = [];
+    for (const [outputPath] of outputs) {
+      const absolute = path.resolve(env.outdir, outputPath);
+      if (!fs.existsSync(absolute)) continue;
+      const artifactPath = relativeBuildOutputPath(env.outdir, outputPath);
+      const extension = path.extname(artifactPath).toLowerCase();
+      const text = TEXT_EXTENSIONS.has(extension);
+      artifacts.push({
+        path: artifactPath,
+        role:
+          artifactPath === entryArtifact
+            ? "primary"
+            : extension === ".css"
+              ? "css"
+              : extension === ".map"
+                ? "map"
+                : "asset",
+        contentType: contentTypeForPath(artifactPath),
+        encoding: text ? "utf8" : "base64",
+        content: text
+          ? fs.readFileSync(absolute, "utf8")
+          : fs.readFileSync(absolute).toString("base64"),
+      });
+    }
+    const metadata: BuildMetadata = {
+      kind: "panel",
+      name: node.name,
+      buildKey,
+      sourcePath: node.relativePath,
+      ev,
+      sourceStateHash,
+      sourcemap: false,
+      authority,
+      framework: resolved.framework,
+      details: {
+        kind: "website-bundle",
+        entryArtifact,
+        declaration,
+      },
+      builtAt: new Date().toISOString(),
+    };
+    return await buildStore.put(buildKey, { entries: artifacts }, metadata);
+  } finally {
+    await env.cleanup();
+  }
 }
 
 async function buildPanel(

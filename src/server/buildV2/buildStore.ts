@@ -178,6 +178,11 @@ export type BuildMetadataDetails =
     }
   | { kind: "library"; format: "cjs" | "async-cjs" }
   | {
+      kind: "website-bundle";
+      entryArtifact: string;
+      declaration: Record<string, unknown>;
+    }
+  | {
       kind: "test";
       suite: string;
       runtime: "browser" | "workerd";

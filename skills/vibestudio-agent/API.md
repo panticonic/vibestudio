@@ -122,6 +122,8 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `build.listUnits` | List declared executable source units and their build readiness. This is not a process list: use runtime.supervision.list for exact live entities. |
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
+| `build.getBuildArtifacts` | Return the content-free artifact manifest for an immutable cached build, or null when the build is unavailable. |
+| `build.buildWebsite` | Build a panel package's manifest-declared portable website entry at an exact workspace ref and return a content-free immutable artifact handle. |
 | `build.getTestArtifact` | Build a declared test suite from an exact workspace state. Runtime is read from the unit manifest and cannot be overridden by the caller. |
 | `build.resolveTestSuite` | Resolve one declared test suite and its execution runtime without executing or compiling source. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
@@ -172,6 +174,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches. |
+| `credentials.beginWebsitePublication` | Review and open a short-lived provider-neutral publication operation for one exact artifact and destination. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 

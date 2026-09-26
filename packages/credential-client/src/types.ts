@@ -41,7 +41,13 @@ export interface Credential {
   /** Encrypted provider-owned session; never included in credential summaries. */
   modelProviderSession?: {
     providerId: string;
-    credential: { type: "oauth"; access: string; refresh: string; expires: number; [key: string]: unknown };
+    credential: {
+      type: "oauth";
+      access: string;
+      refresh: string;
+      expires: number;
+      [key: string]: unknown;
+    };
   };
   oauth1ConsumerSecret?: string;
   oauth1TokenSecret?: string;
@@ -77,7 +83,15 @@ export interface CookieSessionMaterial {
   cookies: CookieSessionCookie[];
 }
 
-export type CredentialBindingUse = "fetch" | "git-http" | "git-ssh";
+export type CredentialBindingUse = "fetch" | "publish" | "git-http" | "git-ssh";
+
+export interface WebsitePublicationIntent {
+  operationId: string;
+  artifactDigest: string;
+  provider: string;
+  destination: string;
+  environment: "preview" | "production";
+}
 
 export type CredentialGrantResourceHint =
   | { type: "audience" }
@@ -536,6 +550,26 @@ export interface ResolveUrlBoundCredentialRequest {
   credentialId?: string;
   credentialLabel?: string;
   use?: CredentialBindingUse;
+}
+
+export interface DeriveUrlBoundCredentialRequest {
+  publication: WebsitePublicationIntent;
+  source: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    credentialId?: string;
+    audiences?: UrlAudience[];
+  };
+  extract: { jsonPath: string[] };
+  credential: {
+    label: string;
+    audience: UrlAudience[];
+    injection: CredentialInjection;
+    expiresInMs: number;
+    metadata?: Record<string, string>;
+  };
 }
 
 export interface ProxyGitHttpRequest {

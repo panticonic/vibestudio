@@ -692,7 +692,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       injection: credentialInjectionSchema,
       accountIdentity: accountIdentitySchema,
       scopes: z.array(z.string()),
-      credentialUse: z.enum(["fetch", "git-http", "git-ssh"]).optional(),
+      credentialUse: z.enum(["fetch", "publish", "git-http", "git-ssh"]).optional(),
       bindingLabel: z.string().optional(),
       gitOperation: z
         .object({
