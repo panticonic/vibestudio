@@ -7,7 +7,7 @@ interface DocumentConnection {
   documentId: string;
   contents: WebContents;
   runtimeId: string;
-  origin: string;
+  origin?: string;
   frame: Electron.WebFrameMain;
   client: Pick<ServerClient, "call"> & Partial<Pick<ServerClient, "onDirectEvent">>;
   connected: boolean;
@@ -38,6 +38,7 @@ export class WebsiteWorkspaceBridge {
     const doc = this.documents.get(contents.id);
     return Boolean(
       doc?.connected &&
+      doc.origin !== undefined &&
       !contents.isDestroyed() &&
       doc.frame === contents.mainFrame &&
       new URL(contents.getURL()).origin === doc.origin
@@ -67,7 +68,6 @@ export class WebsiteWorkspaceBridge {
       contents,
       documentId,
       runtimeId: owner.runtimeId,
-      origin: new URL(contents.mainFrame.url).origin,
       frame: contents.mainFrame,
       client: owner.client,
       connected: false,
@@ -105,6 +105,10 @@ export class WebsiteWorkspaceBridge {
       doc.runtimeId !== owner.runtimeId
     )
       throw new Error("Website document was replaced");
+    // Preload begins before Chromium necessarily publishes the document URL.
+    // Attest the origin at the user's Connect action, after load, while the
+    // same frame and navigation epoch are still current.
+    doc.origin = url.origin;
     if (doc.connected) return doc.result;
     if (doc.pending) return doc.pending;
     const current = doc;
@@ -148,7 +152,7 @@ export class WebsiteWorkspaceBridge {
       !contents.isDestroyed() &&
       this.documents.get(contents.id) === doc &&
       contents.mainFrame === doc.frame &&
-      new URL(contents.getURL()).origin === doc.origin
+      (doc.origin === undefined || new URL(contents.getURL()).origin === doc.origin)
     );
   }
 

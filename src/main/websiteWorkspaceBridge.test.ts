@@ -63,6 +63,17 @@ function fixture() {
 }
 
 describe("native website workspace provider", () => {
+  it("begins during preload before the frame URL is published, then attests it on connect", async () => {
+    const f = fixture();
+    f.contents.mainFrame.url = "";
+    const challenge = await f.bridge.begin(f.event());
+    f.contents.mainFrame.url = "https://example.com/app";
+    await expect(f.bridge.connect(f.event(), challenge)).resolves.toMatchObject({
+      origin: "https://example.com",
+    });
+    await f.bridge.close();
+  });
+
   it("attests the actual origin and only returns public runtime coordinates after approval", async () => {
     const f = fixture();
     expect(f.bridge.connected(f.contents as unknown as WebContents)).toBe(false);
