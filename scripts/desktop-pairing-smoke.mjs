@@ -359,6 +359,7 @@ function parseArgs(argv) {
     productionTemplates: false,
     sharedMemberRevocation: false,
     browserImportApproval: false,
+    websiteConnection: false,
     local: false,
     templateCheckouts: null,
     help: false,
@@ -384,6 +385,8 @@ function parseArgs(argv) {
       options.sharedMemberRevocation = true;
     } else if (arg === "--browser-import-approval") {
       options.browserImportApproval = true;
+    } else if (arg === "--website-connection") {
+      options.websiteConnection = true;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -418,6 +421,7 @@ Runner options:
   --local                  Verify account-only local startup instead of remote pairing.
   --shared-member-revocation Also exercise a second member with an open approval.
   --browser-import-approval Import fixture bookmarks after visible native approval.
+  --website-connection    Open vibestudio.app in the desktop browser and verify workspace RPC.
   --help                    Show this help message.
 
 The smoke consumes the hub's one-time root desktop invite and connects through
@@ -1555,6 +1559,136 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
   );
 }
 
+async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
+  const parentId = await until(() => evaluateElectron(app, async (_electron, id) => {
+    const owner = await globalThis.__testApi.forWorkspace(id);
+    return owner.getRootPanels()[0]?.id ?? null;
+  }, workspaceId, "finding the current workspace panel root"),
+  "waiting for the current workspace panel root", deadline);
+  const browserPanel = await evaluateElectron(app, async (_electron, input) => {
+    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+    return owner.createBrowserPanel(input.parentId, "https://vibestudio.app/", { focus: true });
+  }, { workspaceId, parentId }, "opening vibestudio.app through the desktop browser panel lifecycle");
+  console.log(`[desktop-smoke] Website: opened browser panel ${browserPanel.id}`);
+  const focus = await evaluateElectron(app, async (_electron, input) => {
+    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+    return owner.focusPanel(input.panelId);
+  }, { workspaceId, panelId: browserPanel.id }, "focusing the website browser panel");
+  console.log(`[desktop-smoke] Website: browser focus ${JSON.stringify(focus)}`);
+
+  const website = await until(async () => {
+    for (const page of app.context().pages()) {
+      if (page.isClosed() || !page.url().startsWith("https://vibestudio.app/")) continue;
+      if (await page.locator("#workspace-connect-button").isVisible().catch(() => false))
+        return page;
+    }
+    return null;
+  }, "loading vibestudio.app in a desktop browser panel", deadline);
+  console.log(`[desktop-smoke] Website: loaded ${website.url()}`);
+  await until(async () => evaluateElectron(app, async (_electron, input) => {
+    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+    return owner.getPanelTree().some((panel) => panel.id === input.panelId &&
+      panel.snapshot?.source === "browser:https://vibestudio.app/");
+  }, { workspaceId, panelId: browserPanel.id }, "checking current workspace browser ownership"),
+  "registering vibestudio.app in the current workspace panel tree", deadline);
+  const connect = website.locator("#workspace-connect-button");
+  await until(() => connect.isEnabled(), "enabling the website connection control", deadline);
+  console.log("[desktop-smoke] Website: connection control enabled");
+  if (await website.locator("#workspace-capabilities").textContent())
+    throw new Error("Website read workspace capabilities before connection");
+  await connect.click();
+  console.log("[desktop-smoke] Website: requested workspace connection");
+
+  const chrome = await chromePage(app, deadline);
+  const approval = await until(async () => {
+    const pending = await nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []);
+    return pending.find((entry) => entry.kind === "capability" &&
+      entry.capability === "workspace.connect" &&
+      entry.authoritySubject?.website?.origin === "https://vibestudio.app") ?? null;
+  }, "receiving the website connection approval", deadline);
+  console.log(`[desktop-smoke] Website: approval ${approval.approvalId} received`);
+  const findCard = async () => {
+    for (const page of app.context().pages()) {
+      if (page.isClosed()) continue;
+      const candidate = page.locator(`[data-approval-id="${approval.approvalId}"]:visible`).first();
+      if (await candidate.isVisible().catch(() => false)) return candidate;
+      const pill = page.locator("[data-approval-pill]:visible").first();
+      if (await pill.isVisible().catch(() => false)) await pill.click();
+    }
+    return null;
+  };
+  let card;
+  try {
+    card = await until(findCard, "showing the website connection approval", Math.min(deadline, Date.now() + 15_000));
+  } catch (error) {
+    const pages = await Promise.all(app.context().pages().map(async (page) => ({
+      url: page.url().slice(0, 140),
+      cards: await page.locator("[data-approval-id]").evaluateAll((nodes) =>
+        nodes.map((node) => ({ id: node.getAttribute("data-approval-id"), text: node.textContent?.slice(0, 180) }))
+      ).catch(() => []),
+      pills: await page.locator("[data-approval-pill]").count().catch(() => 0),
+    })));
+    throw new Error(`Website approval is pending but absent from native chrome: ${JSON.stringify(pages)}`, { cause: error });
+  }
+  const connectPage = card.locator('[data-approval-decision="session"]');
+  if (!(await connectPage.isEnabled()))
+    throw new Error(`Website connection approval has no enabled page-scoped action: ${await card.innerText()}`);
+  // CDP pointer coordinates do not map reliably to the separate native overlay
+  // WebContentsView; activate its visible control inside that renderer.
+  await connectPage.evaluate((button) => button.click());
+  console.log("[desktop-smoke] Website: approved connection in native chrome");
+  try {
+    await until(async () => {
+      const text = await website.locator("#workspace-capabilities").textContent();
+      if (text?.startsWith("Could not")) throw new Error(text);
+      return /^[1-9]\d* workspace capabilities available to this page\.$/.test(text ?? "");
+    }, "reading workspace capability discovery through the connected website", Math.min(deadline, Date.now() + 20_000));
+  } catch (error) {
+    const pending = await nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []);
+    const cardState = await card.evaluate((element) => ({
+      text: element.textContent?.slice(0, 700),
+      html: element.outerHTML.slice(0, 1200),
+    })).catch((problem) => ({ error: String(problem) }));
+    const pageState = await website.evaluate(() => ({
+      status: document.querySelector("#workspace-connection-status")?.textContent,
+      capabilities: document.querySelector("#workspace-capabilities")?.textContent,
+      button: document.querySelector("#workspace-connect-button")?.textContent,
+    }));
+    throw new Error(`Website connection did not complete: ${JSON.stringify({ pageState, cardState, pending: pending.map((entry) => ({ id: entry.approvalId, capability: entry.capability })) })}`, { cause: error });
+  }
+  if ((await website.locator("#workspace-connection-status").textContent()) !==
+      "Connected to this workspace.")
+    throw new Error("Website did not display its connected state");
+  await website.getByRole("button", { name: "Disconnect" }).click();
+  await until(async () =>
+    (await website.locator("#workspace-connection-status").textContent()) ===
+      "This page starts without workspace access." &&
+    (await website.locator("#workspace-capabilities").textContent()) === "",
+  "disconnecting the website and clearing workspace data", deadline);
+  console.log("[desktop-smoke] PASS vibestudio.app connected, read workspace capabilities, and disconnected");
+}
+
+async function waitForWebsiteWorkspacePresentation(app, workspaceId, deadline) {
+  let latest = null;
+  while (Date.now() < deadline) {
+    const host = await getHostViewDebugInfo(app);
+    if (host.shellOverlayActive) {
+      await waitForShellOverlayCleared(app, Math.max(1_000, deadline - Date.now()));
+      continue;
+    }
+    latest = await evaluateElectron(app, async (_electron, id) => {
+      const owner = await globalThis.__testApi.forWorkspace(id);
+      const root = owner.getRootPanels()[0];
+      return root ? owner.getPanelReadiness(root.id) : null;
+    }, workspaceId, "checking current workspace panel presentation");
+    if (latest?.contentReady && latest.nativeSlotBound) return;
+    if (latest?.terminal && !latest.contentReady)
+      throw new Error(`Current workspace panel failed before website navigation: ${JSON.stringify(latest)}`);
+    await sleep(250);
+  }
+  throw new Error(`Current workspace panel never presented before website navigation: ${JSON.stringify(latest)}`);
+}
+
 async function getPanelTree(app) {
   return evaluateElectron(
     app,
@@ -2101,6 +2235,22 @@ async function main() {
         Math.max(1000, deadlineMs - Date.now())
       );
       const personal = catalog.find((entry) => entry.privateRole === "personal");
+      if (options.websiteConnection) {
+        const system = catalog.find((entry) => entry.privateRole === "system");
+        if (!system) throw new Error("Local startup is missing System workspace");
+        await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
+        await waitForChromeResult(
+          electronApp,
+          `Boolean(document.querySelector('[aria-label="Open System"][aria-current="location"]'))`,
+          "waiting for System workspace focus before website navigation",
+          Math.max(1000, deadlineMs - Date.now())
+        );
+        await waitForWebsiteWorkspacePresentation(electronApp, system.workspaceId, deadlineMs);
+        await runWebsiteConnectionAcceptance(electronApp, system.workspaceId, deadlineMs);
+        await assertCleanDesktopDiagnostics(electronApp);
+        await cleanup();
+        return;
+      }
       const initial = await waitForPersonalPanel(
         electronApp,
         personal.workspaceId,

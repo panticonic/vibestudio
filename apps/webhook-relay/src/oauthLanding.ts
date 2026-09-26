@@ -202,7 +202,7 @@ const APEX_LANDING_HTML = `<!doctype html>
         <a class="button secondary" href="#how">See how to get started <span aria-hidden="true">↓</span></a>
       </div>
       <section class="workspace-connect" aria-labelledby="workspace-connect-title">
-        <div><h2 id="workspace-connect-title">Use this page in your workspace</h2><p id="workspace-connection-status" role="status" aria-live="polite">This page starts without workspace access.</p></div>
+        <div><h2 id="workspace-connect-title">Use this page in your workspace</h2><p id="workspace-connection-status" role="status" aria-live="polite">This page starts without workspace access.</p><p id="workspace-capabilities" role="status" aria-live="polite"></p></div>
         <button id="workspace-connect-button" type="button" disabled>Connect to workspace</button><noscript><p class="fine">JavaScript is off. Downloads and guides remain available.</p></noscript>
       </section>
       <p class="micro">Free to try · Open source · Currently in alpha · <a href="https://github.com/panticonic/vibestudio">View the source</a></p>
