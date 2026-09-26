@@ -45,31 +45,10 @@ asarUnpack:
   - "packages/**/*"
 
 extraResources:
-  # Reviewed first-party mission charters. These are admission inputs; runtime
-  # code resolves only their @seed pins from the immutable product snapshot.
-  - from: "seed"
-    to: "seed"
-    filter:
-      - "missions/*.json"
   # Exact external Base release pointer. The Base source itself is never
   # packaged; first-run acquisition uses only this immutable coordinate.
   - from: "build-resources/workspace-template-release.json"
     to: "workspace-template-release.json"
-  # Pre-built shipped panels
-  - from: "dist/shipped-panels"
-    to: "shipped-panels"
-    filter:
-      - "**/*"
-  # Pre-built about pages
-  - from: "dist/about-pages"
-    to: "about-pages"
-    filter:
-      - "**/*"
-  # Pre-built builtin workers
-  - from: "dist/builtin-workers"
-    to: "builtin-workers"
-    filter:
-      - "**/*"
   # Optional app dist bake. This directory is intentionally empty unless an
   # approved app build has been explicitly baked for standalone packaging.
   - from: "dist/baked-app"

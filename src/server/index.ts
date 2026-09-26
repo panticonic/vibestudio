@@ -17,7 +17,11 @@ import {
 } from "./openUnitReviewLookup.js";
 import * as path from "path";
 import * as fs from "fs";
-import { resolveRequiredAppRoot } from "./appRoot.js";
+import {
+  resolveNativeTypeScriptServerPath,
+  resolveRequiredAppRoot,
+  TYPESCRIPT_SERVER_PATH_ENV,
+} from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { gitInteropProviderMethods } from "@vibestudio/service-schemas/gitInterop";
@@ -319,6 +323,9 @@ const serverLogStore = createServerLogStore();
 const serverLogStartedAt = Date.now();
 serverLogStore.installConsoleCapture();
 process.env["VIBESTUDIO_APP_ROOT"] = resolveRequiredAppRoot({ argument: args.appRoot });
+process.env[TYPESCRIPT_SERVER_PATH_ENV] = resolveNativeTypeScriptServerPath(
+  process.env["VIBESTUDIO_APP_ROOT"]
+);
 if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
 // A boot identity is immutable process state, not a live view of the shared
 // checkout's latest build marker. Capture it before asynchronous startup so a

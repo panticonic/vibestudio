@@ -1,4 +1,7 @@
 import * as path from "node:path";
+import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
+
+export const TYPESCRIPT_SERVER_PATH_ENV = "VIBESTUDIO_TYPESCRIPT_SERVER_PATH";
 
 export function resolveRequiredAppRoot(
   input: {
@@ -23,4 +26,21 @@ export function resolveRequiredHostArtifactRoot(env: NodeJS.ProcessEnv = process
     );
   }
   return path.resolve(configured);
+}
+
+export function resolveNativeTypeScriptServerPath(
+  appRoot: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string {
+  return getPhysicalAppPath(
+    appRoot,
+    path.join(
+      "node_modules",
+      "@typescript",
+      `typescript-${platform}-${arch}`,
+      "lib",
+      platform === "win32" ? "tsc.exe" : "tsc"
+    )
+  );
 }

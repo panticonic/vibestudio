@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveRequiredAppRoot, resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import {
+  resolveNativeTypeScriptServerPath,
+  resolveRequiredAppRoot,
+  resolveRequiredHostArtifactRoot,
+} from "./appRoot.js";
 
 describe("resolveRequiredAppRoot", () => {
   it("prefers the exact command argument", () => {
@@ -32,5 +36,31 @@ describe("resolveRequiredHostArtifactRoot", () => {
     expect(() =>
       resolveRequiredHostArtifactRoot({ VIBESTUDIO_APP_ROOT: "/installed/host" })
     ).toThrow("VIBESTUDIO_HOST_ARTIFACT_ROOT");
+  });
+});
+
+describe("resolveNativeTypeScriptServerPath", () => {
+  it("maps a packaged Electron root to the physical unpacked compiler", () => {
+    expect(
+      resolveNativeTypeScriptServerPath(
+        "/Applications/Vibestudio.app/Contents/Resources/app.asar",
+        "darwin",
+        "arm64"
+      )
+    ).toBe(
+      "/Applications/Vibestudio.app/Contents/Resources/app.asar.unpacked/node_modules/@typescript/typescript-darwin-arm64/lib/tsc"
+    );
+  });
+
+  it("keeps source installs rooted in their physical checkout", () => {
+    expect(resolveNativeTypeScriptServerPath("/work/vibestudio", "linux", "x64")).toBe(
+      "/work/vibestudio/node_modules/@typescript/typescript-linux-x64/lib/tsc"
+    );
+  });
+
+  it("uses the native Windows executable name", () => {
+    expect(resolveNativeTypeScriptServerPath("C:\\Vibestudio", "win32", "x64")).toMatch(
+      /node_modules[/\\]@typescript[/\\]typescript-win32-x64[/\\]lib[/\\]tsc\.exe$/u
+    );
   });
 });

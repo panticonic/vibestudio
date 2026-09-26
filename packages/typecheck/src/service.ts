@@ -110,6 +110,8 @@ export interface TypeCheckServiceConfig {
   requiredRootFiles?: readonly string[];
   /** Collect native compiler request and transport timings. */
   collectTiming?: boolean;
+  /** Explicit native TypeScript server executable; defaults to the installed host layout. */
+  tsserverPath?: string;
 }
 
 interface OverlayFile {
@@ -130,6 +132,7 @@ export class TypeCheckService {
   private readonly nodeModulesPaths: readonly string[];
   private readonly hasNodeTypeDefinitions: boolean;
   private readonly files = new Map<string, OverlayFile>();
+  private readonly presentedFilePaths = new Map<string, string>();
   private readonly compilerOptionDependencies = new Set<string>();
   private readonly createdFiles = new Set<string>();
   private readonly changedFiles = new Set<string>();
@@ -162,9 +165,12 @@ export class TypeCheckService {
     this.sourceConfigPath = this.resolveSourceConfig();
     if (this.sourceConfigPath) this.collectConfigDependencies(this.sourceConfigPath);
 
+    const tsserverPath =
+      config.tsserverPath ?? process.env["VIBESTUDIO_TYPESCRIPT_SERVER_PATH"]?.trim();
     this.api = new API({
       cwd: this.panelPath,
       collectTiming: config.collectTiming,
+      ...(tsserverPath ? { tsserverPath } : {}),
       fs: {
         readFile: (fileName) => this.readProjectedFile(fileName),
         fileExists: (fileName) => this.projectedFileExists(fileName),
@@ -181,6 +187,7 @@ export class TypeCheckService {
     const existing = this.files.get(absolute);
     if (existing?.content === content) return;
     this.files.set(absolute, { content });
+    this.presentedFilePaths.set(this.filePathKey(absolute), absolute);
     this.deletedFiles.delete(absolute);
     if (existing) this.changedFiles.add(absolute);
     else this.createdFiles.add(absolute);
@@ -190,6 +197,7 @@ export class TypeCheckService {
     this.assertActive();
     const absolute = path.resolve(filePath);
     if (!this.files.delete(absolute)) return;
+    this.presentedFilePaths.delete(this.filePathKey(absolute));
     if (!this.createdFiles.delete(absolute)) this.deletedFiles.add(absolute);
     this.changedFiles.delete(absolute);
   }
@@ -298,7 +306,7 @@ export class TypeCheckService {
       const start = node?.getStart() ?? 0;
       const end = node?.end ?? start;
       return {
-        fileName: handle.path,
+        fileName: this.presentFilePath(handle.path),
         textSpan: { start, length: Math.max(0, end - start) },
         name: definitionSymbol.name,
       };
@@ -326,7 +334,7 @@ export class TypeCheckService {
         const start = node.getStart();
         return [
           {
-            fileName: handle.path,
+            fileName: this.presentFilePath(handle.path),
             textSpan: { start, length: Math.max(0, node.end - start) },
           },
         ];
@@ -490,12 +498,14 @@ export class TypeCheckService {
   }
 
   private convertDiagnostic(diagnostic: Diagnostic): TypeCheckDiagnostic {
-    const fileName = diagnostic.fileName ? path.resolve(diagnostic.fileName) : "";
-    const sourceFile = fileName ? this.project?.program.getSourceFile(fileName) : undefined;
+    const nativeFileName = diagnostic.fileName ? path.resolve(diagnostic.fileName) : "";
+    const sourceFile = nativeFileName
+      ? this.project?.program.getSourceFile(nativeFileName)
+      : undefined;
     const start = sourceFile?.getLineAndCharacterOfPosition(diagnostic.pos);
     const end = sourceFile?.getLineAndCharacterOfPosition(diagnostic.end);
     return {
-      file: fileName,
+      file: nativeFileName ? this.presentFilePath(nativeFileName) : "",
       line: (start?.line ?? 0) + 1,
       column: (start?.character ?? 0) + 1,
       ...(end ? { endLine: end.line + 1, endColumn: end.character + 1 } : {}),
@@ -673,6 +683,18 @@ export class TypeCheckService {
       }
     }
     return undefined;
+  }
+
+  private filePathKey(fileName: string): string {
+    const absolute = path.resolve(fileName);
+    return process.platform === "darwin" || process.platform === "win32"
+      ? absolute.toLowerCase()
+      : absolute;
+  }
+
+  private presentFilePath(fileName: string): string {
+    const absolute = path.resolve(fileName);
+    return this.presentedFilePaths.get(this.filePathKey(absolute)) ?? absolute;
   }
 
   private packageProjectionCandidates(candidate: string): string[] {
