@@ -14,7 +14,7 @@ permissions: {}
 jobs:
   iroh-remote-e2e:
     name: Iroh remote (native + relay + operational)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
     permissions:
@@ -55,7 +55,7 @@ jobs:
 
   android-iroh-smoke:
     name: Android Iroh UX and recovery
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
     permissions:
