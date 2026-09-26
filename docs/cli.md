@@ -247,6 +247,7 @@ Connect a model provider, or renew a credential that can no longer refresh:
 
 ```sh
 vibestudio model connect openai-codex
+vibestudio model connect anthropic
 ```
 
 The CLI always uses the system browser for interactive OAuth sign-in. The
@@ -256,8 +257,9 @@ only the provider ID and a secret-free credential summary. Authorization URLs,
 callbacks, access tokens, and refresh tokens are never printed.
 
 `model connect` currently supports providers with a canonical browser OAuth
-flow, including `openai-codex`. Providers that use API keys still collect those
-secrets through Model Settings; the CLI does not introduce a second secret-input
+flow: `openai-codex` for ChatGPT subscriptions and `anthropic` for Claude Pro / Max.
+The Claude setup card also offers an API-key choice. Providers that use API keys
+collect those secrets through Model Settings; the CLI does not introduce a second secret-input
 or credential-storage path.
 
 ## Remote Deploy

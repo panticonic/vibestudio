@@ -1,6 +1,7 @@
 import type { StoredCredentialSummary } from "@vibestudio/credential-client/types";
 import {
   getProviderConnectPreset,
+  getProviderConnectMethod,
   listProviderConnectPresets,
   toCredentialConnectRequest,
 } from "@vibestudio/shared/providerConnect";
@@ -64,7 +65,12 @@ export async function connectModelProvider(
         .join(", ")}`
     );
   }
-  if (preset.flow.type !== "oauth2-auth-code-pkce") {
+  if (getProviderConnectMethod(providerId)?.flow.type === "model-provider-oauth") {
+    throw new UsageError(
+      `${providerId} uses guided device sign-in. Connect it from the provider setup in the chat panel.`
+    );
+  }
+  if (getProviderConnectMethod(providerId)?.flow.type !== "oauth2-auth-code-pkce") {
     throw new UsageError(
       `${providerId} uses API-key input, which must currently be entered in Vibestudio model settings; ` +
         "the CLI connect command supports browser OAuth providers"

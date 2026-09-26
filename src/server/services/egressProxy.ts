@@ -20,7 +20,7 @@ import type {
   CredentialGrantAction,
   CredentialUseGrant,
 } from "@vibestudio/credential-client/types";
-import { isOAuthRefreshRecipeComplete } from "@vibestudio/credential-client/credentialStatus";
+import { credentialLifecycle as credentialLifecycleStatus } from "@vibestudio/credential-client/credentialStatus";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -1769,11 +1769,7 @@ export class EgressProxy {
     if (!credential.id || !credential.expiresAt || credential.expiresAt > Date.now() + 30_000) {
       return credential;
     }
-    if (
-      !credential.refreshToken ||
-      !isOAuthRefreshRecipeComplete(credential.oauthRefresh) ||
-      !this.deps.credentialLifecycle
-    ) {
+    if (!credentialLifecycleStatus(credential).canRefresh || !this.deps.credentialLifecycle) {
       return credential;
     }
     try {
@@ -1790,11 +1786,10 @@ export class EgressProxy {
 
   private canForceRefreshCredential(
     credential: Credential | null
-  ): credential is Credential & { id: string; refreshToken: string } {
+  ): credential is Credential & { id: string } {
     return (
       !!credential?.id &&
-      !!credential.refreshToken &&
-      isOAuthRefreshRecipeComplete(credential.oauthRefresh) &&
+      credentialLifecycleStatus(credential).canRefresh &&
       typeof this.deps.credentialLifecycle?.refreshCredential === "function"
     );
   }

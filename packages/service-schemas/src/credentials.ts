@@ -454,6 +454,7 @@ export const RequestClientConfigParamsSchema = z
   .strict();
 
 export const CredentialFlowTypeSchema = z.enum([
+  "model-provider-oauth",
   "oauth2-auth-code-pkce",
   "oauth2-device-code",
   "oauth2-client-credentials",
@@ -559,6 +560,7 @@ export const ConnectCredentialSpecSchema = z
   .object({
     flow: z
       .discriminatedUnion("type", [
+        z.object({ type: z.literal("model-provider-oauth"), providerId: z.string().min(1) }).strict(),
         z
           .object({
             type: z.literal("oauth2-auth-code-pkce"),
@@ -568,6 +570,8 @@ export const ConnectCredentialSpecSchema = z
             clientConfigId: IdentifierSchema.optional(),
             scopes: z.array(z.string().max(256)).optional(),
             extraAuthorizeParams: z.record(z.string(), z.string()).optional(),
+            tokenRequestEncoding: z.enum(["form", "json"]).optional(),
+            extraTokenParams: z.record(z.string(), z.string()).optional(),
             tokenAuth: TokenAuthSchema.optional(),
             persistRefreshToken: z.boolean().optional(),
             allowMissingExpiry: z.boolean().optional(),

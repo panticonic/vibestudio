@@ -1,8 +1,10 @@
+import { refreshModelProviderCredential } from "./credentialMechanisms/modelProvider.js";
 import type { Credential } from "@vibestudio/credential-client/types";
 import type { CredentialStore } from "@vibestudio/credential-client/store";
 import type { ClientConfigStore } from "@vibestudio/credential-client/clientConfigStore";
 import type { OAuthConnectionErrorCode } from "@vibestudio/credential-client/types";
 import { isOAuthRefreshRecipeComplete } from "@vibestudio/credential-client/credentialStatus";
+import { encodeOAuthTokenRequest } from "./credentialMechanisms/oauth2.js";
 import { createSign, randomUUID } from "node:crypto";
 
 export class CredentialLifecycleError extends Error {
@@ -20,6 +22,7 @@ export interface CredentialLifecycleDeps {
 }
 
 export class CredentialLifecycle {
+  private readonly refreshes = new Map<string, Promise<Credential & { id: string }>>();
   constructor(private readonly deps: CredentialLifecycleDeps) {}
 
   async refreshIfNeeded(
@@ -30,7 +33,10 @@ export class CredentialLifecycle {
     if (typeof credential.expiresAt !== "number" || credential.expiresAt > Date.now() + skewMs) {
       return credential;
     }
-    if (!credential.refreshToken || !isOAuthRefreshRecipeComplete(credential.oauthRefresh)) {
+    if (
+      !credential.modelProviderSession &&
+      (!credential.refreshToken || !isOAuthRefreshRecipeComplete(credential.oauthRefresh))
+    ) {
       throw new CredentialLifecycleError(
         "client_not_authorized",
         "OAuth credential is expired and has no complete refresh material"
@@ -39,9 +45,24 @@ export class CredentialLifecycle {
     return this.refreshCredential(credential);
   }
 
-  async refreshCredential(
+  refreshCredential(credential: Credential & { id: string }): Promise<Credential & { id: string }> {
+    const pending = this.refreshes.get(credential.id);
+    if (pending) return pending;
+    const refresh = this.performRefresh(credential).finally(() =>
+      this.refreshes.delete(credential.id)
+    );
+    this.refreshes.set(credential.id, refresh);
+    return refresh;
+  }
+
+  private async performRefresh(
     credential: Credential & { id: string }
   ): Promise<Credential & { id: string }> {
+    if (credential.modelProviderSession) {
+      const refreshed = await refreshModelProviderCredential(credential);
+      await this.deps.credentialStore.saveUrlBound(refreshed);
+      return refreshed;
+    }
     const refreshToken = credential.refreshToken;
     const recipe = credential.oauthRefresh;
     if (!refreshToken || !isOAuthRefreshRecipeComplete(recipe)) {
@@ -122,7 +143,8 @@ export class CredentialLifecycle {
     } else if (clientSecret) {
       body.set("client_secret", clientSecret);
     }
-    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+    const encoded = encodeOAuthTokenRequest(body, recipe.tokenRequestEncoding);
+    const headers: Record<string, string> = { "content-type": encoded.contentType };
     if (tokenAuth === "client_secret_basic" && clientSecret) {
       headers["authorization"] = basicAuthHeader(clientId, clientSecret);
     }
@@ -130,7 +152,7 @@ export class CredentialLifecycle {
     const response = await fetch(recipe.tokenUrl, {
       method: "POST",
       headers,
-      body,
+      body: encoded.body,
     });
     const text = await response.text();
     const data = parseJsonObject(text, { strict: response.ok });

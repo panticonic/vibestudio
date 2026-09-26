@@ -1,6 +1,12 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { applyOAuthClientAssertion, basicAuthHeader, signJwtAssertion } from "./oauth2.js";
+import {
+  applyOAuthClientAssertion,
+  basicAuthHeader,
+  signJwtAssertion,
+  encodeOAuthTokenRequest,
+  applyOAuthTokenParams,
+} from "./oauth2.js";
 
 describe("OAuth 2 client authentication", () => {
   it("encodes client credentials for HTTP Basic auth", () => {
@@ -64,5 +70,25 @@ describe("OAuth 2 client authentication", () => {
       tokenAuth: "none",
     });
     expect([...body]).toEqual([]);
+  });
+});
+
+describe("OAuth token request encoding", () => {
+  it("uses validated transaction state in JSON token requests", () => {
+    const fields = new URLSearchParams({ code: "code-1", code_verifier: "verifier-1" });
+    applyOAuthTokenParams(fields, { state: "{state}" }, { state: "state-1" });
+    const request = encodeOAuthTokenRequest(fields, "json");
+    expect(request.contentType).toBe("application/json");
+    expect(JSON.parse(String(request.body))).toEqual({
+      code: "code-1",
+      code_verifier: "verifier-1",
+      state: "state-1",
+    });
+    expect(encodeOAuthTokenRequest(fields).body).toBe(fields);
+  });
+  it("rejects overrides of protocol fields and unknown variables", () => {
+    const fields = new URLSearchParams({ code: "trusted" });
+    expect(() => applyOAuthTokenParams(fields, { code: "untrusted" }, { state: "s" })).toThrow();
+    expect(() => applyOAuthTokenParams(fields, { state: "{unknown}" }, { state: "s" })).toThrow();
   });
 });

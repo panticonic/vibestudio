@@ -100,7 +100,7 @@ Codebase (paths verified 2026-07-07):
   `workspace/workers/model-settings/index.ts:41-93`, served as
   `ModelSettingsSnapshot` (protocol `vibestudio.models.v1`) to both the chat panel
   picker and agent config. Fallback default logic: `pickFallbackModel`
-  (`model-settings/index.ts:203-208`), currently `openai-codex:gpt-5.6-sol` → first
+  (`model-settings/index.ts:203-208`), currently `openai-codex:gpt-6-sol` → first
   recommended → first model.
 - **The single LLM call site for agents** is
   `workspace/packages/agentic-do/src/effect-executors/model-call.ts`

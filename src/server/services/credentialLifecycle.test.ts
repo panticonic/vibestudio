@@ -72,6 +72,37 @@ describe("CredentialLifecycle", () => {
     expect(saveUrlBound).toHaveBeenCalledWith(refreshed);
   });
 
+  it("refreshes Claude subscriptions with the persisted JSON encoding", async () => {
+    const saveUrlBound = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-1",
+        client_id: "public-client",
+      });
+      return Response.json({
+        access_token: "fresh-access",
+        refresh_token: "rotated-refresh",
+        expires_in: 3600,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const lifecycle = new CredentialLifecycle({
+      credentialStore: { saveUrlBound },
+      clientConfigStore: { loadVersion: vi.fn() },
+    });
+    const source = credential();
+    source.oauthRefresh!.tokenRequestEncoding = "json";
+    const refreshed = await lifecycle.refreshCredential(source);
+    expect(refreshed).toMatchObject({
+      accessToken: "fresh-access",
+      refreshToken: "rotated-refresh",
+      oauthRefresh: { tokenRequestEncoding: "json" },
+    });
+    expect(saveUrlBound).toHaveBeenCalledWith(refreshed);
+  });
+
   it("loads the exact configured-client version and authenticates the refresh", async () => {
     const saveUrlBound = vi.fn(async () => undefined);
     const loadVersion = vi.fn(async () => ({

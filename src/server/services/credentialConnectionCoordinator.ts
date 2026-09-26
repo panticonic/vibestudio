@@ -1,3 +1,5 @@
+import { modelProviderOAuth, modelProviderMaterial } from "./credentialMechanisms/modelProvider.js";
+import { toCredentialConnectRequest } from "@vibestudio/shared/providerConnect";
 import {
   createHash,
   createPublicKey,
@@ -53,6 +55,8 @@ import { OAuthConnectionError, oauthConnectionError } from "./credentialMechanis
 import { oauth1AuthorizationHeader } from "./credentialMechanisms/oauth1.js";
 import {
   applyOAuthClientAssertion,
+  applyOAuthTokenParams,
+  encodeOAuthTokenRequest,
   basicAuthHeader,
   signJwtAssertion,
 } from "./credentialMechanisms/oauth2.js";
@@ -175,6 +179,8 @@ type AuthCodeConnectRequest = {
     clientConfigId?: string;
     scopes?: string[];
     extraAuthorizeParams?: Record<string, string>;
+    tokenRequestEncoding?: "form" | "json";
+    extraTokenParams?: Record<string, string>;
     allowMissingExpiry?: boolean;
     persistRefreshToken?: boolean;
     accountValidation?: OAuthAccountValidationSpec;
@@ -196,6 +202,8 @@ type InternalOAuthConnectionRequest = {
     keyAlgorithm?: string;
     scopes?: string[];
     extraAuthorizeParams?: Record<string, string>;
+    tokenRequestEncoding?: "form" | "json";
+    extraTokenParams?: Record<string, string>;
     allowMissingExpiry?: boolean;
     persistRefreshToken?: boolean;
     accountValidation?: AuthCodeConnectRequest["flow"]["accountValidation"];
@@ -210,6 +218,7 @@ type InternalOAuthConnectionRequest = {
 type StoredOAuthCredentialParams = StoreUrlBoundCredentialParams & {
   refreshToken?: string;
   oauthRefresh?: OAuthRefreshRecipe;
+  modelProviderSession?: Credential["modelProviderSession"];
 };
 
 export interface SessionCredentialCapture {
@@ -396,6 +405,7 @@ export function createCredentialConnectionCoordinator(
     clientId: string;
     tokenAuth: OAuthTokenAuthMethod;
     clientConfig?: OAuthRefreshRecipe["clientConfig"];
+    tokenRequestEncoding?: "form" | "json";
   }): Pick<Credential, "oauthRefresh" | "refreshToken"> {
     if (!params.refreshToken) return {};
     if (params.tokenAuth !== "none" && !params.clientConfig) {
@@ -410,6 +420,9 @@ export function createCredentialConnectionCoordinator(
         tokenUrl: canonicalUrl(params.tokenUrl),
         clientId: params.clientId,
         tokenAuth: params.tokenAuth,
+        ...(params.tokenRequestEncoding
+          ? { tokenRequestEncoding: params.tokenRequestEncoding }
+          : {}),
         ...(params.clientConfig ? { clientConfig: params.clientConfig } : {}),
       },
     };
@@ -960,6 +973,8 @@ export function createCredentialConnectionCoordinator(
     const { request, handoffTarget } = normalizeConnectInvocation(ctx, parsedParams);
     const dispatch = (signal?: AbortSignal): Promise<StoredCredentialSummary> => {
       switch (request.flow.type) {
+        case "model-provider-oauth":
+          return connectModelProvider(ctx, request, handoffTarget, signal);
         case "oauth2-auth-code-pkce":
           return connectOAuth2AuthCode(
             ctx,
@@ -1027,6 +1042,8 @@ export function createCredentialConnectionCoordinator(
           clientConfigId: flow.clientConfigId,
           scopes: flow.scopes,
           extraAuthorizeParams: flow.extraAuthorizeParams,
+          tokenRequestEncoding: flow.tokenRequestEncoding,
+          extraTokenParams: flow.extraTokenParams,
           allowMissingExpiry: flow.allowMissingExpiry,
           persistRefreshToken: flow.persistRefreshToken,
           accountValidation: flow.accountValidation,
@@ -1054,6 +1071,8 @@ export function createCredentialConnectionCoordinator(
         clientId: flow.clientId,
         scopes: flow.scopes,
         extraAuthorizeParams: flow.extraAuthorizeParams,
+        tokenRequestEncoding: flow.tokenRequestEncoding,
+        extraTokenParams: flow.extraTokenParams,
         allowMissingExpiry: flow.allowMissingExpiry,
         persistRefreshToken: flow.persistRefreshToken,
         accountValidation: flow.accountValidation,
@@ -1064,6 +1083,158 @@ export function createCredentialConnectionCoordinator(
       browser: request.browser,
       tokenAuth: flow.tokenAuth ?? "none",
     };
+  }
+
+  async function connectModelProvider(
+    ctx: ServiceContext,
+    requested: ConnectCredentialRequest,
+    handoffTarget?: { callerId: string; callerKind: BrowserHandoffCallerKind },
+    signal?: AbortSignal
+  ): Promise<StoredCredentialSummary> {
+    if (requested.flow.type !== "model-provider-oauth")
+      throw new OAuthConnectionError("unsupported_flow");
+    const providerId = requested.flow.providerId;
+    // Only canonical, host-owned provider definitions may mint model sessions.
+    const request = toCredentialConnectRequest(providerId, {
+      method: "subscription",
+      browser: requested.browser,
+    });
+    if (!request || request.flow.type !== "model-provider-oauth")
+      throw new OAuthConnectionError("unsupported_flow");
+    if (!approvalQueue) throw new Error("Provider sign-in requires the trusted approval UI");
+    const identity = resolveApprovalIdentity(ctx);
+    const callerKind = isUserlandRuntimeCaller(ctx) ? ctx.caller.runtime.kind : "panel";
+    const requesterUserId = verifiedInitiatingUserId(ctx);
+    const accountIdentity = normalizeAccountIdentity(undefined, ctx.caller.runtime.id);
+    const controller = new AbortController();
+    const operationSignal = anySignal([signal, controller.signal])!;
+    const browser = await resolveBrowserHandoffTarget(ctx, handoffTarget, request.browser);
+    if (!browser.target) throw new OAuthConnectionError("browser_unavailable");
+    let device: ReturnType<ApprovalQueue["presentDeviceCode"]> | undefined;
+    const open = (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:")
+        throw new Error("The provider returned an invalid sign-in URL");
+      const target = browser.target!;
+      const result =
+        request.browser === "internal" && target.parentPanelId
+          ? emitToBrowserTarget(target, "browser-panel:open", {
+              url,
+              parentPanelId: target.parentPanelId,
+              callerId: ctx.caller.runtime.id,
+              callerKind: ctx.caller.runtime.kind,
+            })
+          : emitToBrowserTarget(target, "external-open:open", {
+              url,
+              callerId: ctx.caller.runtime.id,
+              callerKind: ctx.caller.runtime.kind,
+            });
+      if (!result.delivered) throw new OAuthConnectionError("browser_unavailable");
+    };
+    try {
+      const credential = await (
+        await modelProviderOAuth(providerId)
+      ).login({
+        signal: operationSignal,
+        prompt: async (prompt) => {
+          const result = await abortable(
+            approvalQueue.requestCredentialInput({
+              kind: "credential-input",
+              callerKind,
+              signal: anySignal([operationSignal, prompt.signal]),
+              ...identity,
+              ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
+              title: request.credential.label,
+              credentialLabel: request.credential.label,
+              audience: request.credential.audience,
+              injection: request.credential.injection,
+              accountIdentity,
+              scopes: [],
+              fields: [
+                {
+                  name: "value",
+                  label: prompt.message,
+                  type: prompt.type === "secret" ? "secret" : "text",
+                  required: false,
+                  ...(prompt.type === "select"
+                    ? {
+                        description: prompt.options
+                          .map((option) => `${option.id}: ${option.label}`)
+                          .join("\n"),
+                      }
+                    : {}),
+                },
+              ],
+            }),
+            anySignal([operationSignal, prompt.signal])
+          );
+          if (result.decision !== "submit") throw new OAuthConnectionError("approval_denied");
+          return result.values["value"] ?? "";
+        },
+        notify: (event) => {
+          if (event.type === "device_code") {
+            device?.dispose();
+            device = approvalQueue.presentDeviceCode({
+              kind: "device-code",
+              ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
+              callerId: ctx.caller.runtime.id,
+              callerKind: isUserlandRuntimeCaller(ctx) ? ctx.caller.runtime.kind : "panel",
+              repoPath: identity.repoPath,
+              effectiveVersion: identity.effectiveVersion,
+              credentialLabel: request.credential.label,
+              userCode: event.userCode,
+              verificationUri: event.verificationUri,
+              expiresAt: Date.now() + (event.expiresInSeconds ?? 900) * 1000,
+              oauthTokenOrigin: new URL(event.verificationUri).origin,
+            });
+            device.cancelled.addEventListener(
+              "abort",
+              () => controller.abort(new Error("Sign-in cancelled")),
+              { once: true }
+            );
+            open(event.verificationUri);
+          } else if (event.type === "auth_url") open(event.url);
+        },
+      });
+      throwIfAborted(operationSignal);
+      const material = await modelProviderMaterial(providerId, credential);
+      const audience = normalizeUrlAudiences(request.credential.audience);
+      if (material.baseUrl) {
+        const url = new URL(material.baseUrl);
+        if (url.protocol !== "https:" || url.username || url.password)
+          throw new Error("Invalid provider endpoint");
+        if (!audience.some((entry) => entry.url === material.baseUrl))
+          audience.push({ url: material.baseUrl, match: "path-prefix" });
+      }
+      const metadata = {
+        ...request.credential.metadata,
+        ...(material.baseUrl ? { modelBaseUrl: material.baseUrl } : {}),
+        ...(material.allowedModelIds
+          ? { modelAvailableIds: JSON.stringify(material.allowedModelIds) }
+          : {}),
+      };
+      const duplicate = await findReplacementCandidate(ctx, {
+        label: request.credential.label,
+        audience,
+        metadata,
+        accountIdentity,
+      });
+      throwIfAborted(operationSignal);
+      return await storeCredential(
+        ctx,
+        {
+          ...request.credential,
+          audience,
+          metadata,
+          material: { type: "bearer-token", token: material.token },
+          expiresAt: credential.expires,
+          modelProviderSession: { providerId, credential },
+        },
+        { replaceCredentialId: duplicate?.id, replacementCredentialLabel: duplicate?.label }
+      );
+    } finally {
+      device?.dispose();
+    }
   }
 
   async function connectApiKey(
@@ -1098,6 +1269,7 @@ export function createCredentialConnectionCoordinator(
     );
     const result = await approvalQueue.requestCredentialInput({
       kind: "credential-input",
+      signal: ctx.signal,
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
       ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
@@ -2298,7 +2470,12 @@ export function createCredentialConnectionCoordinator(
       // bound URI so the token exchange uses the same redirect_uri.
       oauthRequest.redirectUri = tx.redirectUri;
       await transitionOAuthTransaction(tx, "exchanging");
-      const token = await exchangeOAuthCode(oauthRequest, result.code, started.codeVerifier);
+      const token = await exchangeOAuthCode(
+        oauthRequest,
+        result.code,
+        started.codeVerifier,
+        started.state
+      );
       await transitionOAuthTransaction(tx, "validating_account");
       const validatedAccountIdentity = await validateOAuthAccountIdentity(
         oauthRequest,
@@ -2329,6 +2506,7 @@ export function createCredentialConnectionCoordinator(
             clientId: oauthRequest.flow.clientId,
             tokenAuth: oauthRequest.tokenAuth,
             clientConfig: oauthRequest.clientConfig,
+            tokenRequestEncoding: oauthRequest.flow.tokenRequestEncoding,
           }),
           accountIdentity,
           scopes: grantedOAuthScopes({
@@ -2407,6 +2585,8 @@ export function createCredentialConnectionCoordinator(
               ...(keyAlgorithm ? { keyAlgorithm } : {}),
               scopes: request.flow.scopes,
               extraAuthorizeParams: request.flow.extraAuthorizeParams,
+              tokenRequestEncoding: request.flow.tokenRequestEncoding,
+              extraTokenParams: request.flow.extraTokenParams,
               allowMissingExpiry: request.flow.allowMissingExpiry,
               persistRefreshToken: request.flow.persistRefreshToken,
               accountValidation: request.flow.accountValidation,
@@ -2428,6 +2608,8 @@ export function createCredentialConnectionCoordinator(
           ...(clientSecret ? { clientSecret } : {}),
           scopes: request.flow.scopes,
           extraAuthorizeParams: request.flow.extraAuthorizeParams,
+          tokenRequestEncoding: request.flow.tokenRequestEncoding,
+          extraTokenParams: request.flow.extraTokenParams,
           allowMissingExpiry: request.flow.allowMissingExpiry,
           persistRefreshToken: request.flow.persistRefreshToken,
           accountValidation: request.flow.accountValidation,
@@ -2449,6 +2631,8 @@ export function createCredentialConnectionCoordinator(
         clientId: request.flow.clientId ?? "",
         scopes: request.flow.scopes,
         extraAuthorizeParams: request.flow.extraAuthorizeParams,
+        tokenRequestEncoding: request.flow.tokenRequestEncoding,
+        extraTokenParams: request.flow.extraTokenParams,
         allowMissingExpiry: request.flow.allowMissingExpiry,
         persistRefreshToken: request.flow.persistRefreshToken,
         accountValidation: request.flow.accountValidation,
@@ -2477,7 +2661,8 @@ export function createCredentialConnectionCoordinator(
   async function exchangeOAuthCode(
     request: InternalOAuthConnectionRequest,
     code: string,
-    codeVerifier: string | undefined
+    codeVerifier: string | undefined,
+    state: string
   ): Promise<{
     accessToken: string;
     refreshToken?: string;
@@ -2503,7 +2688,9 @@ export function createCredentialConnectionCoordinator(
       body.set("client_secret", request.flow.clientSecret);
     }
     body.set("redirect_uri", request.redirectUri);
-    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+    applyOAuthTokenParams(body, request.flow.extraTokenParams, { state });
+    const encoded = encodeOAuthTokenRequest(body, request.flow.tokenRequestEncoding);
+    const headers: Record<string, string> = { "content-type": encoded.contentType };
     if (request.flow.clientSecret && request.tokenAuth === "client_secret_basic") {
       headers["authorization"] = basicAuthHeader(request.flow.clientId, request.flow.clientSecret);
     }
@@ -2511,7 +2698,7 @@ export function createCredentialConnectionCoordinator(
     const tokenResponse = await fetch(request.flow.tokenUrl, {
       method: "POST",
       headers,
-      body,
+      body: encoded.body,
     });
     const tokenText = await tokenResponse.text();
     const tokenData = parseJsonObject(tokenText, { strict: tokenResponse.ok });

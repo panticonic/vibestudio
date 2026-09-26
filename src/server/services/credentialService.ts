@@ -243,7 +243,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
   async function storeCredential(
     ctx: ServiceContext,
-    params: StoreUrlBoundCredentialParams & Pick<Credential, "oauthRefresh" | "refreshToken">,
+    params: StoreUrlBoundCredentialParams &
+      Pick<Credential, "oauthRefresh" | "refreshToken" | "modelProviderSession">,
     opts: {
       approvalDecision?: Exclude<GrantedDecision, "deny">;
       preapprovedUseDecision?: Exclude<GrantedDecision, "deny">;
@@ -252,7 +253,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     } = {}
   ): Promise<StoredCredentialSummary> {
     const request = params as StoreUrlBoundCredentialRequest &
-      Pick<Credential, "oauthRefresh" | "refreshToken">;
+      Pick<Credential, "oauthRefresh" | "refreshToken" | "modelProviderSession">;
     const replaced = opts.replaceCredentialId
       ? await credentialStore.loadUrlBound(opts.replaceCredentialId)
       : null;
@@ -310,6 +311,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       accessToken: request.material.token,
       refreshToken: request.refreshToken,
       oauthRefresh: request.oauthRefresh,
+      modelProviderSession: request.modelProviderSession,
       scopes: request.scopes ?? [],
       expiresAt: request.expiresAt,
       metadata: {
@@ -940,7 +942,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (
       credential.expiresAt &&
       credential.expiresAt <= Date.now() + 30_000 &&
-      credential.refreshToken
+      (credential.refreshToken || credential.modelProviderSession)
     ) {
       credential = await credentialLifecycle.refreshCredential(
         credential as Credential & { id: string }
@@ -1029,7 +1031,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const requesterUserId = verifiedInitiatingUserId(ctx);
     const decisionOptions = { preapprovesUse: params.preapprovesUse };
     const decision = await approvalQueue.request({
-      ...(params.signal ? { signal: params.signal } : {}),
+      ...((params.signal ?? ctx.signal) ? { signal: params.signal ?? ctx.signal } : {}),
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
       ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),

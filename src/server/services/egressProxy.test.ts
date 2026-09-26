@@ -2060,49 +2060,63 @@ describe("EgressProxy", () => {
     expect(auditLog.entries[0]).toMatchObject({ retries: 0 });
   });
 
-  it("refreshes expired OAuth credentials before injection", async () => {
-    const auditLog = new MemoryAuditLog();
-    const credential = createCredential({
-      accessToken: "expired-token",
-      refreshToken: "refresh-token",
-      oauthRefresh: PUBLIC_REFRESH_RECIPE,
-      expiresAt: Date.now() - 1,
-    });
-    const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
-    const credentialLifecycle = {
-      refreshIfNeeded: vi.fn(async (current: Credential & { id: string }) => {
-        const updated = {
-          ...current,
-          accessToken: "fresh-token",
-          expiresAt: Date.now() + 3_600_000,
-        };
-        store.saveUrlBound(updated);
-        return updated;
-      }),
-    };
-    const proxy = new EgressProxy({
-      credentialStore: store,
-      auditLog: auditLog as never,
-      credentialLifecycle: credentialLifecycle as never,
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fresh-token");
-        return new Response("ok", { status: 200, statusText: "OK" });
-      })
-    );
+  it.each(["standard", "model-provider"])(
+    "refreshes expired %s OAuth credentials before injection",
+    async (kind) => {
+      const auditLog = new MemoryAuditLog();
+      const credential = createCredential({
+        accessToken: "expired-token",
+        ...(kind === "standard"
+          ? { refreshToken: "refresh-token", oauthRefresh: PUBLIC_REFRESH_RECIPE }
+          : {
+              modelProviderSession: {
+                providerId: "meta",
+                credential: {
+                  type: "oauth" as const,
+                  access: "expired-token",
+                  refresh: "identity-session",
+                  expires: 1,
+                },
+              },
+            }),
+        expiresAt: Date.now() - 1,
+      });
+      const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
+      const credentialLifecycle = {
+        refreshIfNeeded: vi.fn(async (current: Credential & { id: string }) => {
+          const updated = {
+            ...current,
+            accessToken: "fresh-token",
+            expiresAt: Date.now() + 3_600_000,
+          };
+          store.saveUrlBound(updated);
+          return updated;
+        }),
+      };
+      const proxy = new EgressProxy({
+        credentialStore: store,
+        auditLog: auditLog as never,
+        credentialLifecycle: credentialLifecycle as never,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fresh-token");
+          return new Response("ok", { status: 200, statusText: "OK" });
+        })
+      );
 
-    await proxy.forwardProxyFetch({
-      caller: workerCaller("worker:test"),
-      credentialId: "cred-1",
-      url: "https://api.example.test/v1/items",
-      method: "GET",
-    });
+      await proxy.forwardProxyFetch({
+        caller: workerCaller("worker:test"),
+        credentialId: "cred-1",
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
 
-    expect(credentialLifecycle.refreshIfNeeded).toHaveBeenCalled();
-    expect(store.loadUrlBound("cred-1")?.accessToken).toBe("fresh-token");
-  });
+      expect(credentialLifecycle.refreshIfNeeded).toHaveBeenCalled();
+      expect(store.loadUrlBound("cred-1")?.accessToken).toBe("fresh-token");
+    }
+  );
 
   it("force-refreshes OAuth credentials and retries once after upstream 401", async () => {
     const credential = createCredential({

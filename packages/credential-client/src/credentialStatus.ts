@@ -7,7 +7,7 @@ import type {
 
 type CredentialLifecycleSource = Pick<
   Credential,
-  "expiresAt" | "oauthRefresh" | "refreshToken" | "revokedAt"
+  "expiresAt" | "oauthRefresh" | "refreshToken" | "revokedAt" | "modelProviderSession"
 >;
 
 const TOKEN_AUTH_METHODS = new Set([
@@ -50,7 +50,8 @@ export function credentialLifecycle(
   return {
     state: credential.expiresAt !== undefined && credential.expiresAt <= now ? "expired" : "active",
     canRefresh:
-      Boolean(credential.refreshToken) && isOAuthRefreshRecipeComplete(credential.oauthRefresh),
+      Boolean(credential.modelProviderSession?.credential.refresh) ||
+      (Boolean(credential.refreshToken) && isOAuthRefreshRecipeComplete(credential.oauthRefresh)),
   };
 }
 

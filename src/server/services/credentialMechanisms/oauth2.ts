@@ -80,3 +80,38 @@ export function signJwtAssertion(params: JwtAssertionParams): string {
 export function base64UrlJson(value: Readonly<Record<string, unknown>>): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
+
+/** Encode a token endpoint's declared wire format for exchange and renewal. */
+export function encodeOAuthTokenRequest(
+  fields: URLSearchParams,
+  encoding: "form" | "json" = "form"
+): { body: URLSearchParams | string; contentType: string } {
+  return encoding === "json"
+    ? { body: JSON.stringify(Object.fromEntries(fields)), contentType: "application/json" }
+    : { body: fields, contentType: "application/x-www-form-urlencoded" };
+}
+
+export function applyOAuthTokenParams(
+  fields: URLSearchParams,
+  extra: Record<string, string> | undefined,
+  variables: { state: string }
+): void {
+  for (const [key, template] of Object.entries(extra ?? {})) {
+    if (fields.has(key))
+      throw new OAuthConnectionError(
+        "invalid_connection_spec",
+        `Extra token parameters cannot override ${key}`
+      );
+    fields.set(
+      key,
+      template.replace(/\{([^}]+)\}/g, (_match, name: string) => {
+        if (name !== "state")
+          throw new OAuthConnectionError(
+            "invalid_connection_spec",
+            `Unknown token parameter variable: ${name}`
+          );
+        return variables.state;
+      })
+    );
+  }
+}

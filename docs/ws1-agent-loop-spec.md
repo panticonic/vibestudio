@@ -133,7 +133,7 @@ export interface AgentState {
 }
 
 export interface AgentLoopConfig {
-  model: string; // e.g. "openai-codex:gpt-5.6-sol"
+  model: string; // e.g. "openai-codex:gpt-6-sol"
   thinkingLevel: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   approvalLevel: 0 | 1 | 2; // 0=ask-all, 1=safe-tools auto, 2=full-auto (today's semantics)
   respondPolicy: RespondPolicy;
@@ -971,7 +971,7 @@ Per consumer:
 
 1. **`workspace/workers/agent-worker` (AiChatWorker)** — direct re-base, no
    custom hooks. Migrate: `getExpectedChannelToolNames` (`["eval"]`),
-   `getParticipantInfo`. Verify default model `openai-codex:gpt-5.6-sol`,
+   `getParticipantInfo`. Verify default model `openai-codex:gpt-6-sol`,
    approval level 2, system prompt from `meta/AGENTS.md`.
 2. **`workspace/workers/test-agent`** — re-base; `getDefaultModel`
    (`anthropic:claude-sonnet-4-6`), `getParticipantInfo`. Its

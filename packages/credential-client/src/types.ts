@@ -17,6 +17,7 @@ export interface OAuthRefreshRecipe {
   tokenUrl: string;
   clientId: string;
   tokenAuth: OAuthTokenAuthMethod;
+  tokenRequestEncoding?: "form" | "json";
   clientConfig?: {
     configId: string;
     configVersion: string;
@@ -37,6 +38,11 @@ export interface Credential {
   accessToken: string;
   refreshToken?: string;
   oauthRefresh?: OAuthRefreshRecipe;
+  /** Encrypted provider-owned session; never included in credential summaries. */
+  modelProviderSession?: {
+    providerId: string;
+    credential: { type: "oauth"; access: string; refresh: string; expires: number; [key: string]: unknown };
+  };
   oauth1ConsumerSecret?: string;
   oauth1TokenSecret?: string;
   awsSecretAccessKey?: string;
@@ -191,6 +197,7 @@ export interface StoreUrlBoundCredentialRequest {
 }
 
 export type CredentialFlowType =
+  | "model-provider-oauth"
   | "oauth2-auth-code-pkce"
   | "oauth2-device-code"
   | "oauth2-client-credentials"
@@ -209,6 +216,9 @@ export interface OAuthInlineClientSpec {
   clientId: string;
   scopes?: string[];
   extraAuthorizeParams?: Record<string, string>;
+  tokenRequestEncoding?: "form" | "json";
+  /** Extra token fields; {state} is the validated authorization state. */
+  extraTokenParams?: Record<string, string>;
   allowMissingExpiry?: boolean;
   persistRefreshToken?: boolean;
   accountValidation?: OAuthAccountValidationSpec;
@@ -219,6 +229,9 @@ export interface OAuthStoredClientSpec {
   clientConfigId: string;
   scopes?: string[];
   extraAuthorizeParams?: Record<string, string>;
+  tokenRequestEncoding?: "form" | "json";
+  /** Extra token fields; {state} is the validated authorization state. */
+  extraTokenParams?: Record<string, string>;
   allowMissingExpiry?: boolean;
   persistRefreshToken?: boolean;
   accountValidation?: OAuthAccountValidationSpec;
@@ -233,6 +246,9 @@ export interface OAuth2AuthCodePkceFlowSpec {
   clientConfigId?: string;
   scopes?: string[];
   extraAuthorizeParams?: Record<string, string>;
+  tokenRequestEncoding?: "form" | "json";
+  /** Extra token fields; {state} is the validated authorization state. */
+  extraTokenParams?: Record<string, string>;
   allowMissingExpiry?: boolean;
   persistRefreshToken?: boolean;
   accountValidation?: OAuthAccountValidationSpec;
@@ -366,6 +382,7 @@ export interface SamlBrowserSessionFlowSpec {
 }
 
 export type CredentialFlowSpec =
+  | { type: "model-provider-oauth"; providerId: string }
   | OAuth2AuthCodePkceFlowSpec
   | OAuth2DeviceCodeFlowSpec
   | OAuth2ClientCredentialsFlowSpec

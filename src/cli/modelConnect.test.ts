@@ -20,66 +20,71 @@ const CREDENTIALS = {
 } satisfies DeviceCredential;
 
 describe("connectModelProvider", () => {
-  it("subscribes before connect and uses one RPC for callback forwarding", async () => {
-    const port = await getFreePort();
-    const calls: string[] = [];
-    let listener: ((payload: unknown, fromId: string) => void) | null = null;
-    let resolveConnect!: (value: unknown) => void;
-    const connected = new Promise((resolve) => {
-      resolveConnect = resolve;
-    });
-    const close = vi.fn(async () => undefined);
-    const unsubscribe = vi.fn();
-    let browserResponse: Promise<void> | null = null;
-    const rpc = {
-      async onEvent(event: string, next: (payload: unknown, fromId: string) => void) {
-        calls.push(`listen:${event}`);
-        listener = next;
-        return unsubscribe;
-      },
-      async callTargetPush(targetId: string, method: string, args: unknown[]) {
-        calls.push(`${targetId}:${method}`);
-        if (method === "credentials.connect") {
-          queueMicrotask(() => listener?.(oauthPayload(port), "main"));
-          return await connected;
-        }
-        if (method === "credentials.forwardOAuthCallback") {
-          resolveConnect(storedCredential());
-          return undefined;
-        }
-        throw new Error(`unexpected method ${method} ${JSON.stringify(args)}`);
-      },
-      close,
-    };
-    const openExternal = vi.fn(async () => {
-      browserResponse = httpGet(`http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`);
-    });
+  it.each(["openai-codex", "anthropic"])(
+    "%s subscribes before connect and forwards the browser callback",
+    async (providerId) => {
+      const port = await getFreePort();
+      const calls: string[] = [];
+      let listener: ((payload: unknown, fromId: string) => void) | null = null;
+      let resolveConnect!: (value: unknown) => void;
+      const connected = new Promise((resolve) => {
+        resolveConnect = resolve;
+      });
+      const close = vi.fn(async () => undefined);
+      const unsubscribe = vi.fn();
+      let browserResponse: Promise<void> | null = null;
+      const rpc = {
+        async onEvent(event: string, next: (payload: unknown, fromId: string) => void) {
+          calls.push(`listen:${event}`);
+          listener = next;
+          return unsubscribe;
+        },
+        async callTargetPush(targetId: string, method: string, args: unknown[]) {
+          calls.push(`${targetId}:${method}`);
+          if (method === "credentials.connect") {
+            queueMicrotask(() => listener?.(oauthPayload(port), "main"));
+            return await connected;
+          }
+          if (method === "credentials.forwardOAuthCallback") {
+            resolveConnect(storedCredential());
+            return undefined;
+          }
+          throw new Error(`unexpected method ${method} ${JSON.stringify(args)}`);
+        },
+        close,
+      };
+      const openExternal = vi.fn(async () => {
+        browserResponse = httpGet(
+          `http://127.0.0.1:${port}/auth/callback?code=code-1&state=state-1`
+        );
+      });
 
-    const result = await connectModelProvider(
-      CREDENTIALS,
-      "openai-codex",
-      {},
-      { createRpc: () => rpc, openExternal }
-    );
+      const result = await connectModelProvider(
+        CREDENTIALS,
+        providerId,
+        {},
+        { createRpc: () => rpc, openExternal }
+      );
 
-    expect(calls).toEqual([
-      "listen:external-open:open",
-      "main:credentials.connect",
-      "main:credentials.forwardOAuthCallback",
-    ]);
-    expect(result).toEqual({
-      providerId: "openai-codex",
-      credential: {
-        id: "cred-renewed",
-        label: "ChatGPT Codex model credential",
-        lifecycle: { state: "active", canRefresh: true },
-      },
-    });
-    expect(openExternal).toHaveBeenCalledWith("https://auth.example.test/oauth/authorize");
-    expect(unsubscribe).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    await browserResponse;
-  });
+      expect(calls).toEqual([
+        "listen:external-open:open",
+        "main:credentials.connect",
+        "main:credentials.forwardOAuthCallback",
+      ]);
+      expect(result).toEqual({
+        providerId,
+        credential: {
+          id: "cred-renewed",
+          label: "ChatGPT Codex model credential",
+          lifecycle: { state: "active", canRefresh: true },
+        },
+      });
+      expect(openExternal).toHaveBeenCalledWith("https://auth.example.test/oauth/authorize");
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+      await browserResponse;
+    }
+  );
 
   it("does not open unrelated external-open events while waiting for OAuth", async () => {
     const port = await getFreePort();
@@ -342,7 +347,7 @@ describe("connectModelProvider", () => {
     await expect(
       connectModelProvider(
         CREDENTIALS,
-        "anthropic",
+        "openai",
         {},
         { createRpc, openExternal: async () => undefined }
       )
