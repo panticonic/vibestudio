@@ -7,58 +7,78 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const FOUNDATION_TEMPLATE_NAMES = ["base", "personal", "system"];
 
-export function readPinnedBaseRelease(root = repoRoot) {
+export function readPinnedWorkspaceTemplateRelease(root = repoRoot) {
   const releasePath = path.join(root, "build-resources", "workspace-template-release.json");
   const document = JSON.parse(fs.readFileSync(releasePath, "utf8"));
-  const release = document?.workspaceTemplates?.base;
   if (document?.format !== "vibestudio-template-release/1") {
-    throw new Error(`Unsupported Base release document: ${releasePath}`);
+    throw new Error(`Unsupported workspace template release document: ${releasePath}`);
   }
-  if (
-    typeof release?.url !== "string" ||
-    !release.url.startsWith("git+https://") ||
-    typeof release.ref !== "string" ||
-    !/^refs\/(?:heads|tags)\/[^/].+$/.test(release.ref) ||
-    typeof release.commit !== "string" ||
-    !/^[0-9a-f]{40}$/.test(release.commit)
-  ) {
-    throw new Error(`Base release document has invalid coordinates: ${releasePath}`);
-  }
-  return {
-    url: release.url.slice("git+".length),
-    ref: release.ref,
-    commit: release.commit,
-  };
+
+  return Object.fromEntries(
+    FOUNDATION_TEMPLATE_NAMES.map((name) => {
+      const release = document?.workspaceTemplates?.[name];
+      if (
+        typeof release?.url !== "string" ||
+        !release.url.startsWith("git+https://") ||
+        typeof release.ref !== "string" ||
+        !/^refs\/(?:heads|tags)\/[^/].+$/.test(release.ref) ||
+        typeof release.commit !== "string" ||
+        !/^[0-9a-f]{40}$/.test(release.commit)
+      ) {
+        throw new Error(
+          `Workspace template release document has invalid ${name} coordinates: ${releasePath}`
+        );
+      }
+      return [
+        name,
+        {
+          url: release.url.slice("git+".length),
+          ref: release.ref,
+          commit: release.commit,
+        },
+      ];
+    })
+  );
 }
 
-export function checkoutPinnedBaseRelease({
+export function checkoutPinnedWorkspaceTemplateRelease({
   destination,
-  release = readPinnedBaseRelease(),
+  releases = readPinnedWorkspaceTemplateRelease(),
   runGit = defaultRunGit,
 }) {
   const output = path.resolve(destination);
   if (fs.existsSync(output)) {
-    throw new Error(`Base release checkout destination already exists: ${output}`);
+    throw new Error(`Workspace template release destination already exists: ${output}`);
   }
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  const branch = release.ref.replace(/^refs\/(?:heads|tags)\//, "");
-  runGit([
-    "clone",
-    "--filter=blob:none",
-    "--no-checkout",
-    "--single-branch",
-    "--branch",
-    branch,
-    release.url,
-    output,
-  ]);
-  runGit(["-C", output, "checkout", "--detach", release.commit]);
-  const actual = runGit(["-C", output, "rev-parse", "HEAD"]).trim();
-  if (actual !== release.commit) {
-    throw new Error(`Base release checkout resolved ${actual}; expected ${release.commit}`);
+  fs.mkdirSync(output, { recursive: true });
+
+  const checkouts = {};
+  for (const name of FOUNDATION_TEMPLATE_NAMES) {
+    const release = releases[name];
+    const checkout = path.join(output, name);
+    const branch = release.ref.replace(/^refs\/(?:heads|tags)\//, "");
+    runGit([
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      "--single-branch",
+      "--branch",
+      branch,
+      release.url,
+      checkout,
+    ]);
+    runGit(["-C", checkout, "checkout", "--detach", release.commit]);
+    const actual = runGit(["-C", checkout, "rev-parse", "HEAD"]).trim();
+    if (actual !== release.commit) {
+      throw new Error(
+        `${name} template release checkout resolved ${actual}; expected ${release.commit}`
+      );
+    }
+    checkouts[name] = checkout;
   }
-  return output;
+  return checkouts;
 }
 
 function defaultRunGit(args) {
@@ -70,7 +90,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!destination || process.argv.length !== 3) {
     throw new Error("usage: node scripts/checkout-workspace-template-release.mjs <destination>");
   }
-  const release = readPinnedBaseRelease();
-  const checkout = checkoutPinnedBaseRelease({ destination, release });
-  console.log(`Checked out Base ${release.commit} (${release.ref}) at ${checkout}`);
+  const releases = readPinnedWorkspaceTemplateRelease();
+  const checkouts = checkoutPinnedWorkspaceTemplateRelease({ destination, releases });
+  for (const name of FOUNDATION_TEMPLATE_NAMES) {
+    const release = releases[name];
+    console.log(`Checked out ${name} ${release.commit} (${release.ref}) at ${checkouts[name]}`);
+  }
 }

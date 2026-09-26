@@ -68,12 +68,12 @@ jobs:
       - name: Install the repaired Iroh Android binding
         run: pnpm iroh:install-android
 
-      - name: Materialize pinned Base release
+      - name: Materialize pinned workspace template release
         env:
-          BASE_RELEASE_DIR: ${{ runner.temp }}/vibestudio-base-release
+          TEMPLATE_RELEASE_DIR: ${{ runner.temp }}/vibestudio-template-release
         run: |
-          node scripts/checkout-workspace-template-release.mjs "$BASE_RELEASE_DIR"
-          echo "VIBESTUDIO_USERLAND_ROOT=$BASE_RELEASE_DIR" >> "$GITHUB_ENV"
+          node scripts/checkout-workspace-template-release.mjs "$TEMPLATE_RELEASE_DIR"
+          echo "VIBESTUDIO_TEMPLATE_RELEASE_ROOT=$TEMPLATE_RELEASE_DIR" >> "$GITHUB_ENV"
 
       - name: Link node_modules for Gradle
         run: |

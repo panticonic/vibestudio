@@ -3,13 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  checkoutPinnedBaseRelease,
-  readPinnedBaseRelease,
+  checkoutPinnedWorkspaceTemplateRelease,
+  readPinnedWorkspaceTemplateRelease,
 } from "../scripts/checkout-workspace-template-release.mjs";
 
-describe("pinned Base release checkout", () => {
-  it("reads release coordinates from the artifact without duplicating the current pin", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-base-release-read-"));
+const templateNames = ["base", "personal", "system"] as const;
+
+describe("pinned workspace template release checkout", () => {
+  it("reads every foundation release coordinate from the artifact", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-release-read-"));
     const commit = "a".repeat(40);
     try {
       fs.mkdirSync(path.join(root, "build-resources"));
@@ -17,66 +19,75 @@ describe("pinned Base release checkout", () => {
         path.join(root, "build-resources", "workspace-template-release.json"),
         JSON.stringify({
           format: "vibestudio-template-release/1",
-          workspaceTemplates: {
-            base: {
-              url: "git+https://example.test/base.git",
-              ref: "refs/tags/v1.2.3",
-              commit,
-              snapshot: `v1-sha256:${"b".repeat(64)}`,
-            },
-            personal: {
-              url: "git+https://example.test/personal.git",
-              ref: "refs/tags/v1.2.3",
-              commit,
-            },
-            system: { url: "git+https://example.test/system.git", ref: "refs/tags/v1.2.3", commit },
-          },
+          workspaceTemplates: Object.fromEntries(
+            templateNames.map((name) => [
+              name,
+              {
+                url: `git+https://example.test/${name}.git`,
+                ref: "refs/tags/v1.2.3",
+                commit,
+              },
+            ])
+          ),
         })
       );
 
-      expect(readPinnedBaseRelease(root)).toEqual({
-        url: "https://example.test/base.git",
-        ref: "refs/tags/v1.2.3",
-        commit,
-      });
+      expect(readPinnedWorkspaceTemplateRelease(root)).toEqual(
+        Object.fromEntries(
+          templateNames.map((name) => [
+            name,
+            {
+              url: `https://example.test/${name}.git`,
+              ref: "refs/tags/v1.2.3",
+              commit,
+            },
+          ])
+        )
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("checks out only the pinned ref and verifies the detached commit", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-base-release-checkout-"));
-    const destination = path.join(root, "base");
+  it("checks out and verifies every pinned foundation commit", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-release-checkout-"));
+    const destination = path.join(root, "templates");
     const commit = "a".repeat(40);
     const calls: string[][] = [];
-    const result = checkoutPinnedBaseRelease({
+    const releases = Object.fromEntries(
+      templateNames.map((name) => [
+        name,
+        { url: `https://example.test/${name}.git`, ref: "refs/tags/v1.2.3", commit },
+      ])
+    );
+    const checkouts = checkoutPinnedWorkspaceTemplateRelease({
       destination,
-      release: {
-        url: "https://example.test/base.git",
-        ref: "refs/tags/v1.2.3",
-        commit,
-      },
+      releases,
       runGit(args) {
         calls.push(args);
-        if (args[0] === "clone") fs.mkdirSync(destination);
+        if (args[0] === "clone") fs.mkdirSync(args.at(-1));
         return args.at(-1) === "HEAD" ? `${commit}\n` : "";
       },
     });
-    expect(result).toBe(destination);
-    expect(calls).toEqual([
-      [
+
+    expect(checkouts).toEqual(
+      Object.fromEntries(templateNames.map((name) => [name, path.join(destination, name)]))
+    );
+    for (const name of templateNames) {
+      const checkout = path.join(destination, name);
+      expect(calls).toContainEqual([
         "clone",
         "--filter=blob:none",
         "--no-checkout",
         "--single-branch",
         "--branch",
         "v1.2.3",
-        "https://example.test/base.git",
-        destination,
-      ],
-      ["-C", destination, "checkout", "--detach", commit],
-      ["-C", destination, "rev-parse", "HEAD"],
-    ]);
+        `https://example.test/${name}.git`,
+        checkout,
+      ]);
+      expect(calls).toContainEqual(["-C", checkout, "checkout", "--detach", commit]);
+      expect(calls).toContainEqual(["-C", checkout, "rev-parse", "HEAD"]);
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

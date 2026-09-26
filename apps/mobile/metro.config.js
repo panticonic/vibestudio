@@ -6,8 +6,18 @@ const developmentTemplateConfig = require("../../src/dev/developmentTemplateConf
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
-const templateRoots =
-  developmentTemplateConfig.requireDevelopmentTemplateCheckouts(monorepoRoot).checkouts;
+const templateReleaseRoot = process.env.VIBESTUDIO_TEMPLATE_RELEASE_ROOT?.trim();
+const templateRoots = templateReleaseRoot
+  ? Object.fromEntries(
+      ["base", "personal", "system"].map((name) => {
+        const checkout = path.resolve(templateReleaseRoot, name);
+        if (!fs.statSync(checkout).isDirectory()) {
+          throw new Error(`Pinned ${name} template checkout is not a directory: ${checkout}`);
+        }
+        return [name, fs.realpathSync(checkout)];
+      })
+    )
+  : developmentTemplateConfig.requireDevelopmentTemplateCheckouts(monorepoRoot).checkouts;
 const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
   : path.resolve(templateRoots.system, "apps", "mobile");
