@@ -17,7 +17,7 @@ const REPOSITORY_DIRECTORY = "repository";
 const HOME_DIRECTORY = "home";
 const CHECKPOINT_DIRECTORY = "checkpoints";
 
-export type NativeDevelopmentToolId = "claude-code" | "system-editor";
+export type NativeDevelopmentToolId = "system-editor";
 
 export interface NativeDevelopmentSourcePlan {
   version: 1;
@@ -1201,7 +1201,7 @@ function parseMarker(value: unknown): NativeSessionMarker {
     typeof marker.sessionId !== "string" ||
     typeof marker.ownedRootId !== "string" ||
     typeof marker.executorId !== "string" ||
-    (marker.toolId !== "claude-code" && marker.toolId !== "system-editor") ||
+    marker.toolId !== "system-editor" ||
     typeof marker.developmentContextId !== "string" ||
     typeof marker.repositoryId !== "string" ||
     typeof marker.repoPath !== "string" ||

@@ -618,10 +618,10 @@ describe("ExtensionHost invocation attribution", () => {
     const { host } = makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
-        provider === "claudeCode" ? "@workspace-extensions/git-tools" : null,
+        provider === "exampleTools" ? "@workspace-extensions/git-tools" : null,
       providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
       activeProviderContracts: {
-        claudeCode: { methods: ["prepare", "publishRepo"] },
+        exampleTools: { methods: ["prepare", "publishRepo"] },
       },
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
@@ -629,22 +629,22 @@ describe("ExtensionHost invocation attribution", () => {
     await expect(
       host
         .createServiceDefinition()
-        .handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "prepare", []])
+        .handler(panelCtx("panel-1"), "invokeProvider", ["exampleTools", "prepare", []])
     ).resolves.toBe("ok");
     await expect(
       host
         .createServiceDefinition()
-        .handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "publishRepo", []])
+        .handler(panelCtx("panel-1"), "invokeProvider", ["exampleTools", "publishRepo", []])
     ).resolves.toBe("ok");
     expect(extensionTransport.call).toHaveBeenNthCalledWith(
       1,
       "@workspace-extensions/git-tools",
       "extension.invokeProvider",
       [
-        "claudeCode",
+        "exampleTools",
         "prepare",
         [],
-        expect.objectContaining({ method: "providers.claudeCode.prepare" }),
+        expect.objectContaining({ method: "providers.exampleTools.prepare" }),
       ]
     );
     expect(extensionTransport.call).toHaveBeenNthCalledWith(
@@ -652,10 +652,10 @@ describe("ExtensionHost invocation attribution", () => {
       "@workspace-extensions/git-tools",
       "extension.invokeProvider",
       [
-        "claudeCode",
+        "exampleTools",
         "publishRepo",
         [],
-        expect.objectContaining({ method: "providers.claudeCode.publishRepo" }),
+        expect.objectContaining({ method: "providers.exampleTools.publishRepo" }),
       ]
     );
   });
@@ -665,9 +665,9 @@ describe("ExtensionHost invocation attribution", () => {
     const { host } = makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
-        provider === "claudeCode" ? "@workspace-extensions/git-tools" : null,
+        provider === "exampleTools" ? "@workspace-extensions/git-tools" : null,
       activeProviderContracts: {
-        claudeCode: { methods: ["prepare"] },
+        exampleTools: { methods: ["prepare"] },
       },
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
@@ -681,7 +681,7 @@ describe("ExtensionHost invocation attribution", () => {
       ])
     ).resolves.toBeNull();
     await expect(
-      service.handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "prepare", []])
+      service.handler(panelCtx("panel-1"), "invokeProvider", ["exampleTools", "prepare", []])
     ).resolves.toBeNull();
   });
 

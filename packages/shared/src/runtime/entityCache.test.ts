@@ -190,7 +190,7 @@ describe("callerRuntimeContextId", () => {
     // Built directly: makeRecord always supplies a contextId, and the case
     // under test is a runtime that has none.
     cache._onActivate({
-      ...makeRecord({ id: "do:extensions/claude-code", kind: "do" }),
+      ...makeRecord({ id: "do:extensions/external-agent", kind: "do" }),
       contextId: undefined,
       agentBinding: {
         entityId: "agent:chat",
@@ -198,7 +198,7 @@ describe("callerRuntimeContextId", () => {
         channelId: "channel:chat",
       },
     } as unknown as EntityRecord);
-    expect(callerRuntimeContextId(cache, "do:extensions/claude-code")).toBe("ctx-agent");
+    expect(callerRuntimeContextId(cache, "do:extensions/external-agent")).toBe("ctx-agent");
   });
 
   it("returns null when neither is known, rather than inventing one", () => {

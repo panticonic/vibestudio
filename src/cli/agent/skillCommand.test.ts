@@ -42,7 +42,7 @@ describe("vibestudio agent skill", () => {
     fs.writeFileSync(path.join(source, "EVAL.md"), "eval body");
     vi.stubEnv("VIBESTUDIO_AGENT_SKILL_DIR", source);
 
-    const dest = path.join(tmpDir, "proj", ".claude", "skills", "vibestudio-agent");
+    const dest = path.join(tmpDir, "proj", ".agents", "skills", "vibestudio-agent");
     const { main } = await import("../client.js");
     await expect(main(["agent", "skill", "install", "--dir", dest, "--json"])).resolves.toBe(0);
 

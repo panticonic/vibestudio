@@ -134,7 +134,7 @@ chain and publish only when requested.
 
 ```bash
 vibestudio agent skill install
-vibestudio agent skill install --dir ~/myproj/.claude/skills/vibestudio-agent
+vibestudio agent skill install --dir ~/myproj/.agents/skills/vibestudio-agent
 ```
 
 The bundled transport skill does not embed another semantic VCS protocol.

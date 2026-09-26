@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:1ebfdea7a37db6fc7819fa8733093e918f165f156820b97efe99b9f97134ddd7",
+  "censusDigest": "sha256:6cc25d2c45e5e497c304e7beb8f2d279a6ad49d939bd026f31894b5d45cc7de3",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -590,18 +590,6 @@
       "review": "connection-owned-host-terminal-control",
       "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
     },
-    "host:linkedClaude.start": {
-      "review": "trusted-linked-provider-generation-ownership",
-      "change": "Runs the installed linked Claude provider only for an authenticated caller-owned live session with an exact agent credential and binding. Host runtime, credential profile and context paths are derived by the receiver; no filesystem grant or executable is accepted."
-    },
-    "host:linkedClaude.inspect": {
-      "review": "trusted-linked-provider-generation-ownership",
-      "change": "Returns only bounded runtime state for the exact generation owned by the verified live extension connection."
-    },
-    "host:linkedClaude.stop": {
-      "review": "trusted-linked-provider-generation-ownership",
-      "change": "Retires only that connection-owned generation before credential reconciliation and contained profile cleanup; grants no new execution authority."
-    },
     "host:fs.nativeRoots": {
       "review": "scoped-native-context-root-disclosure",
       "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
@@ -865,14 +853,6 @@
     "host:blobstore.releaseRetention": {
       "review": "caller-scoped-retained-content",
       "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
-    },
-    "host:linkedClaude.continue": {
-      "review": "owned-retained-linked-provider-controls",
-      "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
-    },
-    "host:linkedClaude.interrupt": {
-      "review": "owned-retained-linked-provider-controls",
-      "change": "Records continuation and interruption of an owned linked Claude conversation in its retained host profile. These remain closed to websites and retain the existing control tier and caller ownership checks; they do not expose an unrestricted model credential API."
     },
     "host:workers.listServices": {
       "review": "cross-workspace-service-metadata-discovery",

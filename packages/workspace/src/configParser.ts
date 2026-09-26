@@ -364,7 +364,6 @@ export function workspaceExtensionRepoPath(source: string): string {
 export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
   "browserData",
   "gitInterop",
-  "claudeCode",
 ] as const;
 export type WorkspaceExtensionProviderName = (typeof WORKSPACE_EXTENSION_PROVIDER_NAMES)[number];
 

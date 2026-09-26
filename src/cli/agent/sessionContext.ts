@@ -13,7 +13,7 @@ import {
  * Session/context scoping shared by the fs/vcs/eval command groups. Every
  * command targets one context and dispatches over one credential. The context
  * and credential are resolved once here, with an explicit precedence
- * (docs/claude-code-channels-plan.md §6.2, breaking change §9.3):
+ * for authenticated external agent sessions:
  *
  *   1. explicit `--context <id>` / `--session <name>` flags;
  *   2. ambient `VIBESTUDIO_CONTEXT_ID`, dispatched over the canonical CLI

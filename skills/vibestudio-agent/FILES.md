@@ -49,7 +49,7 @@ application, import work unit, admitted repositories, and canonical external
 snapshot; do not reconstruct that provenance after the commit.
 
 These mutation workflows require an in-process agent tool invocation or a direct
-authorized human/device caller. A linked Claude session's agent credential has neither:
+authorized human/device caller. A linked external session's agent credential has neither:
 its managed `fs`/`vcs` mutations and `eval` are refused, while native local writes only
 dirty disposable projection bytes. Linked sessions should use read/status/history/
 compare/blame for orientation and ask the workspace agent to perform implementation.

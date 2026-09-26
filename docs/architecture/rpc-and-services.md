@@ -94,7 +94,7 @@ Are you routing point-to-point with a single caller/target?
 
 ## Agent callers and the eval escape hatch
 
-The `agent` caller kind (linked external sessions — Claude Code et al.,
+The `agent` caller kind (linked external sessions — external tool adapters,
 authenticated by an entity-scoped agent credential) is deliberately allowed on
 only a handful of host services. This is NOT a reachability limitation, and
 service authors should not play whack-a-mole adding `agent` to allow lists.

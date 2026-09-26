@@ -361,20 +361,6 @@ Authority principals: `code`, `host`, `user`, `website`
 | `hubControl.createWorkspace` | Create and register a workspace from one exact external root template. |
 | `hubControl.workspaceCreationReceipt` | Reconcile one previously submitted workspace creation without creating or opening anything. |
 
-## `linkedClaude`
-
-Trusted linked Claude execution with receiver-owned host resources
-
-Authority principals: `code`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `linkedClaude.start` | Start an authorized linked Claude agent with host-owned runtime and credential materialization; accepts no filesystem paths or executable grants |
-| `linkedClaude.continue` | Continue an owned linked Claude conversation in its retained host profile |
-| `linkedClaude.interrupt` | Stop the active turn of an owned linked Claude conversation without retiring its profile |
-| `linkedClaude.inspect` | Read the bounded state of an owned linked Claude generation |
-| `linkedClaude.stop` | Retire an owned linked Claude generation and reconcile its isolated credential after confirmed exit |
-
 ## `mirror`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.

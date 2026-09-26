@@ -94,7 +94,7 @@ export const extensionsMethods = defineServiceMethods({
     returns: JsonValueSchema,
     // Dispatch is read-only; the host checks the selected provider method’s canonical access.
     access: READ_ACCESS,
-    examples: [{ args: ["claudeCode", "prepare", [{ channelId: "chan_123" }]] }],
+    examples: [{ args: ["gitInterop", "prepare", [{ channelId: "chan_123" }]] }],
   },
   // invokeStream intentionally declares no return schema: the result is a raw
   // streaming Response, not a wire-serializable value.

@@ -891,7 +891,7 @@ A general-purpose `provides` registry is still unnecessary for ordinary public
 extension APIs: canonical package names and `extensions.use(...)` suffice.
 Manifest provider slots are narrower and explicit. They exist only where the
 workspace configuration selects one extension for a platform role such as
-`browserData`, `claudeCode`, or the host-owned `gitInterop` contract; those APIs
+`browserData` or the host-owned `gitInterop` contract; those APIs
 must use `extensions.invokeProvider` (or the owning typed host service).
 
 ## Future work

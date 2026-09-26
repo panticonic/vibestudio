@@ -163,7 +163,7 @@ describe("NativeDevelopmentExecutor", () => {
       executorId: "executor:local",
       tools: new ReviewedNativeDevelopmentTools([
         new UnavailableNativeDevelopmentToolDriver(
-          "claude-code",
+          "system-editor",
           "executor:local",
           "checkpoint-protocol-unavailable"
         ),
@@ -184,14 +184,14 @@ describe("NativeDevelopmentExecutor", () => {
         developmentContextId: "context:child",
         repositoryId: "repository:vibestudio",
         childWorkingHead: { kind: "application", applicationId: "application:dirty" },
-        toolId: "claude-code",
+        toolId: "system-editor",
         idempotencyKey: "open-unavailable",
         ingress,
       })
     ).rejects.toMatchObject({
       name: "NativeDevelopmentExecutorUnavailableError",
       code: "EEXECUTOR_UNAVAILABLE",
-      toolId: "claude-code",
+      toolId: "system-editor",
       reason: "checkpoint-protocol-unavailable",
     });
     expect(fx.commitChildBase).not.toHaveBeenCalled();

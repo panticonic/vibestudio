@@ -578,7 +578,7 @@ describe("WorkspaceDO.entityActivate", () => {
     const sessionId = canonicalEntityId({ kind: "session", key: "external" });
     const session = isolated.entityActivate({
       kind: "session",
-      source: { repoPath: "claude-code", effectiveVersion: "" },
+      source: { repoPath: "external-agent", effectiveVersion: "" },
       contextId: "ctx-agent",
       key: "external",
       agentBinding: {

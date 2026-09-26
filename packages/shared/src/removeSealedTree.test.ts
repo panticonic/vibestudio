@@ -30,11 +30,11 @@ describe("removeSealedTree", () => {
     const root = tree();
     const sealed = path.join(root, "home", ".vibestudio-toolchain");
     fs.mkdirSync(sealed, { recursive: true });
-    fs.writeFileSync(path.join(sealed, "claude-code"), "tool bytes");
+    fs.writeFileSync(path.join(sealed, "system-editor"), "tool bytes");
     fs.mkdirSync(path.join(root, "workspaces", "system"), { recursive: true });
     fs.writeFileSync(path.join(root, "workspaces", "system", "state.db"), "state");
     // A session that is killed rather than retired leaves this seal behind.
-    fs.chmodSync(path.join(sealed, "claude-code"), 0o500);
+    fs.chmodSync(path.join(sealed, "system-editor"), 0o500);
     fs.chmodSync(sealed, 0o500);
 
     expect(() => fs.rmSync(root, { recursive: true, force: true })).toThrow(
@@ -51,7 +51,7 @@ describe("removeSealedTree", () => {
     for (const name of ["one", "two", "three"]) {
       const sealed = path.join(root, "native-sessions", name, "home", ".vibestudio-toolchain");
       fs.mkdirSync(sealed, { recursive: true });
-      fs.writeFileSync(path.join(sealed, "claude-code"), name);
+      fs.writeFileSync(path.join(sealed, "system-editor"), name);
       fs.chmodSync(sealed, 0o500);
     }
 

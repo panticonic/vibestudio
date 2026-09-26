@@ -59,7 +59,6 @@ singletonObjects:
 extensions:
   - source: extensions/browser-data
   - source: extensions/git-bridge
-  - source: extensions/claude-code
 apps:
   - source: apps/shell
 providers:
@@ -73,8 +72,6 @@ providers:
     extension: extensions/browser-data
   gitInterop:
     extension: extensions/git-bridge
-  claudeCode:
-    extension: extensions/claude-code
 trust:
   chromeApps:
     - apps/shell
@@ -193,9 +190,6 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     const config = parse(FULL_MANIFEST);
     expect(workspaceProviderExtensionPackageName(config, "gitInterop")).toBe(
       "@workspace-extensions/git-bridge"
-    );
-    expect(workspaceProviderExtensionPackageName(config, "claudeCode")).toBe(
-      "@workspace-extensions/claude-code"
     );
     expect(workspaceProviderExtensionPackageName(config, "missing")).toBeNull();
   });

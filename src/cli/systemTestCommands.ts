@@ -1387,25 +1387,7 @@ function doctorIsWaitingForApprovedBuilds(
     (!requiredExtensions.ok && transientStates.test(requiredExtensions.detail)) ||
     structuredStatuses.some(({ status }) => transientStates.test(status));
   if (!requiredExtensionsWaiting) return false;
-  const claudeCodeWaiting =
-    structuredStatuses.some(
-      ({ source, name, status }) =>
-        (source === "extensions/claude-code" || name === "@workspace-extensions/claude-code") &&
-        transientStates.test(status)
-    ) ||
-    (!requiredExtensions.ok &&
-      /claude-code[^,;]*(?:missing|pending-approval|approval-required|building)/u.test(
-        requiredExtensions.detail
-      ));
-  return failures.every(
-    (check) =>
-      check === requiredExtensions ||
-      (check.name === "claude-code-extension" &&
-        claudeCodeWaiting &&
-        /(?:pending-approval|approval-required|not installed|no active approved build)/u.test(
-          check.detail
-        ))
-  );
+  return failures.every((check) => check === requiredExtensions);
 }
 
 async function startupApprovalPort(scope: SessionScope): Promise<{

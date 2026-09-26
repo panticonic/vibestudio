@@ -10,7 +10,7 @@ describe("managed system-test startup preparation output", () => {
       ok: false,
       checks: [
         {
-          name: "claude-code-extension",
+          name: "external-agent-extension",
           ok: false,
           detail: "registry status: building",
         },
@@ -18,7 +18,7 @@ describe("managed system-test startup preparation output", () => {
     })}\n`;
 
     expect(systemTestPreparationFailureDetail(output, "ExperimentalWarning: SQLite")).toBe(
-      "claude-code-extension: registry status: building\n" +
+      "external-agent-extension: registry status: building\n" +
         "Subprocess stderr:\nExperimentalWarning: SQLite"
     );
   });

@@ -421,8 +421,6 @@ export interface WorkspaceProvidersDecl {
   browserData?: WorkspaceExtensionProviderDecl;
   /** Extension-backed external Git upstream engine used by gitInterop. */
   gitInterop?: WorkspaceExtensionProviderDecl;
-  /** Extension-backed Claude Code launch/session adapter. */
-  claudeCode?: WorkspaceExtensionProviderDecl;
 }
 
 /**

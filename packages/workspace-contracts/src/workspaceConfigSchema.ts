@@ -437,7 +437,6 @@ export const WorkspaceConfigSchema = z
         cdpClient: z.object({ source: z.string() }).strict().optional(),
         browserData: z.object({ extension: z.string() }).strict().optional(),
         gitInterop: z.object({ extension: z.string() }).strict().optional(),
-        claudeCode: z.object({ extension: z.string() }).strict().optional(),
       })
       .strict()
       .optional(),

@@ -280,79 +280,6 @@ describe("system-test startup preparation", () => {
     expect(reads).toBe(1);
   });
 
-  it("waits while the required extension set and its provider check settle together", async () => {
-    let reads = 0;
-    const result = await settleSystemTestDoctor(
-      async () => {
-        reads += 1;
-        return reads === 1
-          ? {
-              ok: false,
-              checks: [
-                {
-                  name: "required-extensions",
-                  ok: false,
-                  detail: "declared workspace extensions: claude-code=approval-required",
-                },
-                {
-                  name: "claude-code-extension",
-                  ok: false,
-                  detail: "Extension is not installed; registry status: pending-approval",
-                },
-              ],
-            }
-          : { ok: true, checks: [] };
-      },
-      { deadlineMs: 1_000, pollMs: 0 }
-    );
-
-    expect(result.ok).toBe(true);
-    expect(reads).toBe(2);
-  });
-
-  it("waits when an approved provider is still building in structured unit status", async () => {
-    let reads = 0;
-    const result = await settleSystemTestStartup(
-      async () => {
-        reads += 1;
-        return reads === 1
-          ? {
-              ok: false,
-              checks: [
-                {
-                  name: "required-extensions",
-                  ok: true,
-                  detail: "declared workspace extensions are approved and build-ready",
-                  data: [
-                    {
-                      source: "extensions/claude-code",
-                      name: "@workspace-extensions/claude-code",
-                      status: "building",
-                    },
-                  ],
-                },
-                {
-                  name: "claude-code-extension",
-                  ok: false,
-                  detail:
-                    "Extension is not installed: @workspace-extensions/claude-code. Current registry status: building. It has no active approved build.",
-                },
-              ],
-            }
-          : { ok: true, checks: [] };
-      },
-      {
-        getWorkspaceCreationReviewState: async () => ({ status: "resolved" }),
-        listPending: async () => [],
-        resolveInstallReview: async () => undefined,
-      },
-      { deadlineMs: 1_000, pollMs: 0 }
-    );
-
-    expect(result.doctor.ok).toBe(true);
-    expect(reads).toBe(2);
-  });
-
   it("does not mask a terminal provider failure merely because another extension is building", async () => {
     const result = {
       ok: false,
@@ -368,16 +295,16 @@ describe("system-test startup preparation", () => {
               status: "building",
             },
             {
-              source: "extensions/claude-code",
-              name: "@workspace-extensions/claude-code",
+              source: "extensions/external-agent",
+              name: "@workspace-extensions/external-agent",
               status: "error",
             },
           ],
         },
         {
-          name: "claude-code-extension",
+          name: "external-agent-extension",
           ok: false,
-          detail: "Extension is not installed: @workspace-extensions/claude-code",
+          detail: "Extension is not installed: @workspace-extensions/external-agent",
         },
       ],
     };

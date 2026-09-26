@@ -2495,7 +2495,7 @@ describe("runtimeService session entities", () => {
       {
         kind: "session",
         execution: { surface: "inert" },
-        source: "claude-code",
+        source: "external-agent",
         key: "external-agent",
         contextId: "ctx-external",
         agentChannelId: "channel:external",

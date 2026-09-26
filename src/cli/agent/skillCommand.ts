@@ -6,11 +6,11 @@ import { CliError, UsageError, jsonMode, printError, printResult } from "../outp
 
 /**
  * `vibestudio agent skill install|print` — install (or print) the bundled
- * vibestudio-agent Claude Code skill that documents this CLI.
+ * vibestudio-agent skill that documents this CLI.
  */
 
 const SKILL_NAME = "vibestudio-agent";
-const DEFAULT_INSTALL_DIR = path.join(".claude", "skills", SKILL_NAME);
+const DEFAULT_INSTALL_DIR = path.join(".agents", "skills", SKILL_NAME);
 
 /**
  * Locate the bundled skill directory. Built CLI: build.mjs copies
@@ -82,7 +82,7 @@ async function skill(inv: ParsedInvocation): Promise<number> {
 export const skillCommand: CliCommand = {
   group: "agent",
   name: "skill",
-  summary: "Install or print the bundled vibestudio-agent Claude Code skill",
+  summary: "Install or print the bundled vibestudio-agent skill",
   usage: "vibestudio agent skill install [--dir DIR] | print",
   flags: [
     {

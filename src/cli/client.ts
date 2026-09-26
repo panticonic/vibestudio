@@ -49,7 +49,6 @@ import { storageCommands } from "./storageCommands.js";
 import { templatesCommands } from "./templatesCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
-import { runClaudeGroup } from "./claude/index.js";
 import {
   findCommand,
   groupCommands,
@@ -1062,9 +1061,6 @@ export async function main(argv: string[]): Promise<number> {
       printHelp();
       return 0;
     }
-    if (topic === "claude") {
-      return await runClaudeGroup(["--help"]);
-    }
     if (!GROUP_ORDER.includes(topic)) {
       console.error(`Unknown help topic: ${topic}`);
       return 2;
@@ -1075,18 +1071,6 @@ export async function main(argv: string[]): Promise<number> {
   if (group === "--version" || group === "-v" || group === "version") {
     console.log(packageVersion());
     return 0;
-  }
-  // The `claude` group self-parses (it supports a bare launcher invocation plus
-  // `emit`/`channel-host` subcommands) and calls the configured Claude Code
-  // provider over RPC — it deliberately owns no `CliCommand` entries.
-  if (group === "claude") {
-    const json = jsonMode(rest.includes("--json"));
-    const claudeArgs = rest.filter((arg) => arg !== "--json" && arg !== "--plain");
-    try {
-      return await runClaudeGroup(claudeArgs, { json });
-    } catch (error) {
-      return printError(error, { json });
-    }
   }
   if (!GROUP_ORDER.includes(group)) {
     console.error(`Unknown command: ${group}`);
@@ -1188,13 +1172,10 @@ function printHelp(): void {
     (group) =>
       `\n${group} — ${GROUP_DESCRIPTIONS[group] ?? "Commands"}\n${renderGroupHelp(commandRegistry, group)}`
   ).join("\n");
-  const claudeSection =
-    "  vibestudio claude [--channel <id>]                   Launch Claude Code as a linked channel agent";
   console.log(`vibestudio
 
 Usage:
 ${sections}
-${claudeSection}
 
 Getting started:
   1. Get a pairing invite from the desktop app or the server host.

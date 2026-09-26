@@ -56,7 +56,7 @@ const developmentTemplateExchangeReceiptSchema = z
   .strict();
 
 export const developmentSessionModeSchema = z.enum(["semantic", "native-tool"]);
-export const nativeDevelopmentToolSchema = z.enum(["claude-code", "system-editor"]);
+export const nativeDevelopmentToolSchema = z.enum(["system-editor"]);
 const nativeProcessSchema = z
   .object({
     ownershipToken: nonEmpty,

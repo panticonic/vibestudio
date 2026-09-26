@@ -64,7 +64,7 @@ it("exchanges Claude's browser callback with PKCE and JSON state, persisting its
               coordinator
                 .forwardOAuthCallback(ctx, {
                   transactionId: handoff.transactionId,
-                  url: `${handoff.redirectUri}?code=claude-code&state=${encodeURIComponent(handoff.state)}`,
+                  url: `${handoff.redirectUri}?code=authorization-code&state=${encodeURIComponent(handoff.state)}`,
                 })
                 .then(resolve, reject);
             }, 0)
@@ -81,7 +81,7 @@ it("exchanges Claude's browser callback with PKCE and JSON state, persisting its
     expect(body).toMatchObject({
       grant_type: "authorization_code",
       client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-      code: "claude-code",
+      code: "authorization-code",
       state: authorization!.searchParams.get("state"),
       redirect_uri: "http://localhost:53692/callback",
     });

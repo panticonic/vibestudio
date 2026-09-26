@@ -474,7 +474,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
-    // `agent` = linked external sessions (Claude Code et al.) driving the
+    // `agent` = linked external sessions (attached over RPC) driving the
     // frontend-dev loop over the CLI; every target op below is gated by the
     // same context-boundary permission as sandboxed code callers.
     authority: { principals: ["user", "host", "code"] },

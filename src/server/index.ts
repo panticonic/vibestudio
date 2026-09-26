@@ -5897,7 +5897,7 @@ async function main() {
           // on its entity record, and the binding's context is the one the
           // relayed work belongs to. `vcsService.callerContextId` already
           // resolves a caller this way; without it here, an extension invoked
-          // from an agent — launching a Claude Code subagent, say — has no
+          // from an agent — launching an external subagent, say — has no
           // context of its own and resolving a creator-context service fails
           // outright. Kept as a fallback rather than a preference, so a caller
           // that already resolves keeps resolving exactly as before.
@@ -6698,49 +6698,6 @@ async function main() {
     container.registerManaged(
       serviceWithHttpRoutes(createBlobstoreService({ blobsDir }), routeRegistry)
     );
-  }
-
-  {
-    const { createLinkedClaudeService, assertLinkedClaudeBinding } =
-      await import("./services/linkedClaudeService.js");
-    const { parseAgentToken } = await import("@vibestudio/shared/cliCredentials");
-    const service = createLinkedClaudeService({
-      appRoot,
-      profilesRoot: path.join(getCentralDataPath(), "linked-claude", entryWorkspaceId),
-      authorize: async (ctx, input) => {
-        const env = input.profile.environment;
-        const parsed = parseAgentToken(env.VIBESTUDIO_AGENT_TOKEN);
-        const authenticated =
-          parsed && deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret);
-        const entity = await getEntityStore().resolveRecord(env.VIBESTUDIO_ENTITY_ID);
-        const vessel = await getEntityStore().resolveRecord(env.VIBESTUDIO_VESSEL_REF);
-        const binding = assertLinkedClaudeBinding(
-          ctx.caller.runtime.id,
-          input,
-          authenticated || null,
-          parsed?.agentId ?? "",
-          entity,
-          vessel
-        );
-        // The contract and first-task prompt are userland-owned prose, not authority.
-        return {
-          contextDirectory: await contextFolderManager.ensureContextScratch(binding.contextId),
-          route: {
-            url: getLocalGatewayUrl("linked Claude"),
-            serverId: deviceAuthStore.getServerId(),
-            workspaceId: entryWorkspaceId,
-            workspaceName,
-            transport: "local",
-          },
-        };
-      },
-    });
-    container.registerManaged({
-      name: "linkedClaude",
-      start: async () => service,
-      stop: (instance: typeof service) => instance.stop(),
-      getServiceDefinition: () => service,
-    });
   }
 
   // ── Gateway ingress ──
