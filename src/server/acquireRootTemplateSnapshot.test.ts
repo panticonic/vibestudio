@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import type { GitClient } from "@vibestudio/git";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { canonicalTemplateNodeId } from "@vibestudio/workspace/templateCoordinates";
 import {
   acquireRootTemplateSnapshot,
   discoverAndSeedRootTemplateSnapshotFromCheckout,
@@ -79,7 +80,9 @@ describe("acquireRootTemplateSnapshot", () => {
     const cached = await fsp.readdir(
       path.join(process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!, "root-templates")
     );
-    expect(cached).toHaveLength(1);
+    expect(cached.filter((name) => !name.startsWith("."))).toEqual([
+      canonicalTemplateNodeId(pin.url, pin.commit),
+    ]);
   });
 
   it("seeds an unpushed committed tree into the ordinary immutable acquisition coordinate", async () => {
