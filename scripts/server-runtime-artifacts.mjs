@@ -39,6 +39,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
 export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
   "dist/browserTransport.js",
   "dist/fs-disk-worker.cjs",
+  "dist/dependency-content-maintenance.cjs",
   "dist/internal-do.bundle.mjs",
   "dist/host-build-fingerprint.json",
   "dist/headless-host",

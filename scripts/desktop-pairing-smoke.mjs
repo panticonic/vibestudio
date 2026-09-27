@@ -1454,7 +1454,8 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
               const setup = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
-                  (frame) => frame.textContent?.includes('onboarding-setup-overview')
+                  (frame) => frame.textContent?.includes('Your Vibestudio') &&
+                    frame.querySelector('[aria-label="Refresh setup overview"]')
                 );
               return {
                 source: window.__vibestudioSourceRepo,
@@ -1464,8 +1465,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
                 submittedPrompt: [...document.querySelectorAll('[data-message-role="player"]')]
                   .some((message) => message.textContent.includes(initialPrompt)),
-                setupReady: Boolean(setup?.textContent.includes("Your Vibestudio") &&
-                  setup.querySelector('[aria-label="Refresh setup overview"]'))
+                setupReady: Boolean(setup)
               };
             })()`);
             },

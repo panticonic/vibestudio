@@ -54,6 +54,10 @@ test("publishes immutable complete generations and leaves the prior one readable
     assert.equal(readCurrentHostBuildGeneration(root, "desktop"), first);
     assert.equal(readCurrentHostBuildGeneration(root, "source"), source);
     assert.equal(fs.existsSync(path.join(source, "main.cjs")), false);
+    assert.equal(
+      fs.readFileSync(path.join(source, "dependency-content-maintenance.cjs"), "utf8"),
+      "dependency-content-maintenance.cjs"
+    );
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(first, "package.json"), "utf8")), {
       name: "@panticonic/vibestudio",
       productName: "Vibestudio",
@@ -141,6 +145,7 @@ test("refuses an incomplete generation without replacing current", () => {
     for (const entry of [
       "browserTransport.js",
       "fs-disk-worker.cjs",
+      "dependency-content-maintenance.cjs",
       "internal-do.bundle.mjs",
       "host-build-fingerprint.json",
     ])
