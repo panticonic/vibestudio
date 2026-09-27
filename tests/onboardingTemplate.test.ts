@@ -30,7 +30,7 @@ const composedRuntime = canonicalTemplateYaml(
 );
 
 describe("shipped Personal first-run workspace", () => {
-  it("is valid as its own source and when composed with Base", () => {
+  it("is valid as its own source and with development layers", () => {
     expect(() =>
       parseWorkspaceConfigContentWithId(personalRuntime, "personal-layer")
     ).not.toThrow();
@@ -39,7 +39,6 @@ describe("shipped Personal first-run workspace", () => {
     ).not.toThrow();
     expect(personalManifest.dependencies.map(({ url }) => url)).toEqual([
       "git+https://github.com/panticonic/vibestudio-base.git",
-      "git+https://github.com/panticonic/vibestudio-system-testing.git",
     ]);
   });
 
