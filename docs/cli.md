@@ -25,8 +25,7 @@ standalone server from `src/server/index.ts`.
 
 ```sh
 pnpm server:live --help
-pnpm system-test --instance test-a doctor --approve-startup \
-  --model openai-codex:gpt-5.6-luna
+pnpm system-test --instance test-a doctor --approve-startup
 ```
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
@@ -156,11 +155,9 @@ For unattended system tests, use the system-test runner. It installs an
 explicit per-test authority policy and full-auto agent configuration:
 
 ```sh
-pnpm system-test --instance system-test doctor --approve-startup \
-  --model openai-codex:gpt-5.6-luna
+pnpm system-test --instance system-test doctor --approve-startup
 pnpm system-test --instance system-test list --json
-pnpm system-test --instance system-test run TEST_NAME \
-  --model openai-codex:gpt-5.6-luna
+pnpm system-test --instance system-test run TEST_NAME
 pnpm system-test --instance system-test stop
 ```
 
@@ -364,15 +361,11 @@ session. Runs execute asynchronously in the session's durable EvalDO, so a
 detached run can be polled or cancelled from a later CLI invocation:
 
 ```sh
-vibestudio system-test doctor --approve-startup \
-  --model openai-codex:gpt-5.6-luna
+vibestudio system-test doctor --approve-startup
 vibestudio system-test list --json
-vibestudio system-test run eval-return-value \
-  --model openai-codex:gpt-5.6-luna
-vibestudio system-test run --category smoke \
-  --model openai-codex:gpt-5.6-luna
-vibestudio system-test run --all --detach \
-  --model openai-codex:gpt-5.6-luna
+vibestudio system-test run eval-return-value
+vibestudio system-test run --category smoke
+vibestudio system-test run --all --detach
 vibestudio system-test runs
 vibestudio system-test status <run-id> --wait
 vibestudio system-test wait <run-id>
@@ -403,8 +396,8 @@ instances isolate workspace state; separate named agent sessions provide truly
 parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
-The default system-test route uses `openai-codex:gpt-5.6-luna` and falls
-back to `openai-codex:gpt-5.6-sol` at `low` thinking effort only when Luna
+The default system-test route uses `openai-codex:gpt-6-luna` and falls
+back to `openai-codex:gpt-6-sol` at `low` thinking effort only when Luna
 terminates with `usage_limit_terminal`. `doctor` checks both models, every
 spawned workspace agent receives the same exact route, and run metadata records
 it. This includes auxiliary agents created inside panel and worker contexts:
