@@ -65,6 +65,7 @@ import type {
   PanelFailureStage,
   PanelHostObservation,
 } from "@vibestudio/shared/panel/observation";
+import { DEFAULT_THEME_CONFIG } from "@vibestudio/shared/theme";
 
 const log = createDevLogger("PanelOrchestrator");
 export interface PanelOrchestratorDeps {
@@ -126,13 +127,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private readonly deps: PanelOrchestratorDeps;
   private currentTheme: "light" | "dark" = "dark";
   /** App-wide theme identity, broadcast to panels alongside appearance. */
-  private currentThemeConfig: ThemeConfig = {
-    accentColor: "violet",
-    grayColor: "mauve",
-    radius: "medium",
-    scaling: "100%",
-    panelBackground: "translucent",
-  };
+  private currentThemeConfig: ThemeConfig = { ...DEFAULT_THEME_CONFIG };
   private readonly runtime: PanelPresentationController;
   private readonly externalDocumentCommitBySlot = new Map<string, Promise<void>>();
   private readonly restorePolicy: PanelRestorePolicy;

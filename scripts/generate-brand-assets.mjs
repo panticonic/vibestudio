@@ -13,8 +13,10 @@ const canonicalSources = {
   logo: path.join(sourceDir, "vibestudio-logo.svg"),
   symbol: path.join(sourceDir, "vibestudio-symbol.svg"),
 };
-const lightBackground = "#F7F1FF";
-const darkBackground = "#100B18";
+const lightBackground = "#F4F7F5";
+const darkBackground = "#0C202B";
+const lightMark = "#006D86";
+const darkMark = "#65D4DE";
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -137,10 +139,12 @@ function renderSvg(input, output, width, height = width) {
 }
 
 let tempAssetIndex = 0;
-function makeSymbolTile(output, size, background) {
+function makeSymbolTile(output, size, background, markColor) {
   ensureDir(path.dirname(output));
   const layer = path.join(tmp, `symbol-${size}-${tempAssetIndex++}.png`);
-  renderSvg(sources.symbol, layer, size);
+  const tileSource = path.join(tmp, `symbol-source-${tempAssetIndex++}.svg`);
+  writeText(tileSource, recolorSymbolSvg(sources.symbol, markColor));
+  renderSvg(tileSource, layer, size);
   convert([
     "-size",
     `${size}x${size}`,
@@ -154,8 +158,13 @@ function makeSymbolTile(output, size, background) {
   ]);
 }
 
-function symbolOnBackgroundSvg(input, background, radius = 220) {
+function recolorSymbolSvg(input, color) {
   const source = fs.readFileSync(input, "utf8");
+  return source.replace(/(<path\s+fill=")[^"]+("\s+fill-rule=)/, `$1${color}$2`);
+}
+
+function symbolOnBackgroundSvg(input, background, markColor, radius = 220) {
+  const source = recolorSymbolSvg(input, markColor);
   const viewBox = source.match(/viewBox=["']([^"']+)["']/)?.[1];
   const contents = source.replace(/^\s*<svg\b[^>]*>\s*/, "").replace(/\s*<\/svg>\s*$/, "");
   if (!viewBox) throw new Error(`SVG is missing a viewBox: ${input}`);
@@ -218,6 +227,14 @@ try {
     "Images.xcassets",
     "LaunchLogo.imageset"
   );
+  const iosLaunchStoryboard = path.join(
+    repoRoot,
+    "apps",
+    "mobile",
+    "ios",
+    "Vibestudio",
+    "LaunchScreen.storyboard"
+  );
 
   for (const dir of [
     brandDir,
@@ -245,6 +262,10 @@ try {
     "vibestudio-mark-on-light-512.png",
     "vibestudio-mark-on-dark.png",
     "vibestudio-mark-on-dark-512.png",
+    "vibestudio-symbol-dark.svg",
+    "vibestudio-logo-dark.svg",
+    "vibestudio-symbol-dark.png",
+    "vibestudio-logo-dark.png",
   ]) {
     fs.rmSync(path.join(brandDir, file), { force: true });
   }
@@ -272,34 +293,47 @@ try {
   fs.rmSync(path.join(brandDir, "vibestudio-symbol-small.svg"), { force: true });
   writeText(
     path.join(brandDir, "vibestudio-symbol-on-light.svg"),
-    symbolOnBackgroundSvg(sources.symbol, lightBackground)
+    symbolOnBackgroundSvg(sources.symbol, lightBackground, lightMark)
   );
   writeText(
     path.join(brandDir, "vibestudio-symbol-on-dark.svg"),
-    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+    symbolOnBackgroundSvg(sources.symbol, darkBackground, darkMark)
   );
   writeText(
     path.join(brandDir, "favicon.svg"),
-    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+    symbolOnBackgroundSvg(sources.symbol, darkBackground, darkMark)
   );
 
   renderSvg(sources.logo, path.join(brandDir, "vibestudio-logo.png"), 1024, 1536);
   renderSvg(sources.logo, path.join(brandDir, "vibestudio-logo-512.png"), 341, 512);
+  const darkLogoSource = path.join(tmp, "vibestudio-logo-dark.svg");
+  writeText(
+    darkLogoSource,
+    fs.readFileSync(sources.logo, "utf8")
+      .replace('fill="#006D86"', `fill="${darkMark}"`)
+      .replace('fill="#102F3D"', 'fill="#EFF6F5"')
+  );
+  writeText(path.join(brandDir, "vibestudio-logo-dark.svg"), fs.readFileSync(darkLogoSource, "utf8"));
+  renderSvg(darkLogoSource, path.join(brandDir, "vibestudio-logo-dark.png"), 1024, 1536);
   renderSvg(sources.symbol, path.join(brandDir, "vibestudio-symbol.png"), 1024);
   renderSvg(sources.symbol, path.join(brandDir, "vibestudio-symbol-512.png"), 512);
-  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light.png"), 1024, lightBackground);
-  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark.png"), 1024, darkBackground);
-  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light-512.png"), 512, lightBackground);
-  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark-512.png"), 512, darkBackground);
+  const darkSymbolSource = path.join(tmp, "vibestudio-symbol-dark.svg");
+  writeText(darkSymbolSource, recolorSymbolSvg(sources.symbol, darkMark));
+  renderSvg(darkSymbolSource, path.join(brandDir, "vibestudio-symbol-dark.png"), 1024);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light.png"), 1024, lightBackground, lightMark);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark.png"), 1024, darkBackground, darkMark);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-light-512.png"), 512, lightBackground, lightMark);
+  makeSymbolTile(path.join(brandDir, "vibestudio-symbol-on-dark-512.png"), 512, darkBackground, darkMark);
+  writeText(path.join(brandDir, "vibestudio-symbol-dark.svg"), recolorSymbolSvg(sources.symbol, darkMark));
 
   for (const size of [16, 24, 32, 48, 64, 128, 180, 192, 256, 512]) {
-    makeSymbolTile(path.join(brandDir, `favicon-${size}.png`), size, darkBackground);
+    makeSymbolTile(path.join(brandDir, `favicon-${size}.png`), size, darkBackground, darkMark);
   }
 
   const icoEntries = [];
   for (const size of [16, 24, 32, 48, 64, 128, 256]) {
     const file = path.join(tmp, `ico-${size}.png`);
-    makeSymbolTile(file, size, darkBackground);
+    makeSymbolTile(file, size, darkBackground, darkMark);
     icoEntries.push({ size, file });
   }
   writeIco(icoEntries, path.join(repoRoot, "build-resources", "icon.ico"));
@@ -320,31 +354,35 @@ try {
   const icnsEntries = [];
   for (const [size, type] of icnsMap) {
     const file = path.join(tmp, `icns-${size}.png`);
-    makeSymbolTile(file, size, darkBackground);
+    makeSymbolTile(file, size, darkBackground, darkMark);
     icnsEntries.push({ type, file });
   }
   writeIcns(icnsEntries, path.join(repoRoot, "build-resources", "icon.icns"));
 
   for (const size of [16, 24, 32, 48, 64, 128, 256, 512, 1024]) {
-    makeSymbolTile(path.join(linuxDir, `${size}x${size}.png`), size, darkBackground);
+    makeSymbolTile(path.join(linuxDir, `${size}x${size}.png`), size, darkBackground, darkMark);
   }
 
   fs.copyFileSync(sources.logo, path.join(workspaceUiAssetsDir, "vibestudio-logo.svg"));
+  fs.copyFileSync(darkLogoSource, path.join(workspaceUiAssetsDir, "vibestudio-logo-dark.svg"));
   fs.copyFileSync(sources.symbol, path.join(workspaceUiAssetsDir, "vibestudio-symbol.svg"));
+  fs.copyFileSync(darkSymbolSource, path.join(workspaceUiAssetsDir, "vibestudio-symbol-dark.svg"));
   fs.rmSync(path.join(workspaceUiAssetsDir, "vibestudio-symbol-small.svg"), { force: true });
   writeText(
     path.join(workspaceUiAssetsDir, "vibestudio-symbol-on-light.svg"),
-    symbolOnBackgroundSvg(sources.symbol, lightBackground)
+    symbolOnBackgroundSvg(sources.symbol, lightBackground, lightMark)
   );
   writeText(
     path.join(workspaceUiAssetsDir, "vibestudio-symbol-on-dark.svg"),
-    symbolOnBackgroundSvg(sources.symbol, darkBackground)
+    symbolOnBackgroundSvg(sources.symbol, darkBackground, darkMark)
   );
   for (const dir of [mobileWorkspaceAssets, mobileHostAssets]) {
     renderSvg(sources.logo, path.join(dir, "vibestudio-logo.png"), 341, 512);
+    renderSvg(darkLogoSource, path.join(dir, "vibestudio-logo-dark.png"), 341, 512);
     renderSvg(sources.symbol, path.join(dir, "vibestudio-symbol.png"), 512);
-    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-light.png"), 512, lightBackground);
-    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-dark.png"), 512, darkBackground);
+    renderSvg(darkSymbolSource, path.join(dir, "vibestudio-symbol-dark.png"), 512);
+    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-light.png"), 512, lightBackground, lightMark);
+    makeSymbolTile(path.join(dir, "vibestudio-symbol-on-dark.png"), 512, darkBackground, darkMark);
   }
 
   const androidSizes = new Map([
@@ -355,10 +393,10 @@ try {
     ["mipmap-xxxhdpi", 192],
   ]);
   for (const [dir, size] of androidSizes) {
-    makeSymbolTile(path.join(androidRes, dir, "ic_launcher.png"), size, darkBackground);
-    makeSymbolTile(path.join(androidRes, dir, "ic_launcher_round.png"), size, darkBackground);
+    makeSymbolTile(path.join(androidRes, dir, "ic_launcher.png"), size, darkBackground, darkMark);
+    makeSymbolTile(path.join(androidRes, dir, "ic_launcher_round.png"), size, darkBackground, darkMark);
   }
-  renderSvg(sources.symbol, path.join(androidRes, "drawable", "splash_logo.png"), 192);
+  renderSvg(darkSymbolSource, path.join(androidRes, "drawable", "splash_logo.png"), 192);
   writeText(
     path.join(androidRes, "drawable", "launch_screen.xml"),
     `<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n    <item android:drawable="@color/vibestudio_splash_background" />\n    <item>\n        <bitmap\n            android:gravity="center"\n            android:src="@drawable/splash_logo" />\n    </item>\n</layer-list>\n`
@@ -391,7 +429,7 @@ try {
   const writtenIosIcons = new Set();
   for (const [, , , size, filename] of iosEntries) {
     if (writtenIosIcons.has(filename)) continue;
-    makeSymbolTile(path.join(iosIconDir, filename), size, darkBackground);
+    makeSymbolTile(path.join(iosIconDir, filename), size, darkBackground, darkMark);
     writtenIosIcons.add(filename);
   }
   writeJson(path.join(iosIconDir, "Contents.json"), {
@@ -404,17 +442,29 @@ try {
     info: { version: 1, author: "xcode" },
   });
 
-  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo.png"), 96);
-  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo@2x.png"), 192);
-  renderSvg(sources.symbol, path.join(iosLaunchLogoDir, "launch-logo@3x.png"), 288);
+  renderSvg(darkSymbolSource, path.join(iosLaunchLogoDir, "launch-logo.png"), 96);
+  renderSvg(darkSymbolSource, path.join(iosLaunchLogoDir, "launch-logo@2x.png"), 192);
+  renderSvg(darkSymbolSource, path.join(iosLaunchLogoDir, "launch-logo@3x.png"), 288);
   writeJson(path.join(iosLaunchLogoDir, "Contents.json"), imageSetContents());
+  const launchStoryboard = fs.readFileSync(iosLaunchStoryboard, "utf8");
+  const launchBackgroundPattern = /<color key="backgroundColor" red="[^"]+" green="[^"]+" blue="[^"]+" alpha="1" colorSpace="custom" customColorSpace="sRGB"\/>/;
+  if (!launchBackgroundPattern.test(launchStoryboard)) {
+    throw new Error(`Unable to find the iOS launch background color in ${iosLaunchStoryboard}`);
+  }
+  writeText(
+    iosLaunchStoryboard,
+    launchStoryboard.replace(
+      launchBackgroundPattern,
+      '<color key="backgroundColor" red="0.04705882353" green="0.1254901961" blue="0.168627451" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>'
+    )
+  );
 
   const dmgLogo = path.join(tmp, "dmg-logo.png");
-  renderSvg(sources.logo, dmgLogo, 107, 160);
+  renderSvg(darkLogoSource, dmgLogo, 107, 160);
   convert([
     "-size",
     "660x420",
-    `gradient:#21122F-${darkBackground}`,
+    `xc:${darkBackground}`,
     dmgLogo,
     "-gravity",
     "center",
@@ -422,7 +472,7 @@ try {
     "+0-120",
     "-composite",
     "-fill",
-    "#C7B9D8",
+    "#A8C0C8",
     "-font",
     "DejaVu-Sans",
     "-pointsize",

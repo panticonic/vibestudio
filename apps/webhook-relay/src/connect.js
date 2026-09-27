@@ -25,7 +25,7 @@ function renderConnection() {
     activeGeneration.abort();
     activeGeneration = undefined;
     generate.disabled = false;
-    generate.textContent = "✦ Draw my workspace";
+    generate.textContent = "Draw my workspace";
     setLabStatus("Connection ended. Reconnect to make something new.");
   }
 
@@ -36,7 +36,7 @@ function renderConnection() {
   } else if (connection.connected) {
     button.textContent = "Disconnect";
     button.disabled = false;
-    status.textContent = "Connected. Your image lab is ready below.";
+    status.textContent = "Connected. You can draw a workspace poster below.";
   } else if (connection.status === "connecting") {
     button.textContent = "Waiting for approval";
     button.disabled = true;
@@ -92,7 +92,7 @@ function drawConstellation(title, surfaces, atmosphere) {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("This browser cannot draw the poster.");
   const palettes = {
-    nebula: ["#110d25", "#3a1f5d", "#f3a5da", "#af8aff", "#f6d9ac"],
+    nebula: ["#0c202b", "#183b4b", "#eff6f5", "#f18b70", "#65d4de"],
     aurora: ["#081d27", "#164f5b", "#a9efcf", "#70cde7", "#f8dfaa"],
     blueprint: ["#0a1737", "#193a75", "#c4dbff", "#77a3ef", "#e5f0ff"],
   };
@@ -218,7 +218,7 @@ generate.addEventListener("click", async () => {
     if (activeGeneration === operation) {
       activeGeneration = undefined;
       generate.disabled = false;
-      generate.textContent = "✦ Draw my workspace";
+      generate.textContent = "Draw my workspace";
     }
   }
 });

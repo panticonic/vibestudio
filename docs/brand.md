@@ -1,6 +1,6 @@
 # Vibestudio Brand Assets
 
-Vibestudio uses a violet-to-pink vertical logo lockup and a standalone "S" glyph.
+Vibestudio uses a flat sea-blue symbol, an ink wordmark, and a standalone "S" glyph.
 Do not hand-edit generated output files unless you are testing locally and plan
 to regenerate the suite afterward.
 
@@ -32,8 +32,8 @@ Replace the canonical source files from production-ready vector artwork:
 pnpm generate:brand-assets -- --logo /path/to/logo.svg --symbol /path/to/symbol.svg --update-source
 ```
 
-The generator rejects SVGs that embed raster images. Large PNG outputs retain
-full-color gradients instead of being reduced to indexed palettes.
+The generator rejects SVGs that embed raster images. Generated marks use solid
+colors and include light and inverse variants for both light and dark surfaces.
 
 Generated surfaces include:
 
@@ -68,15 +68,21 @@ Prefer `variant="logo"` for onboarding and prominent brand surfaces. Use
 chrome. Use `variant="tile"` only where the glyph needs its generated
 light/dark background tile.
 
-SVG logo, symbol, background variants, and favicon files are generated under
+SVG logo, symbol, inverse variants, and favicon files are generated under
 `build-resources/brand/` for packaging and HTTP surfaces. Static platform icons
 use the dark tile; the light tile remains available for light application surfaces.
 
 Brand color direction:
 
-- Primary surfaces are mauve-neutral with violet depth.
-- The default app accent is violet; pink is the secondary brand spark.
-- Brand gradients run violet through purple to pink. Keep semantic success,
+- Light product surfaces use canvas `#F4F7F5`, white panels, ink `#102F3D`,
+  muted text `#526C76`, and sea primary `#006D86`.
+- Dark product surfaces use canvas `#0C202B`, panels `#112D3B`, raised surfaces
+  `#183B4B`, ink `#EFF6F5`, and sea primary `#65D4DE`.
+- The default panel theme is cyan accent, slate neutrals, small radius, and solid
+  panels. Explicit user theme choices remain supported.
+- Desktop shell chrome uses neutral gray so it frames arbitrary panel content.
+  Nautical product colors apply to the branded app and its panels.
+- Use vermilion sparingly for decorative brand detail. Keep semantic success,
   warning, and danger colors distinct from the brand palette.
 - Panel-local syntax colors, agent colors, and user-lane colors may use their
   own semantic palettes when they are not acting as brand chrome.

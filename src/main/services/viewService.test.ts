@@ -68,8 +68,8 @@ describe("view service", () => {
       loaded: true,
     };
     const theme = {
-      accentColor: "violet",
-      grayColor: "mauve",
+      accentColor: "cyan",
+      grayColor: "slate",
       radius: "medium",
       scaling: "100%",
       panelBackground: "solid",

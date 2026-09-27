@@ -21,7 +21,17 @@ execFileSync(
 
 await rm(assetOutput, { recursive: true, force: true });
 await mkdir(assetOutput, { recursive: true });
+const brandOutput = path.join(assetOutput, "brand");
+await mkdir(brandOutput, { recursive: true });
 await copyFile(path.join(runtimeOutput, "index.js"), path.join(assetOutput, "runtime.js"));
 await copyFile(path.join(appRoot, "src/connect.js"), path.join(assetOutput, "connect.js"));
+for (const asset of [
+  "favicon.svg",
+  "vibestudio-symbol.svg",
+  "vibestudio-symbol-dark.svg",
+  "vibestudio-logo.svg",
+]) {
+  await copyFile(path.join(root, "build-resources/brand", asset), path.join(brandOutput, asset));
+}
 
 console.log(`Built Vibestudio website assets in ${assetOutput}`);

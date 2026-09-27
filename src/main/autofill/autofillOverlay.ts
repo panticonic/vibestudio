@@ -118,17 +118,17 @@ export class AutofillOverlay {
 <html><head><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         font-size: 13px; background: #f0f0f3; border: 1px solid #d4d5db;
+         font-size: 13px; background: #eaebed; border: 1px solid #c6c8cc;
          border-radius: 6px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-  .item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eee; }
+  .item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #d9dadd; }
   .item:last-child { border-bottom: none; }
-  .item:hover, .item:focus, .item.selected { background: #e8f0fe; outline: none; }
-  .item .origin { font-size: 11px; color: #666; margin-top: 2px; }
+  .item:hover, .item:focus, .item.selected { background: #dfe1e4; outline: none; }
+  .item .origin { font-size: 11px; color: #55585e; margin-top: 2px; }
   @media (prefers-color-scheme: dark) {
-    body { background: #2e3135; border-color: #3d4147; color: #eee; }
-    .item:hover, .item:focus, .item.selected { background: #3d3d5c; }
-    .item .origin { color: #aaa; }
-    .item { border-bottom-color: #444; }
+    body { background: #202225; border-color: #424448; color: #eaebed; }
+    .item:hover, .item:focus, .item.selected { background: #303236; }
+    .item .origin { color: #bfc1c5; }
+    .item { border-bottom-color: #36383c; }
   }
 </style></head><body>
 ${itemsHtml}

@@ -1,14 +1,18 @@
 import React from "react";
 import { Image, StyleSheet, View } from "react-native";
 
-const BRAND_LOGO = require("./assets/vibestudio-logo.png");
-const BRAND_SYMBOL = require("./assets/vibestudio-symbol.png");
-const BRAND_SYMBOL_ON_DARK = require("./assets/vibestudio-symbol-on-dark.png");
+const BRAND_LOGO_ON_DARK = require("./assets/vibestudio-logo-dark.png");
+const BRAND_SYMBOL_ON_DARK = require("./assets/vibestudio-symbol-dark.png");
+const BRAND_SYMBOL_TILE_ON_DARK = require("./assets/vibestudio-symbol-on-dark.png");
 
 export function VibestudioLogo({ size = 44, variant = "symbol", style }) {
   const width = variant === "logo" ? Math.round((size * 2) / 3) : size;
   const source =
-    variant === "logo" ? BRAND_LOGO : variant === "tile" ? BRAND_SYMBOL_ON_DARK : BRAND_SYMBOL;
+    variant === "logo"
+      ? BRAND_LOGO_ON_DARK
+      : variant === "tile"
+        ? BRAND_SYMBOL_TILE_ON_DARK
+        : BRAND_SYMBOL_ON_DARK;
   return (
     <View
       style={[
@@ -38,8 +42,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   tile: {
-    backgroundColor: "#100b18",
-    borderColor: "#4b2f67",
+    backgroundColor: "#0c202b",
+    borderColor: "#355463",
     borderWidth: 1,
     overflow: "hidden",
   },

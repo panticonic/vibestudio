@@ -76,9 +76,9 @@ export interface ThemeConfig {
 
 /** Product default used until a persisted or shell-provided preference wins. */
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
-  accentColor: "violet",
-  grayColor: "mauve",
-  radius: "medium",
+  accentColor: "cyan",
+  grayColor: "slate",
+  radius: "small",
   scaling: "100%",
-  panelBackground: "translucent",
+  panelBackground: "solid",
 };

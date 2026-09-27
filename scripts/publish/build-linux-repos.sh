@@ -131,41 +131,41 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#110f18">
+<meta name="theme-color" content="#F4F7F5">
 <meta name="description" content="Install Vibestudio on Debian, Ubuntu, Fedora, RHEL, and openSUSE using signed Linux packages.">
 <link rel="icon" type="image/svg+xml" href="./vibestudio-symbol.svg">
 <title>Install Vibestudio for Linux</title>
 <style>
- :root{color-scheme:dark;--bg:#110f18;--panel:#1b1724;--line:#342b40;--ink:#f8f5fc;--muted:#b8afc4;--purple:#bb9afa;--pink:#f394bd}
+ :root{color-scheme:light;--bg:#F4F7F5;--panel:#FFFFFF;--line:#C2D3D8;--ink:#102F3D;--muted:#526C76;--sea:#006D86;--chrome:#E5EEEF}
  *{box-sizing:border-box}
  html{background:var(--bg);scroll-behavior:smooth}
- body{margin:0;background:radial-gradient(ellipse at 72% 0,rgba(129,72,190,.19),transparent 36rem),var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
- a{color:#ddcaff}
+ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+ a{color:var(--sea)}
  .wrap{width:min(100% - 40px,960px);margin:0 auto}
- .topbar{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.09)}
+ .topbar{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}
  .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:18px;font-weight:700;letter-spacing:-.04em}
  .brand img{width:30px;height:30px;display:block}
- .toplink{font-size:14px;color:#d4c5e8;text-decoration:none}
+ .toplink{font-size:14px;color:var(--sea);text-decoration:none}
  .hero{padding:75px 0 43px;max-width:760px}
- .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#d6bfff;font-weight:700}
+ .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--sea);font-weight:700}
  h1{font-size:clamp(42px,7vw,68px);letter-spacing:-.06em;line-height:1.05;margin:15px 0 17px}
- .lede{max-width:670px;font-size:18px;color:#d0c8d8;margin:0}
+ .lede{max-width:670px;font-size:18px;color:var(--muted);margin:0}
  .trust{display:flex;gap:10px;flex-wrap:wrap;margin-top:23px}
- .badge{border:1px solid #514362;background:rgba(31,25,42,.72);border-radius:999px;padding:5px 11px;color:#e7dff0;font-size:12px}
+ .badge{border:1px solid var(--line);background:var(--chrome);border-radius:4px;padding:5px 11px;color:var(--ink);font-size:12px}
  .section-title{font-size:22px;letter-spacing:-.035em;margin:25px 0 16px}
  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
- .card{min-width:0;padding:22px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(145deg,rgba(37,30,49,.96),rgba(25,21,34,.96));box-shadow:0 18px 54px rgba(0,0,0,.14)}
+ .card{min-width:0;padding:22px;border:1px solid var(--line);border-radius:4px;background:var(--panel);box-shadow:none}
  .card-head{display:flex;align-items:center;gap:11px;margin-bottom:15px}
- .os-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#332643;color:#e2caff;font-size:15px;font-weight:750}
+ .os-icon{width:36px;height:36px;border-radius:4px;display:grid;place-items:center;background:var(--chrome);color:var(--sea);font-size:15px;font-weight:750}
  h2{font-size:19px;line-height:1.25;letter-spacing:-.03em;margin:0}
  .card p{color:var(--muted);font-size:14px;margin:0 0 15px}
- .step-label{margin:17px 0 7px;color:#ddd1eb;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
- pre{max-width:100%;margin:0;padding:14px 15px;border:1px solid #40364c;border-radius:9px;background:#100e15;color:#eee8f5;font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;tab-size:2}
- .arch{margin-top:20px;padding:19px 22px;border:1px solid var(--line);border-radius:12px;background:rgba(27,23,36,.75);color:var(--muted);font-size:14px}
+ .step-label{margin:17px 0 7px;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+ pre{max-width:100%;margin:0;padding:14px 15px;border:1px solid var(--line);border-radius:4px;background:var(--chrome);color:var(--ink);font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;tab-size:2}
+ .arch{margin-top:20px;padding:19px 22px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--muted);font-size:14px}
  .arch strong{color:var(--ink)}
  .arch p{margin:4px 0 0}
- footer{margin-top:56px;padding:20px 0 30px;border-top:1px solid rgba(255,255,255,.09);display:flex;justify-content:space-between;gap:20px;color:#a99fb4;font-size:13px}
- footer a{color:#d4c5e8;text-decoration:none}
+ footer{margin-top:56px;padding:20px 0 30px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:13px}
+ footer a{color:var(--sea);text-decoration:none}
  @media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding:57px 0 32px}.card{padding:18px}}
  @media(max-width:420px){.wrap{width:min(100% - 28px,960px)}.topbar{height:66px}.hero{padding-top:45px}.lede{font-size:16px}footer{display:block}footer span{display:block;margin-top:6px}}
 </style>

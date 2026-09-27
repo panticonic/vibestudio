@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
 import * as http from "node:http";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { handleApexLanding } from "./oauthLanding";
 
 const connectedRuntime = `
@@ -46,6 +46,15 @@ describe("apex connected experience", () => {
       } else if (request.url === "/connect.js") {
         response.writeHead(200, { "content-type": "text/javascript" });
         response.end(readFileSync(join(import.meta.dirname, "connect.js")));
+      } else if (request.url?.startsWith("/brand/")) {
+        const file = request.url.slice("/brand/".length);
+        if (!["favicon.svg", "vibestudio-symbol.svg", "vibestudio-symbol-dark.svg"].includes(file)) {
+          response.writeHead(404);
+          response.end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "image/svg+xml" });
+        response.end(readFileSync(resolve(import.meta.dirname, "../../../build-resources/brand", file)));
       } else {
         const landing = handleApexLanding();
         response.writeHead(landing.status, Object.fromEntries(landing.headers));
@@ -66,24 +75,39 @@ describe("apex connected experience", () => {
       );
   });
 
-  it("opens the studio on connection and draws a downloadable poster from workspace data", async () => {
-    const page = await browser.newPage();
+  it.each([
+    { viewport: "desktop", width: 1280, height: 900 },
+    { viewport: "mobile", width: 390, height: 844 },
+  ])("opens the studio on $viewport and draws a downloadable poster", async ({ width, height }) => {
+    const page = await browser.newPage({ viewport: { width, height } });
     try {
       await page.goto(origin);
+      const logo = page.locator(".brand .mark");
+      await expect.poll(() => logo.isVisible()).toBe(true);
+      await expect
+        .poll(() => logo.evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0))
+        .toBe(true);
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+        .toBe(true);
       await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(false);
       await page.getByRole("button", { name: "Connect to workspace" }).click();
       await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(true);
-      await page.getByRole("button", { name: "Aurora" }).click();
+      await page.getByRole("button", { name: "Sea" }).click();
       await page.getByRole("button", { name: "Draw my workspace" }).click();
       await expect.poll(() => page.locator("#lab-image").getAttribute("src")).toMatch(
         /^data:image\/png;base64,/
       );
       await expect.poll(() => page.locator("#lab-download").isVisible()).toBe(true);
-      await expect.poll(() => page.locator("#lab-status").textContent()).toContain(
-        "A snapshot of what this page can see"
-      );
-      if (process.env["VIBESTUDIO_APEX_SCREENSHOT"])
-        await page.screenshot({ path: process.env["VIBESTUDIO_APEX_SCREENSHOT"], fullPage: true });
+      await expect.poll(() => page.locator("#lab-status").textContent()).toContain("A snapshot of what this page can see");
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+        .toBe(true);
+      const screenshotPath = process.env["VIBESTUDIO_APEX_SCREENSHOT"];
+      if (screenshotPath) {
+        const sizedScreenshotPath = screenshotPath.replace(/(\.[^./]+)$/u, `-${width}x${height}$1`);
+        await page.screenshot({ path: sizedScreenshotPath, fullPage: true });
+      }
       await page.getByRole("button", { name: "Disconnect" }).click();
       await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(false);
     } finally {

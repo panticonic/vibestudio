@@ -9,11 +9,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./assets/brand/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/favicon-180.png" />
     <style>
-      /* One token layer, two themes. The palette mirrors the shell's brand
-         language (violet-to-magenta over mauve neutrals) so the launch window
-         and the workspace it hands off to read as the same product. Every rule
-         below styles against these variables; the light block only re-points
-         the variables. */
+      /* One token layer keeps the launch window in step with the workspace. */
       :root {
         --macos-titlebar-control-reserve: 78px;
         color-scheme: dark;
@@ -26,39 +22,31 @@
           "Segoe UI",
           sans-serif;
 
-        --brand-gradient: linear-gradient(135deg, #7c3aed 0%, #a021d8 52%, #e0329f 100%);
-
-        --bg: #0f0917;
-        --titlebar-bg: rgb(21 13 32 / 82%);
-        --titlebar-border: rgb(196 162 255 / 12%);
-        --titlebar-text: #9b8cb0;
-
-        --panel-bg: rgb(32 21 47 / 86%);
-        --panel-border: rgb(196 162 255 / 15%);
-        --panel-shadow: 0 30px 70px rgb(5 2 12 / 55%);
-        --divider: rgb(196 162 255 / 13%);
-
-        --surface: rgb(255 255 255 / 4%);
-        --surface-strong: rgb(255 255 255 / 7%);
-        --surface-border: rgb(196 162 255 / 13%);
-        --surface-border-hover: rgb(196 162 255 / 30%);
-
-        --text: #f5f0fb;
-        --text-muted: #b3a5c6;
-        --text-soft: #8d7fa3;
-        --accent: #c9a7ff;
-
-        /* Steps progress along the brand gradient: done reads violet, the step
-           in flight reads magenta. A semantic green here looked borrowed from
-           another product. */
-        --step-done: #a78bfa;
-        --step-active: #f24bb0;
+        --brand-sea: #65d4de;
+        --bg: #0c202b;
+        --titlebar-bg: #202225;
+        --titlebar-border: #424448;
+        --titlebar-text: #bfc1c5;
+        --panel-bg: #112d3b;
+        --panel-border: #355463;
+        --panel-shadow: none;
+        --divider: #355463;
+        --surface: #112d3b;
+        --surface-strong: #183b4b;
+        --surface-border: #355463;
+        --surface-border-hover: #65d4de;
+        --text: #eff6f5;
+        --text-muted: #a8c0c8;
+        --text-soft: #95aeb7;
+        --accent: #65d4de;
+        --step-done: #65d4de;
+        --step-active: #65d4de;
         --danger: #ff9d9d;
         --danger-border: rgb(255 120 120 / 30%);
         --danger-surface: rgb(126 34 46 / 32%);
 
-        --focus-ring: rgb(168 116 255 / 24%);
-        --pulse-ring: rgb(242 75 176 / 26%);
+        --focus-ring: rgb(101 212 222 / 28%);
+        --pulse-ring: rgb(101 212 222 / 28%);
 
         background: var(--bg);
         color: var(--text);
@@ -72,11 +60,7 @@
            grid/flex items clip their own top edge once they outgrow the window,
            and the approval state does exactly that on short screens. */
         display: flex;
-        background:
-          radial-gradient(115% 85% at 10% -12%, rgb(124 58 237 / 26%) 0%, transparent 62%),
-          radial-gradient(95% 75% at 94% 4%, rgb(224 50 159 / 15%) 0%, transparent 64%),
-          linear-gradient(180deg, #1a1026 0%, #0d0814 100%);
-        background-attachment: fixed;
+        background: var(--bg);
       }
       .bootstrap-titlebar {
         position: fixed;
@@ -130,18 +114,17 @@
         overflow: hidden;
         box-sizing: border-box;
         border: 1px solid var(--panel-border);
-        border-radius: 16px;
+        border-radius: 12px;
         padding: 28px;
         background: var(--panel-bg);
         box-shadow: var(--panel-shadow);
-        backdrop-filter: blur(14px);
       }
       .launch-panel::before {
         content: "";
         position: absolute;
         inset: 0 0 auto;
         height: 2px;
-        background: var(--brand-gradient);
+        background: var(--brand-sea);
       }
       .launch-header {
         display: grid;
@@ -468,9 +451,9 @@
       }
       button.primary {
         border-color: transparent;
-        background: var(--brand-gradient);
-        color: #ffffff;
-        box-shadow: 0 6px 16px rgb(124 58 237 / 24%);
+        background: var(--brand-sea);
+        color: #102f3d;
+        box-shadow: none;
       }
       button.primary:hover:not(:disabled) {
         border-color: transparent;
@@ -564,43 +547,33 @@
         :root {
           color-scheme: light;
 
-          --bg: #faf7ff;
-          --titlebar-bg: rgb(255 255 255 / 84%);
-          --titlebar-border: rgb(88 28 135 / 10%);
-          --titlebar-text: #6b5b7e;
-
-          --panel-bg: rgb(255 255 255 / 92%);
-          --panel-border: rgb(124 58 237 / 14%);
-          --panel-shadow: 0 26px 60px rgb(76 29 149 / 13%);
-          --divider: rgb(124 58 237 / 13%);
-
-          --surface: rgb(124 58 237 / 4%);
-          --surface-strong: rgb(124 58 237 / 7%);
-          --surface-border: rgb(124 58 237 / 15%);
-          --surface-border-hover: rgb(124 58 237 / 32%);
-
-          --text: #21132f;
-          --text-muted: #5f5273;
-          --text-soft: #7d7191;
-          --accent: #7c3aed;
-
-          --step-done: #7c3aed;
-          --step-active: #d61f8f;
+          --brand-sea: #006d86;
+          --bg: #f4f7f5;
+          --titlebar-bg: #eaebed;
+          --titlebar-border: #c6c8cc;
+          --titlebar-text: #55585e;
+          --panel-bg: #ffffff;
+          --panel-border: #c2d3d8;
+          --panel-shadow: none;
+          --divider: #c2d3d8;
+          --surface: #ffffff;
+          --surface-strong: #e5eeef;
+          --surface-border: #c2d3d8;
+          --surface-border-hover: #006d86;
+          --text: #102f3d;
+          --text-muted: #526c76;
+          --text-soft: #526c76;
+          --accent: #006d86;
+          --step-done: #006d86;
+          --step-active: #006d86;
           --danger: #b4232d;
           --danger-border: rgb(180 35 45 / 22%);
           --danger-surface: rgb(255 241 242 / 90%);
 
-          --focus-ring: rgb(124 58 237 / 18%);
+          --focus-ring: rgb(0 109 134 / 20%);
         }
         body {
-          background:
-            radial-gradient(110% 80% at 8% -10%, rgb(124 58 237 / 14%) 0%, transparent 60%),
-            radial-gradient(95% 70% at 95% 2%, rgb(224 50 159 / 11%) 0%, transparent 62%),
-            linear-gradient(180deg, #fdfbff 0%, #f6efff 100%);
-          background-attachment: fixed;
-        }
-        .launch-mark {
-          filter: drop-shadow(0 8px 16px rgb(124 58 237 / 22%));
+          background: var(--bg);
         }
       }
 

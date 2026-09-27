@@ -45,11 +45,14 @@ function loadBrandAsset(filename: string): Buffer | null {
 const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
 const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
 const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="5" y1="4" x2="27" y2="28"><stop stop-color="#6D28D9"/><stop offset="1" stop-color="#EC4899"/></linearGradient></defs><rect width="32" height="32" rx="7" fill="#100B18"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round"/></svg>`;
+const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0C202B"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="#65D4DE" stroke-width="4" stroke-linecap="round"/></svg>`;
 const BRAND_SYMBOL_SVG = loadBrandAsset("vibestudio-symbol.svg");
-const DEFAULT_BRAND_SYMBOL_SVG = DEFAULT_FAVICON_SVG;
-const BRAND_SYMBOL_DATA_URL = `data:image/svg+xml;base64,${(
-  BRAND_SYMBOL_SVG ?? Buffer.from(DEFAULT_BRAND_SYMBOL_SVG)
+const BRAND_SYMBOL_DARK_SVG = loadBrandAsset("vibestudio-symbol-dark.svg");
+const BRAND_SYMBOL_LIGHT_DATA_URL = `data:image/svg+xml;base64,${(
+  BRAND_SYMBOL_SVG ?? Buffer.from(DEFAULT_FAVICON_SVG)
+).toString("base64")}`;
+const BRAND_SYMBOL_DARK_DATA_URL = `data:image/svg+xml;base64,${(
+  BRAND_SYMBOL_DARK_SVG ?? Buffer.from(DEFAULT_FAVICON_SVG)
 ).toString("base64")}`;
 
 // ---------------------------------------------------------------------------
@@ -864,40 +867,44 @@ export class PanelHttpServer {
   <style>
     :root {
       color-scheme: light dark;
-      --page-bg: radial-gradient(circle at top, #f5edff 0%, #fcfaff 58%);
-      --heading: #24152f;
-      --muted: #685875;
-      --accent: #6d28d9;
+      --page-bg: #f4f7f5;
+      --heading: #102f3d;
+      --muted: #526c76;
+      --accent: #006d86;
       --error-bg: #fff1f2;
       --error-border: #fecdd3;
       --error-text: #b91c1c;
-      --mark-shadow: drop-shadow(0 18px 24px rgba(109, 40, 217, 0.16));
+      --mark-light-display: block;
+      --mark-dark-display: none;
     }
     html { min-height: 100%; background: var(--page-bg); }
     body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
     h1 { color: var(--heading); font-size: 1.5rem; }
     p { color: var(--muted); line-height: 1.6; }
     code { color: var(--accent); }
-    pre { background: var(--error-bg); border: 1px solid var(--error-border); padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: var(--error-text); }
+    pre { background: var(--error-bg); border: 1px solid var(--error-border); padding: 1rem; border-radius: 4px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: var(--error-text); }
     a { color: var(--accent); }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; }
     .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .brand-mark .mark-light { display: var(--mark-light-display); }
+    .brand-mark .mark-dark { display: var(--mark-dark-display); }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page-bg: radial-gradient(circle at top, #21122f 0%, #100b18 58%);
-        --heading: #fbf7ff;
-        --muted: #b8a9c5;
-        --accent: #a874ff;
-        --error-bg: #170f20;
-        --error-border: #49305f;
+        --page-bg: #0c202b;
+        --heading: #eff6f5;
+        --muted: #a8c0c8;
+        --accent: #65d4de;
+        --error-bg: #112d3b;
+        --error-border: #355463;
         --error-text: #fecaca;
-        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
+        --mark-light-display: none;
+        --mark-dark-display: block;
       }
     }
   </style>
 </head>
 <body>
-  <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
+  <div class="brand-mark"><img class="mark-light" src="${BRAND_SYMBOL_LIGHT_DATA_URL}" alt="" aria-hidden="true"><img class="mark-dark" src="${BRAND_SYMBOL_DARK_DATA_URL}" alt="" aria-hidden="true"></div>
   <h1>Build Failed</h1>
   <p>The panel <code>${escapeHtml(source)}</code> failed to build:</p>
   <pre>${escapeHtml(error)}</pre>
@@ -1259,25 +1266,36 @@ export class PanelHttpServer {
   <title>Vibestudio Panels</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #fbf7ff; background: radial-gradient(circle at top, #21122f 0%, #100b18 58%); }
-    h1 { color: #fbf7ff; }
-    code { background: #170f20; border: 1px solid #49305f; padding: 0.1em 0.4em; border-radius: 5px; font-size: 0.8em; color: #e4d8ed; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #102f3d; background: #f4f7f5; }
+    h1 { color: #102f3d; }
+    code { background: #e5eeef; border: 1px solid #c2d3d8; padding: 0.1em 0.4em; border-radius: 4px; font-size: 0.8em; color: #102f3d; }
     ul { list-style: none; padding: 0; }
-    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #352244; }
-    a { color: #a874ff; text-decoration: none; font-weight: 600; }
+    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #c2d3d8; }
+    a { color: #006d86; text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
     .brand-header { display: flex; align-items: center; gap: 1rem; margin: 0 0 1.5rem; }
-    .brand-mark { width: 58px; height: 58px; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
+    .brand-mark { width: 58px; height: 58px; }
     .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    .sub { color: #8f7c9e; margin-left: 0.5em; }
-    .empty { color: #b8a9c5; }
+    .brand-mark .mark-dark { display: none; }
+    .sub { color: #526c76; margin-left: 0.5em; }
+    .empty { color: #526c76; }
     .badge { font-size: 0.7em; padding: 0.15em 0.5em; border-radius: 3px; margin-left: 0.5em; text-transform: uppercase; font-weight: 600; }
     .badge.running { background: #1b5e20; color: #81c784; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #eff6f5; background: #0c202b; }
+      h1 { color: #eff6f5; }
+      code { background: #183b4b; border-color: #355463; color: #eff6f5; }
+      li { border-bottom-color: #355463; }
+      a { color: #65d4de; }
+      .sub, .empty { color: #a8c0c8; }
+      .brand-mark .mark-light { display: none; }
+      .brand-mark .mark-dark { display: block; }
+    }
   </style>
 </head>
 <body>
   <div class="brand-header">
-    <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
+    <div class="brand-mark"><img class="mark-light" src="${BRAND_SYMBOL_LIGHT_DATA_URL}" alt="" aria-hidden="true"><img class="mark-dark" src="${BRAND_SYMBOL_DARK_DATA_URL}" alt="" aria-hidden="true"></div>
     <h1>Vibestudio Panels</h1>
   </div>
   ${
