@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -44,6 +45,7 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
   const cacheRoot = path.join(cacheBase, `darwin-${process.arch}-${electronVersion}`);
   const brandedApp = path.join(cacheRoot, `${APP_NAME}.app`);
   const markerPath = path.join(cacheRoot, "metadata.json");
+  const iconSource = path.join(repoRoot, "build-resources", "icon.icns");
   const marker = {
     cacheVersion: CACHE_VERSION,
     sourceApp,
@@ -51,6 +53,7 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
     appName: APP_NAME,
     bundleIdentifier,
     installed,
+    iconDigest: digestFile(iconSource),
   };
 
   if (!isCurrentBrandedApp(brandedApp, markerPath, marker)) {
@@ -73,6 +76,11 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
   }
 
   return path.join(brandedApp, path.relative(sourceApp, electronExecutable));
+}
+
+function digestFile(file) {
+  if (!fs.existsSync(file)) return null;
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
 function adhocCodesign(appPath) {
@@ -132,13 +140,13 @@ function isCurrentBrandedApp(brandedApp, markerPath, expectedMarker) {
 }
 
 function patchBundleMetadata(appPath, bundleIdentifier) {
+  const iconSource = path.join(repoRoot, "build-resources", "icon.icns");
   const plistPath = path.join(appPath, "Contents", "Info.plist");
   let plist = fs.readFileSync(plistPath, "utf8");
   plist = setPlistString(plist, "CFBundleDisplayName", APP_NAME);
   plist = setPlistString(plist, "CFBundleName", APP_NAME);
   plist = setPlistString(plist, "CFBundleIdentifier", bundleIdentifier);
 
-  const iconSource = path.join(repoRoot, "build-resources", "icon.icns");
   if (fs.existsSync(iconSource)) {
     const iconName = "vibestudio.icns";
     fs.copyFileSync(iconSource, path.join(appPath, "Contents", "Resources", iconName));

@@ -92,7 +92,7 @@ function drawConstellation(title, surfaces, atmosphere) {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("This browser cannot draw the poster.");
   const palettes = {
-    nebula: ["#0c202b", "#183b4b", "#eff6f5", "#f18b70", "#65d4de"],
+    nebula: ["#1a202a", "#323e4e", "#f4f5f6", "#dc9584", "#496fa8"],
     aurora: ["#081d27", "#164f5b", "#a9efcf", "#70cde7", "#f8dfaa"],
     blueprint: ["#0a1737", "#193a75", "#c4dbff", "#77a3ef", "#e5f0ff"],
   };

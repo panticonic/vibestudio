@@ -1,6 +1,6 @@
 # Vibestudio Brand Assets
 
-Vibestudio uses a flat sea-blue symbol, an ink wordmark, and a standalone "S" glyph.
+Vibestudio uses a two-tone royal-blue and vermilion symbol, an ink wordmark, and a standalone "S" glyph.
 Do not hand-edit generated output files unless you are testing locally and plan
 to regenerate the suite afterward.
 
@@ -32,13 +32,16 @@ Replace the canonical source files from production-ready vector artwork:
 pnpm generate:brand-assets -- --logo /path/to/logo.svg --symbol /path/to/symbol.svg --update-source
 ```
 
-The generator rejects SVGs that embed raster images. Generated marks use solid
-colors and include light and inverse variants for both light and dark surfaces.
+The generator rejects SVGs that embed raster images. Mark symbol paths with
+`data-brand-part="primary"` and `data-brand-part="signal"`; logo wordmark paths
+use `data-brand-part="wordmark"`. The generator preserves the path geometry,
+removes these role markers in outputs, and applies solid light and inverse colors.
 
 Generated surfaces include:
 
 - `build-resources/icon.icns`
 - `build-resources/icon.ico`
+- `build-resources/icons/*`
 - `build-resources/dmg-background.png`
 - `build-resources/brand/favicon-*`
 - `build-resources/brand/vibestudio-logo*`
@@ -48,6 +51,7 @@ Generated surfaces include:
 - `apps/mobile/assets/*`
 - `apps/mobile/android/app/src/main/res/mipmap-*`
 - `apps/mobile/android/app/src/main/res/drawable/launch_screen.xml`
+- `apps/mobile/android/app/src/main/res/drawable/splash_logo.xml`
 - `apps/mobile/ios/Vibestudio/Images.xcassets/AppIcon.appiconset`
 - `apps/mobile/ios/Vibestudio/Images.xcassets/LaunchLogo.imageset`
 
@@ -69,16 +73,20 @@ chrome. Use `variant="tile"` only where the glyph needs its generated
 light/dark background tile.
 
 SVG logo, symbol, inverse variants, and favicon files are generated under
-`build-resources/brand/` for packaging and HTTP surfaces. Static platform icons
-use the dark tile; the light tile remains available for light application surfaces.
+`build-resources/brand/` for packaging and HTTP surfaces. Desktop ICO, ICNS, and
+Linux icon sizes use transparent vector artwork with medium blue and vermilion.
+The SVG favicon switches to pale blue and soft vermilion in dark mode. Opaque
+tiles are reserved for mobile launcher icons and Apple touch icons.
 
 Brand color direction:
 
-- Light product surfaces use canvas `#F4F7F5`, white panels, ink `#102F3D`,
-  muted text `#526C76`, and sea primary `#006D86`.
-- Dark product surfaces use canvas `#0C202B`, panels `#112D3B`, raised surfaces
-  `#183B4B`, ink `#EFF6F5`, and sea primary `#65D4DE`.
-- The default panel theme is cyan accent, slate neutrals, small radius, and solid
+- Light product surfaces use white canvas and panels, raised surfaces `#F1F3F7`,
+  ink `#14243D`, muted text `#58677D`, and royal-blue primary `#204FA3`.
+- Dark product surfaces use canvas `#1A202A`, panels `#242E3C`, raised surfaces
+  `#323E4E`, ink `#F4F5F6`, and blue primary `#496FA8`.
+- The symbol uses blue `#204FA3` and vermilion `#C73F2D` on light surfaces,
+  and pale blue `#AFC8F0` with soft vermilion `#DC9584` on dark surfaces.
+- The default panel theme is blue accent, slate neutrals, small radius, and solid
   panels. Explicit user theme choices remain supported.
 - Desktop shell chrome uses neutral gray so it frames arbitrary panel content.
   Nautical product colors apply to the branded app and its panels.

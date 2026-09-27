@@ -637,7 +637,7 @@ function VibestudioMobileHostBootstrap() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.panel}>
           <View style={styles.brandRow}>
-            <VibestudioLogo size={44} variant="tile" />
+            <VibestudioLogo size={44} variant="symbol" />
             <View style={styles.brandText}>
               <Text style={styles.eyebrow}>Vibestudio</Text>
               <Text style={styles.title}>Your workspace</Text>
@@ -649,7 +649,7 @@ function VibestudioMobileHostBootstrap() {
             <LaunchTimeline session={launchSession} />
             {busy ? (
               <View style={styles.loadingRow}>
-                <ActivityIndicator color="#65d4de" />
+                <ActivityIndicator color="#496fa8" />
                 <Text style={styles.loadingText}>Preparing secure workspace access</Text>
               </View>
             ) : null}
@@ -774,7 +774,7 @@ function VibestudioMobileHostBootstrap() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0c202b",
+    backgroundColor: "#1a202a",
   },
   scrollContent: {
     flexGrow: 1,
@@ -797,7 +797,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   eyebrow: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0,
@@ -807,13 +807,13 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   title: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     fontSize: 26,
     fontWeight: "800",
   },
   statusPanel: {
-    backgroundColor: "#112d3b",
-    borderColor: "#355463",
+    backgroundColor: "#242e3c",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -825,7 +825,7 @@ const styles = StyleSheet.create({
     lineHeight: 23,
   },
   timeline: {
-    borderColor: "#355463",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -862,7 +862,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   timelineLabel: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 18,
@@ -893,7 +893,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   loadingText: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     flex: 1,
     fontSize: 13,
   },
@@ -903,7 +903,7 @@ const styles = StyleSheet.create({
   },
   step: {
     alignItems: "center",
-    borderColor: "#355463",
+    borderColor: "#485667",
     borderRadius: 999,
     borderWidth: 1,
     flexDirection: "row",
@@ -912,8 +912,8 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   stepActive: {
-    backgroundColor: "#183b4b",
-    borderColor: "#65d4de",
+    backgroundColor: "#323e4e",
+    borderColor: "#496fa8",
   },
   stepDot: {
     backgroundColor: "#63708a",
@@ -922,21 +922,21 @@ const styles = StyleSheet.create({
     width: 6,
   },
   stepDotActive: {
-    backgroundColor: "#65d4de",
+    backgroundColor: "#496fa8",
   },
   stepText: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 12,
     fontWeight: "700",
   },
   stepTextActive: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
   },
   sectionHeader: {
     gap: 3,
   },
   sectionTitle: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     fontSize: 18,
     fontWeight: "800",
     lineHeight: 24,
@@ -947,22 +947,22 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   approvalEmphasis: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     fontSize: 14,
     fontWeight: "700",
     lineHeight: 20,
   },
   approvalBox: {
-    backgroundColor: "#112d3b",
-    borderColor: "#355463",
+    backgroundColor: "#242e3c",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
     padding: 14,
   },
   unitCard: {
-    backgroundColor: "#112d3b",
-    borderColor: "#355463",
+    backgroundColor: "#242e3c",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
@@ -976,7 +976,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   unitName: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     flexShrink: 1,
     fontSize: 15,
     fontWeight: "700",
@@ -993,12 +993,12 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   unitMeta: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 13,
     lineHeight: 18,
   },
   unitRow: {
-    borderTopColor: "#355463",
+    borderTopColor: "#485667",
     borderTopWidth: 1,
     gap: 3,
     paddingTop: 8,
@@ -1010,16 +1010,16 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   connectCard: {
-    backgroundColor: "#112d3b",
-    borderColor: "#355463",
+    backgroundColor: "#242e3c",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 14,
   },
   scannerCard: {
-    backgroundColor: "#0c202b",
-    borderColor: "#355463",
+    backgroundColor: "#1a202a",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -1039,26 +1039,26 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   workspaceButton: {
-    backgroundColor: "#18202b",
-    borderColor: "#355463",
+    backgroundColor: "#242e3c",
+    borderColor: "#485667",
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
   workspaceName: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     fontSize: 16,
     fontWeight: "800",
     lineHeight: 22,
   },
   workspaceMeta: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 13,
     lineHeight: 18,
   },
   hint: {
-    color: "#a8c0c8",
+    color: "#c7cdd5",
     fontSize: 14,
     lineHeight: 20,
   },
@@ -1072,24 +1072,24 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   primaryButton: {
-    backgroundColor: "#65d4de",
-    borderColor: "#65d4de",
+    backgroundColor: "#496fa8",
+    borderColor: "#496fa8",
   },
   secondaryButton: {
-    backgroundColor: "#183b4b",
-    borderColor: "#355463",
+    backgroundColor: "#323e4e",
+    borderColor: "#485667",
   },
   dangerButton: {
     backgroundColor: "#321e25",
     borderColor: "#a24b5a",
   },
   primaryButtonText: {
-    color: "#102f3d",
+    color: "#ffffff",
     fontSize: 15,
     fontWeight: "800",
   },
   secondaryButtonText: {
-    color: "#eff6f5",
+    color: "#f4f5f6",
     fontSize: 15,
     fontWeight: "800",
   },

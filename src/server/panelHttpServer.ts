@@ -45,7 +45,7 @@ function loadBrandAsset(filename: string): Buffer | null {
 const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
 const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
 const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0C202B"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="#65D4DE" stroke-width="4" stroke-linecap="round"/></svg>`;
+const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#14243D"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3" fill="none" stroke="#AFC8F0" stroke-width="4" stroke-linecap="round"/><path d="M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="#DC9584" stroke-width="4" stroke-linecap="round"/></svg>`;
 const BRAND_SYMBOL_SVG = loadBrandAsset("vibestudio-symbol.svg");
 const BRAND_SYMBOL_DARK_SVG = loadBrandAsset("vibestudio-symbol-dark.svg");
 const BRAND_SYMBOL_LIGHT_DATA_URL = `data:image/svg+xml;base64,${(
@@ -864,13 +864,14 @@ export class PanelHttpServer {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Build Error — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any">
   <style>
     :root {
       color-scheme: light dark;
-      --page-bg: #f4f7f5;
-      --heading: #102f3d;
-      --muted: #526c76;
-      --accent: #006d86;
+      --page-bg: #ffffff;
+      --heading: #14243d;
+      --muted: #58677d;
+      --accent: #204fa3;
       --error-bg: #fff1f2;
       --error-border: #fecdd3;
       --error-text: #b91c1c;
@@ -890,12 +891,12 @@ export class PanelHttpServer {
     .brand-mark .mark-dark { display: var(--mark-dark-display); }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page-bg: #0c202b;
-        --heading: #eff6f5;
-        --muted: #a8c0c8;
-        --accent: #65d4de;
-        --error-bg: #112d3b;
-        --error-border: #355463;
+        --page-bg: #1a202a;
+        --heading: #f4f5f6;
+        --muted: #c7cdd5;
+        --accent: #AFC8F0;
+        --error-bg: #242e3c;
+        --error-border: #485667;
         --error-text: #fecaca;
         --mark-light-display: none;
         --mark-dark-display: block;
@@ -1265,29 +1266,30 @@ export class PanelHttpServer {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vibestudio Panels</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #102f3d; background: #f4f7f5; }
-    h1 { color: #102f3d; }
-    code { background: #e5eeef; border: 1px solid #c2d3d8; padding: 0.1em 0.4em; border-radius: 4px; font-size: 0.8em; color: #102f3d; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #14243d; background: #ffffff; }
+    h1 { color: #14243d; }
+    code { background: #f1f3f7; border: 1px solid #d4d9e2; padding: 0.1em 0.4em; border-radius: 4px; font-size: 0.8em; color: #14243d; }
     ul { list-style: none; padding: 0; }
-    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #c2d3d8; }
-    a { color: #006d86; text-decoration: none; font-weight: 600; }
+    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #d4d9e2; }
+    a { color: #204fa3; text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
     .brand-header { display: flex; align-items: center; gap: 1rem; margin: 0 0 1.5rem; }
     .brand-mark { width: 58px; height: 58px; }
     .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
     .brand-mark .mark-dark { display: none; }
-    .sub { color: #526c76; margin-left: 0.5em; }
-    .empty { color: #526c76; }
+    .sub { color: #58677d; margin-left: 0.5em; }
+    .empty { color: #58677d; }
     .badge { font-size: 0.7em; padding: 0.15em 0.5em; border-radius: 3px; margin-left: 0.5em; text-transform: uppercase; font-weight: 600; }
     .badge.running { background: #1b5e20; color: #81c784; }
     @media (prefers-color-scheme: dark) {
-      body { color: #eff6f5; background: #0c202b; }
-      h1 { color: #eff6f5; }
-      code { background: #183b4b; border-color: #355463; color: #eff6f5; }
-      li { border-bottom-color: #355463; }
-      a { color: #65d4de; }
-      .sub, .empty { color: #a8c0c8; }
+      body { color: #f4f5f6; background: #1a202a; }
+      h1 { color: #f4f5f6; }
+      code { background: #323e4e; border-color: #485667; color: #f4f5f6; }
+      li { border-bottom-color: #485667; }
+      a { color: #AFC8F0; }
+      .sub, .empty { color: #c7cdd5; }
       .brand-mark .mark-light { display: none; }
       .brand-mark .mark-dark { display: block; }
     }

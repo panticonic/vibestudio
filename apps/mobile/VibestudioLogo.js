@@ -42,8 +42,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   tile: {
-    backgroundColor: "#0c202b",
-    borderColor: "#355463",
+    backgroundColor: "#14243d",
+    borderColor: "#485667",
     borderWidth: 1,
     overflow: "hidden",
   },

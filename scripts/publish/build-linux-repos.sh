@@ -131,23 +131,23 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#F4F7F5">
+<meta name="theme-color" content="#FFFFFF">
 <meta name="description" content="Install Vibestudio on Debian, Ubuntu, Fedora, RHEL, and openSUSE using signed Linux packages.">
 <link rel="icon" type="image/svg+xml" href="./vibestudio-symbol.svg">
 <title>Install Vibestudio for Linux</title>
 <style>
- :root{color-scheme:light;--bg:#F4F7F5;--panel:#FFFFFF;--line:#C2D3D8;--ink:#102F3D;--muted:#526C76;--sea:#006D86;--chrome:#E5EEEF}
+ :root{color-scheme:light;--bg:#FFFFFF;--panel:#FFFFFF;--line:#D4D9E2;--ink:#14243D;--muted:#58677D;--primary:#204FA3;--chrome:#F1F3F7}
  *{box-sizing:border-box}
  html{background:var(--bg);scroll-behavior:smooth}
  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
- a{color:var(--sea)}
+ a{color:var(--primary)}
  .wrap{width:min(100% - 40px,960px);margin:0 auto}
  .topbar{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}
  .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:18px;font-weight:700;letter-spacing:-.04em}
  .brand img{width:30px;height:30px;display:block}
- .toplink{font-size:14px;color:var(--sea);text-decoration:none}
+ .toplink{font-size:14px;color:var(--primary);text-decoration:none}
  .hero{padding:75px 0 43px;max-width:760px}
- .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--sea);font-weight:700}
+ .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--primary);font-weight:700}
  h1{font-size:clamp(42px,7vw,68px);letter-spacing:-.06em;line-height:1.05;margin:15px 0 17px}
  .lede{max-width:670px;font-size:18px;color:var(--muted);margin:0}
  .trust{display:flex;gap:10px;flex-wrap:wrap;margin-top:23px}
@@ -156,7 +156,7 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
  .card{min-width:0;padding:22px;border:1px solid var(--line);border-radius:4px;background:var(--panel);box-shadow:none}
  .card-head{display:flex;align-items:center;gap:11px;margin-bottom:15px}
- .os-icon{width:36px;height:36px;border-radius:4px;display:grid;place-items:center;background:var(--chrome);color:var(--sea);font-size:15px;font-weight:750}
+ .os-icon{width:36px;height:36px;border-radius:4px;display:grid;place-items:center;background:var(--chrome);color:var(--primary);font-size:15px;font-weight:750}
  h2{font-size:19px;line-height:1.25;letter-spacing:-.03em;margin:0}
  .card p{color:var(--muted);font-size:14px;margin:0 0 15px}
  .step-label{margin:17px 0 7px;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
@@ -165,7 +165,7 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
  .arch strong{color:var(--ink)}
  .arch p{margin:4px 0 0}
  footer{margin-top:56px;padding:20px 0 30px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:13px}
- footer a{color:var(--sea);text-decoration:none}
+ footer a{color:var(--primary);text-decoration:none}
  @media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding:57px 0 32px}.card{padding:18px}}
  @media(max-width:420px){.wrap{width:min(100% - 28px,960px)}.topbar{height:66px}.hero{padding-top:45px}.lede{font-size:16px}footer{display:block}footer span{display:block;margin-top:6px}}
 </style>

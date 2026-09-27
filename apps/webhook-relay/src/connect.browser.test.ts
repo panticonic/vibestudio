@@ -114,4 +114,59 @@ describe("apex connected experience", () => {
       await page.close();
     }
   });
+
+  it.each([390, 900])(
+    "switches the live landing palette and logos with the system appearance at %ipx",
+    async (width) => {
+      const page = await browser.newPage({
+        viewport: { width, height: 900 },
+        colorScheme: "light",
+      });
+      try {
+        await page.goto(origin);
+        const headerLogo = page.locator(".brand-mark img");
+        const heroLogo = page.locator(".hero-art img");
+        const hero = page.locator(".hero-art");
+        await expect
+          .poll(() => headerLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
+          .toContain("vibestudio-symbol.svg");
+        await expect
+          .poll(() => heroLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
+          .toContain("vibestudio-symbol.svg");
+        await expect
+          .poll(() => hero.evaluate((element) => getComputedStyle(element).backgroundColor))
+          .toBe("rgb(241, 243, 247)");
+        await expect
+          .poll(() => page.locator(".primary").first().evaluate((element) => getComputedStyle(element).color))
+          .toBe("rgb(255, 255, 255)");
+
+        await page.emulateMedia({ colorScheme: "dark" });
+        await expect
+          .poll(() => headerLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
+          .toContain("vibestudio-symbol-dark.svg");
+        await expect
+          .poll(() => heroLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
+          .toContain("vibestudio-symbol-dark.svg");
+        await expect
+          .poll(() => hero.evaluate((element) => getComputedStyle(element).backgroundColor))
+          .toBe("rgb(50, 62, 78)");
+        await expect
+          .poll(() => page.locator(".nav a").first().evaluate((element) => getComputedStyle(element).color))
+          .toBe("rgb(175, 200, 240)");
+        await expect
+          .poll(() => page.locator('meta[name="theme-color"][media*="dark"]').getAttribute("content"))
+          .toBe("#1A202A");
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+          .toBe(true);
+
+        await page.emulateMedia({ colorScheme: "light" });
+        await expect
+          .poll(() => headerLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
+          .toContain("vibestudio-symbol.svg");
+      } finally {
+        await page.close();
+      }
+    }
+  );
 });

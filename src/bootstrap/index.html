@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vibestudio Launch</title>
-    <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="./assets/brand/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="./assets/brand/favicon-32.png" />
+    <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg" sizes="any" />
     <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/favicon-180.png" />
     <style>
       /* One token layer keeps the launch window in step with the workspace. */
@@ -22,25 +22,25 @@
           "Segoe UI",
           sans-serif;
 
-        --brand-sea: #65d4de;
-        --bg: #0c202b;
+        --brand-primary: #496fa8;
+        --bg: #1a202a;
         --titlebar-bg: #202225;
         --titlebar-border: #424448;
         --titlebar-text: #bfc1c5;
-        --panel-bg: #112d3b;
-        --panel-border: #355463;
+        --panel-bg: #242e3c;
+        --panel-border: #485667;
         --panel-shadow: none;
-        --divider: #355463;
-        --surface: #112d3b;
-        --surface-strong: #183b4b;
-        --surface-border: #355463;
-        --surface-border-hover: #65d4de;
-        --text: #eff6f5;
-        --text-muted: #a8c0c8;
-        --text-soft: #95aeb7;
-        --accent: #65d4de;
-        --step-done: #65d4de;
-        --step-active: #65d4de;
+        --divider: #485667;
+        --surface: #242e3c;
+        --surface-strong: #323e4e;
+        --surface-border: #485667;
+        --surface-border-hover: #496fa8;
+        --text: #f4f5f6;
+        --text-muted: #c7cdd5;
+        --text-soft: #c7cdd5;
+        --accent: #afc8f0;
+        --step-done: #afc8f0;
+        --step-active: #496fa8;
         --danger: #ff9d9d;
         --danger-border: rgb(255 120 120 / 30%);
         --danger-surface: rgb(126 34 46 / 32%);
@@ -124,7 +124,7 @@
         position: absolute;
         inset: 0 0 auto;
         height: 2px;
-        background: var(--brand-sea);
+        background: var(--brand-primary);
       }
       .launch-header {
         display: grid;
@@ -451,8 +451,8 @@
       }
       button.primary {
         border-color: transparent;
-        background: var(--brand-sea);
-        color: #102f3d;
+        background: var(--brand-primary);
+        color: #ffffff;
         box-shadow: none;
       }
       button.primary:hover:not(:disabled) {
@@ -547,25 +547,25 @@
         :root {
           color-scheme: light;
 
-          --brand-sea: #006d86;
-          --bg: #f4f7f5;
+          --brand-primary: #204fa3;
+          --bg: #ffffff;
           --titlebar-bg: #eaebed;
           --titlebar-border: #c6c8cc;
           --titlebar-text: #55585e;
           --panel-bg: #ffffff;
-          --panel-border: #c2d3d8;
+          --panel-border: #d4d9e2;
           --panel-shadow: none;
-          --divider: #c2d3d8;
+          --divider: #d4d9e2;
           --surface: #ffffff;
-          --surface-strong: #e5eeef;
-          --surface-border: #c2d3d8;
-          --surface-border-hover: #006d86;
-          --text: #102f3d;
-          --text-muted: #526c76;
-          --text-soft: #526c76;
-          --accent: #006d86;
-          --step-done: #006d86;
-          --step-active: #006d86;
+          --surface-strong: #f1f3f7;
+          --surface-border: #d4d9e2;
+          --surface-border-hover: #204fa3;
+          --text: #14243d;
+          --text-muted: #58677d;
+          --text-soft: #58677d;
+          --accent: #204fa3;
+          --step-done: #204fa3;
+          --step-active: #204fa3;
           --danger: #b4232d;
           --danger-border: rgb(180 35 45 / 22%);
           --danger-surface: rgb(255 241 242 / 90%);
