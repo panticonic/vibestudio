@@ -24440,6 +24440,7 @@
         "key": "service:remoteCred.clear"
       },
       "authorityPrincipals": [
+        "host",
         "user",
         "code"
       ],
@@ -24462,10 +24463,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.clear),workspace-member),allOf(capability(code,service:remoteCred.clear),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:remoteCred.clear),allOf(capability(user,service:remoteCred.clear),workspace-member),allOf(capability(code,service:remoteCred.clear),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "native-shell-device-pairing-control",
+        "change": "Admits the authenticated product-host shell to clear this device's local pairing. The critical method retains its existing confirmation tier, and app callers remain restricted to authorized workspace chrome."
       },
       "capability": "service:remoteCred.clear",
       "parityAssertion": "generated-census:host-authority"
@@ -24485,6 +24486,7 @@
         "key": "service:remoteCred.getCurrent"
       },
       "authorityPrincipals": [
+        "host",
         "user",
         "code"
       ],
@@ -24507,10 +24509,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.getCurrent),workspace-member),allOf(capability(code,service:remoteCred.getCurrent),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:remoteCred.getCurrent),allOf(capability(user,service:remoteCred.getCurrent),workspace-member),allOf(capability(code,service:remoteCred.getCurrent),workspace-member))",
       "r3b": {
         "review": "trusted-chrome-secret-free-connection-status",
-        "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+        "change": "Admits the authenticated product-host shell that renders Connection settings. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
       },
       "capability": "service:remoteCred.getCurrent",
       "parityAssertion": "generated-census:host-authority"
@@ -24530,6 +24532,7 @@
         "key": "service:remoteCred.pair"
       },
       "authorityPrincipals": [
+        "host",
         "user",
         "code"
       ],
@@ -24552,10 +24555,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.pair),workspace-member),allOf(capability(code,service:remoteCred.pair),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:remoteCred.pair),allOf(capability(user,service:remoteCred.pair),workspace-member),allOf(capability(code,service:remoteCred.pair),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "native-shell-device-pairing-control",
+        "change": "Admits the authenticated product-host shell to pair this device from Connection settings. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
       },
       "capability": "service:remoteCred.pair",
       "parityAssertion": "generated-census:host-authority"
@@ -24575,6 +24578,7 @@
         "key": "service:remoteCred.reconnectNow"
       },
       "authorityPrincipals": [
+        "host",
         "user",
         "code"
       ],
@@ -24597,10 +24601,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.reconnectNow),workspace-member),allOf(capability(code,service:remoteCred.reconnectNow),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:remoteCred.reconnectNow),allOf(capability(user,service:remoteCred.reconnectNow),workspace-member),allOf(capability(code,service:remoteCred.reconnectNow),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "native-shell-device-pairing-control",
+        "change": "Admits the authenticated product-host shell to reconnect its own device session. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
       },
       "capability": "service:remoteCred.reconnectNow",
       "parityAssertion": "generated-census:host-authority"
@@ -24620,6 +24624,7 @@
         "key": "service:remoteCred.relaunch"
       },
       "authorityPrincipals": [
+        "host",
         "user",
         "code"
       ],
@@ -24642,10 +24647,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.relaunch),workspace-member),allOf(capability(code,service:remoteCred.relaunch),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:remoteCred.relaunch),allOf(capability(user,service:remoteCred.relaunch),workspace-member),allOf(capability(code,service:remoteCred.relaunch),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "native-shell-device-pairing-control",
+        "change": "Admits the authenticated product-host shell to relaunch this device after a pairing change. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
       },
       "capability": "service:remoteCred.relaunch",
       "parityAssertion": "generated-census:host-authority"

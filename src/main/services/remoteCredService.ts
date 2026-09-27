@@ -105,7 +105,7 @@ export function createRemoteCredService(deps: {
   return {
     name: "remoteCred",
     description: "Manage this desktop's encrypted Iroh device pairing",
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["host", "user", "code"] },
     methods: remoteCredMethods,
     handler: defineServiceHandler("remoteCred", remoteCredMethods, {
       getCurrent: (ctx) => {

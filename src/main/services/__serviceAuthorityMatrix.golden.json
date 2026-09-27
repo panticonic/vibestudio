@@ -2226,6 +2226,7 @@
   "remoteCred": {
     "service": {
       "principals": [
+        "host",
         "user",
         "code"
       ]

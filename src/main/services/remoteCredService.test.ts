@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink } from "@vibestudio/shared/connect";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
 
@@ -61,6 +66,21 @@ function serverClient(call = vi.fn()) {
 describe("remoteCredService", () => {
   it("keeps secret-free connection status readable without an authority grant", () => {
     expect(remoteCredMethods.getCurrent.tier.tier).toBe("open");
+  });
+
+  it("admits the native shell origin to its local connection service", async () => {
+    const { createRemoteCredService } = await import("./remoteCredService.js");
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(createRemoteCredService({}));
+    dispatcher.markInitialized();
+
+    const context = { caller: createHostCaller("shell", "shell") };
+    await expect(
+      dispatcher.dispatch(context, "remoteCred", "getCurrent", [])
+    ).resolves.toMatchObject({ configured: false, bootstrap: "none" });
+    await expect(
+      dispatcher.dispatch(context, "remoteCred", "pair", [{ link: "not-a-link" }])
+    ).resolves.toMatchObject({ ok: false, error: "invalid-link" });
   });
 
   beforeEach(() => {

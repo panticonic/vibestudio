@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:51e4df14d49e11ce241e46a5f7da10e8e1a41ded29d01a3d64b52d2ad243ef11",
+  "censusDigest": "sha256:d2a90f404f3006a27cccd2b8459f8a41e3ca3c22be196eab8f9e1dc8f9568906",
   "decisions": {
     "host:build.buildWebsite": {
       "review": "exact-source-portable-website-build",
@@ -124,7 +124,23 @@
     },
     "host:remoteCred.getCurrent": {
       "review": "trusted-chrome-secret-free-connection-status",
-      "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+      "change": "Admits the authenticated product-host shell that renders Connection settings. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+    },
+    "host:remoteCred.clear": {
+      "review": "native-shell-device-pairing-control",
+      "change": "Admits the authenticated product-host shell to clear this device's local pairing. The critical method retains its existing confirmation tier, and app callers remain restricted to authorized workspace chrome."
+    },
+    "host:remoteCred.pair": {
+      "review": "native-shell-device-pairing-control",
+      "change": "Admits the authenticated product-host shell to pair this device from Connection settings. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
+    },
+    "host:remoteCred.reconnectNow": {
+      "review": "native-shell-device-pairing-control",
+      "change": "Admits the authenticated product-host shell to reconnect its own device session. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
+    },
+    "host:remoteCred.relaunch": {
+      "review": "native-shell-device-pairing-control",
+      "change": "Admits the authenticated product-host shell to relaunch this device after a pairing change. The gated method retains its existing authority tier, and app callers remain restricted to authorized workspace chrome."
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
