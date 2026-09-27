@@ -48,10 +48,10 @@ describe("mobile Iroh launch recovery", () => {
     expect(operation).toHaveBeenCalledTimes(2);
   });
 
-  it("does not mistake semantic failures or retired WebRTC wording for recovery", async () => {
+  it("does not mistake semantic failures or retired transport wording for recovery", async () => {
     for (const error of [
       new Error("No react-native app is configured or selected"),
-      new Error("WebRTC pipe down: keepalive timeout"),
+      new Error("Legacy pipe down: keepalive timeout"),
       Object.assign(new Error("closed"), { code: "PIPE_CLOSED" }),
     ]) {
       const operation = vi.fn(async () => Promise.reject(error));

@@ -82,7 +82,7 @@ design decision and the code honors it consistently.
 ## 2. What is healthy (preserve these while refactoring around them)
 
 - **The service dispatch choke point.** Every ingress path (WS, HTTP,
-  streaming, WebRTC) funnels into `ServiceDispatcher.dispatch()`
+  streaming, and the former peer transport) funnels into `ServiceDispatcher.dispatch()`
   (`packages/shared/src/serviceDispatcher.ts:435`), which performs policy
   check, Zod argument validation, and read-only containment in one place.
   The golden policy matrix
@@ -97,7 +97,7 @@ design decision and the code honors it consistently.
   `@vibestudio/rpc`. The signaling worker is the *server* of that protocol,
   not a re-implementation; framing primitives (`streamCodec`,
   `controlFraming`, `bulkMux`, `frameScheduler`) are reused across the
-  WebRTC and HTTP paths.
+  former peer and HTTP paths.
 - **`apps/headless-host` as a separate app is correct.** It is a spawned
   child-process bundle with only a process contract
   (`src/server/headlessHostManager.ts`); the server never imports it. Do not
@@ -114,7 +114,7 @@ design decision and the code honors it consistently.
 - **Preload is thin and interface-driven** (`ipcTransport` and `wsTransport`
   share the `TransportBridge` interface); test density on the client side is
   high (58 test files against 87 sources in `src/cli` + `src/main`).
-- **`apps/signaling` and `apps/webhook-relay` having no `workspace:*` deps is
+- **The former signaling edge app and `apps/webhook-relay` having no `workspace:*` deps is
   intentional** (edge build isolation), not an oversight.
 
 ## 3. The six structural problems that matter
@@ -199,9 +199,9 @@ Contracts that exist in two-plus hand-synced copies, enumerated:
    bare-node `scripts/cli/*.mjs` world import. The same fix retires the
    duplicated `resolveSignalingUrl`/`parseSignalingEndpoint`/
    `normalizeFingerprint`.
-2. **Signaling wire types.** `apps/signaling/src/protocol.ts:1-23`
+2. **Signaling wire types.** The former signaling app's protocol module
    re-declares `RtcSessionDescription`/`RtcIceCandidate`/`RtcIceServer`
-   from `packages/rpc/src/transports/webrtcPeer.ts` "field-for-field" —
+   from the former peer-transport module "field-for-field" —
    deliberate (edge build isolation is sound) but unenforced. Fix: a
    type-level assertion test (`satisfies`/`expectTypeOf`) run by the
    umbrella vitest; keep the deploy boundary, kill the silent drift.
@@ -248,7 +248,7 @@ the seams in most of them.
 | `src/main/viewManager.ts` | 2,534 | — |
 | `src/main/panelOrchestrator.ts` | 2,087 | — |
 | `src/server/panelRuntimeRegistration.ts` | 1,640 | header says "panel trees no longer live here" — residual code from a migrated ownership |
-| `src/cli/client.ts` | 1,327 | entrypoint + three command registries + ~200 lines of headless-host WebRTC bootstrap (`:836-1033`) |
+| `src/cli/client.ts` | 1,327 | entrypoint + three command registries + ~200 lines of the former headless-host peer bootstrap (`:836-1033`) |
 
 The god files also carry god test files (`rpcServer.test.ts` 2,994,
 `appHost.test.ts` 2,693).
@@ -265,8 +265,8 @@ captured by the current subsystem architecture documents.
 
 ### 3.5 Layering leaks
 
-- **CLI → Electron main.** `src/cli/webrtcClient.ts:135` imports
-  `../main/webrtc/nodeDatachannelPeer.js`; `src/cli/client.ts:845` imports
+- **CLI → Electron main.** The former CLI peer client imported
+  the former Electron-main data-channel peer; `src/cli/client.ts:845` imports
   `../main/panelAssetFacade.js`. Both are shared infrastructure that
   physically lives under `main/`. Move the datachannel peer factory toward
   `@vibestudio/rpc` and the asset facade to a neutral module so the CLI does
@@ -358,7 +358,7 @@ of `apps/mobile/index.js`.
 
 - **`apps/well-known/` is dead.** Only an untracked `dist/` remains; source
   was removed in commit `137ed036`; webhook-relay is the single apex owner
-  per [webrtc-deployment.md](webrtc-deployment.md). Delete the directory and
+  per the retired peer-transport deployment guide. Delete the directory and
   fix the dangling audit-doc references.
 - `headlessHostManager.ts:95-108` carries a 5-way fallback path search for
   the headless-host entry — pin a single build-output contract instead.
@@ -369,7 +369,7 @@ of `apps/mobile/index.js`.
   `shared/serviceSchemas/vcs.ts` (959 lines) — co-locate.
 - `src/cli/client.ts:1193-1208`: `wantsHelp` and `wantsScriptHelp` are
   byte-identical.
-- `rpcClient.ts:267-350` repeats the same `if (this.isWebRtc)` fork across
+- `rpcClient.ts:267-350` repeats the same legacy transport-selection fork across
   five methods — collapse behind one transport-selection accessor.
 - Naming hazards: `refService.ts` vs `refsService.ts` (legitimately distinct,
   one character apart); `configLoader.ts` is panel bootstrap JS, not config

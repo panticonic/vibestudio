@@ -87,7 +87,7 @@ Every workstream must state where its win lands for mobile. Preference order:
    explicit tasks in the same workstream; neither ships as "done" with only one client
    converted.
 3. **Mobile-specific work** — mobile has constraints desktop doesn't: panel assets are
-   proxied over the WebRTC pipe via streaming `gateway.fetch` with gzip on the wire
+   proxied over the Iroh pipe via streaming `gateway.fetch` with gzip on the wire
    (`workspace/apps/mobile/src/services/panelAssetFacade.ts`), cached in a 256MiB
    in-memory LRU keyed by URL path + forwarded headers (`panelAssetFacade.ts:253-262` —
    safe because artifact URLs are content-hashed) plus the WebView HTTP cache keyed to a
@@ -408,7 +408,7 @@ holding revision N would wrongly treat the new server's revision 1 as stale.
 ## WS3 — Panel bundle composition
 
 Propagation: all of WS3 is builder/server-side, so both clients inherit it — and mobile
-gains the most. Every initial byte crosses the WebRTC pipe through the loopback façade,
+gains the most. Every initial byte crosses the Iroh pipe through the loopback façade,
 occupies the 256MiB in-memory LRU, and competes with app memory; cutting first-paint
 payload cuts mobile's slowest and most constrained path. Mobile-specific requirements
 folded into the sub-items below:

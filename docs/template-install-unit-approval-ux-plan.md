@@ -1547,7 +1547,7 @@ skills, authoring docs, Permissions terminology.
 12. A headless install with an explicit decision succeeds; one with no policy fails
     closed.
 
-Run the Electron E2E suite, WebRTC smoke, and headless agentic system tests
+Run the Electron E2E suite, Iroh transport smoke, and headless agentic system tests
 against exact host + exact base, plus each optional template, plus representative
 multi-template compositions.
 
@@ -1672,4 +1672,4 @@ Every case fails at the server boundary, independent of client behavior.
     components and one decision contract.
 14. Desktop, mobile, terminal, and headless complete every install decision with
     the same semantics.
-15. Electron, mobile, WebRTC, E2E, and agentic system tests prove it.
+15. Electron, mobile, Iroh transport, E2E, and agentic system tests prove it.
