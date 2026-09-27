@@ -17,9 +17,14 @@ const baseRuntime = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
 const personalRuntime = fs.readFileSync(personalPath("meta/vibestudio.yml"), "utf8");
 const baseManifest = parseTemplateManifestContent(baseRuntime, WORKSPACE_SYSTEM_EPOCH);
 const personalManifest = parseTemplateManifestContent(personalRuntime, WORKSPACE_SYSTEM_EPOCH);
+const systemTestingManifest = parseTemplateManifestContent(
+  fs.readFileSync(path.join(exactTemplateRoots["system-testing"], "meta/vibestudio.yml"), "utf8"),
+  WORKSPACE_SYSTEM_EPOCH
+);
 const composedRuntime = canonicalTemplateYaml(
   mergeTemplateManifests([
     { label: "base", manifest: baseManifest },
+    { label: "system-testing", manifest: systemTestingManifest },
     { label: "personal", manifest: personalManifest },
   ]).document
 );
@@ -34,6 +39,7 @@ describe("shipped Personal first-run workspace", () => {
     ).not.toThrow();
     expect(personalManifest.dependencies.map(({ url }) => url)).toEqual([
       "git+https://github.com/panticonic/vibestudio-base.git",
+      "git+https://github.com/panticonic/vibestudio-system-testing.git",
     ]);
   });
 
@@ -50,6 +56,8 @@ describe("shipped Personal first-run workspace", () => {
         }),
       }),
     ]);
+    const effective = parseWorkspaceConfigContentWithId(composedRuntime, "personal-workspace");
+    expect(effective.initPanels).toEqual(manifest.initPanels);
     const systemPrompt = manifest.initPanels?.[0]?.stateArgs?.["systemPrompt"];
     expect(systemPrompt).toEqual(expect.stringContaining("executeOnboardingSelection"));
     expect(systemPrompt).toEqual(expect.stringContaining("SetupHub.tsx"));
