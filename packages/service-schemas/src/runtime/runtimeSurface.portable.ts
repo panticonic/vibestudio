@@ -278,6 +278,7 @@ export const WORKSPACE_MEMBERS = [
 export const CREDENTIALS_MEMBERS = [
   "store",
   "connect",
+  "beginWebsitePublication",
   "configureClient",
   "requestCredentialInput",
   "getClientConfigStatus",
@@ -287,7 +288,9 @@ export const CREDENTIALS_MEMBERS = [
   "inspectStoredCredentials",
   "revokeCredential",
   "resolveCredential",
+  "deriveCredential",
   "fetch",
+  "publishFetch",
   "hookForUrl",
   "gitHttp",
   "forAudience",
