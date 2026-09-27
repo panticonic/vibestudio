@@ -129,6 +129,7 @@ function makeHarness(
     affectedBuildUnits?: string[];
     isSystemWorkspace?: () => boolean;
     connectionGrants?: AppHostDeps["connectionGrants"];
+    ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
   } = {}
 ) {
   const root = tempRoot();
@@ -324,6 +325,9 @@ function makeHarness(
         : target === "react-native"
           ? { appSource: "apps/mobile", requiresExtensions: ["extensions/react-native"] }
           : { appSource: "apps/remote-cli", requiresExtensions: [] },
+    ...(opts.ensureHostTargetExtensions
+      ? { ensureHostTargetExtensions: opts.ensureHostTargetExtensions }
+      : {}),
   });
   return {
     host,
@@ -2413,8 +2417,10 @@ describe("AppHost", () => {
   });
 
   it("stages React Native app approval before the provider is active and consumes it after provider startup", async () => {
+    const ensureHostTargetExtensions = vi.fn(async () => undefined);
     const { host, buildSystem, approvalQueue, approvalCoordinator, graphNode } = makeHarness({
       useApprovalCoordinator: true,
+      ensureHostTargetExtensions,
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     host.setDeclared([{ source: graphNode.relativePath, ref: "main" }]);
@@ -2429,6 +2435,7 @@ describe("AppHost", () => {
       appId: graphNode.name,
       reason: "React Native build provider is not active",
     });
+    expect(ensureHostTargetExtensions).toHaveBeenCalledWith("react-native");
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
     expect(approvalQueue.request).not.toHaveBeenCalled();
 
