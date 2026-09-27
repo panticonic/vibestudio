@@ -7,6 +7,7 @@
  *   ├── index.html  (panels/about only)
  *   ├── assets/     (chunks, images, fonts)
  *   ├── artifacts.json
+ *   ├── executable-modules.json.gz (optional sealed source inventory)
  *   └── metadata.json
  *
  * Same key = same content. Online deletion is owned exclusively by the
@@ -16,6 +17,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { gunzipSync, gzip, constants as zlibConstants } from "zlib";
 import {
   getCentralDataPath,
   getSharedDerivedDataPath,
@@ -45,6 +47,7 @@ import { stateLayout } from "../stateLayout.js";
 import {
   derivedCacheCoordinator,
   scheduleDerivedCachePrune,
+  type DerivedCacheLease,
 } from "@vibestudio/shared/derivedCache";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
@@ -269,6 +272,68 @@ interface StoredExecutionVariant {
   sourceStateHash: string;
   sourceState: ExecutionSourceStateRef;
   execution: BuildExecutionIdentity;
+}
+
+const EXECUTABLE_MODULES_FILE = "executable-modules.json.gz";
+
+function gzipJson(value: unknown): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    gzip(JSON.stringify(value), { level: zlibConstants.Z_BEST_SPEED }, (error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  });
+}
+
+/** Read both current compact metadata and older inline-module records. */
+export function readBuildMetadata(dir: string): BuildMetadata {
+  const metadata = JSON.parse(
+    fs.readFileSync(path.join(dir, "metadata.json"), "utf-8")
+  ) as BuildMetadata;
+  if (metadata.executableModules !== undefined) return metadata;
+  const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
+  if (!fs.existsSync(modulesPath)) return metadata;
+  const executableModules = JSON.parse(
+    gunzipSync(fs.readFileSync(modulesPath)).toString("utf-8")
+  ) as ExecutableModuleInput[];
+  return { ...metadata, executableModules };
+}
+
+/** Keep the verbose source inventory compressed and separate from hot metadata. */
+export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): Promise<void> {
+  const { executableModules, ...compactMetadata } = metadata;
+  const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
+  if (executableModules !== undefined) {
+    const modulesTmp = `${modulesPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+    try {
+      const payload = await gzipJson(executableModules);
+      await fs.promises.writeFile(modulesTmp, payload);
+      await fs.promises.rename(modulesTmp, modulesPath);
+    } catch (error) {
+      try {
+        await fs.promises.rm(modulesTmp, { force: true });
+      } catch (cleanupError) {
+        warnCleanupFailure(modulesTmp, cleanupError);
+      }
+      throw error;
+    }
+  } else {
+    await fs.promises.rm(modulesPath, { force: true });
+  }
+
+  const metadataPath = path.join(dir, "metadata.json");
+  const metadataTmp = `${metadataPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+  try {
+    await fs.promises.writeFile(metadataTmp, JSON.stringify(compactMetadata));
+    await fs.promises.rename(metadataTmp, metadataPath);
+  } catch (error) {
+    try {
+      await fs.promises.rm(metadataTmp, { force: true });
+    } catch (cleanupError) {
+      warnCleanupFailure(metadataTmp, cleanupError);
+    }
+    throw error;
+  }
 }
 
 function executionVariant(metadata: BuildMetadata): StoredExecutionVariant | null {
@@ -748,7 +813,7 @@ function readBuildDir(
   if (!fs.existsSync(metadataPath)) return null;
 
   try {
-    const rawMetadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as BuildMetadata;
+    const rawMetadata = readBuildMetadata(dir);
     if (
       !("sourceStateHash" in rawMetadata) ||
       (rawMetadata.sourceStateHash !== null && typeof rawMetadata.sourceStateHash !== "string") ||
@@ -794,6 +859,12 @@ function readBuildDir(
     if (options.verifyExecution !== false) {
       verifiedExecutionIdentity(metadata, storedManifest);
     }
+    if (rawMetadata.executableModules !== undefined) {
+      // Upgrade old entries when read. The complete compressed inventory is
+      // atomically published before metadata.json stops carrying the inline
+      // copy, so concurrent readers always have one complete representation.
+      scheduleSharedMetadataMigration(dir, expectedBuildKey, rawMetadata);
+    }
     return {
       dir,
       buildKey: expectedBuildKey,
@@ -804,6 +875,31 @@ function readBuildDir(
   } catch {
     return null;
   }
+}
+
+function scheduleSharedMetadataMigration(dir: string, key: string, metadata: BuildMetadata): void {
+  const sharedDir = getSharedBuildDir(key);
+  if (!sharedDir || path.resolve(sharedDir) !== path.resolve(dir)) return;
+  const cacheRoot = path.dirname(sharedDir);
+  let lease: DerivedCacheLease;
+  try {
+    // Migration can outlive the read which discovered the old record. Own a
+    // separate lease so collection cannot rename the directory mid-migration.
+    lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
+  } catch (error) {
+    warnCleanupFailure(path.join(dir, "metadata.json"), error);
+    return;
+  }
+  setImmediate(() => {
+    void writeBuildMetadata(dir, metadata)
+      .catch((error) => warnCleanupFailure(path.join(dir, "metadata.json"), error))
+      .finally(() => {
+        lease.release();
+        void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
+          warnCleanupFailure(cacheRoot, error);
+        });
+      });
+  });
 }
 
 const reportedSharedBuildHits = new Set<string>();
@@ -904,10 +1000,7 @@ export async function getOrHydrate(
       try {
         await fs.promises.mkdir(path.dirname(localDir), { recursive: true });
         await linkBuildTree(sharedDir, tmpDir, new Set(["metadata.json", "executions"]));
-        await fs.promises.writeFile(
-          path.join(tmpDir, "metadata.json"),
-          `${JSON.stringify(sharedMetadata, null, 2)}\n`
-        );
+        await writeBuildMetadata(tmpDir, sharedMetadata);
         // Execution metadata is workspace-owned provenance. Shared caches supply
         // reusable bytes, never another workspace's semantic execution variants.
         const executionDigest = sharedMetadata.execution?.executionDigest;
@@ -1064,20 +1157,8 @@ export async function rebindSourceState(
   const metadata: BuildMetadata = { ...metadataWithoutExecution, execution };
   const localDir = getBuildDir(build.buildKey);
   if (path.resolve(build.dir) === path.resolve(localDir)) {
-    const metadataPath = path.join(localDir, "metadata.json");
-    const tmpPath = `${metadataPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
-    try {
-      await fs.promises.writeFile(tmpPath, `${JSON.stringify(metadata, null, 2)}\n`);
-      await writeExecutionMetadata(localDir, metadata);
-      await fs.promises.rename(tmpPath, metadataPath);
-    } catch (error) {
-      try {
-        await fs.promises.rm(tmpPath, { force: true });
-      } catch (cleanupError) {
-        warnCleanupFailure(tmpPath, cleanupError);
-      }
-      throw error;
-    }
+    await writeExecutionMetadata(localDir, metadata);
+    await writeBuildMetadata(localDir, metadata);
   }
   const rebound = {
     ...build,
@@ -1116,9 +1197,7 @@ export async function discardBootstrapBuilds(
     const buildDir = path.join(buildsDir, entry.name);
     let metadata: BuildMetadata;
     try {
-      metadata = JSON.parse(
-        await fs.promises.readFile(path.join(buildDir, "metadata.json"), "utf8")
-      ) as BuildMetadata;
+      metadata = readBuildMetadata(buildDir);
     } catch {
       continue;
     }
@@ -1267,10 +1346,7 @@ export async function put(
   );
 
   // Write metadata (sentinel) inside tmpDir BEFORE rename so winner is always complete
-  await fs.promises.writeFile(
-    path.join(tmpDir, "metadata.json"),
-    JSON.stringify(storedMetadata, null, 2)
-  );
+  await writeBuildMetadata(tmpDir, storedMetadata);
   await writeExecutionMetadata(tmpDir, storedMetadata);
 
   // Race-safe promotion: try rename, handle concurrent winner

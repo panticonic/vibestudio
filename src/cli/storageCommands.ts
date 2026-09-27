@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  DEFAULT_DERIVED_CACHE_MAX_BYTES,
   DerivedCacheCoordinator,
   derivedCacheDatabasePath,
+  derivedCacheMaxBytes,
   type DerivedCachePruneResult,
 } from "@vibestudio/shared/derivedCache";
 import {
@@ -14,11 +14,9 @@ import {
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { UsageError, jsonMode, printError, printResult } from "./output.js";
 
-interface StorageRoot {
-  kind: "live-safe" | "offline-only";
-  name: string;
-  path: string;
-}
+type StorageRoot =
+  | { kind: "live-safe"; name: string; path: string }
+  | { kind: "offline-only"; name: string; path: string };
 
 function cacheRoots(): StorageRoot[] {
   const profile = getProfileDataPath();
@@ -35,6 +33,11 @@ function cacheRoots(): StorageRoot[] {
       path: path.join(shared, "extension-runtime-deps"),
     },
     { kind: "live-safe", name: "shared build results", path: path.join(shared, "build-results") },
+    {
+      kind: "live-safe",
+      name: "shared root template checkouts",
+      path: path.join(shared, "root-templates"),
+    },
     {
       kind: "offline-only",
       name: "shared build artifacts",
@@ -86,8 +89,8 @@ function cacheRoots(): StorageRoot[] {
   return [...unique.values()].filter((root) => fs.existsSync(root.path));
 }
 
-function gibibytes(value: string | boolean | undefined): number {
-  if (typeof value !== "string") return DEFAULT_DERIVED_CACHE_MAX_BYTES;
+function gibibytes(value: string | boolean | undefined): number | undefined {
+  if (typeof value !== "string") return undefined;
   const gib = Number(value);
   if (!Number.isFinite(gib) || gib < 0.25 || gib > 1024) {
     throw new UsageError("--max-gib must be a number from 0.25 to 1024");
@@ -111,7 +114,7 @@ function storedBytes(storedPath: string): number {
     .reduce((total, child) => total + storedBytes(path.join(storedPath, child)), stat.blocks * 512);
 }
 
-function offlineStatus(root: StorageRoot) {
+function offlineStatus(root: Extract<StorageRoot, { kind: "offline-only" }>) {
   const entries = fs.readdirSync(root.path, { withFileTypes: true });
   const statfs = fs.statfsSync(root.path);
   return {
@@ -133,7 +136,11 @@ async function status(inv: ParsedInvocation): Promise<number> {
         if (root.kind === "offline-only") return offlineStatus(root);
         const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));
         try {
-          return { ...root, ...(await coordinator.status(root.path)) };
+          return {
+            ...root,
+            ...(await coordinator.status(root.path)),
+            maxBytes: derivedCacheMaxBytes(root.path),
+          };
         } finally {
           coordinator.close();
         }
@@ -147,6 +154,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
           for (const root of roots) {
             console.log(
               `${root.name}: ${humanBytes(root.bytes)} in ${root.entries} entries` +
+                (root.kind === "live-safe" ? ` (limit ${humanBytes(root.maxBytes)})` : "") +
                 ` (${humanBytes(root.reclaimableBytes)} currently reclaimable, ${root.kind})`
             );
           }
@@ -173,14 +181,17 @@ async function prune(inv: ParsedInvocation): Promise<number> {
       try {
         results.push({
           ...root,
-          ...(await coordinator.prune(root.path, { maxBytes, dryRun })),
+          ...(await coordinator.prune(root.path, {
+            ...(maxBytes === undefined ? {} : { maxBytes }),
+            dryRun,
+          })),
         });
       } finally {
         coordinator.close();
       }
     }
     printResult(
-      { dryRun, maxBytes, roots: results },
+      { dryRun, ...(maxBytes === undefined ? {} : { maxBytes }), roots: results },
       {
         json,
         human: () => {
@@ -188,7 +199,8 @@ async function prune(inv: ParsedInvocation): Promise<number> {
             console.log(
               `${result.name}: ${dryRun ? "would remove" : "removed"} ` +
                 `${result.removedEntries} entries / ${humanBytes(result.removedBytes)}; ` +
-                `${humanBytes(result.bytes)} ${dryRun ? "would remain" : "remain"}`
+                `${humanBytes(result.bytes)} ${dryRun ? "would remain" : "remain"} ` +
+                `(limit ${humanBytes(result.targetBytes)})`
             );
           }
         },
@@ -217,7 +229,7 @@ export const storageCommands: CliCommand[] = [
       {
         name: "max-gib",
         takesValue: true,
-        description: "Maximum size of each live-safe cache root",
+        description: "Override the configured size limit for every live-safe cache root",
       },
       {
         name: "dry-run",

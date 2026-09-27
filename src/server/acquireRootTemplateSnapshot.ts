@@ -16,6 +16,10 @@ import {
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+import {
+  derivedCacheCoordinator,
+  scheduleDerivedCachePrune,
+} from "@vibestudio/shared/derivedCache";
 
 /**
  * Where an exact template checkout is cached.
@@ -29,11 +33,32 @@ import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
  * hermetic.
  */
 function rootTemplateCheckoutTarget(pin: { url: string; commit: string }): string {
-  return path.join(
-    getSharedDerivedDataPath(),
-    "root-templates",
+  return path.join(rootTemplateCacheRoot(), canonicalTemplateNodeId(pin.url, pin.commit));
+}
+
+function rootTemplateCacheRoot(): string {
+  return path.join(getSharedDerivedDataPath(), "root-templates");
+}
+
+async function withRootTemplateLease<T>(
+  pin: { url: string; commit: string },
+  operation: () => Promise<T>
+): Promise<T> {
+  const root = rootTemplateCacheRoot();
+  const lease = derivedCacheCoordinator(root).acquire(
+    root,
     canonicalTemplateNodeId(pin.url, pin.commit)
   );
+  try {
+    return await operation();
+  } finally {
+    lease.release();
+    void scheduleDerivedCachePrune(root).catch((error) => {
+      console.warn(
+        `[rootTemplates] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+  }
 }
 
 /**
@@ -59,23 +84,25 @@ export function acquireRootTemplateSnapshot(input: {
       sink: input.sink,
       reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
     });
-  return readThroughImmutableGitCheckout({
-    fs,
-    target,
-    label: "root-template",
-    read,
-    prepare: (dir) =>
-      acquireExactGitSnapshot({
-        git: input.git,
-        dir,
-        url: templateGitTransportUrl(input.pin.url),
-        ref: input.pin.ref,
-        expectedCommit: input.pin.commit,
-        label,
-        sink: input.sink,
-        reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
-      }),
-  });
+  return withRootTemplateLease(input.pin, () =>
+    readThroughImmutableGitCheckout({
+      fs,
+      target,
+      label: "root-template",
+      read,
+      prepare: (dir) =>
+        acquireExactGitSnapshot({
+          git: input.git,
+          dir,
+          url: templateGitTransportUrl(input.pin.url),
+          ref: input.pin.ref,
+          expectedCommit: input.pin.commit,
+          label,
+          sink: input.sink,
+          reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
+        }),
+    })
+  );
 }
 
 /**
@@ -93,47 +120,49 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
   const fs = input.fs ?? fsp;
   const label = `local workspace root template ${input.pin.url}`;
   const target = rootTemplateCheckoutTarget(input.pin);
-  return readThroughImmutableGitCheckout({
-    fs,
-    target,
-    label: "local-root-template-seed",
-    read: (dir) =>
-      readExactGitSnapshot({
-        git: input.git,
-        dir,
-        commit: input.pin.commit,
-        label,
-        sink: input.sink,
-        reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
-      }),
-    prepare: async (dir) => {
-      // This is a transport adapter, not a second resolver. Copy the repository
-      // database into the private atomic attempt, then apply the exact same
-      // commit-tree and snapshot verification used by ordinary acquisition.
-      // Worktree dirt is harmless because readExactGitSnapshot reads the named
-      // commit tree rather than filesystem bytes.
-      const startedAt = performance.now();
-      await fs.cp(path.resolve(input.checkout), dir, { recursive: true });
-      const copiedAt = performance.now();
-      const snapshot = await readExactGitSnapshot({
-        git: input.git,
-        dir,
-        commit: input.pin.commit,
-        label,
-        sink: input.sink,
-        reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
-      });
-      const readAt = performance.now();
-      if (readAt - startedAt >= 100) {
-        console.log("[Perf] local root template seed", {
-          copyMs: copiedAt - startedAt,
-          readMs: readAt - copiedAt,
-          totalMs: readAt - startedAt,
+  return withRootTemplateLease(input.pin, () =>
+    readThroughImmutableGitCheckout({
+      fs,
+      target,
+      label: "local-root-template-seed",
+      read: (dir) =>
+        readExactGitSnapshot({
+          git: input.git,
+          dir,
+          commit: input.pin.commit,
+          label,
+          sink: input.sink,
+          reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
+        }),
+      prepare: async (dir) => {
+        // This is a transport adapter, not a second resolver. Copy the repository
+        // database into the private atomic attempt, then apply the exact same
+        // commit-tree and snapshot verification used by ordinary acquisition.
+        // Worktree dirt is harmless because readExactGitSnapshot reads the named
+        // commit tree rather than filesystem bytes.
+        const startedAt = performance.now();
+        await fs.cp(path.resolve(input.checkout), dir, { recursive: true });
+        const copiedAt = performance.now();
+        const snapshot = await readExactGitSnapshot({
+          git: input.git,
+          dir,
+          commit: input.pin.commit,
+          label,
+          sink: input.sink,
+          reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
         });
-      }
-      return snapshot;
-    },
-  });
+        const readAt = performance.now();
+        if (readAt - startedAt >= 100) {
+          console.log("[Perf] local root template seed", {
+            copyMs: copiedAt - startedAt,
+            readMs: readAt - copiedAt,
+            totalMs: readAt - startedAt,
+          });
+        }
+        return snapshot;
+      },
+    })
+  );
 }
 
 /**

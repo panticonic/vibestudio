@@ -4776,10 +4776,7 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
     }
     if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
       extensionDetails.runtimeDepsKey = runtimeDeps.key;
-      await fs.promises.writeFile(
-        path.join(result.dir, "metadata.json"),
-        JSON.stringify(result.metadata, null, 2)
-      );
+      await buildStore.writeBuildMetadata(result.dir, result.metadata);
     }
   } finally {
     runtimeDeps.release();

@@ -3,8 +3,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const DEFAULT_DERIVED_CACHE_MAX_BYTES = 10 * 1024 ** 3;
-export const DEFAULT_DERIVED_CACHE_FREE_FLOOR_BYTES = 10 * 1024 ** 3;
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+export const DEFAULT_DERIVED_CACHE_MAX_BYTES = 2 * GIB;
+export const DEFAULT_DERIVED_CACHE_FREE_FLOOR_BYTES = 10 * GIB;
+const DERIVED_CACHE_MAX_BYTES_BY_ROOT: Readonly<Record<string, number>> = {
+  "external-deps": 2 * GIB,
+  "extension-runtime-deps": 1 * GIB,
+  "build-results": 1 * GIB,
+  "root-templates": 512 * MIB,
+};
 const LEASE_TTL_MS = 5 * 60_000;
 const HEARTBEAT_MS = 60_000;
 const AUTOMATIC_PRUNE_INTERVAL_MS = 15 * 60_000;
@@ -40,6 +48,12 @@ export interface DerivedCacheLease {
 
 export function derivedCacheDatabasePath(root: string): string {
   return path.join(canonicalRoot(root), ".storage", "derived-cache.db");
+}
+
+/** Per-root quotas sum to a bounded profile-wide shared cache footprint. */
+export function derivedCacheMaxBytes(root: string): number {
+  return DERIVED_CACHE_MAX_BYTES_BY_ROOT[path.basename(canonicalRoot(root))] ??
+    DEFAULT_DERIVED_CACHE_MAX_BYTES;
 }
 
 function canonicalRoot(root: string): string {
@@ -109,8 +123,7 @@ async function cacheDirectories(root: string): Promise<string[]> {
       .filter(
         (entry) =>
           entry.isDirectory() &&
-          entry.name !== ".storage" &&
-          entry.name !== ".trash" &&
+          !entry.name.startsWith(".") &&
           !entry.name.includes(".tmp.") &&
           !entry.name.includes(".gc.")
       )
@@ -231,7 +244,7 @@ export class DerivedCacheCoordinator {
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     let entries = await this.scan(root);
     const before = this.summarize(root, entries);
-    const maxBytes = options.maxBytes ?? DEFAULT_DERIVED_CACHE_MAX_BYTES;
+    const maxBytes = options.maxBytes ?? derivedCacheMaxBytes(root);
     const freeFloor = options.freeFloorBytes ?? DEFAULT_DERIVED_CACHE_FREE_FLOOR_BYTES;
     const pressureBytes = Math.max(0, freeFloor - before.availableBytes);
     const targetBytes = Math.max(

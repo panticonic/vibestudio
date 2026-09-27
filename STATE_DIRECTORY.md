@@ -106,6 +106,19 @@ The dependency environment is leased for the complete bundle or typecheck, not
 only while npm installs it. A cache entry therefore cannot disappear while
 esbuild or TypeScript is resolving packages from it.
 
+### `derived-cache/root-templates/`
+
+Stores immutable Git checkouts for exact template URL and commit pins. Snapshot
+reads hold cross-process leases; the live-safe collector can remove an old
+checkout after readers release it. Private in-progress checkouts are excluded
+from collection.
+
+### `derived-cache/build-results/`
+
+Stores shared reconstruction results. Executable source inventories are gzip
+compressed beside the compact metadata and loaded transparently when a build is
+read. Older inline inventories are migrated when their build is next read.
+
 ### `derived-cache/extension-runtime-deps/`
 
 Stores extension runtime dependency installations for packages esbuild leaves
@@ -134,13 +147,16 @@ environment still references an inode.
 
 ### Cache policy
 
-Each live-safe cache root defaults to a 10 GiB ceiling and collection also
-attempts to preserve at least 10 GiB of filesystem free space. Using a cache
-root starts an unreferenced periodic tuner for that root. It makes an immediate
-opportunistic pass, then checks every fifteen minutes while the process remains
-live. A SQLite maintenance lease and persisted last-pass time coalesce those
-checks across every Vibestudio process sharing the profile, so only one process
-walks a root in each interval. Manual `storage prune` bypasses that cadence.
+Managed shared live-safe roots have individual ceilings of 2 GiB for external
+dependencies, 1 GiB each for extension runtime installations and build results,
+and 512 MiB for root-template checkouts. Their combined ceiling is 4.5 GiB.
+Other live-safe roots default to 2 GiB. Collection also attempts to preserve at
+least 10 GiB of filesystem free space. Using a cache root starts an unreferenced
+periodic tuner for that root. It makes an immediate opportunistic pass, then
+checks every fifteen minutes while the process remains live. A SQLite
+maintenance lease and persisted last-pass time coalesce those checks across
+every Vibestudio process sharing the profile, so only one process walks a root
+in each interval. Manual `storage prune` bypasses that cadence.
 Persistent developer instances additionally prune their central build cache
 before startup and after shutdown, then remove instance-CAS blobs whose pool
 link is the only remaining hardlink. The offline boundary is deliberate:
