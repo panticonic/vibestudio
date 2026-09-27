@@ -4,8 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  collectHostBuildGenerations,
   publishHostBuildGeneration,
   readCurrentHostBuildGeneration,
+  releaseHostBuildGeneration,
 } from "./host-build-generations.mjs";
 import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
 
@@ -90,6 +92,38 @@ test("publishes immutable complete generations and leaves the prior one readable
     );
     assert.equal(fs.readFileSync(path.join(second, "panelPreload.cjs"), "utf8"), "preload-b");
     assert.equal(readCurrentHostBuildGeneration(root, "desktop"), second);
+    releaseHostBuildGeneration(first);
+    assert.equal(fs.existsSync(first), false);
+    assert.equal(fs.existsSync(second), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("collects generations after a crashed launcher without removing current builds", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-gc-"));
+  try {
+    const generations = path.join(root, "dist/host-generations");
+    fs.mkdirSync(generations, { recursive: true });
+    const old = path.join(generations, `source-${"a".repeat(64)}`);
+    const current = path.join(generations, `source-${"b".repeat(64)}`);
+    fs.mkdirSync(old);
+    fs.mkdirSync(current);
+    fs.writeFileSync(
+      path.join(generations, "current-source.json"),
+      JSON.stringify({ version: 1, kind: "source", root: current })
+    );
+    const leaseDir = path.join(generations, ".leases", path.basename(old));
+    fs.mkdirSync(leaseDir, { recursive: true });
+    const liveLease = path.join(leaseDir, `${process.pid}-live`);
+    fs.writeFileSync(liveLease, "");
+    collectHostBuildGenerations(root);
+    assert.equal(fs.existsSync(old), true);
+    fs.rmSync(liveLease);
+    fs.writeFileSync(path.join(leaseDir, "99999999-crashed"), "");
+    collectHostBuildGenerations(root);
+    assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(current), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
