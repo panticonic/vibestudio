@@ -2,9 +2,14 @@ import { defineConfig } from "vitest/config";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
 import { exactPairTestPaths } from "./vitest.exactPairTests";
+import { hostSourceAliases } from "./vitest.sourceAliases";
 
 export default defineConfig({
   ...vitestSharedConfig,
+  resolve: {
+    ...vitestSharedConfig.resolve,
+    alias: [...vitestSharedConfig.resolve.alias, ...hostSourceAliases(__dirname)],
+  },
   test: {
     ...vitestSharedConfig.test,
     name: "host",
