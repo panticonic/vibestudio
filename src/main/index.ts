@@ -2724,6 +2724,7 @@ app.on("ready", async () => {
     });
     setupTestApi(testOwner(workspaceController), {
       resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
+      getServerConnectionStatus: () => conn.serverClient.getConnectionStatus(),
       listWorkspaces: () =>
         conn.hubControlClient.call("hubControl", "listWorkspaces", []) as Promise<
           import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]

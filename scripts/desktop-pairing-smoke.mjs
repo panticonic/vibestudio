@@ -1160,12 +1160,20 @@ async function workspaceTreeIds(app, name, timeoutMs) {
 }
 
 async function waitForConnectionStatus(app, connected, timeoutMs) {
-  return waitForChromeResult(
-    app,
-    `([...document.querySelectorAll('button[aria-label]')].some((entry) =>
-    entry.getClientRects().length && ${connected ? "/^Connected to /" : "/^(Disconnected from |Reconnecting to server|Connecting to server)/"}.test(entry.getAttribute('aria-label'))))`,
-    `waiting for ${connected ? "restored" : "interrupted"} server connection`,
-    timeoutMs
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = null;
+  while (Date.now() < deadline) {
+    lastStatus = await evaluateElectron(
+      app,
+      () => globalThis.__testApi.getServerConnectionStatus(),
+      undefined,
+      "reading desktop server connection status"
+    );
+    if ((lastStatus === "connected") === connected) return;
+    await sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for ${connected ? "restored" : "interrupted"} server connection (last status: ${lastStatus})`
   );
 }
 
@@ -2505,7 +2513,7 @@ async function main() {
       Math.max(1000, deadlineMs - Date.now())
     );
     await waitForConnectionStatus(electronApp, true, Math.max(1000, deadlineMs - Date.now()));
-    // The chrome saying "Connected to" is one workspace reporting that its own
+    // The desktop reporting "connected" is one workspace reporting that its own
     // recovery finished, not a promise that the next call lands: the link can
     // be re-established and lost again underneath this, and asking during that
     // gap is answered with the gap. So this asks until it is answered.

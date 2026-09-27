@@ -56,6 +56,7 @@ export type { PanelReadinessSnapshot } from "./panelReadiness.js";
 export interface TestApi {
   forWorkspace(workspaceId: string): Promise<TestApi>;
   listWorkspaces(): Promise<import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]>;
+  getServerConnectionStatus(): "connected" | "connecting" | "disconnected";
 
   /** Get the full panel tree as a flat array */
   getPanelTree(): Panel[];
@@ -218,6 +219,7 @@ export function setupTestApi(
   selectors: {
     resolveWorkspace(workspaceId: string): Promise<TestWorkspaceOwner>;
     listWorkspaces(): ReturnType<TestApi["listWorkspaces"]>;
+    getServerConnectionStatus(): ReturnType<TestApi["getServerConnectionStatus"]>;
   }
 ): void {
   if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") return;
@@ -234,6 +236,7 @@ export function setupTestApi(
         {
           forWorkspace: async (id) => getApi(await selectors.resolveWorkspace(id)),
           listWorkspaces: selectors.listWorkspaces,
+          getServerConnectionStatus: selectors.getServerConnectionStatus,
         },
         assertHostedChrome
       );
@@ -246,7 +249,7 @@ export function setupTestApi(
 
 function createWorkspaceTestApi(
   { panelOrchestrator, panelRegistry, getPanelView }: TestWorkspaceOwner,
-  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces">,
+  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces" | "getServerConnectionStatus">,
   assertHostedChrome: () => void
 ): TestApi {
   const panelDiagnostics = new Map<

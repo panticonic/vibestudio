@@ -22,6 +22,7 @@ it("keeps identical panel IDs and RPC reads with their captured workspace owner"
   const system = owner("System");
   const personal = owner("Personal");
   setupTestApi(system, {
+    getServerConnectionStatus: () => "connected",
     resolveWorkspace: async (id) => {
       if (id !== "personal") throw new Error("Workspace is unavailable");
       return personal;
@@ -46,7 +47,11 @@ it("observes its owner's view becoming ready without reinstalling the global API
     panelRegistry: {} as PanelRegistry,
     getPanelView: () => view,
   };
-  setupTestApi(owner, { resolveWorkspace: async () => owner, listWorkspaces: async () => [] });
+  setupTestApi(owner, {
+    resolveWorkspace: async () => owner,
+    listWorkspaces: async () => [],
+    getServerConnectionStatus: () => "connected",
+  });
   const api = globalThis.__testApi!;
   await expect(api.getPanelText("panel")).rejects.toThrow("PanelView not available");
   view = {
@@ -88,7 +93,11 @@ it("creates in the captured workspace through native chrome without requiring an
       return {} as PanelView;
     },
   };
-  setupTestApi(system, { resolveWorkspace: async () => personal, listWorkspaces: async () => [] });
+  setupTestApi(system, {
+    resolveWorkspace: async () => personal,
+    listWorkspaces: async () => [],
+    getServerConnectionStatus: () => "connected",
+  });
   const api = await globalThis.__testApi!.forWorkspace("personal");
   await api.createPanel("parent", "about/help", { focus: false });
   expect(createPanel).toHaveBeenCalledWith("parent", "about/help", { focus: false }, undefined);
