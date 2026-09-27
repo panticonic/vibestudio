@@ -238,6 +238,49 @@ describe("userland authority fold", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("keeps an injected test seam outside the production service query", async () => {
+    const { root, project } = programFor(`
+      declare const workers: {
+        resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }>;
+      };
+      type ResolveService = typeof workers.resolveService;
+      export async function resolveNotes(resolveService?: ResolveService) {
+        return resolveService
+          ? resolveService("example.notes.v1", "main")
+          : workers.resolveService("example.notes.v1", "main");
+      }
+    `);
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:exact",
+      services: [binding],
+      resolveCatalog: async () => catalog,
+    });
+
+    const diagnostics = await authorityDiagnosticsForProgram({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [{ name: "consumer", relativePath: "." }],
+      manifest: {
+        authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          requests: [
+            {
+              capability: "workspace-service:notes",
+              resource: { kind: "exact", key: "do:workers/notes:NotesDO:main" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+          provides: [],
+        },
+      },
+      environment,
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   it("reports an actionable diagnostic when a consumed service lacks review metadata", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string): Promise<unknown> };

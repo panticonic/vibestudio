@@ -8,8 +8,8 @@
     },
     "personal": {
       "url": "git+https://github.com/panticonic/vibestudio-personal.git",
-      "ref": "refs/tags/v0.3.54",
-      "commit": "c1d799adfc3012fc0e3111870744b1ac4f25b4cd"
+      "ref": "refs/tags/v0.3.55",
+      "commit": "77e12b412968c7520b78d3d2ba1f68e7bc7ca7f7"
     },
     "system": {
       "url": "git+https://github.com/panticonic/vibestudio-system.git",
