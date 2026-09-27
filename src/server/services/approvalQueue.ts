@@ -588,7 +588,10 @@ function preparationDiagnostics(error: unknown): string[] {
 export interface ApprovalQueue {
   beginPreparation?(req: CapabilityApprovalQueueRequest & { dedupKey: string }): string;
   updatePreparation?(dedupKey: string, progress: ApprovalPreparationProgress): void;
-  failPreparation?(dedupKey: string, error: unknown): void;
+  failPreparation?(
+    dedupKey: string,
+    error: unknown
+  ): { approval: PendingApproval; diagnostics: string[] } | undefined;
   discardPreparation?(dedupKey: string): void;
   request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;
   request(req: AuthorityApprovalQueueRequest): Promise<AuthorityApprovalQueueDecision>;
@@ -1820,10 +1823,7 @@ export function createApprovalQueue(deps: {
         const cancel = () => {
           const current = preparationsByProducerKey.get(producerKey);
           if (!current || current.approval.lifecycle?.state !== "preparing") return;
-          current.approval = {
-            ...current.approval,
-            lifecycle: { state: "cancelled", diagnostics: ["Publication was cancelled"] },
-          };
+          removeEntry(current);
           emitPendingChanged();
           console.log("[Approvals] Publication review cancelled", {
             approvalId: current.approval.approvalId,
@@ -1857,19 +1857,14 @@ export function createApprovalQueue(deps: {
     failPreparation(dedupKey, error) {
       const entry = preparationsByProducerKey.get(dedupKey);
       if (!entry || entry.approval.lifecycle?.state !== "preparing") return;
-      entry.approval = {
-        ...entry.approval,
-        attention: "interrupt",
-        lifecycle: {
-          state: "failed",
-          diagnostics: preparationDiagnostics(error),
-        },
-      };
+      const failure = { approval: entry.approval, diagnostics: preparationDiagnostics(error) };
+      removeEntry(entry);
       emitPendingChanged();
       console.log("[Approvals] Publication review failed", {
-        approvalId: entry.approval.approvalId,
-        elapsedMs: Date.now() - entry.approval.requestedAt,
+        approvalId: failure.approval.approvalId,
+        elapsedMs: Date.now() - failure.approval.requestedAt,
       });
+      return failure;
     },
 
     discardPreparation(dedupKey) {
@@ -1973,14 +1968,6 @@ export function createApprovalQueue(deps: {
       if (!entry) return;
       if (entry.approval.lifecycle?.state === "preparing") {
         throw new Error("Approval is still preparing and cannot be resolved");
-      }
-      if (
-        (entry.approval.lifecycle?.state === "failed" ||
-          entry.approval.lifecycle?.state === "cancelled") &&
-        decision !== "dismiss" &&
-        decision !== "deny"
-      ) {
-        throw new Error(`Approval is ${entry.approval.lifecycle.state} and cannot be granted`);
       }
       if (entry.approval.kind === "unit-install-review") {
         throw new Error("Unit install reviews must be resolved through resolveInstallReview");

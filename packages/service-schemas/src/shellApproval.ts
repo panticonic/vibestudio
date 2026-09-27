@@ -209,8 +209,7 @@ const pendingApprovalBaseShape = {
     .optional(),
   lifecycle: z
     .object({
-      state: z.enum(["preparing", "ready", "failed", "cancelled"]),
-      diagnostics: z.array(z.string()).readonly().optional(),
+      state: z.enum(["preparing", "ready"]),
       progress: z
         .object({
           label: z.string(),

@@ -267,7 +267,7 @@ describe("approvalQueue", () => {
     await expect(decision).resolves.toBe("dismiss");
   });
 
-  it("updates a preparing publication with structured build diagnostics", () => {
+  it("removes a failed preparation and returns its diagnostics for notification", () => {
     const { queue } = createQueue();
     const dedupKey = "workspace-publication:event-failed";
     const approvalId = queue.beginPreparation!({
@@ -281,7 +281,7 @@ describe("approvalQueue", () => {
       title: "Preparing workspace update…",
     });
 
-    queue.failPreparation!(dedupKey, {
+    const failure = queue.failPreparation!(dedupKey, {
       errorData: {
         diagnostics: [
           { file: "workers/store/index.ts", line: 12, message: "Undeclared service protocol" },
@@ -289,16 +289,34 @@ describe("approvalQueue", () => {
       },
     });
 
-    expect(queue.listPending()).toEqual([
-      expect.objectContaining({
-        approvalId,
-        attention: "interrupt",
-        lifecycle: {
-          state: "failed",
-          diagnostics: ["workers/store/index.ts:12: Undeclared service protocol"],
-        },
-      }),
-    ]);
+    expect(failure).toEqual({
+      approval: expect.objectContaining({ approvalId, lifecycle: { state: "preparing" } }),
+      diagnostics: ["workers/store/index.ts:12: Undeclared service protocol"],
+    });
+    expect(queue.listPending()).toEqual([]);
+    expect(queue.failPreparation!(dedupKey, new Error("again"))).toBeUndefined();
+  });
+
+  it("removes a cancelled preparation without reporting a failure", () => {
+    const { queue } = createQueue();
+    const controller = new AbortController();
+    const dedupKey = "workspace-publication:cancelled";
+    queue.beginPreparation!({
+      kind: "capability",
+      capability: "git.publish",
+      dedupKey,
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      title: "Preparing workspace update…",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    expect(queue.listPending()).toEqual([]);
+    expect(queue.failPreparation!(dedupKey, new Error("cancelled"))).toBeUndefined();
   });
 
   it("fails closed when a credential producer omits its decision contract", () => {

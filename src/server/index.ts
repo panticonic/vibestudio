@@ -826,7 +826,10 @@ async function main() {
     const explicit = membershipStore
       .listMembers(entryWorkspaceId)
       .map((membership) => membership.userId);
-    return explicit.filter((userId) => membershipStore.has(userId, entryWorkspaceId));
+    const privateOwner = identityDb.getPrivateWorkspaceOwner(entryWorkspaceId)?.userId;
+    return [...new Set([...explicit, ...(privateOwner ? [privateOwner] : [])])].filter((userId) =>
+      membershipStore.has(userId, entryWorkspaceId)
+    );
   };
   const workspaceChildHub = createWorkspaceChildHubPort({
     hubUrl,
@@ -2788,8 +2791,40 @@ async function main() {
       },
       updateCandidateReview: (publicationId, progress) =>
         approvalQueue.updatePreparation?.(`workspace-publication:${publicationId}`, progress),
-      failCandidateReview: (publicationId, error) =>
-        approvalQueue.failPreparation?.(`workspace-publication:${publicationId}`, error),
+      failCandidateReview: (publicationId, error) => {
+        const failure = approvalQueue.failPreparation?.(
+          `workspace-publication:${publicationId}`,
+          error
+        );
+        if (!failure) return;
+        const [message, ...remainingDiagnostics] = failure.diagnostics;
+        const notification = {
+          type: "error" as const,
+          title: "Workspace update failed",
+          message: message ?? "The workspace update could not be prepared.",
+          ...(remainingDiagnostics.length > 0
+            ? {
+                details: remainingDiagnostics.map((value, index) => ({
+                  label: `Diagnostic ${index + 2}`,
+                  value,
+                  mono: true,
+                })),
+              }
+            : {}),
+          ttl: 0,
+        };
+        // The notification service is registered before the VCS gate can
+        // accept a publication. Deliver to the same audience that could see
+        // this preparation, without broadcasting private diagnostics.
+        for (const userId of listWorkspaceMemberUserIds()) {
+          if (!approvalVisibleToUser(failure.approval, userId, approvalWorkspaceAccess)) continue;
+          try {
+            notificationResult.internal.show(notification, userId);
+          } catch (notificationError) {
+            console.warn("[Approvals] Could not report publication failure", notificationError);
+          }
+        }
+      },
       discardCandidateReview: (publicationId) =>
         approvalQueue.discardPreparation?.(`workspace-publication:${publicationId}`),
       validateCandidateWorkspaceState: async (stateHash, changedPaths, signal, reportProgress) => {

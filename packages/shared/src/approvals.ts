@@ -335,8 +335,7 @@ export interface PendingApprovalBase {
   repeatReason?: import("./governance/types.js").ApprovalRepeatReason;
   /** Validation lifecycle for publication reviews; ordinary approvals are immediately ready. */
   lifecycle?: {
-    state: "preparing" | "ready" | "failed" | "cancelled";
-    diagnostics?: readonly string[];
+    state: "preparing" | "ready";
     progress?: ApprovalPreparationProgress & { updatedAt: number };
   };
   /** Whether a newly actionable request should also demand attention outside the app. */
