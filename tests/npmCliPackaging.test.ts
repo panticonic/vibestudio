@@ -7,7 +7,7 @@ import {
   assertPassthroughScriptsStaged,
   SERVER_RUNTIME_ARTIFACTS,
   stageNativeIsolationArtifacts,
-  stageNodeRuntimeArtifacts,
+  stageNodeRuntimeInstaller,
 } from "../scripts/build-server-npm-package.mjs";
 import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
@@ -92,32 +92,20 @@ describe("npm CLI packaging", () => {
     }
   });
 
-  it("stages the pinned stock Node runtime into the standalone server package", () => {
-    const appRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-node-stage-"));
-    const sourceRoot = path.join(appRoot, "source-runtime");
-    const packageRoot = path.join(appRoot, "package");
-    mkdirSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin"), { recursive: true });
-    writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin", "node"), "node");
-    if (process.platform !== "win32")
-      fs.symlinkSync("node", path.join(sourceRoot, "dist", "node", "linux-x64", "bin", "npm"));
-    writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "runtime.json"), "{}");
+  it("stages the pinned Node installer without bundling platform runtimes", () => {
+    const packageRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-node-stage-"));
     try {
-      stageNodeRuntimeArtifacts(packageRoot, {
-        root: path.join(sourceRoot, "dist", "node", "linux-x64"),
-      });
-      expect(
-        fs.existsSync(path.join(packageRoot, "dist", "node", "linux-x64", "bin", "node"))
-      ).toBe(true);
-      expect(
-        fs.existsSync(path.join(packageRoot, "dist", "node", "linux-x64", "runtime.json"))
-      ).toBe(true);
-      if (process.platform !== "win32") {
-        const npmLink = path.join(packageRoot, "dist", "node", "linux-x64", "bin", "npm");
-        expect(fs.lstatSync(npmLink).isSymbolicLink()).toBe(true);
-        expect(fs.readlinkSync(npmLink)).toBe("node");
-      }
+      stageNodeRuntimeInstaller(packageRoot);
+      const distribution = JSON.parse(
+        fs.readFileSync(path.join(packageRoot, "native/node/distribution.json"), "utf8")
+      );
+      expect(fs.readFileSync(path.join(packageRoot, ".nvmrc"), "utf8").trim()).toBe(
+        distribution.version
+      );
+      expect(fs.existsSync(path.join(packageRoot, "scripts/node-runtime-artifacts.mjs"))).toBe(true);
+      expect(fs.existsSync(path.join(packageRoot, "dist/node"))).toBe(false);
     } finally {
-      fs.rmSync(appRoot, { recursive: true, force: true });
+      fs.rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 });

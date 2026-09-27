@@ -131,9 +131,7 @@ function stageServer(nativeArtifacts) {
   vendorVibestudioPackages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
-  copyFile("scripts/node-runtime-artifacts.mjs", path.join(root, "scripts/node-runtime-artifacts.mjs"));
-  copyFile("native/node/distribution.json", path.join(root, "native/node/distribution.json"));
-  copyFile(".nvmrc", path.join(root, ".nvmrc"));
+  stageNodeRuntimeInstaller(root);
 
   writeJson(path.join(root, "package.json"), {
     name: PUBLIC_SERVER_PACKAGE_NAME,
@@ -153,6 +151,12 @@ function stageServer(nativeArtifacts) {
     dependencies: computeHostDependencies(),
     publishConfig: { access: "public" },
   });
+}
+
+export function stageNodeRuntimeInstaller(root) {
+  copyFile("scripts/node-runtime-artifacts.mjs", path.join(root, "scripts/node-runtime-artifacts.mjs"));
+  copyFile("native/node/distribution.json", path.join(root, "native/node/distribution.json"));
+  copyFile(".nvmrc", path.join(root, ".nvmrc"));
 }
 
 function copyWorkerdWindowsMetadata(root) {
