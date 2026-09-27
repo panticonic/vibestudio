@@ -25,6 +25,10 @@ const brandOutput = path.join(assetOutput, "brand");
 await mkdir(brandOutput, { recursive: true });
 await copyFile(path.join(runtimeOutput, "index.js"), path.join(assetOutput, "runtime.js"));
 await copyFile(path.join(appRoot, "src/connect.js"), path.join(assetOutput, "connect.js"));
+await copyFile(
+  path.join(appRoot, "design/regatta-palettes.html"),
+  path.join(assetOutput, "regatta-palettes.html")
+);
 for (const asset of [
   "favicon.svg",
   "vibestudio-symbol.svg",

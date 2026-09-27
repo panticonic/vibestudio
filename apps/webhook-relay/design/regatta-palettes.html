@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Palette comparison · Vibestudio</title>
+  <style>
+    :root { --mark-mask: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiPgo8cGF0aCBmaWxsPSIjMDA2RDg2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04MzguNSAzOTZRODMxIDM4NiA4MTMgMzY3LjVRNzk1IDM0OSA3ODAuNSAzMzcuNVE3NjYgMzI2IDc0Ni41IDMxNC41UTcyNyAzMDMgNzE5IDI5OS41UTcxMSAyOTYgNzA5LjUgMjk2UTcwOCAyOTYgNzA2IDI5NC41UTcwNCAyOTMgNjk4IDI5MS41UTY5MiAyOTAgNjkxIDI4OVE2OTAgMjg4IDY3NCAyODRRNjU4IDI4MCA2NTYuNSAyNzlRNjU1IDI3OCA2MzIuNSAyNzVRNjEwIDI3MiA1OTAuNSAyNzIuNVE1NzEgMjczIDU3MCAyNzRRNTY5IDI3NSA1NjMuNSAyNzZRNTU4IDI3NyA1NDguNSAyODIuNVE1MzkgMjg4IDUzNSAyOTEuNVE1MzEgMjk1IDUyNSAzMDIuNVE1MTkgMzEwIDUxNiAzMThRNTEzIDMyNiA1MTMuNSAzMzkuNVE1MTQgMzUzIDUxNi41IDM1OFE1MTkgMzYzIDUyMy41IDM2OVE1MjggMzc1IDUzNSAzNzkuNVE1NDIgMzg0IDU0OSAzODYuNVE1NTYgMzg5IDU4OC41IDM4OS41UTYyMSAzOTAgNjI4LjUgMzkxUTYzNiAzOTIgNjM3IDM5M1E2MzggMzk0IDY0NC41IDM5NVE2NTEgMzk2IDY1NSAzOThRNjU5IDQwMCA2NjMuNSA0MDFRNjY4IDQwMiA2NzEgNDA0UTY3NCA0MDYgNjgwLjUgNDA4LjVRNjg3IDQxMSA2OTYgNDE2LjVRNzA1IDQyMiA3MDkuNSA0MjZRNzE0IDQzMCA3MTUgNDMwUTcxNiA0MzAgNzMwIDQ0My41UTc0NCA0NTcgNzUzIDQ2OS41UTc2MiA0ODIgNzY3LjUgNDkyLjVRNzczIDUwMyA3NzggNTE1UTc4MyA1MjcgNzg3LjUgNTQ1LjVRNzkyIDU2NCA3OTMgNTczUTc5NCA1ODIgNzk0IDYwNVE3OTQgNjI4IDc5MyA2MzcuNVE3OTIgNjQ3IDc5MSA2NDguNVE3OTAgNjUwIDc4OC41IDY2MFE3ODcgNjcwIDc4NiA2NzFRNzg1IDY3MiA3ODQgNjc3LjVRNzgzIDY4MyA3NzcuNSA2OTcuNVE3NzIgNzEyIDc2NS41IDcyM1E3NTkgNzM0IDc1OC41IDczNlE3NTggNzM4IDc0NyA3NTIuNVE3MzYgNzY3IDcyNiA3NzcuNVE3MTYgNzg4IDY5Ni41IDgwMi41UTY3NyA4MTcgNjYwIDgyNS41UTY0MyA4MzQgNjQwIDgzNC41UTYzNyA4MzUgNjM1IDgzNi41UTYzMyA4MzggNjI1IDg0MVE2MTcgODQ0IDYxNSA4NDRRNjEzIDg0NCA2MDguNSA4NDZRNjA0IDg0OCA1OTcgODQ5UTU5MCA4NTAgNTg3IDg1MS41UTU4NCA4NTMgNTc1IDg1NFE1NjYgODU1IDU2MS41IDg1Ni41UTU1NyA4NTggNTM1IDg1OS41UTUxMyA4NjEgNDk2LjUgODYxUTQ4MCA4NjEgNDUyIDg1OVE0MjQgODU3IDQyMi41IDg1NlE0MjEgODU1IDQwNyA4NTMuNVEzOTMgODUyIDM5MiA4NTFRMzkxIDg1MCAzODMgODQ5UTM3NSA4NDggMzcxLjUgODQ2LjVRMzY4IDg0NSAzNTkuNSA4NDMuNVEzNTEgODQyIDM0OCA4NDAuNVEzNDUgODM5IDMzOSA4MzhRMzMzIDgzNyAzMzIgODM2UTMzMSA4MzUgMzI5IDgzNVEzMjcgODM1IDMxNiA4MzEuNVEzMDUgODI4IDMwMyA4MjYuNVEzMDEgODI1IDI5MC41IDgyMS41UTI4MCA4MTggMjY0LjUgODEwUTI0OSA4MDIgMjQ3LjUgODAwLjVRMjQ2IDc5OSAyNDIgNzk4UTIzOCA3OTcgMjM3IDc5NlEyMzYgNzk1IDIyNSA3OTVRMjE0IDc5NSAyMDcgNzk3LjVRMjAwIDgwMCAxOTYuNSA4MDIuNVExOTMgODA1IDE4Ni41IDgxMS41UTE4MCA4MTggMTc2IDgyNVExNzIgODMyIDE3MC41IDgzOFExNjkgODQ0IDE2OSA4NTFRMTY5IDg1OCAxNzAuNSA4NjRRMTcyIDg3MCAxNzUuNSA4NzZRMTc5IDg4MiAxODUuNSA4ODguNVExOTIgODk1IDE5Ni41IDg5OFEyMDEgOTAxIDIxNiA5MDguNVEyMzEgOTE2IDI1NC41IDkyNVEyNzggOTM0IDI3OSA5MzVRMjgwIDkzNiAyODUgOTM3UTI5MCA5MzggMjkyLjUgOTM5LjVRMjk1IDk0MSAzMDEuNSA5NDIuNVEzMDggOTQ0IDMwOSA5NDVRMzEwIDk0NiAzMjcgOTUwUTM0NCA5NTQgMzQ1IDk1NVEzNDYgOTU2IDM1My41IDk1N1EzNjEgOTU4IDM2NyA5NjBRMzczIDk2MiAzODIuNSA5NjNRMzkyIDk2NCAzOTMuNSA5NjVRMzk1IDk2NiA0MTEgOTY3LjVRNDI3IDk2OSA0MjguNSA5NzBRNDMwIDk3MSA0NDcgOTcyUTQ2NCA5NzMgNDkxIDk3M1E1MTggOTczIDUzMyA5NzJRNTQ4IDk3MSA1NTAgOTcwUTU1MiA5NjkgNTY4IDk2Ny41UTU4NCA5NjYgNTg1LjUgOTY1UTU4NyA5NjQgNTk4IDk2Mi41UTYwOSA5NjEgNjEwIDk2MFE2MTEgOTU5IDYxOS41IDk1Ny41UTYyOCA5NTYgNjI5IDk1NVE2MzAgOTU0IDYzNy41IDk1Mi41UTY0NSA5NTEgNjQ2IDk1MFE2NDcgOTQ5IDY2MCA5NDVRNjczIDk0MSA2NzUgOTM5LjVRNjc3IDkzOCA2ODQgOTM1LjVRNjkxIDkzMyA3MTEuNSA5MjJRNzMyIDkxMSA3NDkgODk5UTc2NiA4ODcgNzc0IDg4MFE3ODIgODczIDc5NyA4NTcuNVE4MTIgODQyIDgyMi41IDgyOC41UTgzMyA4MTUgODQyLjUgODAwLjVRODUyIDc4NiA4NTkuNSA3NzEuNVE4NjcgNzU3IDg3NCA3NDBRODgxIDcyMyA4ODIuNSA3MTYuNVE4ODQgNzEwIDg4NSA3MDlRODg2IDcwOCA4ODcuNSA3MDFRODg5IDY5NCA4OTAgNjkyLjVRODkxIDY5MSA4OTIgNjg0LjVRODkzIDY3OCA4OTUgNjcyUTg5NyA2NjYgODk4IDY1N1E4OTkgNjQ4IDkwMCA2NDZROTAxIDY0NCA5MDIuNSA2MjZROTA0IDYwOCA5MDMuNSA1ODcuNVE5MDMgNTY3IDkwMiA1NThROTAxIDU0OSA5MDAgNTQ3UTg5OSA1NDUgODk4LjUgNTM5LjVRODk4IDUzNCA4OTQuNSA1MTlRODkxIDUwNCA4ODMuNSA0ODIuNVE4NzYgNDYxIDg2OS41IDQ0Ny41UTg2MyA0MzQgODU0LjUgNDIwUTg0NiA0MDYgODM4LjUgMzk2Wk03MDkuNSA2My41UTcwMiA1NyA2OTIuNSA1NFE2ODMgNTEgNjM1LjUgNTFRNTg4IDUxIDU4MiA1MS41UTU3NiA1MiA1NzQuNSA1M1E1NzMgNTQgNTU3IDU1LjVRNTQxIDU3IDU0MCA1OFE1MzkgNTkgNTMxLjUgNjBRNTI0IDYxIDUyMSA2Mi41UTUxOCA2NCA1MTAuNSA2NS41UTUwMyA2NyA0ODkgNzJRNDc1IDc3IDQ1NS41IDg3UTQzNiA5NyA0MTYgMTExLjVRMzk2IDEyNiAzODEgMTQxUTM2NiAxNTYgMzU0LjUgMTcxUTM0MyAxODYgMzM1LjUgMTk4LjVRMzI4IDIxMSAzMjcgMjE0UTMyNiAyMTcgMzI0LjUgMjE4LjVRMzIzIDIyMCAzMjIuNSAyMjIuNVEzMjIgMjI1IDMxOSAyMzAuNVEzMTYgMjM2IDMxNiAyMzcuNVEzMTYgMjM5IDMxNC41IDI0MVEzMTMgMjQzIDMwOCAyNThRMzAzIDI3MyAzMDEuNSAyODEuNVEzMDAgMjkwIDI5OSAyOTEuNVEyOTggMjkzIDI5Ni41IDMwNFEyOTUgMzE1IDI5NSAzMjEuNVEyOTUgMzI4IDI5NCAzMzAuNVEyOTMgMzMzIDI5MyAzNDIuNVEyOTMgMzUyIDI5NCAzNTRRMjk1IDM1NiAyOTYuNSAzNzMuNVEyOTggMzkxIDI5OSAzOTJRMzAwIDM5MyAzMDEuNSA0MDJRMzAzIDQxMSAzMDQgNDEyUTMwNSA0MTMgMzA2LjUgNDE5LjVRMzA4IDQyNiAzMDkgNDI3UTMxMCA0MjggMzExLjUgNDMzLjVRMzEzIDQzOSAzMTggNDUwUTMyMyA0NjEgMzMwLjUgNDc0UTMzOCA0ODcgMzQyIDQ5MS41UTM0NiA0OTYgMzQ5IDUwMVEzNTIgNTA2IDM1OS41IDUxNC41UTM2NyA1MjMgMzgxLjUgNTM3UTM5NiA1NTEgNDA3IDU1OVE0MTggNTY3IDQxOSA1NjdRNDIwIDU2NyA0MzEgNTc0UTQ0MiA1ODEgNDU3LjUgNTg4UTQ3MyA1OTUgNDc5LjUgNTk2LjVRNDg2IDU5OCA0ODcgNTk5UTQ4OCA2MDAgNDk2IDYwMS41UTUwNCA2MDMgNTA1LjUgNjA0UTUwNyA2MDUgNTE4IDYwNi41UTUyOSA2MDggNTMwLjUgNjA5UTUzMiA2MTAgNTUyIDYxMC41UTU3MiA2MTEgNTc0IDYxMlE1NzYgNjEzIDU3Ny41IDYxNVE1NzkgNjE3IDU3OC41IDYyM1E1NzggNjI5IDU3MSA2MzIuNVE1NjQgNjM2IDU1NC41IDYzNy41UTU0NSA2MzkgNTQ0IDY0MFE1NDMgNjQxIDUzMS41IDY0Mi41UTUyMCA2NDQgNTE4LjUgNjQ1UTUxNyA2NDYgNTA5IDY0N1E1MDEgNjQ4IDQ4OC41IDY0OC41UTQ3NiA2NDkgNDUxIDY0Ny41UTQyNiA2NDYgNDI0LjUgNjQ1UTQyMyA2NDQgNDEyLjUgNjQyLjVRNDAyIDY0MSA0MDEgNjQwUTQwMCA2MzkgMzkzIDYzOFEzODYgNjM3IDM4MyA2MzUuNVEzODAgNjM0IDM3NC41IDYzM1EzNjkgNjMyIDM2NyA2MzAuNVEzNjUgNjI5IDM1OSA2MjcuNVEzNTMgNjI2IDM1MSA2MjQuNVEzNDkgNjIzIDM0MCA2MTkuNVEzMzEgNjE2IDMxMC41IDYwNFEyOTAgNTkyIDI3OSA1ODMuNVEyNjggNTc1IDI1NCA1NjFRMjQwIDU0NyAyMzEuNSA1MzZRMjIzIDUyNSAyMTkuNSA1MTlRMjE2IDUxMyAyMTEgNTA4UTIwNiA1MDMgMTk5LjUgNDk5LjVRMTkzIDQ5NiAxODcgNDk0LjVRMTgxIDQ5MyAxNzYuNSA0OTNRMTcyIDQ5MyAxNjQgNDk1UTE1NiA0OTcgMTUyIDQ5OVExNDggNTAxIDE0MC41IDUwNy41UTEzMyA1MTQgMTI5LjUgNTE5LjVRMTI2IDUyNSAxMjMuNSA1MzJRMTIxIDUzOSAxMjEgNTQ5LjVRMTIxIDU2MCAxMjMuNSA1NjdRMTI2IDU3NCAxMzEgNTgxUTEzNiA1ODggMTM2IDU4OVExMzYgNTkwIDEzNy41IDU5MVExMzkgNTkyIDEzOS41IDU5My41UTE0MCA1OTUgMTUwLjUgNjA3LjVRMTYxIDYyMCAxNzQgNjMzUTE4NyA2NDYgMTg4IDY0NlExODkgNjQ2IDIwMC41IDY1NlEyMTIgNjY2IDIyMCA2NzEuNVEyMjggNjc3IDIyOSA2NzdRMjMwIDY3NyAyMzUgNjgxUTI0MCA2ODUgMjQzIDY4NlEyNDYgNjg3IDI0OSA2ODkuNVEyNTIgNjkyIDI2MiA2OTdRMjcyIDcwMiAyNzMuNSA3MDMuNVEyNzUgNzA1IDI3Ny41IDcwNS41UTI4MCA3MDYgMjg4IDcxMC41UTI5NiA3MTUgMzAxLjUgNzE2LjVRMzA3IDcxOCAzMTAgNzIwUTMxMyA3MjIgMzE2IDcyMi41UTMxOSA3MjMgMzI2LjUgNzI2LjVRMzM0IDczMCAzNDEgNzMxLjVRMzQ4IDczMyAzNTAuNSA3MzQuNVEzNTMgNzM2IDM1OSA3MzdRMzY1IDczOCAzNjggNzM5LjVRMzcxIDc0MSAzNzggNzQyUTM4NSA3NDMgMzg4LjUgNzQ0LjVRMzkyIDc0NiAzOTguNSA3NDYuNVE0MDUgNzQ3IDQxMyA3NDlRNDIxIDc1MSA0MzcuNSA3NTJRNDU0IDc1MyA0NTYuNSA3NTRRNDU5IDc1NSA0ODEgNzU1UTUwMyA3NTUgNTA1IDc1NFE1MDcgNzUzIDUyMiA3NTJRNTM3IDc1MSA1NDQuNSA3NDlRNTUyIDc0NyA1NjAgNzQ2UTU2OCA3NDUgNTY5LjUgNzQ0UTU3MSA3NDMgNTg1LjUgNzM5UTYwMCA3MzUgNjExIDczMFE2MjIgNzI1IDYyNyA3MjFRNjMyIDcxNyA2MzQuNSA3MTZRNjM3IDcxNSA2NDcgNzA1LjVRNjU3IDY5NiA2NjMuNSA2ODYuNVE2NzAgNjc3IDY3MyA2NzFRNjc2IDY2NSA2NzcgNjYxUTY3OCA2NTcgNjc5LjUgNjU0LjVRNjgxIDY1MiA2ODMuNSA2NDFRNjg2IDYzMCA2ODUuNSA2MTNRNjg1IDU5NiA2ODAuNSA1ODIuNVE2NzYgNTY5IDY3MSA1NjAuNVE2NjYgNTUyIDY2Mi41IDU0Ny41UTY1OSA1NDMgNjUyLjUgNTM3UTY0NiA1MzEgNjM1IDUyNC41UTYyNCA1MTggNjE5IDUxN1E2MTQgNTE2IDYxMSA1MTQuNVE2MDggNTEzIDU3OCA1MTAuNVE1NDggNTA4IDUzNC41IDUwNVE1MjEgNTAyIDUwNi41IDQ5Ni41UTQ5MiA0OTEgNDgwLjUgNDgzLjVRNDY5IDQ3NiA0NjggNDc2UTQ2NyA0NzYgNDY2IDQ3NC41UTQ2NSA0NzMgNDYwLjUgNDcwUTQ1NiA0NjcgNDQzLjUgNDUzLjVRNDMxIDQ0MCA0MjMuNSA0MjguNVE0MTYgNDE3IDQxMS41IDQwNy41UTQwNyAzOTggNDA2IDM5M1E0MDUgMzg4IDQwMyAzODMuNVE0MDEgMzc5IDQwMCAzNjkuNVEzOTkgMzYwIDM5OCAzNThRMzk3IDM1NiAzOTcgMzM3UTM5NyAzMTggMzk4IDMxNi41UTM5OSAzMTUgNDAwIDMwNS41UTQwMSAyOTYgNDAyLjUgMjkzUTQwNCAyOTAgNDA1LjUgMjgzLjVRNDA3IDI3NyA0MTYgMjU5UTQyNSAyNDEgNDMzIDIzMFE0NDEgMjE5IDQ1MSAyMDlRNDYxIDE5OSA0NzQgMTg5LjVRNDg3IDE4MCA1MDAuNSAxNzNRNTE0IDE2NiA1MjAgMTY0LjVRNTI2IDE2MyA1MjYuNSAxNjJRNTI3IDE2MSA1MzQuNSAxNTguNVE1NDIgMTU2IDU1MC41IDE1NC41UTU1OSAxNTMgNTYwLjUgMTUyUTU2MiAxNTEgNTczLjUgMTQ5LjVRNTg1IDE0OCA1OTEgMTQ4UTU5NyAxNDggNjAwLjUgMTQ3UTYwNCAxNDYgNjQ1LjUgMTQ2UTY4NyAxNDYgNjkyLjUgMTQ0LjVRNjk4IDE0MyA3MDIuNSAxNDAuNVE3MDcgMTM4IDcxMSAxMzRRNzE1IDEzMCA3MTguNSAxMjRRNzIyIDExOCA3MjIuNSAxMTQuNVE3MjMgMTExIDcyNCAxMDkuNVE3MjUgMTA4IDcyNSA5Ny41UTcyNSA4NyA3MjEgNzguNVE3MTcgNzAgNzA5LjUgNjMuNVoiLz4KPC9zdmc+Cg=="); font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #20252a; background: #f3f4f5; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    button { font: inherit; color: inherit; }
+    .page { width: min(1200px, 100% - 32px); margin: 0 auto; padding: 28px 0 36px; }
+    h1 { margin: 0 0 18px; font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -.02em; }
+    .controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; align-items: end; margin-bottom: 14px; }
+    .palette-list { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+    .palette-choice { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid #c7cbd0; border-radius: 5px; background: #fff; text-align: left; cursor: pointer; }
+    .palette-choice[aria-pressed="true"] { border: 2px solid #30363d; padding: 8px 10px; box-shadow: 0 0 0 2px #fff inset; }
+    .palette-choice:focus-visible, .mode button:focus-visible, .views button:focus-visible { outline: 3px solid #40566d; outline-offset: 2px; }
+    .palette-name { font-weight: 620; white-space: nowrap; }
+    .chips { display: flex; gap: 3px; flex: none; }
+    .chips i { display: block; width: 12px; height: 26px; border: 1px solid #0002; border-radius: 2px; }
+    .options { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; align-items: center; }
+    .mode, .views { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid #c7cbd0; border-radius: 6px; background: #e8eaed; }
+    .mode button, .views button { border: 0; border-radius: 4px; background: transparent; padding: 7px 10px; cursor: pointer; font-size: 13px; }
+    .mode button[aria-pressed="true"], .views button[aria-pressed="true"] { color: #20252a; background: white; box-shadow: 0 1px 2px #1112; }
+    .stage { border: 1px solid #c7cbd0; border-radius: 7px; background: #e4e6e8; padding: 16px; }
+    .preview { display: none; min-height: 525px; overflow: hidden; border: 1px solid var(--shell-line); border-radius: 6px; background: var(--shell-bg); color: var(--shell-ink); box-shadow: 0 2px 5px #12182012; }
+    .preview.active { display: flex; }
+    .preview-website.active, .preview-mobile.active { display: block; }
+    .preview[data-mode="light"] { color-scheme: light; --shell-bg: #eaebed; --shell-hover: #dfe1e4; --shell-line: #c6c8cc; --shell-ink: #202225; --shell-muted: #55585e; --product-bg: var(--light-canvas); --product-panel: var(--light-panel); --product-raised: var(--light-raised); --product-ink: var(--light-ink); --product-muted: var(--light-muted); --product-line: var(--light-line); --product-primary: var(--light-primary); --product-primary-ink: var(--light-primary-ink); --product-detail: var(--detail); }
+    .preview[data-mode="dark"] { color-scheme: dark; --shell-bg: #202225; --shell-hover: #303236; --shell-line: #424448; --shell-ink: #eaebed; --shell-muted: #bfc1c5; --product-bg: var(--dark-canvas); --product-panel: var(--dark-panel); --product-raised: var(--dark-raised); --product-ink: var(--dark-ink); --product-muted: var(--dark-muted); --product-line: var(--dark-line); --product-primary: var(--dark-primary); --product-primary-ink: var(--dark-primary-ink); --product-detail: var(--dark-detail); }
+    .app-sidebar { width: 208px; flex: none; padding: 12px 9px; border-right: 1px solid var(--shell-line); background: var(--shell-bg); color: var(--shell-ink); }
+    .app-brand { display: flex; align-items: center; gap: 8px; padding: 0 6px 14px; font-weight: 650; }
+    .mark { display: inline-block; width: 22px; height: 22px; background: var(--product-ink); -webkit-mask: var(--mark-mask) center / contain no-repeat; mask: var(--mark-mask) center / contain no-repeat; }
+    .workspace-label { display: flex; justify-content: space-between; align-items: center; padding: 8px 7px; color: var(--shell-muted); font-size: 12px; }
+    .tree-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 8px; border-radius: 4px; color: var(--shell-ink); }
+    .tree-row.selected { background: var(--shell-hover); }
+    .tree-icon { width: 16px; text-align: center; color: var(--shell-muted); }
+    .tree-row small { display: block; color: var(--shell-muted); font-size: 11px; }
+    .app-main { display: flex; min-width: 0; flex: 1; flex-direction: column; background: var(--product-bg); color: var(--product-ink); }
+    .app-topbar { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--shell-line); background: var(--shell-bg); color: var(--shell-ink); }
+    .crumb { font-size: 12px; color: var(--shell-muted); }
+    .avatar { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--shell-line); border-radius: 50%; font-size: 11px; color: var(--shell-ink); }
+    .chat { width: min(670px, 100%); margin: 0 auto; padding: 26px 24px 18px; display: flex; flex: 1; flex-direction: column; }
+    .chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 23px; }
+    .chat-title { font-weight: 650; font-size: 16px; }
+    .model { padding: 5px 9px; border: 1px solid var(--product-line); border-radius: 4px; background: var(--product-panel); color: var(--product-ink); font-size: 12px; }
+    .message { max-width: 88%; margin-bottom: 12px; padding: 11px 13px; border: 1px solid var(--product-line); border-radius: 5px; background: var(--product-panel); }
+    .message.user { align-self: flex-end; background: var(--product-raised); }
+    .message p { margin: 0; }
+    .message .byline { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--product-muted); font-size: 11px; }
+    .assistant-mark { display: inline-block; width: 7px; height: 7px; border-radius: 1px; background: var(--product-detail); }
+    .response-list { margin: 6px 0 0; padding-left: 19px; color: var(--product-ink); }
+    .composer { margin-top: auto; padding: 10px; border: 1px solid var(--product-line); border-radius: 6px; background: var(--product-panel); }
+    .composer textarea { display: block; width: 100%; min-height: 42px; padding: 3px; resize: none; border: 0; outline: 0; color: var(--product-ink); background: transparent; font: inherit; }
+    .composer textarea::placeholder { color: var(--product-muted); opacity: 1; }
+    .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .tool, .send, .download { border: 1px solid var(--product-line); border-radius: 4px; padding: 6px 9px; background: var(--product-panel); color: var(--product-ink); font-size: 12px; }
+    .send, .download { border-color: var(--product-primary); background: var(--product-primary); color: var(--product-primary-ink); font-weight: 620; }
+    .product-footer { margin-top: 8px; color: var(--product-muted); font-size: 11px; }
+    .website-wrap { min-height: 525px; color: var(--product-ink); background: var(--product-bg); }
+    .website-nav { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 30px; border-bottom: 1px solid var(--product-line); background: var(--product-panel); }
+    .site-brand { display: flex; align-items: center; gap: 8px; font-weight: 680; }
+    .site-brand .mark { width: 20px; height: 20px; }
+    .site-links { display: flex; align-items: center; gap: 18px; color: var(--product-muted); font-size: 12px; }
+    .website-hero { min-height: 340px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 280px); align-items: center; gap: 28px; overflow: hidden; padding: 42px clamp(24px, 9vw, 110px); background: var(--product-bg); }
+    .site-copy { position: relative; max-width: 670px; }
+    .site-kicker { margin: 0 0 12px; color: var(--product-muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+    .site-copy h2 { max-width: 600px; margin: 0; font-size: clamp(30px, 4.3vw, 48px); line-height: 1.07; letter-spacing: -.045em; }
+    .site-copy p { max-width: 570px; margin: 15px 0 20px; color: var(--product-muted); font-size: 15px; }
+    .site-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+    .site-secondary { border: 1px solid var(--product-line); border-radius: 4px; background: var(--product-panel); color: var(--product-ink); padding: 8px 12px; font-size: 12px; }
+    .site-note { margin-top: 17px; color: var(--product-muted); font-size: 11px; }
+    .brand-panel { position: relative; min-height: 225px; display: grid; place-items: center; overflow: hidden; background: var(--dark-panel); }
+    .brand-panel .large-mark { display: block; width: 120px; height: 120px; background: var(--dark-ink); -webkit-mask: var(--mark-mask) center / contain no-repeat; mask: var(--mark-mask) center / contain no-repeat; }
+    .brand-panel .signal-band { position: absolute; right: 0; bottom: 0; left: 0; height: 9px; background: var(--signal); }
+    .brand-panel .signal-band i { display: block; width: 38px; height: 100%; margin-left: auto; background: var(--detail); }
+    .mobile-wrap { min-height: 525px; display: grid; place-items: center; padding: 20px; background: var(--shell-bg); }
+    .phone { width: min(320px, 100%); min-height: 475px; display: flex; flex-direction: column; overflow: hidden; border: 7px solid #35383d; border-radius: 24px; background: var(--product-bg); color: var(--product-ink); box-shadow: 0 4px 16px #10182024; }
+    .phone-status { height: 24px; padding: 4px 12px; background: var(--product-panel); text-align: center; font-size: 10px; }
+    .phone-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--product-line); background: var(--product-panel); }
+    .phone-header b { font-size: 13px; }
+    .phone-content { display: flex; flex: 1; flex-direction: column; padding: 14px 11px 9px; }
+    .phone .message { max-width: 94%; padding: 9px 10px; font-size: 12px; }
+    .phone .composer { padding: 8px; }
+    .phone .composer textarea { min-height: 30px; font-size: 12px; }
+    .phone .tool, .phone .send { padding: 5px 7px; font-size: 11px; }
+    .hexes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+    .hex { min-width: 0; display: grid; grid-template-columns: 26px minmax(0,1fr); gap: 8px; align-items: center; padding: 8px 9px; border: 1px solid #d0d3d7; border-radius: 5px; background: #fff; }
+    .swatch { width: 26px; height: 26px; border: 1px solid #0002; border-radius: 3px; }
+    .hex b { display: block; color: #3d454d; font-size: 10px; font-weight: 600; }
+    .hex code { display: block; overflow: hidden; color: #171b1f; font-size: 11px; text-overflow: ellipsis; }
+    @media (max-width: 1100px) {
+      .controls { grid-template-columns: 1fr; align-items: stretch; gap: 10px; }
+      .options { justify-content: flex-end; }
+    }
+    @media (max-width: 760px) {
+      .page { width: min(100% - 20px, 620px); padding-top: 18px; }
+      .palette-list { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .options { justify-content: space-between; }
+      .stage { padding: 8px; }
+      .preview { min-height: 515px; }
+      .app-sidebar { width: 128px; padding: 10px 5px; }
+      .app-brand { padding-inline: 4px; gap: 5px; font-size: 12px; }
+      .mark { width: 18px; height: 18px; }
+      .workspace-label { font-size: 10px; }
+      .tree-row { gap: 4px; padding-inline: 4px; font-size: 11px; }
+      .tree-row small { font-size: 9px; }
+      .chat { padding: 18px 12px 12px; }
+      .website-nav { padding-inline: 14px; }
+      .site-links { gap: 10px; }
+      .hexes { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    }
+    @media (max-width: 370px) {
+      .palette-choice { min-height: 52px; gap: 7px; padding: 7px; }
+      .palette-choice[aria-pressed="true"] { padding: 6px; }
+      .chips i { width: 9px; height: 23px; }
+      .palette-name { font-size: 12px; }
+      .app-sidebar { width: 104px; }
+      .tree-row { font-size: 10px; }
+      .tree-row small { display: none; }
+      .chat-title { font-size: 14px; }
+      .chat-head { align-items: flex-start; gap: 5px; flex-direction: column; }
+      .site-links a:first-child { display: none; }
+      .website-hero { min-height: 360px; grid-template-columns: minmax(0,1fr); gap: 18px; padding: 28px 18px; }
+    }
+    @media (max-width: 650px) {
+      .website-hero { grid-template-columns: minmax(0,1fr); gap: 18px; padding: 28px 18px; }
+      .brand-panel { min-height: 115px; }
+      .brand-panel .large-mark { width: 74px; height: 74px; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .palette-choice, .mode button, .views button { transition: background-color .12s ease, border-color .12s ease; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page" id="comparison">
+    <h1>Palette comparison</h1>
+    <section class="controls" aria-label="Preview controls">
+      <div class="palette-list" role="group" aria-label="Choose palette">
+        <button class="palette-choice" data-palette="regatta" aria-pressed="true"><span class="palette-name">Regatta</span><span class="chips" aria-hidden="true"></span></button>
+        <button class="palette-choice" data-palette="yacht" aria-pressed="false"><span class="palette-name">Yacht club</span><span class="chips" aria-hidden="true"></span></button>
+        <button class="palette-choice" data-palette="sailcloth" aria-pressed="false"><span class="palette-name">Sailcloth</span><span class="chips" aria-hidden="true"></span></button>
+        <button class="palette-choice" data-palette="racing" aria-pressed="false"><span class="palette-name">Racing</span><span class="chips" aria-hidden="true"></span></button>
+      </div>
+      <div class="options">
+        <div class="mode" role="group" aria-label="Color scheme">
+          <button data-mode="light" aria-pressed="true">Light</button><button data-mode="dark" aria-pressed="false">Dark</button>
+        </div>
+        <div class="views" role="group" aria-label="Preview surface">
+          <button data-view="app" aria-pressed="true">App</button><button data-view="website" aria-pressed="false">Website</button><button data-view="mobile" aria-pressed="false">Mobile</button>
+        </div>
+      </div>
+    </section>
+    <section class="stage" aria-label="Palette preview">
+      <section class="preview preview-app active" data-view="app" data-mode="light" aria-label="App preview">
+        <aside class="app-sidebar">
+          <div class="app-brand"><i class="mark" aria-hidden="true"></i>Vibestudio</div>
+          <div class="workspace-label"><span>Your workspaces</span><span>+</span></div>
+          <div class="tree-row"><span class="tree-icon">⌄</span><span class="tree-icon">◉</span><span>Personal<small>Only you</small></span></div>
+          <div class="tree-row selected"><span class="tree-icon">▣</span><span>Agentic Chat</span></div>
+          <div class="tree-row"><span class="tree-icon">▤</span><span>New Panel</span></div>
+          <div class="workspace-label"><span>System</span><span>+</span></div>
+          <div class="tree-row"><span class="tree-icon">⌘</span><span>Terminal</span></div>
+        </aside>
+        <div class="app-main">
+          <header class="app-topbar"><span class="crumb">Personal&nbsp; / &nbsp;Agentic Chat</span><span class="avatar">A</span></header>
+          <div class="chat">
+            <div class="chat-head"><span class="chat-title">Agentic Chat</span><button class="model" type="button">Claude Opus 5.5⌄</button></div>
+            <div class="message user"><p class="byline">You</p><p>Help me prepare for the regatta this weekend.</p></div>
+            <div class="message"><p class="byline"><i class="assistant-mark" aria-hidden="true"></i>Assistant</p><p>Here’s a simple checklist for race day:</p><ul class="response-list"><li>Check the forecast and course notice</li><li>Pack safety gear, water, and layers</li><li>Confirm crew roles before launch</li></ul></div>
+            <div class="composer"><textarea aria-label="Message" placeholder="Ask anything…"></textarea><div class="composer-actions"><button class="tool" type="button">＋ &nbsp;Add context</button><button class="send" type="button">↑ &nbsp;Send</button></div></div>
+            <div class="product-footer">Claude Opus 5.5 &nbsp;·&nbsp; Ready</div>
+          </div>
+        </div>
+      </section>
+      <section class="preview preview-website" data-view="website" data-mode="light" aria-label="Website preview">
+        <div class="website-wrap">
+          <header class="website-nav"><span class="site-brand"><i class="mark" aria-hidden="true"></i>Vibestudio</span><nav class="site-links"><a>Source</a><button class="download">Get Vibestudio ↗</button></nav></header>
+          <div class="website-hero"><div class="site-copy"><p class="site-kicker">Desktop and mobile · Open source</p><h2>A workspace for apps, files, and agents.</h2><p>Use your tools together. Ask an agent to help with your work or build something of your own. Keep it on your computer or your server.</p><div class="site-actions"><button class="download">Download Vibestudio ↗</button><button class="site-secondary">Read the guide</button></div><div class="site-note">Windows · macOS · Linux</div></div><div class="brand-panel" aria-hidden="true"><i class="large-mark"></i><span class="signal-band"><i></i></span></div></div>
+        </div>
+      </section>
+      <section class="preview preview-mobile" data-view="mobile" data-mode="light" aria-label="Mobile preview">
+        <div class="mobile-wrap"><div class="phone"><div class="phone-status">9:41</div><header class="phone-header"><b>‹ &nbsp;Agentic Chat</b><button class="model" type="button">Opus 5.5⌄</button></header><div class="phone-content"><div class="message user"><p>Help me prepare for the regatta this weekend.</p></div><div class="message"><p class="byline"><i class="assistant-mark" aria-hidden="true"></i>Assistant</p><p>Check the forecast, pack safety gear and water, and confirm crew roles before launch.</p></div><div class="composer"><textarea aria-label="Message" placeholder="Message…"></textarea><div class="composer-actions"><button class="tool" type="button">＋</button><button class="send" type="button">↑</button></div></div></div></div></div>
+      </section>
+    </section>
+    <section class="hexes" aria-label="Selected palette colors"></section>
+  </main>
+  <script>
+    const palettes = {
+      regatta: { name: "Regatta", navy: "#14243D", primary: "#BD3038", sail: "#FAF9F4", ink: "#14243D", detail: "#D4AB42", light: ["#FAF9F4", "#FFFFFF", "#F1F0E9", "#14243D", "#526174", "#D2D5D9"], dark: ["#101A2B", "#17243A", "#202D43", "#F4F5F6", "#BFC8D4", "#39465A"], darkPrimary: "#BD3038", darkPrimaryInk: "#FFFFFF", darkDetail: "#E1BE64" },
+      yacht: { name: "Yacht club", navy: "#14243D", primary: "#204FA3", sail: "#FFFFFF", ink: "#14243D", detail: "#C73F2D", light: ["#FFFFFF", "#FFFFFF", "#F1F3F7", "#14243D", "#58677D", "#D4D9E2"], dark: ["#101A2B", "#17243A", "#202D43", "#F4F5F6", "#BFC8D4", "#39465A"], darkPrimary: "#204FA3", darkPrimaryInk: "#FFFFFF", darkDetail: "#E87B68" },
+      sailcloth: { name: "Sailcloth", navy: "#24334A", primary: "#24334A", sail: "#F2EBDD", ink: "#24334A", detail: "#D6A52D", signal: "#AF3F36", light: ["#F2EBDD", "#FFFDF8", "#EAE2D2", "#24334A", "#5F6670", "#D5CCBA"], dark: ["#151D2B", "#202B3D", "#2B384A", "#F4F2EB", "#C5C8CC", "#424B59"], darkPrimary: "#F2EBDD", darkPrimaryInk: "#24334A", darkDetail: "#E0B843", darkSignal: "#D9665D" },
+      racing: { name: "Racing", navy: "#24292F", primary: "#E8C632", sail: "#FAFAF7", ink: "#24292F", detail: "#BD3038", light: ["#FAFAF7", "#FFFFFF", "#EFEFED", "#24292F", "#5A6066", "#D1D4D7"], dark: ["#171A1E", "#202428", "#2B3036", "#F5F5F1", "#C3C6C8", "#41474D"], darkPrimary: "#E8C632", darkPrimaryInk: "#24292F", darkDetail: "#E27075" }
+    };
+    let selectedPalette = "regatta";
+    let selectedMode = "light";
+    const root = document.documentElement;
+    const previews = [...document.querySelectorAll(".preview")];
+    const hexes = document.querySelector(".hexes");
+    function setPalette(name) {
+      selectedPalette = name;
+      const p = palettes[name];
+      const colors = p[selectedMode];
+      const [canvas, , , ink] = colors;
+      root.style.setProperty("--light-canvas", p.light[0]); root.style.setProperty("--light-panel", p.light[1]); root.style.setProperty("--light-raised", p.light[2]); root.style.setProperty("--light-ink", p.light[3]); root.style.setProperty("--light-muted", p.light[4]); root.style.setProperty("--light-line", p.light[5]);
+      root.style.setProperty("--dark-canvas", p.dark[0]); root.style.setProperty("--dark-panel", p.dark[1]); root.style.setProperty("--dark-raised", p.dark[2]); root.style.setProperty("--dark-ink", p.dark[3]); root.style.setProperty("--dark-muted", p.dark[4]); root.style.setProperty("--dark-line", p.dark[5]);
+      root.style.setProperty("--light-primary", p.primary); root.style.setProperty("--light-primary-ink", name === "racing" ? p.ink : "#FFFFFF");
+      root.style.setProperty("--dark-primary", p.darkPrimary || p.primary); root.style.setProperty("--dark-primary-ink", p.darkPrimaryInk || (name === "racing" ? p.ink : "#FFFFFF"));
+      root.style.setProperty("--detail", p.detail); root.style.setProperty("--dark-detail", p.darkDetail || p.detail);
+      root.style.setProperty("--signal", selectedMode === "dark" ? (p.darkSignal || p.darkPrimary || p.primary) : (p.signal || p.primary));
+      
+      previews.forEach((preview) => preview.dataset.mode = selectedMode);
+      document.querySelectorAll(".palette-choice").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.palette === name)));
+      document.querySelectorAll(".chips").forEach((el) => {
+        const colors = palettes[el.closest("button").dataset.palette];
+        const chips = [colors.ink, colors.primary, colors.sail, colors.detail];
+        if (colors.signal) chips.push(colors.signal);
+        el.innerHTML = chips.map((color) => `<i style="background:${color}"></i>`).join("");
+      });
+      const signal = selectedMode === "dark" ? (p.darkSignal || p.darkPrimary || p.primary) : (p.signal || p.primary);
+      const swatches = [["Primary", selectedMode === "dark" ? (p.darkPrimary || p.primary) : p.primary], ["Canvas", canvas], ["Ink", ink], ["Detail", selectedMode === "dark" ? (p.darkDetail || p.detail) : p.detail]];
+      if (signal !== (selectedMode === "dark" ? (p.darkPrimary || p.primary) : p.primary)) swatches.push(["Signal", signal]);
+      hexes.innerHTML = swatches.map(([label, color]) => `<div class="hex"><span class="swatch" style="background:${color}"></span><span><b>${label}</b><code>${color}</code></span></div>`).join("");
+      root.dataset.palette = name;
+    }
+    function setMode(mode) {
+      selectedMode = mode;
+      document.querySelectorAll(".mode button").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.mode === mode)));
+      setPalette(selectedPalette);
+    }
+    function setView(view) {
+      previews.forEach((preview) => preview.classList.toggle("active", preview.dataset.view === view));
+      document.querySelectorAll(".views button").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.view === view)));
+    }
+    document.querySelectorAll(".palette-choice").forEach((button) => button.addEventListener("click", () => setPalette(button.dataset.palette)));
+    document.querySelectorAll(".mode button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
+    document.querySelectorAll(".views button").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
+    setPalette(selectedPalette);
+    setMode(selectedMode);
+  </script>
+</body>
+</html>
