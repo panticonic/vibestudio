@@ -1,6 +1,6 @@
-import type { Connection } from "@number0/iroh";
+import type { Connection, Endpoint } from "@number0/iroh";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodePhysicalConnection } from "./nodePhysical.js";
+import { NodePhysicalConnection, NodePhysicalEndpoint } from "./nodePhysical.js";
 
 describe("Node Iroh physical diagnostics", () => {
   afterEach(() => vi.useRealTimers());
@@ -70,4 +70,44 @@ describe("Node Iroh physical diagnostics", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(snapshots).toHaveLength(3);
   });
+});
+
+describe("Node Iroh physical ingress", () => {
+  it.each(["accept", "connect"] as const)(
+    "keeps listening when one incoming handshake fails during %s",
+    async (failureStage) => {
+      const failedAccepting = {
+        connect: vi.fn(async () => {
+          throw new Error("timed out");
+        }),
+      };
+      const failedIncoming = {
+        accept: vi.fn(async () => {
+          if (failureStage === "accept") throw new Error("timed out");
+          return failedAccepting;
+        }),
+      };
+      const connection = {
+        remoteId: () => ({ toString: () => "peer-endpoint" }),
+        setMaxConcurrentBiStreams: vi.fn(),
+        setMaxConcurrentUniStreams: vi.fn(),
+      } as unknown as Connection;
+      const acceptedIncoming = {
+        accept: vi.fn(async () => ({ connect: vi.fn(async () => connection) })),
+      };
+      const native = {
+        id: () => ({ toString: () => "server-endpoint" }),
+        acceptNext: vi
+          .fn()
+          .mockResolvedValueOnce(failedIncoming)
+          .mockResolvedValueOnce(acceptedIncoming),
+      } as unknown as Endpoint;
+
+      const endpoint = new NodePhysicalEndpoint(native);
+      const accepted = await endpoint.accept();
+
+      expect(native.acceptNext).toHaveBeenCalledTimes(2);
+      expect(accepted?.peerEndpointId).toBe("peer-endpoint");
+    }
+  );
 });

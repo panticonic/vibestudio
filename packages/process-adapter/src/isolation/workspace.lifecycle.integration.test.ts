@@ -54,20 +54,13 @@ function nextMessage(command: ProcessAdapter): Promise<unknown> {
   });
 }
 
-function windowsAcl(paths: string[]): unknown {
-  const literals = paths.map((file) => `'${file.replaceAll("'", "''")}'`).join(",");
-  const script = `$ErrorActionPreference='Stop'; @(${literals}) | ForEach-Object { if ([System.IO.Directory]::Exists($_)) { $acl=[System.IO.Directory]::GetAccessControl($_) } else { $acl=[System.IO.File]::GetAccessControl($_) }; $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::All) } | ConvertTo-Json -Compress`;
-  return JSON.parse(
-    execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        Buffer.from(script, "utf16le").toString("base64"),
-      ],
-      { encoding: "utf8", timeout: 10000 }
-    )
+function windowsAcl(paths: string[]): string[] {
+  return paths.map((file) =>
+    execFileSync("icacls.exe", [file], {
+      encoding: "utf8",
+      timeout: 10000,
+      windowsHide: true,
+    })
   );
 }
 

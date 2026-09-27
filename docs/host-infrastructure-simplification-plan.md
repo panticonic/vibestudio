@@ -25,7 +25,7 @@ boot-complexity burden. Raw kernel mass is a goal in its own right (residency pl
   not product frameworks.
 - **Workerd manager**: post-P2 it is catalog-driven; audit the remaining bespoke
   paths and dead configuration.
-- **Transport stack**: RPC server, streaming relay, and the WebRTC surface —
+- **Transport stack**: RPC server, streaming relay, and the Iroh surface —
   consolidation audit.
 - **`viewManager`** (~2.5k): audit against the H8 `UnitDriver` contract once panels
   are driver-backed.

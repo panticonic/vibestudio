@@ -29,7 +29,7 @@ describe("mobile Iroh bundle transfer retry", () => {
   it("does not retry semantic failures or obsolete transport-shaped messages", async () => {
     for (const error of [
       new Error("Mobile app artifact is missing integrity or URL"),
-      new Error("WebRTC pipe down: keepalive timeout"),
+      new Error("Legacy pipe down: keepalive timeout"),
       codedError("INVALID_MANIFEST"),
     ]) {
       const operation = vi.fn(async () => Promise.reject(error));

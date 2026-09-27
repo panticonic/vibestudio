@@ -3,6 +3,7 @@ import {
   parseWorkspaceConfigContentWithId,
   parseWorkspaceSystemEpochEnvelope,
   readWorkspaceConfig,
+  resolveExtensionsForHostTargets,
   resolveHostTargetDecl,
   resolveHostTargetRequiredExtensions,
   resolveWorkspaceTrustGrants,
@@ -33,9 +34,7 @@ describe("template authoring metadata", () => {
 
   it("validates and removes authoring metadata from runtime configuration", () => {
     expect(
-      parse(
-        "template:\n  name: Example\n  repositories: [panels/example]\n"
-      )
+      parse("template:\n  name: Example\n  repositories: [panels/example]\n")
     ).not.toHaveProperty("template");
   });
 });
@@ -174,6 +173,15 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(resolveHostTargetRequiredExtensions(config, "electron")).toEqual([]);
     expect(resolveHostTargetRequiredExtensions(config, "react-native")).toEqual([
       { source: "extensions/react-native", ref: "main" },
+    ]);
+    expect(resolveExtensionsForHostTargets(config, ["electron"])).toEqual([
+      { source: "extensions/browser-data", ref: "main" },
+      { source: "extensions/git-bridge", ref: "main" },
+    ]);
+    expect(resolveExtensionsForHostTargets(config, ["react-native"])).toEqual([
+      { source: "extensions/react-native", ref: "main" },
+      { source: "extensions/browser-data", ref: "main" },
+      { source: "extensions/git-bridge", ref: "main" },
     ]);
   });
 

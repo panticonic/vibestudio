@@ -353,15 +353,17 @@ describe("BuildSystemV2 library package subpaths", () => {
     const realm = vm.runInContext("globalThis", context) as Record<string, unknown>;
     tameRealmCodegen(realm);
     const RealmFunction = getRealmCompiler(realm);
-    // Node's vm realm omits web-platform text codecs that workerd provides.
-    // Install guest-realm wrappers whose closures retain the host codecs but
-    // whose functions, objects, and returned byte arrays all belong to the
-    // tamed realm. Passing the host constructors or module endowments through
-    // directly would reopen codegen through their constructor chains.
+    // Node's vm realm omits web-platform globals that workerd provides. Install
+    // guest-owned Response identity for schema construction plus text-codec
+    // wrappers whose closures retain the host codecs but whose functions,
+    // objects, and returned byte arrays all belong to the tamed realm. Passing
+    // host constructors or module endowments through directly would reopen
+    // codegen through their constructor chains.
     const installTextCodecs = new RealmFunction(
       "HostTextDecoder",
       "HostTextEncoder",
       `
+        globalThis.Response = class Response {};
         globalThis.TextDecoder = class TextDecoder {
           #inner;
           constructor(...args) { this.#inner = new HostTextDecoder(...args); }

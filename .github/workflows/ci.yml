@@ -104,9 +104,6 @@ jobs:
       - name: Production Electron Node-mode native workspace receiver
         run: ELECTRON_RUN_AS_NODE=1 pnpm exec electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
 
-      - name: Linux native Claude launch contract
-        run: pnpm vitest run packages/shared/src/claudeNativeLaunch.test.ts
-
       - name: Native Iroh remote transport
         run: pnpm test:remote-transport
 

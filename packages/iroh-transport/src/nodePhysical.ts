@@ -184,12 +184,22 @@ export class NodePhysicalEndpoint implements IrohPhysicalEndpoint<NodePhysicalCo
   }
 
   async accept(): Promise<NodePhysicalConnection | null> {
-    const incoming = await this.native.acceptNext();
-    if (!incoming) return null;
-    const accepting = await incoming.accept();
-    const connection = await accepting.connect();
-    configureNodeConnection(connection);
-    return new NodePhysicalConnection(connection);
+    while (true) {
+      const incoming = await this.native.acceptNext();
+      if (!incoming) return null;
+      try {
+        const accepting = await incoming.accept();
+        const connection = await accepting.connect();
+        configureNodeConnection(connection);
+        return new NodePhysicalConnection(connection);
+      } catch {
+        // A remote peer can abandon or time out its own QUIC handshake after
+        // the endpoint has accepted the incoming attempt. That invalidates the
+        // attempt, not this process's listening endpoint or its other live
+        // connections. Keep accepting on the same endpoint; acceptNext itself
+        // remains the authoritative endpoint-lifecycle signal.
+      }
+    }
   }
 
   close(): Promise<void> {

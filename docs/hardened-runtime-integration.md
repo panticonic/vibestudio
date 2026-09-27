@@ -63,7 +63,7 @@ Findings from the current codebase, which drive every decision below:
    inside a realm; the residual gap there is intra-unit (dependency-vs-first-party),
    not host-vs-guest.
 7. **Install scripts are already allowlisted.** `package.json` pins pnpm 10 with
-   `pnpm.allowedBuilds` (electron, esbuild, node-pty, node-datachannel). The
+   `pnpm.allowedBuilds` (electron, esbuild, node-pty). The
    supply-chain outcome LavaMoat's `allow-scripts` provides is substantially in
    place; only marginal deltas remain (§6).
 
@@ -306,8 +306,8 @@ membrane techniques; noted as a possible future layer, not planned.
 ## 6. Supply chain: mostly already in place
 
 pnpm 10's `allowedBuilds` in the root `package.json` already restricts install
-scripts to an explicit reviewed list (electron, esbuild, node-pty,
-node-datachannel). Residual work is marginal and low priority: keep the list
+scripts to an explicit reviewed list (electron, esbuild, node-pty). Residual
+work is marginal and low priority: keep the list
 minimal as dependencies change, and optionally adopt `@lavamoat/allow-scripts` only
 if we want its auditing UX on top of pnpm's enforcement. No new protection should
 be claimed from this item.
