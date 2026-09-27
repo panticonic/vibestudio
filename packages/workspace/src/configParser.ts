@@ -361,10 +361,7 @@ export function workspaceExtensionRepoPath(source: string): string {
   return canonicalUnitRepoPath(source, EXTENSION_UNIT, "extension source");
 }
 
-export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
-  "browserData",
-  "gitInterop",
-] as const;
+export const WORKSPACE_EXTENSION_PROVIDER_NAMES = ["browserData", "gitInterop"] as const;
 export type WorkspaceExtensionProviderName = (typeof WORKSPACE_EXTENSION_PROVIDER_NAMES)[number];
 
 const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>(WORKSPACE_EXTENSION_PROVIDER_NAMES);
@@ -562,6 +559,33 @@ export function resolveHostTargetRequiredExtensions(
     }
   }
   return required;
+}
+
+/**
+ * Resolve the extensions that should run for the currently demanded host
+ * targets. A target prerequisite remains a declaration (and therefore part of
+ * launch review) without becoming ambient startup work for unrelated hosts.
+ */
+export function resolveExtensionsForHostTargets(
+  config: WorkspaceConfig,
+  targets: readonly WorkspaceHostTargetName[]
+): Array<{ source: string; ref: string }> {
+  const allRequired = resolveHostTargetRequiredExtensions(config);
+  const requiredSources = new Set(allRequired.map((decl) => decl.source));
+  const activeRequired = targets.flatMap((target) =>
+    resolveHostTargetRequiredExtensions(config, target)
+  );
+  const seen = new Set<string>();
+  return [...activeRequired, ...resolveDeclaredExtensions(config)].filter((decl) => {
+    if (seen.has(decl.source)) return false;
+    if (
+      requiredSources.has(decl.source) &&
+      !activeRequired.some((item) => item.source === decl.source)
+    )
+      return false;
+    seen.add(decl.source);
+    return true;
+  });
 }
 
 /**

@@ -80,6 +80,7 @@ export interface ReactNativeAppAdapterDeps {
   listCandidates(): HostTargetCandidate[];
   declaredForCandidate(candidate: HostTargetCandidate): WorkspaceAppDeclaration | null;
   requiredExtensions(): string[];
+  ensureRequiredExtensions(): Promise<void>;
   whenDeclarationsStaged(): Promise<void>;
   whenReconciled(): Promise<void>;
   reconcileDeclaration(
@@ -183,6 +184,7 @@ export class ReactNativeAppAdapter {
     const nonBlocking = options.waitForApproval === false;
     if (nonBlocking) await this.deps.whenDeclarationsStaged();
     else await this.deps.whenReconciled();
+    await this.deps.ensureRequiredExtensions();
 
     const first = this.readinessSnapshot(source);
     const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;

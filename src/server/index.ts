@@ -565,6 +565,7 @@ async function main() {
   const { resolveWorkspaceService } = await import("./workspaceServices.js");
   const {
     resolveWorkspaceTrustGrants,
+    resolveExtensionsForHostTargets,
     resolveHostTargetDecl,
     resolveHostTargetRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
@@ -1743,6 +1744,24 @@ async function main() {
   };
   const appliedExtensionDeclarations = new AppliedWorkspaceUnitDeclarations();
   const appliedAppDeclarations = new AppliedWorkspaceUnitDeclarations();
+  const demandedHostTargets = new Set<import("@vibestudio/shared/hostTargets").HostTarget>([
+    "electron",
+    ...(requireMobileReady ? (["react-native"] as const) : []),
+  ]);
+  const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
+    resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
+  const ensureHostTargetExtensions = async (
+    target: import("@vibestudio/shared/hostTargets").HostTarget
+  ): Promise<void> => {
+    if (demandedHostTargets.has(target)) return;
+    demandedHostTargets.add(target);
+    const extensionHost = extensionHostForGateway;
+    if (!extensionHost) throw new Error("Extension host is not available");
+    await extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
+      trigger: "startup",
+      waitFor: "staged",
+    });
+  };
   /**
    * Startup extension reconciliation, which runs in the background and stages
    * approvals of its own. The startup gate cannot be published until it has
@@ -1765,14 +1784,13 @@ async function main() {
       const tasks: Array<Promise<void>> = [];
       if (extensionHostForGateway) {
         const extensionHost = extensionHostForGateway;
-        const critical = resolveHostTargetRequiredExtensions(nextConfig);
-        const criticalSources = new Set(critical.map((decl) => decl.source));
-        const declared = [
-          ...critical,
-          ...resolveDeclaredExtensions(nextConfig).filter(
-            (declaration) => !criticalSources.has(declaration.source)
-          ),
-        ];
+        const declared = runtimeExtensionDeclarations(nextConfig);
+        const reviewed = resolveDeclaredExtensions(nextConfig);
+        for (const required of resolveHostTargetRequiredExtensions(nextConfig)) {
+          if (!reviewed.some((declaration) => declaration.source === required.source)) {
+            reviewed.push(required);
+          }
+        }
         const declarationFingerprint = workspaceUnitDeclarationFingerprint(declared);
         if (
           trigger === "meta-change" &&
@@ -1784,8 +1802,8 @@ async function main() {
             // Host-build units first: they are never offered at the gate, so
             // this is the only thing that records their admission — and the
             // shell needs it before it can render any review at all.
-            admitSeedTrustedUnits(extensionHost.seedTrustedDeclared(declared));
-            const review = extensionHost.reviewDeclared(declared);
+            admitSeedTrustedUnits(extensionHost.seedTrustedDeclared(reviewed));
+            const review = extensionHost.reviewDeclared(reviewed);
             if (review.units.length > 0) {
               tasks.push(
                 enqueueLaunchGateReview({
@@ -5743,6 +5761,7 @@ async function main() {
         // hostTargets.*). Read live from workspaceConfig so meta-change
         // reloads are reflected without an AppHost restart.
         getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
+        ensureHostTargetExtensions,
       });
       appHostForGateway = host;
       return host;

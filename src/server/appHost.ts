@@ -365,6 +365,7 @@ export interface AppHostDeps {
   getHostTargetDecl?(
     target: HostTarget
   ): { appSource: string; requiresExtensions: string[] } | null;
+  ensureHostTargetExtensions?(target: HostTarget): Promise<void>;
 }
 
 export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
@@ -519,6 +520,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       listCandidates: () => this.listHostTargetCandidates("react-native"),
       declaredForCandidate: (candidate) => this.declaredForCandidate(candidate),
       requiredExtensions: () => deps.getHostTargetDecl?.("react-native")?.requiresExtensions ?? [],
+      ensureRequiredExtensions: () =>
+        deps.ensureHostTargetExtensions?.("react-native") ?? Promise.resolve(),
       whenDeclarationsStaged: () => this.unitHost.whenDeclarationsStaged(),
       whenReconciled: () => this.unitHost.whenReconciled(),
       reconcileDeclaration: (declaration, options) =>
