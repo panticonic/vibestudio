@@ -1,0 +1,93 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser } from "playwright";
+import * as http from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { handleApexLanding } from "./oauthLanding";
+
+const connectedRuntime = `
+  const listeners = new Set();
+  export const workspaceConnection = {
+    available: true, connected: false, status: "disconnected", error: null,
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }
+  };
+  export async function connectWorkspace() {
+    workspaceConnection.connected = true;
+    workspaceConnection.status = "connected";
+    for (const listener of listeners) listener();
+  }
+  export async function disconnectWorkspace() {
+    workspaceConnection.connected = false;
+    workspaceConnection.status = "disconnected";
+    for (const listener of listeners) listener();
+  }
+  export const services = { docs: {
+    async listSurfaces() {
+      return [
+        { surface: "service", count: 28 },
+        { surface: "runtime", count: 14 },
+        { surface: "workspace", count: 5 },
+      ];
+    }
+  } };
+`;
+
+describe("apex connected experience", () => {
+  let browser: Browser;
+  let server: http.Server;
+  let origin: string;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+    server = http.createServer(async (request, response) => {
+      if (request.url === "/runtime.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end(connectedRuntime);
+      } else if (request.url === "/connect.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end(readFileSync(join(import.meta.dirname, "connect.js")));
+      } else {
+        const landing = handleApexLanding();
+        response.writeHead(landing.status, Object.fromEntries(landing.headers));
+        response.end(await landing.text());
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No local test address");
+    origin = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    if (server)
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+  });
+
+  it("opens the studio on connection and draws a downloadable poster from workspace data", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(origin);
+      await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(false);
+      await page.getByRole("button", { name: "Connect to workspace" }).click();
+      await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(true);
+      await page.getByRole("button", { name: "Aurora" }).click();
+      await page.getByRole("button", { name: "Draw my workspace" }).click();
+      await expect.poll(() => page.locator("#lab-image").getAttribute("src")).toMatch(
+        /^data:image\/png;base64,/
+      );
+      await expect.poll(() => page.locator("#lab-download").isVisible()).toBe(true);
+      await expect.poll(() => page.locator("#lab-status").textContent()).toContain(
+        "A snapshot of what this page can see"
+      );
+      if (process.env["VIBESTUDIO_APEX_SCREENSHOT"])
+        await page.screenshot({ path: process.env["VIBESTUDIO_APEX_SCREENSHOT"], fullPage: true });
+      await page.getByRole("button", { name: "Disconnect" }).click();
+      await expect.poll(() => page.locator("#image-lab").isVisible()).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+});
