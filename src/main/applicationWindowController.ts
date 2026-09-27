@@ -186,8 +186,8 @@ export class ApplicationWindowController {
 
     const chrome = chromeWindowColors(nativeTheme.shouldUseDarkColors);
     const window = new BaseWindow({
-      width: 1200,
-      height: 600,
+      width: 1280,
+      height: 800,
       show: false,
       icon: path.join(__dirname, "assets", "brand", "vibestudio-symbol-512.png"),
       skipTaskbar: this.deps.isHeadlessHost,

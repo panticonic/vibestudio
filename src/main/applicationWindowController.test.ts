@@ -172,6 +172,15 @@ describe("ApplicationWindowController window lifetime", () => {
     mocks.viewManagers.length = 0;
   });
 
+  it("opens with a full desktop-sized viewport", () => {
+    const harness = createHarness();
+    harness.controller.create();
+
+    expect(mocks.BaseWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 1280, height: 800 })
+    );
+  });
+
   it("routes browser notification IPC through native workspace ownership without Personal", async () => {
     const harness = createHarness();
     harness.controller.create();
