@@ -270,21 +270,42 @@ export class WebsiteDocuments {
         requestedByUserId: doc.user.userId,
         capability: CONNECTION_CAPABILITY,
         title: `Connect ${doc.fact.origin} to this workspace?`,
-        description: [
-          "This website can request workspace operations. Access to additional resources is approved separately. Results you approve may be disclosed to this site.",
-          "Only connect websites you trust. This site’s code can change independently of Vibestudio. Its approved operations can change this workspace; disconnecting does not undo completed actions or automatically cancel accepted work.",
-          "Remembered access follows this website origin as its content changes; it does not pin a reviewed code version.",
+        description:
+          "This page can request actions in your workspace and receive their results. Some actions need separate approval. Connect only if you trust this site.",
+        details: [
+          {
+            label: "What happens after connecting",
+            value:
+              "This site can change its code independently of Vibestudio. Actions you approve may change this workspace and disclose their results to the site.",
+          },
+          {
+            label: "Disconnecting",
+            value: "Disconnecting does not undo completed actions or cancel work already accepted.",
+          },
+          {
+            label: "Remembered access",
+            value:
+              "Remembered access follows this website origin as its content changes; it does not pin a reviewed code version.",
+          },
           ...(doc.fact.origin.startsWith("http:")
             ? [
-                "This site uses unencrypted HTTP. A network intermediary can change the code receiving approved workspace data.",
+                {
+                  label: "Unencrypted connection",
+                  value:
+                    "A network intermediary can change the code receiving approved workspace data from this HTTP site.",
+                },
               ]
             : []),
           ...(new URL(doc.fact.origin).hostname.endsWith(".github.io")
             ? [
-                "GitHub Pages projects under this owner domain share one origin. Remembered access applies across those repository paths.",
+                {
+                  label: "Shared site origin",
+                  value:
+                    "GitHub Pages projects under this owner domain share one origin. Remembered access applies across those repository paths.",
+                },
               ]
             : []),
-        ].join(" "),
+        ],
         authoritySubject: {
           principal: doc.fact.subject,
           website: {

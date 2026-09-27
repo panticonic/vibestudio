@@ -41,6 +41,31 @@ function fixture(decision: "session" | "always" | "deny" = "session") {
 }
 
 describe("website document admission", () => {
+  it("keeps the connection decision concise and puts lasting access risks in request details", async () => {
+    const f = fixture();
+    await f.documents.begin(f.input);
+    await f.documents.connect(f.input.runtimeId, f.input.documentId, f.input.hostId);
+
+    const prompt = f.request.mock.calls[0]![0];
+    expect(prompt.kind).toBe("capability");
+    if (prompt.kind !== "capability") throw new Error("Expected a capability approval");
+    expect(prompt.description).toBe(
+      "This page can request actions in your workspace and receive their results. Some actions need separate approval. Connect only if you trust this site."
+    );
+    expect(prompt.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Disconnecting",
+          value: expect.stringContaining("does not undo"),
+        }),
+        expect.objectContaining({
+          label: "Remembered access",
+          value: expect.stringContaining("origin"),
+        }),
+      ])
+    );
+  });
+
   it("lists only the authenticated viewer's live website documents", async () => {
     const f = fixture();
     await f.documents.begin(f.input);
