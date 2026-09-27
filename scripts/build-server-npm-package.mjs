@@ -9,7 +9,9 @@ import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // the NSIS installer on Windows. npm remains the route for a headless host that
 // no native package covers, which is the one thing it does better than an
 // archive: it resolves this host's own native dependencies (node-pty, esbuild,
-// ripgrep's fetched binary) instead of shipping every platform's copy.
+// ripgrep's fetched binary) instead of shipping every platform's copy. The
+// postinstall verifies and installs the pinned Node runtime for the current
+// platform, rather than carrying four complete distributions in every tarball.
 //
 // The monorepo root stays private; this script synthesizes the server package.json
 // and assembles its file tree. Host @vibestudio/* packages are vendored under
@@ -28,7 +30,6 @@ import { fileURLToPath } from "node:url";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
-import { stageNodeRuntime, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
 
@@ -53,14 +54,9 @@ async function main() {
   console.log(`Staging ${PUBLIC_SERVER_PACKAGE_NAME} @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
-  // This npm package is portable across the supported targets, so retain every
-  // pinned Node distribution alongside the complete Unix MXC artifact matrix.
-  const nodeRuntimes = await Promise.all(
-    NODE_RUNTIME_TARGETS.map((target) => stageNodeRuntime(repoRoot, target))
-  );
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
-  stageServer(nativeArtifacts, nodeRuntimes);
+  stageServer(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
   console.log("    (cd dist-packages/server && npm publish --dry-run)");
@@ -86,7 +82,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-function stageServer(nativeArtifacts, nodeRuntimes) {
+function stageServer(nativeArtifacts) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -96,7 +92,6 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
     copyFile(artifact, path.join(root, artifact));
   }
   stageNativeIsolationArtifacts(root, nativeArtifacts);
-  for (const runtime of nodeRuntimes) stageNodeRuntimeArtifacts(root, runtime);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),
@@ -136,6 +131,9 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
   vendorVibestudioPackages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
+  copyFile("scripts/node-runtime-artifacts.mjs", path.join(root, "scripts/node-runtime-artifacts.mjs"));
+  copyFile("native/node/distribution.json", path.join(root, "native/node/distribution.json"));
+  copyFile(".nvmrc", path.join(root, ".nvmrc"));
 
   writeJson(path.join(root, "package.json"), {
     name: PUBLIC_SERVER_PACKAGE_NAME,
@@ -149,7 +147,7 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
       vibestudio: "scripts/vibestudio-cli-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "scripts", "build-resources"],
+    files: ["dist", "vendor", "scripts", "build-resources", "native/node/distribution.json", ".nvmrc"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies(),
@@ -335,13 +333,4 @@ export function stageNativeIsolationArtifacts(root, artifacts) {
     fs.copyFileSync(source, destination);
     if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) fs.chmodSync(destination, 0o755);
   }
-}
-
-export function stageNodeRuntimeArtifacts(root, runtime) {
-  const target = path.basename(runtime.root);
-  if (!/^(linux-(x64|arm64)|darwin-arm64|win32-x64)$/u.test(target))
-    throw new Error(`Unsupported staged Node runtime target: ${target}`);
-  const destination = path.join(root, "dist/node", target);
-  mkdirp(path.dirname(destination));
-  fs.cpSync(runtime.root, destination, { recursive: true, verbatimSymlinks: true });
 }

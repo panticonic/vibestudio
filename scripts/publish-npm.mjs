@@ -105,9 +105,8 @@ async function main() {
     });
     if (result.error) throw result.error;
     if (result.status !== 0) {
-      console.error(twoFactorHelp());
       console.error(
-        `\n[publish-npm] Publish failed for ${entry.pkg.name}. After fixing auth, rerun the staged flow:`
+        `\n[publish-npm] Publish failed for ${entry.pkg.name}. After addressing the npm error above, rerun the staged flow:`
       );
       console.error("  pnpm publish:server-npm:staged");
       process.exit(result.status ?? 1);
@@ -502,18 +501,6 @@ function tokenUserConfig() {
   });
 
   return tokenUserConfigPath;
-}
-
-function twoFactorHelp() {
-  return `
-[publish-npm] npm rejected the write because publish-time 2FA was not satisfied.
-[publish-npm] This release flow requires a granular npm access token with
-[publish-npm] "bypass 2FA" enabled.
-[publish-npm] For this repo, create a granular token with read/write package access
-[publish-npm] for the @panticonic scope or all packages/scopes, then save it once:
-[publish-npm]   pnpm setup:npm-token
-[publish-npm]   pnpm publish:server-npm:staged
-[publish-npm] Do not paste the token into chat.`;
 }
 
 function readJson(file) {
