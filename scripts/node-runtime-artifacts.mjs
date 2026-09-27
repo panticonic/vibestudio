@@ -100,27 +100,39 @@ export async function assertNodeRuntimeArtifacts(appRoot, target = nodeRuntimeTa
   return { root, executable };
 }
 async function downloadArchive(file, target) {
-  const response = await fetch(
-    `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${target.archive}`,
-    {
-      signal: AbortSignal.timeout(120_000),
-      redirect: "error",
-    }
-  );
-  if (!response.ok || !response.body)
-    throw new Error(`Node distribution download failed: HTTP ${response.status}`);
-  let size = 0;
-  const limit = new Transform({
-    transform(chunk, _encoding, callback) {
-      size += chunk.length;
-      callback(
-        size > 256 * 1024 * 1024 ? new Error("Node distribution exceeds 256 MiB") : null,
-        chunk
-      );
-    },
-  });
-  await pipeline(Readable.fromWeb(response.body), limit, createWriteStream(file, { flags: "wx" }));
-  verifyNodeRuntimeArchive(await readFile(file), target);
+  const controller = new AbortController();
+  let idleTimer;
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(
+      () => controller.abort(new Error("Node distribution download stalled for 120 seconds")),
+      120_000
+    );
+  };
+  try {
+    resetIdleTimer();
+    const response = await fetch(
+      `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${target.archive}`,
+      { signal: controller.signal, redirect: "error" }
+    );
+    if (!response.ok || !response.body)
+      throw new Error(`Node distribution download failed: HTTP ${response.status}`);
+    let size = 0;
+    const limit = new Transform({
+      transform(chunk, _encoding, callback) {
+        resetIdleTimer();
+        size += chunk.length;
+        callback(
+          size > 256 * 1024 * 1024 ? new Error("Node distribution exceeds 256 MiB") : null,
+          chunk
+        );
+      },
+    });
+    await pipeline(Readable.fromWeb(response.body), limit, createWriteStream(file, { flags: "wx" }));
+    verifyNodeRuntimeArchive(await readFile(file), target);
+  } finally {
+    clearTimeout(idleTimer);
+  }
 }
 /** Stage an official, checksum-pinned distribution. No system Node discovery,
  * aliases or Electron runtime conversion participate in installed execution. */
