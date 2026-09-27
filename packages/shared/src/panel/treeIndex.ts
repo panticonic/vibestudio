@@ -82,6 +82,14 @@ export interface PanelTreeSearchHit {
   ancestorsTruncated?: boolean;
 }
 
+/** Keep the match title separate so a long path cannot hide it in a narrow row. */
+export function panelTreeSearchBreadcrumb(hit: PanelTreeSearchHit): string {
+  return [
+    ...(hit.ancestorsTruncated ? ["…"] : []),
+    ...hit.ancestors.map((ancestor) => ancestor.title),
+  ].join(" › ");
+}
+
 export interface PanelTreeSearchPage {
   revision: number;
   hits: PanelTreeSearchHit[];
