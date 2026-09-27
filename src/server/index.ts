@@ -1130,6 +1130,7 @@ async function main() {
           admissionStore: unitAdmissionStore,
           grantStore: capabilityGrantStore,
           presentationFor: describeCapability,
+          workspaceCapabilityDefinitions: authorityCapabilities,
         },
         { units: admissible, origin }
       );
@@ -2690,6 +2691,7 @@ async function main() {
     describeCapability,
     admissionStore: unitAdmissionStore,
     grantStore: capabilityGrantStore,
+    workspaceCapabilityDefinitions: authorityCapabilities,
     selections: installReviewSelections,
   });
   {

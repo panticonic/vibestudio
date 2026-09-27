@@ -4505,6 +4505,7 @@ export class RpcServer {
         snapshotDigest: denied.snapshotDigest,
         tier: denied.leaf.tier as "gated" | "critical",
         caller: denied.leaf.caller,
+        authorizationContext: denied.leaf.context,
         renderedAction,
         resource: { kind: "exact", key: denied.leaf.resourceKey },
         ...(disclosedSubstance ? { substance: disclosedSubstance } : {}),

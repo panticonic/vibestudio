@@ -237,6 +237,31 @@ export function reviewedUserlandDefinitions(
   return definitions;
 }
 
+/** Apply exact candidate declarations over the current protected workspace catalog. */
+export function workspaceUserlandDefinitions(
+  workspaceDefinitions: readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[],
+  units: readonly {
+    repoPath: string;
+    authority: { provides: readonly UserlandCapabilityDefinition[] };
+  }[]
+): Map<string, UserlandCapabilityDefinition> {
+  const candidates = new Set(units.map((unit) => unit.repoPath));
+  const definitions = new Map<string, UserlandCapabilityDefinition>(
+    workspaceDefinitions
+      .filter(({ provider }) => !candidates.has(provider))
+      .map(
+        ({ provider, definition }) =>
+          [`userland:${provider}/${definition.name}#*`, definition] as const
+      )
+  );
+  for (const [capability, definition] of reviewedUserlandDefinitions(units))
+    definitions.set(capability, definition);
+  return definitions;
+}
+
 export interface InstallReviewRowsInput {
   requests: readonly UnitAuthorityRequest[];
   /** The previously admitted declaration, for differential review (§5.4, U7). */

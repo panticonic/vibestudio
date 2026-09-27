@@ -1,4 +1,9 @@
-import type { AcquisitionInfo, InvocationSnapshot, ResourceScope } from "@vibestudio/rpc";
+import type {
+  AcquisitionInfo,
+  AuthorizationContext,
+  InvocationSnapshot,
+  ResourceScope,
+} from "@vibestudio/rpc";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -9,6 +14,7 @@ import {
   type AuthorityAcquisitionDecision,
 } from "@vibestudio/shared/approvalContract";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { matchingAuthorityGrants } from "@vibestudio/shared/authorization";
 import {
   authorityPromptCardType,
   type AuthorityPromptCardType,
@@ -37,6 +43,8 @@ export interface AcquisitionRequestInput {
   snapshotDigest: string;
   tier: "gated" | "critical";
   caller: VerifiedCaller;
+  /** Exact verified context from the denied invocation, retained for grant reconciliation. */
+  authorizationContext?: AuthorizationContext;
   renderedAction: string;
   resource: ResourceScope;
   presentation?: AuthorityChallengePresentation;
@@ -90,6 +98,7 @@ interface PendingAcquisition {
   agentBindingId: string | null;
   /** The scope the request was made against, kept for the waiting-list projection. */
   resource: ResourceScope;
+  inputs: readonly AcquisitionRequestInput[];
   /** When the request began waiting, so a reviewer can see what has been stuck. */
   requestedAt: number;
   outcome: Promise<AcquisitionSettlement>;
@@ -836,6 +845,7 @@ export class AcquisitionCoordinator {
       sessionId: input.snapshot.sessionId,
       agentBindingId: input.snapshot.agentBindingId ?? null,
       resource: input.resource,
+      inputs,
       requestedAt: now,
       outcome,
       settle,
@@ -961,6 +971,7 @@ export class AcquisitionCoordinator {
       sessionId: input.snapshot.sessionId,
       agentBindingId: input.snapshot.agentBindingId ?? null,
       resource: input.resource,
+      inputs: [input],
       requestedAt: Date.now(),
       outcome,
       settle,
@@ -1237,13 +1248,16 @@ export class AcquisitionCoordinator {
     return pending.length + joined;
   }
 
-  private cancelPresentation(entry: PendingAcquisition): void {
+  private cancelPresentation(entry: PendingAcquisition, exactSnapshot = false): void {
     this.deps.approvalQueue.resolveMatching?.(
       (approval) =>
         approval.kind === "capability" &&
         approval.callerId === entry.info.ownerRuntimeId &&
         approval.capability === entry.info.capability &&
-        approval.grantResourceKey === entry.info.resourceKey,
+        approval.grantResourceKey === entry.info.resourceKey &&
+        (!exactSnapshot ||
+          (approval.snapshot !== undefined &&
+            canonicalJson(approval.snapshot) === canonicalJson(entry.inputs[0]?.snapshot))),
       "deny"
     );
   }
@@ -1503,6 +1517,37 @@ export class AcquisitionCoordinator {
       decision: authorityDecision,
       ...(grantIds[0] ? { grantId: grantIds[0] } : {}),
     });
+    if (authorityDecision === "version" && grantIds.length > 0)
+      this.settlePendingCoveredByVersionGrants(new Set(grantIds));
+  }
+
+  private settlePendingCoveredByVersionGrants(issuedIds: ReadonlySet<string>): void {
+    for (const pending of [...this.byId.values()]) {
+      if (pending.info.tier !== "gated") continue;
+      const covering = pending.inputs.map((facet) => {
+        const snapshot = facet.snapshot;
+        if (!facet.authorizationContext) return undefined;
+        return matchingAuthorityGrants({
+          grants: this.deps.grantStore.grantsForSubjects(
+            [snapshot.callerPrincipal],
+            snapshot.capability
+          ),
+          context: facet.authorizationContext,
+          subjects: new Set([snapshot.callerPrincipal]),
+          capability: snapshot.capability,
+          resourceKey: snapshot.resourceKey,
+          invocationDigest: facet.snapshotDigest,
+          providerExecutionDigest: snapshot.providerExecutionDigest,
+        }).find((grant) => grant.id && issuedIds.has(grant.id) && grant.effect === "allow");
+      });
+      if (covering.some((grant) => !grant)) continue;
+      this.finish(pending, {
+        state: "decided",
+        decision: "version",
+        ...(covering[0]?.id ? { grantId: covering[0].id } : {}),
+      });
+      this.cancelPresentation(pending, true);
+    }
   }
 
   private finish(entry: PendingAcquisition, outcome: AcquisitionSettlement): void {
@@ -1768,7 +1813,7 @@ export class AcquisitionCoordinator {
     if (!input.snapshot.callerPrincipal.startsWith("code:")) {
       throw new Error("Always-allow is only valid for an installed code identity");
     }
-    this.deps.grantStore.issue({
+    return this.deps.grantStore.issue({
       effect: "allow",
       capability: input.snapshot.capability,
       resource: input.resource,
@@ -1788,8 +1833,7 @@ export class AcquisitionCoordinator {
       ...(input.presentation?.grantExpiresAt
         ? { expiresAt: input.presentation.grantExpiresAt }
         : {}),
-    });
-    return;
+    }).id;
   }
 }
 

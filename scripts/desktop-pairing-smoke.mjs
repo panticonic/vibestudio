@@ -1594,12 +1594,23 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
   const connect = website.locator("#workspace-connect-button");
   await until(() => connect.isEnabled(), "enabling the website connection control", deadline);
   console.log("[desktop-smoke] Website: connection control enabled");
+  const chrome = await chromePage(app, deadline);
+  await until(async () => {
+    const history = await nativeRpc(chrome, { kind: "workspace", workspaceId },
+      "extensions.invokeProvider", ["browserData", "getHistory", [{ limit: 10 }]]);
+    return history.some((entry) => entry.url === "https://vibestudio.app/");
+  }, "recording the website visit without browser-data approval", deadline);
+  const beforeConnection = await nativeRpc(chrome, { kind: "workspace", workspaceId },
+    "shellApproval.listPending", []);
+  if (beforeConnection.some((entry) => entry.kind === "capability" &&
+      entry.capability?.includes("browser-data.write")))
+    throw new Error("Ordinary website navigation requested Browser Data write approval");
+  console.log("[desktop-smoke] Website: visit recorded without Browser Data approval");
   if (await website.locator("#workspace-capabilities").textContent())
     throw new Error("Website read workspace capabilities before connection");
   await connect.click();
   console.log("[desktop-smoke] Website: requested workspace connection");
 
-  const chrome = await chromePage(app, deadline);
   const approval = await until(async () => {
     const pending = await nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []);
     return pending.find((entry) => entry.kind === "capability" &&
@@ -2236,17 +2247,16 @@ async function main() {
       );
       const personal = catalog.find((entry) => entry.privateRole === "personal");
       if (options.websiteConnection) {
-        const system = catalog.find((entry) => entry.privateRole === "system");
-        if (!system) throw new Error("Local startup is missing System workspace");
-        await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
+        if (!personal) throw new Error("Local startup is missing Personal workspace");
+        await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
         await waitForChromeResult(
           electronApp,
-          `Boolean(document.querySelector('[aria-label="Open System"][aria-current="location"]'))`,
-          "waiting for System workspace focus before website navigation",
+          `Boolean(document.querySelector('[aria-label="Open Personal"][aria-current="location"]'))`,
+          "waiting for Personal workspace focus before website navigation",
           Math.max(1000, deadlineMs - Date.now())
         );
-        await waitForWebsiteWorkspacePresentation(electronApp, system.workspaceId, deadlineMs);
-        await runWebsiteConnectionAcceptance(electronApp, system.workspaceId, deadlineMs);
+        await waitForWebsiteWorkspacePresentation(electronApp, personal.workspaceId, deadlineMs);
+        await runWebsiteConnectionAcceptance(electronApp, personal.workspaceId, deadlineMs);
         await assertCleanDesktopDiagnostics(electronApp);
         await cleanup();
         return;

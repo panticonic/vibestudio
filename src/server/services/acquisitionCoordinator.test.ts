@@ -9,6 +9,7 @@ import {
 } from "@vibestudio/shared/authority/invocationSnapshot";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { TargetAuthorityRequestStore } from "./targetAuthorityRequestStore.js";
 
@@ -838,10 +839,106 @@ describe("AcquisitionCoordinator", () => {
         acquisitionId: first.acquisitionId,
         ownerRuntimeId: caller.runtime.id,
       })
-    ).resolves.toEqual({ state: "decided", decision: "version" });
+    ).resolves.toMatchObject({ state: "decided", decision: "version" });
     expect(
       grantStore.grantsForSubjects([firstSnapshot.callerPrincipal], firstSnapshot.capability)
     ).toHaveLength(1);
+    grantStore.close();
+  });
+
+  it("retires another pending code ask when a version grant covers it", async () => {
+    const decisions: Array<(decision: "version" | "deny") => void> = [];
+    const request = vi.fn(
+      () =>
+        new Promise<"version" | "deny">((resolve) => {
+          decisions.push(resolve);
+        })
+    );
+    const resolveMatching = vi.fn();
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-pending-grant-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request, resolveMatching } as never,
+      grantStore,
+    });
+    const caller = createVerifiedCaller("do:workers/example:Example:test", "do", {
+      callerId: "do:workers/example:Example:test",
+      callerKind: "do",
+      repoPath: "workers/example",
+      effectiveVersion: "ev-test",
+      executionDigest: "c".repeat(64),
+      requested: [],
+    });
+    const firstSnapshot = {
+      ...snapshot(),
+      callerPrincipal: "code:workers/example@ev-test" as const,
+    };
+    const secondSnapshot = { ...firstSnapshot, method: "updateTitle", argsDigest: "d".repeat(64) };
+    const unrelatedSnapshot = {
+      ...firstSnapshot,
+      method: "changeOtherData",
+      resourceKey: "https://unrelated.example",
+    };
+    const common = {
+      tier: "gated" as const,
+      caller,
+      authorizationContext: authorizeVerifiedCaller(caller, {
+        workspaceId: "workspace-1",
+        workspaceMember: true,
+        sessionId: firstSnapshot.sessionId,
+        audience: "gateway",
+        capability: firstSnapshot.capability,
+        resourceKey: firstSnapshot.resourceKey,
+        grantStore,
+      }).context,
+      renderedAction: "change browser data",
+      resource: { kind: "exact" as const, key: firstSnapshot.resourceKey },
+      presentation: reviewedPresentation(),
+    };
+    const first = coordinator.request({
+      ...common,
+      snapshot: firstSnapshot,
+      snapshotDigest: invocationSnapshotDigest(firstSnapshot),
+    });
+    const second = coordinator.request({
+      ...common,
+      snapshot: secondSnapshot,
+      snapshotDigest: invocationSnapshotDigest(secondSnapshot),
+    });
+    const unrelated = coordinator.request({
+      ...common,
+      snapshot: unrelatedSnapshot,
+      snapshotDigest: invocationSnapshotDigest(unrelatedSnapshot),
+      resource: { kind: "exact", key: unrelatedSnapshot.resourceKey },
+    });
+    expect(second.acquisitionId).not.toBe(first.acquisitionId);
+    await vi.waitFor(() => expect(decisions).toHaveLength(3));
+
+    decisions[0]!("version");
+    await expect(
+      coordinator.awaitDecision({
+        acquisitionId: first.acquisitionId,
+        ownerRuntimeId: caller.runtime.id,
+      })
+    ).resolves.toMatchObject({ state: "decided", decision: "version" });
+    await expect(
+      coordinator.awaitDecision({
+        acquisitionId: second.acquisitionId,
+        ownerRuntimeId: caller.runtime.id,
+      })
+    ).resolves.toMatchObject({ state: "decided", decision: "version" });
+    expect(resolveMatching).toHaveBeenCalledOnce();
+    expect(coordinator.pending().map((entry) => entry.acquisitionId)).toContain(
+      unrelated.acquisitionId
+    );
+    decisions[2]!("deny");
+    await expect(
+      coordinator.awaitDecision({
+        acquisitionId: unrelated.acquisitionId,
+        ownerRuntimeId: caller.runtime.id,
+      })
+    ).resolves.toMatchObject({ state: "decided", decision: "deny" });
     grantStore.close();
   });
 

@@ -34,7 +34,7 @@ import type { InstallReviewSelectionStore } from "./installReviewSelections.js";
 import { reviewedUnitPart, unresolvedOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
 import {
   INSTALL_BEHAVIOR_COPY,
-  reviewedUserlandDefinitions,
+  workspaceUserlandDefinitions,
   summarizeParts,
   type InstallReviewOrigin,
   type InstallReviewPart,
@@ -242,24 +242,13 @@ function installReviewParts(
   // Protected workspace receivers include ordinary workers that do not need a
   // privileged startup review. Their declarations still govern consumers in
   // this review. Candidate providers replace the corresponding current metadata.
-  const reviewedProviders = new Set([...units.values()].map((unit) => unit.source.repo));
-  const userlandDefinitions = new Map<string, UserlandCapabilityDefinition>(
-    workspaceDefinitions
-      // A provider being changed in this review replaces its previous declarations,
-      // including removals. Current workspace metadata never overrides the candidate.
-      .filter(({ provider }) => !reviewedProviders.has(provider))
-      .map(
-        ({ provider, definition }) =>
-          [`userland:${provider}/${definition.name}#*`, definition] as const
-      )
-  );
-  for (const [capability, definition] of reviewedUserlandDefinitions(
+  const userlandDefinitions = workspaceUserlandDefinitions(
+    workspaceDefinitions,
     [...units.values()].map((unit) => ({
       repoPath: unit.source.repo,
       authority: unit.authority ?? { requests: [], provides: [] },
     }))
-  ))
-    userlandDefinitions.set(capability, definition);
+  );
   return [...units.values()].map((unit) => {
     const repoPath = unit.source.repo;
     const previousRequests = req.previousRequests?.get(repoPath);

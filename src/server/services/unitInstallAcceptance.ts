@@ -1,8 +1,9 @@
 import {
-  reviewedUserlandDefinitions,
+  workspaceUserlandDefinitions,
   type ServiceBindingFact,
   type WorkspaceServiceReviewFact,
 } from "@vibestudio/shared/authority/unitInstallReview";
+import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -79,6 +80,10 @@ export interface UnitInstallAcceptanceDeps {
   decidedBy?: () => string;
   issuedBy?: () => string;
   presentationFor?: CapabilityPresentationResolver;
+  workspaceCapabilityDefinitions?: () => readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[];
 }
 
 export interface UnitInstallAcceptanceTransaction {
@@ -154,7 +159,10 @@ export function prepareUnitInstallReview(
         origin: input.origin,
         decidedBy: deps.decidedBy?.() ?? "user:workspace",
         issuedBy: deps.issuedBy?.() ?? "host:vibestudio",
-        userlandDefinitions: reviewedUserlandDefinitions(input.units.map((unit) => unit.identity)),
+        userlandDefinitions: workspaceUserlandDefinitions(
+          deps.workspaceCapabilityDefinitions?.() ?? [],
+          input.units.map((unit) => unit.identity)
+        ),
         ...(deps.presentationFor ? { presentationFor: deps.presentationFor } : {}),
       });
       issuedGrantIds = issued.flatMap((grant) => (grant.id ? [grant.id] : []));

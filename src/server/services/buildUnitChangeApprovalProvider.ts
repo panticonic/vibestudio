@@ -8,6 +8,7 @@ import {
 } from "@vibestudio/unit-host";
 import type { BuildSystemV2, BuildUnitIdentityResolution } from "../buildV2/index.js";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   prepareUnitInstallReview,
@@ -58,6 +59,10 @@ export function createBuildUnitChangeApprovalProvider(deps: {
   admissionStore: UnitAdmissionStore;
   /** Absent only in tests that exercise admission bookkeeping on its own. */
   grantStore?: CapabilityGrantStore;
+  workspaceCapabilityDefinitions?: () => readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[];
   /**
    * What the user checked, carried from the review that accepted it. An absent
    * entry means this unit was never put to the user — a code-only update (U7)

@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import type {
+  UnitAuthorityManifest,
+  UserlandCapabilityDefinition,
+} from "@vibestudio/shared/authorityManifest";
 import { installRowKey } from "@vibestudio/shared/authority/unitInstallReview";
 import { hostBuildOrigin, reviewedUnitPart } from "@vibestudio/shared/authority/reviewedUnitParts";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -90,6 +93,40 @@ describe("acceptUnitInstallReview", () => {
     expect([...heldClearanceRowKeys({ grantStore, ...shell })]).toEqual([
       rowKey("workspace.files.write"),
     ]);
+  });
+
+  it("mints a reviewed receiver grant when its provider is outside the accepted batch", () => {
+    const capability = "userland:workers/browser-data/browser-data.write#*";
+    const extension = {
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "ev-browser-extension",
+      authority: authority(capability),
+    };
+    const definition: UserlandCapabilityDefinition = {
+      name: "browser-data.write",
+      title: "Change browser data",
+      action: "change persistent browser data",
+      tier: "gated",
+      sensitivity: "write",
+      resourceType: "browser-data",
+      presentation: { domain: "web", verb: "manage" },
+      notability: "everyday",
+      grantScopes: ["once", "version"],
+    };
+
+    acceptUnitInstallReview(
+      {
+        admissionStore,
+        grantStore,
+        workspaceCapabilityDefinitions: () => [{ provider: "workers/browser-data", definition }],
+      },
+      {
+        units: [{ identity: extension, clearedRowKeys: [rowKey(capability)] }],
+        origin: "launch-gate",
+      }
+    );
+
+    expect([...heldClearanceRowKeys({ grantStore, ...extension })]).toEqual([rowKey(capability)]);
   });
 
   it("retires the outgoing version's clearance in the same step", () => {
