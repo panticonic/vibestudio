@@ -163,7 +163,9 @@ describe("Iroh server ingress", () => {
     await vi.waitFor(() => expect(attach).toHaveBeenCalledWith(accepted));
     expect(binding.bind).toHaveBeenCalledTimes(2);
     expect(first.close).toHaveBeenCalledOnce();
+    expect(ingress.endpoint).toBe(second);
     await ingress.stop();
+    expect(() => ingress.endpoint).toThrow("not bound");
   });
 
   it("keeps the same endpoint through a relay outage and becomes ready on recovery", async () => {

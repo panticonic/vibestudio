@@ -23,8 +23,9 @@ export interface IrohIngressOptions<
   log?(message: string): void;
 }
 
-export interface IrohIngress {
+export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnection>> {
   readonly endpointId: string;
+  readonly endpoint: Endpoint;
   readonly ready: Promise<void>;
   stop(): Promise<void>;
 }
@@ -39,7 +40,7 @@ export interface IrohIngress {
 export function startIrohIngress<
   Connection extends IrohPhysicalConnection,
   Endpoint extends IrohPhysicalEndpoint<Connection>,
->(options: IrohIngressOptions<Connection, Endpoint>): IrohIngress {
+>(options: IrohIngressOptions<Connection, Endpoint>): IrohIngress<Endpoint> {
   const maximum = options.maxConnections ?? DEFAULT_CATASTROPHIC_CONNECTION_CEILING;
   if (!Number.isSafeInteger(maximum) || maximum < 1) {
     throw new Error("Iroh ingress maxConnections must be a positive safe integer");
@@ -201,6 +202,10 @@ export function startIrohIngress<
   })();
 
   return {
+    get endpoint() {
+      if (!endpoint) throw new Error("Iroh ingress endpoint is not bound");
+      return endpoint;
+    },
     get endpointId() {
       if (!endpointId) throw new Error("Iroh ingress endpoint is not bound yet");
       return endpointId;

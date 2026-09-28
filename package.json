@@ -148,7 +148,7 @@
       "esbuild",
       "node-pty"
     ],
-    "//overrides": "react-native 0.79 requires React 19; pin the hoisted React pair. protobufjs, shell-quote, and websocket-driver have compatible security floors for transitive consumers. ws pins each host-required major to its patched fragmentation-memory floor. Revisit React when bumping RN. qs 6 and fast-xml-parser 4 consumers use patched releases with compatible APIs; FXP 5 retains CommonJS exports. Firebase UUID consumers use the stable named v4 API; UUID 11 preserves CommonJS and fixes buffer bounds. esbuild and Undici floors also cover compatible development-tool consumers. Navigation core is pinned to its query-string 9 import migration; update the patch and Base mobile-navigation owner together.",
+    "//overrides": "react-native 0.79 requires React 19; pin the hoisted React pair. protobufjs, shell-quote, and websocket-driver have compatible security floors for transitive consumers. ws pins each host-required major to its patched fragmentation-memory floor. Revisit React when bumping RN. qs 6 and fast-xml-parser 4 consumers use patched releases with compatible APIs; FXP 5 retains CommonJS exports. Firebase UUID consumers use the stable named v4 API; UUID 11 preserves CommonJS and fixes buffer bounds. esbuild and Undici floors also cover compatible development-tool consumers.",
     "overrides": {
       "dts-bundle-generator>typescript": "6.0.3",
       "react": "19.0.0",
@@ -164,8 +164,6 @@
       "uuid@>=8 <11": "^11.1.1",
       "esbuild@0.27": "^0.28.2",
       "undici@7": "^7.29.1",
-      "@react-navigation/core": "7.21.13",
-      "query-string": "^9.5.1",
       "@number0/iroh-darwin-arm64": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-darwin-arm64-1.1.0-cancel.2.tgz",
       "@number0/iroh-linux-x64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-x64-gnu-1.1.0-cancel.2.tgz",
       "@number0/iroh-linux-arm64-gnu": "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-linux-arm64-gnu-1.1.0-cancel.2.tgz",
@@ -174,8 +172,7 @@
     },
     "patchedDependencies": {
       "react-native-webview@13.16.1": "patches/react-native-webview@13.16.1.patch",
-      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch",
-      "@react-navigation/core@7.21.13": "patches/@react-navigation__core@7.21.13.patch"
+      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch"
     }
   },
   "devDependencies": {

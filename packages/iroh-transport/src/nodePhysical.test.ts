@@ -5,6 +5,27 @@ import { NodePhysicalConnection, NodePhysicalEndpoint } from "./nodePhysical.js"
 describe("Node Iroh physical diagnostics", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("advertises the current native home before configured fallback relays", () => {
+    const relays = ["https://us.example/", "https://eu.example/"];
+    let home: string | null = relays[1]!;
+    const endpoint = new NodePhysicalEndpoint({
+      id: () => ({ toString: () => "a".repeat(64) }),
+      addr: () => ({ relayUrl: () => home }),
+    } as unknown as Endpoint);
+    expect(endpoint.reach(relays)).toEqual({
+      endpointId: "a".repeat(64),
+      v: 5,
+      relays: [relays[1], relays[0]],
+    });
+    home = relays[0]!;
+    expect(endpoint.reach(relays).relays).toEqual(relays);
+    home = "https://unconfigured.example/";
+    expect(endpoint.reach(relays).relays).toEqual(relays);
+    home = null;
+    expect(endpoint.reach(relays).relays).toEqual(relays);
+    expect(relays).toEqual(["https://us.example/", "https://eu.example/"]);
+  });
+
   it("samples only while subscribed and emits changed path/stat snapshots", async () => {
     vi.useFakeTimers();
     let transmittedBytes = 10;

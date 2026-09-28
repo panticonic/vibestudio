@@ -2265,7 +2265,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.runActivationExclusive(name, () => this.activateOnce(name));
   }
 
-  private async ensureActivated(name: string): Promise<void> {
+  async ensureActivated(name: string): Promise<void> {
     await this.runActivationExclusive(name, async () => {
       // Recheck inside the serialized operation. Multiple consumers can all
       // observe an idle target before the first queued activation starts; a

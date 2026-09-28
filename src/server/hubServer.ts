@@ -2181,10 +2181,8 @@ async function startHubControlTransport(
   await ingress.ready;
   const transport: HubControlTransport = {
     ingress,
-    pairing: {
-      endpointId: ingress.endpointId,
-      relays: relayUrls,
-      v: IROH_REACH_VERSION,
+    get pairing() {
+      return ingress.endpoint.reach(relayUrls);
     },
     rpcServer,
     grantStore,

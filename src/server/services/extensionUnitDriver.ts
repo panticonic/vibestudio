@@ -5,7 +5,10 @@ import type {
 } from "@vibestudio/service-schemas/runtime";
 import type { UnitDriver, UnitLogQuery } from "./unitSupervisor.js";
 
-export function createExtensionUnitDriver(getHost: () => ExtensionHost | null): UnitDriver {
+export function createExtensionUnitDriver(
+  getHost: () => ExtensionHost | null,
+  ensureDeclaration: (releaseId: string) => Promise<void>
+): UnitDriver {
   const host = () => {
     const value = getHost();
     if (!value) throw new Error("Extension runtime is not available");
@@ -102,6 +105,9 @@ export function createExtensionUnitDriver(getHost: () => ExtensionHost | null): 
       host().appendRuntimeLog(ctx, report.level, report.message, report.fields),
     activation: {
       activate: async (_ctx, releaseId) => {
+        // A declared host prerequisite may be dormant until its first launch.
+        // Stage that declaration before consulting the runtime registry.
+        await ensureDeclaration(releaseId);
         const row = host()
           .listWorkspaceUnits()
           .find((candidate) => candidate.name === releaseId || candidate.source === releaseId);
@@ -113,7 +119,7 @@ export function createExtensionUnitDriver(getHost: () => ExtensionHost | null): 
         if (row.status === "error" && !row.activeBundleKey) {
           return { status: "unavailable", reason: row.lastError ?? `${row.name} failed` };
         }
-        await host().activate(row.name);
+        await host().ensureActivated(row.name);
         const entity = describeRow(requireRow(row.name));
         return { status: "ready", entity };
       },

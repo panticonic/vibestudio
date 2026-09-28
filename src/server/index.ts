@@ -1754,17 +1754,29 @@ async function main() {
   ]);
   const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
     resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
+  const hostTargetStaging = new Map<string, Promise<void>>();
   const ensureHostTargetExtensions = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
-    if (demandedHostTargets.has(target)) return;
-    demandedHostTargets.add(target);
+    const pending = hostTargetStaging.get(target);
+    if (pending) return pending;
     const extensionHost = extensionHostForGateway;
     if (!extensionHost) throw new Error("Extension host is not available");
-    await extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
+    if (demandedHostTargets.has(target)) return extensionHost.whenDeclarationsStaged();
+    demandedHostTargets.add(target);
+    const staging = extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
       trigger: "startup",
       waitFor: "staged",
     });
+    hostTargetStaging.set(target, staging);
+    try {
+      await staging;
+    } catch (error) {
+      demandedHostTargets.delete(target);
+      throw error;
+    } finally {
+      hostTargetStaging.delete(target);
+    }
   };
   /**
    * Startup extension reconciliation, which runs in the background and stages
@@ -4559,8 +4571,13 @@ async function main() {
   // Child ingress is armed exclusively by authenticated hub control requests.
   // Exact transport ownership is injected from the advertised workspace's
   // hub-owned reach tree, outside resettable semantic/runtime state.
-  let irohReach: import("@vibestudio/iroh-transport").IrohReach | null = null;
-  let irohIngress: import("./irohIngress.js").IrohIngress | null = null;
+  let irohIngress: import("./irohIngress.js").IrohIngress<
+    import("@vibestudio/iroh-transport/node").NodePhysicalEndpoint
+  > | null = null;
+  const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
+  const workspaceRelayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+  const currentIrohReach = (): import("@vibestudio/iroh-transport").IrohReach | null =>
+    irohIngress?.endpoint.reach(workspaceRelayUrls) ?? null;
   // Persisted peers can reconnect as soon as the endpoint binds. Their RPC
   // admission must wait for the same completed startup reported to new peers.
   let settleWorkspaceReadyForPeers!: (ready: boolean) => void;
@@ -5136,10 +5153,8 @@ async function main() {
       try {
         const { createNodeEndpointBinding, loadOrCreateNodeEndpointSecret } =
           await import("@vibestudio/iroh-transport/node");
-        const { IROH_REACH_VERSION } = await import("@vibestudio/iroh-transport");
-        const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
         const { startIrohIngress } = await import("./irohIngress.js");
-        const relayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+        const relayUrls = workspaceRelayUrls;
         console.warn(`[iroh-workspace] Connecting to relays: ${relayUrls.join(", ")}`);
         const secretKey = loadOrCreateNodeEndpointSecret(workspaceIrohIdentityFile);
         const ingress = startIrohIngress({
@@ -5155,11 +5170,6 @@ async function main() {
         });
         await ingress.ready;
         irohIngress = ingress;
-        irohReach = {
-          endpointId: ingress.endpointId,
-          relays: relayUrls,
-          v: IROH_REACH_VERSION,
-        };
         return ingress;
       } catch (error) {
         throw new Error(
@@ -5174,7 +5184,6 @@ async function main() {
       await ingress.stop();
       if (irohIngress === ingress) {
         irohIngress = null;
-        irohReach = null;
       }
     },
   });
@@ -5398,11 +5407,11 @@ async function main() {
             respond(403, { error: "Device owner is not a workspace member", code: "EACCES" });
             return;
           }
-          if (!irohIngress || !irohReach) {
+          if (!irohIngress) {
             respond(503, { error: "Workspace Iroh ingress is not ready", code: "NOT_READY" });
             return;
           }
-          respond(200, irohReach);
+          respond(200, currentIrohReach());
         } catch (error) {
           respond(400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -6535,7 +6544,25 @@ async function main() {
   });
   unitSupervisor.register(
     (await import("./services/extensionUnitDriver.js")).createExtensionUnitDriver(
-      () => extensionHostForGateway
+      () => extensionHostForGateway,
+      async (releaseId) => {
+        const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+        const node = buildSystem
+          ?.getGraph()
+          .allNodes()
+          .find((candidate) => candidate.name === releaseId || candidate.relativePath === releaseId);
+        if (!node) return;
+        for (const target of ["electron", "react-native", "terminal"] as const) {
+          if (
+            resolveHostTargetRequiredExtensions(workspaceConfig, target).some(
+              (declaration) => declaration.source === node.relativePath
+            )
+          ) {
+            await ensureHostTargetExtensions(target);
+          }
+        }
+        await extensionHostForGateway?.whenDeclarationsStaged();
+      }
     )
   );
   unitSupervisor.register(
@@ -6809,7 +6836,7 @@ async function main() {
         workerd: workerdManagerForGateway?.getPort() ? "running" : "stopped",
         tokenSource,
         // Remote transport health. Null for loopback-only co-located mode.
-        iroh: irohReach,
+        iroh: currentIrohReach(),
       };
     },
   });
@@ -7444,7 +7471,7 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        pairing: irohReach,
+        pairing: currentIrohReach(),
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         tokenFilePath,

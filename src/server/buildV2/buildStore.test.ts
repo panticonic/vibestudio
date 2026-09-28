@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import {
@@ -886,6 +886,76 @@ describe("build artifact helpers", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["compact", "inline"])(
+    "hydrates %s metadata from a captured record without copying mutable cache files",
+    async (format) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-snapshot-"));
+      const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      const sharedCache = path.join(root, "shared");
+      process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
+      const key = "snapshot-build";
+      const modules = [
+        {
+          moduleId: "workers/a/index.ts",
+          contentDigest: "a".repeat(64),
+          package: { kind: "first-party" as const },
+          format: "ts" as const,
+          source: "export default {};",
+        },
+      ];
+      let linkSpy: import("vitest").MockInstance<typeof fs.promises.link> | undefined;
+      try {
+        setUserDataPath(path.join(root, "producer"));
+        await put(
+          key,
+          { entries: build().artifacts },
+          {
+            ...build().metadata,
+            buildKey: key,
+            executableModules: modules,
+          }
+        );
+        // Hydration joins this process's background publication, providing a
+        // deterministic published-cache boundary before introducing the race.
+        setUserDataPath(path.join(root, "first-reader"));
+        const first = await getOrHydrate(key);
+        expect(first?.metadata.executableModules).toEqual(modules);
+        const sharedDir = path.join(sharedCache, key);
+        const metadataPath = path.join(sharedDir, "metadata.json");
+        if (format === "inline") {
+          fs.writeFileSync(metadataPath, JSON.stringify(first!.metadata));
+          fs.unlinkSync(path.join(sharedDir, "executable-modules.json.gz"));
+        }
+        const metadataBefore = fs.readFileSync(metadataPath, "utf8");
+        fs.writeFileSync(path.join(sharedDir, "metadata.json.tmp.other-writer"), "in flight");
+        const realLink = fs.promises.link;
+        linkSpy = vi.spyOn(fs.promises, "link").mockImplementation(async (source, target) => {
+          if (String(source) === path.join(sharedDir, "executable-modules.json.gz")) {
+            throw Object.assign(new Error("Concurrent metadata replacement"), { code: "ENOENT" });
+          }
+          return realLink(source, target);
+        });
+        setUserDataPath(path.join(root, "second-reader"));
+        const hydrated = await getOrHydrate(key);
+        expect(hydrated?.metadata.executableModules).toEqual(modules);
+        expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+        expect(fs.existsSync(path.join(hydrated!.dir, "metadata.json.tmp.other-writer"))).toBe(
+          false
+        );
+        expect(
+          JSON.parse(fs.readFileSync(path.join(hydrated!.dir, "package.json"), "utf8"))
+        ).toEqual({ type: "module" });
+        expect(fs.readFileSync(metadataPath, "utf8")).toBe(metadataBefore);
+      } finally {
+        linkSpy?.mockRestore();
+        if (previousSharedCache === undefined)
+          delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+        else process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   it("reuses artifact bytes without changing either workspace's persisted execution identity", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));

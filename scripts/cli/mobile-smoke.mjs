@@ -1016,8 +1016,12 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     // React Native owns the transition after it receives the press. Android can
     // retain the old clickable accessibility node while the visual tree is
     // already busy; dumping and tapping that ghost node creates duplicate
-    // decisions and competes with the JS/native bridge.
-    if (logcat.hasPhase("embedded-host-target-approval-submitted")) {
+    // decisions and competes with the JS/native bridge. A resolved submission
+    // is no longer busy: a later prerequisite review still needs a decision.
+    if (
+      logcat.phaseCount("embedded-host-target-approval-submitted") >
+      logcat.phaseCount("embedded-host-target-approval-resolved")
+    ) {
       await sleep(250);
       continue;
     }

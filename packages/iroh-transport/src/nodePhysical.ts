@@ -14,7 +14,7 @@ import type {
   IrohPhysicalReceiveStream,
   IrohPhysicalSendStream,
 } from "./physical.js";
-import type { IrohReach } from "./reach.js";
+import { IROH_REACH_VERSION, type IrohReach } from "./reach.js";
 import { withIrohConnectionLossTag } from "./connectionLoss.js";
 import {
   bindNodeEndpoint,
@@ -176,6 +176,19 @@ export class NodePhysicalEndpoint implements IrohPhysicalEndpoint<NodePhysicalCo
 
   constructor(readonly native: Endpoint) {
     this.endpointId = native.id().toString();
+  }
+
+  /** Advertise the native home first, retaining the configured failover set. */
+  reach(relays: readonly string[]): IrohReach {
+    const home = this.native.addr().relayUrl();
+    return {
+      endpointId: this.endpointId,
+      v: IROH_REACH_VERSION,
+      relays:
+        home && relays.includes(home)
+          ? [home, ...relays.filter((relay) => relay !== home)]
+          : [...relays],
+    };
   }
 
   async connect(reach: IrohReach, relayUrl: string): Promise<NodePhysicalConnection> {

@@ -47,7 +47,6 @@ import { stateLayout } from "../stateLayout.js";
 import {
   derivedCacheCoordinator,
   scheduleDerivedCachePrune,
-  type DerivedCacheLease,
 } from "@vibestudio/shared/derivedCache";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
@@ -424,29 +423,21 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
-async function linkBuildTree(
-  sourceDir: string,
+/** Project only the sealed artifacts, never mutable metadata or writer scratch files. */
+async function materializeBuildTree(
+  source: BuildResult,
   targetDir: string,
-  excludedEntries: ReadonlySet<string> = new Set()
+  metadata: BuildMetadata = source.metadata
 ): Promise<void> {
   await fs.promises.mkdir(targetDir, { recursive: true });
-  for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
-    if (excludedEntries.has(entry.name)) continue;
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-    if (entry.isDirectory()) {
-      await linkBuildTree(sourcePath, targetPath);
-      continue;
-    }
-    if (!entry.isFile()) {
-      throw new Error(`Unsupported build cache entry: ${sourcePath}`);
-    }
-    // Provenance is rebound by each workspace during hydration. It must own
-    // its inode before any write; linking it would also overwrite the shared
-    // cache and the original producer's sealed execution metadata.
-    if (entry.name === "metadata.json" || process.platform === "win32") {
+  const manifest = source.artifacts.map(manifestForEntry);
+  await runBounded(manifest, 8, async (entry) => {
+    const sourcePath = path.join(source.dir, entry.path);
+    const targetPath = path.join(targetDir, entry.path);
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    if (process.platform === "win32") {
       await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
-      continue;
+      return;
     }
     try {
       await fs.promises.link(sourcePath, targetPath);
@@ -454,7 +445,21 @@ async function linkBuildTree(
       if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
       await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
     }
+  });
+  await writeBuildRecords(targetDir, metadata, manifest);
+}
+
+async function writeBuildRecords(
+  dir: string,
+  metadata: BuildMetadata,
+  manifest: BuildArtifactManifestEntry[]
+): Promise<void> {
+  if (metadata.kind === "worker" || metadata.kind === "extension") {
+    await fs.promises.writeFile(path.join(dir, "package.json"), '{"type":"module"}');
   }
+  await fs.promises.writeFile(path.join(dir, "artifacts.json"), JSON.stringify(manifest, null, 2));
+  await writeBuildMetadata(dir, metadata);
+  await writeExecutionMetadata(dir, metadata);
 }
 
 async function publishSharedBuild(key: string, sourceDir: string): Promise<void> {
@@ -468,7 +473,9 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
   const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
   try {
     await fs.promises.mkdir(path.dirname(sharedDir), { recursive: true });
-    await linkBuildTree(sourceDir, tmpDir);
+    const source = readBuildDir(sourceDir, key, { verifyExecution: false });
+    if (!source) throw new Error(`Cannot publish incomplete build ${key}`);
+    await materializeBuildTree(source, tmpDir);
     try {
       await fs.promises.rename(tmpDir, sharedDir);
     } catch (error) {
@@ -665,7 +672,7 @@ async function runBounded<T>(
   work: (value: T) => Promise<void>
 ): Promise<void> {
   let cursor = 0;
-  await Promise.all(
+  const results = await Promise.allSettled(
     Array.from({ length: Math.min(concurrency, values.length) }, async () => {
       while (cursor < values.length) {
         const value = values[cursor++];
@@ -673,6 +680,10 @@ async function runBounded<T>(
       }
     })
   );
+  // The owner may remove its temporary tree after rejection. Settle every
+  // writer first so no sibling operation can recreate files during cleanup.
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 function buildArtifactSetIntegrity(entries: BuildArtifactManifestEntry[]): string {
@@ -859,12 +870,6 @@ function readBuildDir(
     if (options.verifyExecution !== false) {
       verifiedExecutionIdentity(metadata, storedManifest);
     }
-    if (rawMetadata.executableModules !== undefined) {
-      // Upgrade old entries when read. The complete compressed inventory is
-      // atomically published before metadata.json stops carrying the inline
-      // copy, so concurrent readers always have one complete representation.
-      scheduleSharedMetadataMigration(dir, expectedBuildKey, rawMetadata);
-    }
     return {
       dir,
       buildKey: expectedBuildKey,
@@ -875,31 +880,6 @@ function readBuildDir(
   } catch {
     return null;
   }
-}
-
-function scheduleSharedMetadataMigration(dir: string, key: string, metadata: BuildMetadata): void {
-  const sharedDir = getSharedBuildDir(key);
-  if (!sharedDir || path.resolve(sharedDir) !== path.resolve(dir)) return;
-  const cacheRoot = path.dirname(sharedDir);
-  let lease: DerivedCacheLease;
-  try {
-    // Migration can outlive the read which discovered the old record. Own a
-    // separate lease so collection cannot rename the directory mid-migration.
-    lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
-  } catch (error) {
-    warnCleanupFailure(path.join(dir, "metadata.json"), error);
-    return;
-  }
-  setImmediate(() => {
-    void writeBuildMetadata(dir, metadata)
-      .catch((error) => warnCleanupFailure(path.join(dir, "metadata.json"), error))
-      .finally(() => {
-        lease.release();
-        void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
-          warnCleanupFailure(cacheRoot, error);
-        });
-      });
-  });
 }
 
 const reportedSharedBuildHits = new Set<string>();
@@ -999,18 +979,7 @@ export async function getOrHydrate(
       const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
       try {
         await fs.promises.mkdir(path.dirname(localDir), { recursive: true });
-        await linkBuildTree(sharedDir, tmpDir, new Set(["metadata.json", "executions"]));
-        await writeBuildMetadata(tmpDir, sharedMetadata);
-        // Execution metadata is workspace-owned provenance. Shared caches supply
-        // reusable bytes, never another workspace's semantic execution variants.
-        const executionDigest = sharedMetadata.execution?.executionDigest;
-        if (executionDigest) {
-          const target = executionMetadataPath(tmpDir, executionDigest);
-          const variant = executionVariant(sharedMetadata);
-          if (!variant) throw new Error(`Build ${key} has incomplete execution metadata`);
-          await fs.promises.mkdir(path.dirname(target), { recursive: true });
-          await fs.promises.writeFile(target, `${JSON.stringify(variant, null, 2)}\n`);
-        }
+        await materializeBuildTree(shared, tmpDir, sharedMetadata);
         let promoted = true;
         try {
           await fs.promises.rename(tmpDir, localDir);
@@ -1335,19 +1304,8 @@ export async function put(
     await writeArtifactFile(targetPath, entry, artifactPoolDir);
   });
 
-  // Ensure Node.js treats bundle.js as ESM.
-  if (storedMetadata.kind === "worker" || storedMetadata.kind === "extension") {
-    await fs.promises.writeFile(path.join(tmpDir, "package.json"), '{"type":"module"}');
-  }
-
-  await fs.promises.writeFile(
-    path.join(tmpDir, "artifacts.json"),
-    JSON.stringify(artifactManifest, null, 2)
-  );
-
-  // Write metadata (sentinel) inside tmpDir BEFORE rename so winner is always complete
-  await writeBuildMetadata(tmpDir, storedMetadata);
-  await writeExecutionMetadata(tmpDir, storedMetadata);
+  // Write the complete records, including the metadata sentinel, before promotion.
+  await writeBuildRecords(tmpDir, storedMetadata, artifactManifest);
 
   // Race-safe promotion: try rename, handle concurrent winner
   try {

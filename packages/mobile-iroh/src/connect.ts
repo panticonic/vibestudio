@@ -81,9 +81,9 @@ export class MobileEndpointPool {
     if (this.closed) throw new Error("Mobile Iroh endpoint pool is closed");
     if (
       relays.length !== this.relays.length ||
-      relays.some((relay, index) => relay !== this.relays[index])
+      relays.some((relay) => !this.relays.includes(relay))
     ) {
-      throw new Error("Hub and workspace must advertise the same ordered Iroh relay set");
+      throw new Error("Hub and workspace must advertise the same Iroh relay set");
     }
     this.references += 1;
   }
