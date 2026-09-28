@@ -328,7 +328,7 @@ export const panelRuntimeMethods = defineServiceMethods({
         "Assigns a presentation lease only for the exact runtime entity already committed by the builtin topology owner",
     },
     description: "Ensure that the current runtime entity for a slot has a presentation host lease.",
-    args: z.tuple([z.string().min(1), z.string().min(1)]),
+    args: z.tuple([panelSlotIdSchema]),
     returns: z
       .object({
         status: z.enum(["assigned", "already-held", "mobile-held", "unavailable"]),

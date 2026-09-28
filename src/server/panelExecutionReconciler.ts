@@ -69,17 +69,18 @@ export class PanelExecutionReconciler {
    * materialize a lease, so correctness does not depend on observing the
    * one-shot executionActivated event.
    */
-  async ensureExecutable(slotId: string, entityId: string): Promise<void> {
+  async ensureExecutable(slotId: string, entityId: string): Promise<boolean> {
     await this.resume(slotId, entityId);
     const detail = await this.deps.getDetail(slotId);
     if (!detail || detail.slot.current_entity_id !== entityId || detail.entity.id !== entityId) {
-      throw new Error(`Panel execution target ${entityId} is no longer current for ${slotId}`);
+      return false;
     }
     if (detail.entity.status !== "active") {
       throw new Error(
         `Panel execution target ${entityId} did not become executable (status: ${detail.entity.status})`
       );
     }
+    return true;
   }
 
   private resume(

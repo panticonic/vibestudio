@@ -262,9 +262,27 @@ describe("PanelExecutionReconciler", () => {
       onError: vi.fn(),
     });
 
-    await reconciler.ensureExecutable(detail.slot.slot_id, entity.id);
+    await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(true);
 
     expect(activate).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports supersession as convergence state when the slot changes during activation", async () => {
+    let currentDetail: WorkspacePanelDetail = detail;
+    const reconciler = new PanelExecutionReconciler({
+      getDetail: async () => currentDetail,
+      resolveSlotByEntity: async () => detail.slot.slot_id,
+      listPreparingPanels: async () => [],
+      activate: async () => {
+        currentDetail = {
+          ...detail,
+          entity: { ...detail.entity, id: "panel:replacement", status: "active" },
+        };
+        return activeHandle;
+      },
+      onError: vi.fn(),
+    });
+    await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(false);
   });
 
   it("retries a transient activation failure without another slot event", async () => {

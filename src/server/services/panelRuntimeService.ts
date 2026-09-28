@@ -17,7 +17,7 @@ interface PanelHostViewReport {
 
 export function createPanelRuntimeService(deps: {
   coordinator: PanelRuntimeCoordinator;
-  ensureExecutable(slotId: string, entityId: string): Promise<void>;
+  ensureExecutable(slotId: string, entityId: string): Promise<boolean>;
   currentEntityForSlot(slotId: string): Promise<string | null>;
   observeHostSlot(slotId: string): Promise<PanelHostViewReport | null>;
   browserSourceForSlot?: (slotId: string) => Promise<string | null>;
@@ -157,65 +157,60 @@ export function createPanelRuntimeService(deps: {
       },
       acquire: async (ctx, [panelId, request]) => {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
-        await deps.ensureExecutable(request.slotId, panelId);
+        if (!(await deps.ensureExecutable(request.slotId, panelId))) {
+          throw new Error(`Panel ${panelId} was superseded for slot ${request.slotId}`);
+        }
         return deps.coordinator.acquire(panelId, request);
       },
       takeOver: async (ctx, [panelId, request]) => {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
-        await deps.ensureExecutable(request.slotId, panelId);
+        if (!(await deps.ensureExecutable(request.slotId, panelId))) {
+          throw new Error(`Panel ${panelId} was superseded for slot ${request.slotId}`);
+        }
         return deps.coordinator.takeOver(panelId, request);
       },
-      ensureSlot: async (_ctx, [slotId, entityId]) => {
-        const current = await deps.currentEntityForSlot(slotId);
-        if (current !== entityId) {
-          throw new Error(
-            `Panel runtime assignment target ${entityId} is not current for slot ${slotId}`
-          );
+      ensureSlot: async (ctx, [slotId]) => {
+        // The slot is the caller's durable demand. Resolve its incarnation at
+        // the owner, and converge again when navigation changes that demand
+        // across an activation or host-provisioning await.
+        for (;;) {
+          ctx.signal?.throwIfAborted();
+          const entityId = await deps.currentEntityForSlot(slotId);
+          if (!entityId) throw new Error(`Unknown panel slot: ${slotId}`);
+          if (!(await deps.ensureExecutable(slotId, entityId))) continue;
+          const source = await deps.browserSourceForSlot?.(slotId);
+          if ((await deps.currentEntityForSlot(slotId)) !== entityId) continue;
+          deps.coordinator.ensureAttemptForSlot(slotId, entityId);
+          if (!source || !isBrowserPanelSource(source)) {
+            const lifecycle = deps.coordinator.observeSlotLifecycle(slotId);
+            if (!lifecycle.build) deps.coordinator.setBuildState(slotId, { state: "building" });
+          }
+          let result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
+          if (
+            !result.assigned &&
+            result.reason === "no_default_cdp_host" &&
+            deps.ensureDefaultHeadlessHost
+          ) {
+            const hostReady = await deps.ensureDefaultHeadlessHost();
+            if ((await deps.currentEntityForSlot(slotId)) !== entityId) continue;
+            ctx.signal?.throwIfAborted();
+            if (hostReady) result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
+          }
+          const attempt = deps.coordinator.currentAttemptForSlot(slotId);
+          if (result.assigned) {
+            return { status: "assigned" as const, lease: result.lease, attempt };
+          }
+          return {
+            status:
+              result.reason === "already_held"
+                ? ("already-held" as const)
+                : result.reason === "mobile_held"
+                  ? ("mobile-held" as const)
+                  : ("unavailable" as const),
+            lease: result.lease ?? null,
+            attempt,
+          };
         }
-        deps.coordinator.ensureAttemptForSlot(slotId, entityId);
-        const source = await deps.browserSourceForSlot?.(slotId);
-        if (!source || !isBrowserPanelSource(source)) {
-          const lifecycle = deps.coordinator.observeSlotLifecycle(slotId);
-          if (!lifecycle.build) deps.coordinator.setBuildState(slotId, { state: "building" });
-        }
-        await deps.ensureExecutable(slotId, entityId);
-        const executableCurrent = await deps.currentEntityForSlot(slotId);
-        if (executableCurrent !== entityId) {
-          throw new Error(
-            `Panel runtime assignment target ${entityId} is no longer current for slot ${slotId}`
-          );
-        }
-        let result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
-        if (
-          !result.assigned &&
-          result.reason === "no_default_cdp_host" &&
-          deps.ensureDefaultHeadlessHost &&
-          (await deps.ensureDefaultHeadlessHost())
-        ) {
-          result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
-        }
-        const attempt = deps.coordinator.currentAttemptForSlot(slotId);
-        if (attempt && attempt.runtimeEntityId !== entityId) {
-          // A newer navigation committed while we awaited host assignment;
-          // returning its attempt would hand the caller a wait target it did
-          // not create.
-          throw new Error(
-            `Panel runtime assignment target ${entityId} is no longer current for slot ${slotId}`
-          );
-        }
-        if (result.assigned) {
-          return { status: "assigned" as const, lease: result.lease, attempt };
-        }
-        return {
-          status:
-            result.reason === "already_held"
-              ? ("already-held" as const)
-              : result.reason === "mobile_held"
-                ? ("mobile-held" as const)
-                : ("unavailable" as const),
-          lease: result.lease ?? null,
-          attempt,
-        };
       },
       unloadSlot: (_ctx, [slotId]) => {
         const before = deps.coordinator.currentAttemptForSlot(slotId);

@@ -35,11 +35,12 @@ function setup(
     connectionId: "route-a",
   });
   const observeHostSlot = vi.fn(input.observeHostSlot ?? (async () => null));
-  const ensureExecutable = vi.fn(async () => undefined);
+  const ensureExecutable = vi.fn(async () => true);
+  const currentEntityForSlot = vi.fn(async (): Promise<string | null> => "panel:nav-a");
   const service = createPanelRuntimeService({
     coordinator,
     ensureExecutable,
-    currentEntityForSlot: async () => "panel:nav-a",
+    currentEntityForSlot,
     observeHostSlot,
     browserSourceForSlot: async () => input.browserSource ?? null,
   });
@@ -48,6 +49,7 @@ function setup(
     service,
     observeHostSlot,
     ensureExecutable,
+    currentEntityForSlot,
     attempt: coordinator.currentAttemptForSlot("panel:tree/a")!,
   };
 }
@@ -278,12 +280,68 @@ describe("panelRuntimeService attempt waits", () => {
   it("ensureSlot converges execution before returning the coordinator-minted attempt", async () => {
     const { service, attempt, ensureExecutable } = setup();
     await expect(
-      service.handler(desktopCtx, "ensureSlot", ["panel:tree/a", "panel:nav-a"])
+      service.handler(desktopCtx, "ensureSlot", ["panel:tree/a"])
     ).resolves.toMatchObject({
       status: "already-held",
       attempt: { attemptId: attempt.attemptId, runtimeEntityId: "panel:nav-a" },
     });
     expect(ensureExecutable).toHaveBeenCalledWith("panel:tree/a", "panel:nav-a");
+  });
+
+  it("follows a slot replacement during activation rather than assigning a stale entity", async () => {
+    const { service, ensureExecutable, currentEntityForSlot } = setup();
+    ensureExecutable.mockImplementationOnce(async () => {
+      currentEntityForSlot.mockResolvedValue("panel:nav-b");
+      return false;
+    });
+    await expect(
+      service.handler(desktopCtx, "ensureSlot", ["panel:tree/a"])
+    ).resolves.toMatchObject({
+      attempt: { runtimeEntityId: "panel:nav-b" },
+    });
+    expect(ensureExecutable.mock.calls).toEqual([
+      ["panel:tree/a", "panel:nav-a"],
+      ["panel:tree/a", "panel:nav-b"],
+    ]);
+  });
+
+  it("preserves activation failures instead of treating them as navigation", async () => {
+    const { service, ensureExecutable } = setup();
+    ensureExecutable.mockRejectedValue(new Error("build failed"));
+    await expect(service.handler(desktopCtx, "ensureSlot", ["panel:tree/a"])).rejects.toThrow(
+      "build failed"
+    );
+    expect(ensureExecutable).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns the current slot after navigation during headless host startup", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    let current = "panel:nav-a";
+    const service = createPanelRuntimeService({
+      coordinator,
+      ensureExecutable: async () => true,
+      currentEntityForSlot: async () => current,
+      observeHostSlot: async () => null,
+      ensureDefaultHeadlessHost: async () => {
+        current = "panel:nav-b";
+        coordinator.registerClient({
+          clientSessionId: "headless",
+          hostConnectionId: "headless-host",
+          label: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+        });
+        return true;
+      },
+    });
+    await expect(
+      service.handler(desktopCtx, "ensureSlot", ["panel:tree/a"])
+    ).resolves.toMatchObject({
+      status: "assigned",
+      lease: { runtimeEntityId: "panel:nav-b" },
+      attempt: { runtimeEntityId: "panel:nav-b" },
+    });
   });
 
   it("publishes browser readiness as a host-owned lifecycle fact", async () => {
