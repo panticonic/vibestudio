@@ -338,8 +338,8 @@ export class CapabilityGrantStore {
           session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
-          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal, task_authority
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -367,7 +367,8 @@ export class CapabilityGrantStore {
         constraints.sourceWorkspaceId ?? null,
         constraints.subjectGeneration ?? null,
         constraints.documentId ?? null,
-        constraints.requestingCodePrincipal ?? null
+        constraints.requestingCodePrincipal ?? null,
+        constraints.taskAuthority ?? null
       );
     return {
       id,
@@ -927,6 +928,13 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["agent_binding_id"] === null
       ? {}
       : { agentBindingId: String(row["agent_binding_id"]) }),
+    ...(row["task_authority"] === null
+      ? {}
+      : {
+          taskAuthority: String(
+            row["task_authority"]
+          ) as import("@vibestudio/rpc").TaskGrantPrincipal,
+        }),
     ...(row["task_ref"] === null ? {} : { taskRef: String(row["task_ref"]) }),
   };
   return {
@@ -1027,7 +1035,12 @@ function inferGrantScope(input: IssueAuthorityGrantInput): NonNullable<Authority
   // shape — subject `task:<digest>`, constrained only by lineage — and reading
   // scope from the constraint alone labelled it "system", the broadest scope
   // there is, which hid real task grants from authority.listTaskRules.
-  if (input.constraints?.taskRef || input.subject.startsWith("task:")) return "task";
+  if (
+    input.constraints?.taskAuthority ||
+    input.constraints?.taskRef ||
+    input.subject.startsWith("task:")
+  )
+    return "task";
   if (input.constraints?.sessionId) return "session";
   if (input.subject.startsWith("code:")) return "version";
   return "system";

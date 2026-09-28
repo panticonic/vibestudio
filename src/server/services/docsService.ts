@@ -1,3 +1,4 @@
+import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { verifiedInitiator } from "@vibestudio/shared/serviceDispatcher";
 import type { CatalogAudience } from "./catalog/buildCatalog.js";
 /**
@@ -148,7 +149,9 @@ export function createDocsService(deps: {
     methods: docsMethods,
     handler: defineServiceHandler("docs", docsMethods, {
       search: async (ctx, [query, opts]) => {
-        const kind = verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind;
+        const kind = websiteAuthorityIdentity(verifiedInitiator(ctx))
+          ? "website"
+          : ctx.caller.runtime.kind;
         // Host/runtime catalog rows are stable inputs and must never be held
         // behind builds of unrelated, mutable workspace providers. Only an
         // explicitly workspace-scoped (or all-surface) search needs that live
@@ -159,12 +162,12 @@ export function createDocsService(deps: {
       describe: async (ctx, [name]) =>
         (await indexFor(ctx, name.startsWith("workspace:"))).get(
           name,
-          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+          websiteAuthorityIdentity(verifiedInitiator(ctx)) ? "website" : ctx.caller.runtime.kind
         ),
       getSchema: async (ctx, [name]) => {
         const entry = (await indexFor(ctx, name.startsWith("workspace:"))).get(
           name,
-          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+          websiteAuthorityIdentity(verifiedInitiator(ctx)) ? "website" : ctx.caller.runtime.kind
         );
         if (!entry) return null;
         return {
@@ -174,7 +177,7 @@ export function createDocsService(deps: {
       },
       listSurfaces: async (ctx) =>
         (await indexFor(ctx, true)).listSurfaces(
-          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+          websiteAuthorityIdentity(verifiedInitiator(ctx)) ? "website" : ctx.caller.runtime.kind
         ),
       listServices: (ctx) =>
         deps.dispatcher
@@ -182,7 +185,7 @@ export function createDocsService(deps: {
           .map((def) =>
             serializeForCaller(
               def,
-              verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+              websiteAuthorityIdentity(verifiedInitiator(ctx)) ? "website" : ctx.caller.runtime.kind
             )
           )
           .filter((d) => Object.keys(d.methods).length > 0),
@@ -191,7 +194,7 @@ export function createDocsService(deps: {
         return def
           ? serializeForCaller(
               def,
-              verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+              websiteAuthorityIdentity(verifiedInitiator(ctx)) ? "website" : ctx.caller.runtime.kind
             )
           : null;
       },

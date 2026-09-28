@@ -114,5 +114,10 @@ describe("reviewed host method tiers", () => {
       session: "codeOnly",
       residency: "native-effect",
     });
+    expect(METHOD_TIERS["developmentNative.retireBuild"]).toMatchObject({
+      tier: "open",
+      session: "codeOnly",
+      residency: "untrusted-execution",
+    });
   });
 });

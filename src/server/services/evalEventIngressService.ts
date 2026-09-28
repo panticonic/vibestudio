@@ -1,3 +1,4 @@
+import { requireEvalKernel } from "./evalKernelAuthority.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
@@ -96,29 +97,29 @@ export function createEvalEventIngressService(deps: {
   return {
     name: "evalEventIngress",
     description: "Internal producer ingress for durable eval run events",
-    authority: { principals: ["session"] },
+    authority: { principals: ["code"] },
     methods: evalEventIngressMethods,
     handler: defineServiceHandler("evalEventIngress", evalEventIngressMethods, {
       publish: async (ctx, [sinkNonce, runId, event]) => {
-        const execution = ctx.caller.executionSession;
+        const entity = requireEvalKernel(
+          ctx.caller,
+          deps.entityStore.cache,
+          "evalEventIngress",
+          "publish"
+        );
         const route = deps.sinks.resolve(sinkNonce);
         const closedRoute = route ? null : deps.sinks.resolveClosed(sinkNonce);
         const authenticatedRoute = route ?? closedRoute;
         if (
-          !execution ||
           !authenticatedRoute ||
-          execution.executor.kind !== "eval" ||
-          execution.executor.eventSinkNonce !== sinkNonce ||
-          execution.executor.runtimeId !== ctx.caller.runtime.id ||
-          execution.executor.evalRunId !== runId ||
-          authenticatedRoute.runtimeId !== execution.executor.runtimeId ||
+          authenticatedRoute.runtimeId !== ctx.caller.runtime.id ||
           authenticatedRoute.runId !== runId ||
-          authenticatedRoute.contextId !== execution.contextId
+          authenticatedRoute.contextId !== entity.contextId
         ) {
           throw new ServiceAccessError(
             "evalEventIngress",
             "publish",
-            "Live eval event does not belong to the authenticated execution session",
+            "Live eval event does not belong to the authenticated kernel and registered run",
             "EACCES"
           );
         }
@@ -127,7 +128,6 @@ export function createEvalEventIngressService(deps: {
         // a benign no-op. Closed routes are retained only as a small bounded
         // identity tombstone, so unknown/forged sink nonces still fail.
         if (!route) return { delivered: false };
-        const entity = deps.entityStore.cache.resolveActive(ctx.caller.runtime.id);
         const entityState =
           entity?.stateArgs &&
           typeof entity.stateArgs === "object" &&

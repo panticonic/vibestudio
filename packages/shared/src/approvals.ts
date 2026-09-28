@@ -305,7 +305,7 @@ export interface PendingApprovalBase {
   authoritySubject?: {
     principal: import("@vibestudio/rpc").Principal;
     reviewedVersion?: string;
-    website?: { origin: string; workspaceId: string; documentId: string };
+    website?: { origin: string; workspaceId: string; documentId?: string };
   };
   approvalId: string;
   callerId: string;

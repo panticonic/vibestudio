@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { cleanupRunTempRoot, recordRunStarted } from "../setup/e2eCleanupLedger.js";
 import { prepareE2eRootTemplate, publishE2eRootTemplate } from "../setup/e2eRootTemplate.js";
 import { E2E_ARTIFACT_ROOT_ENV, E2E_RUN_ID_ENV, E2E_TEMP_ROOT_ENV } from "../setup/e2eRun.js";
+import { stopRunResourceOwners } from "../setup/managedServerLease.js";
 import { startOwnedXvfb } from "../setup/ownedXvfb.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -44,6 +45,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   if (xvfb) console.log(`[E2E] owned X11 display ${xvfb.display} (pid ${xvfb.pid})`);
 
   return async () => {
+    await stopRunResourceOwners(runTempRoot);
     await xvfb?.stop();
     cleanupRunTempRoot(runTempRoot);
   };

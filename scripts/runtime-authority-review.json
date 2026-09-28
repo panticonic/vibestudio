@@ -1,18 +1,18 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d2a90f404f3006a27cccd2b8459f8a41e3ca3c22be196eab8f9e1dc8f9568906",
+  "censusDigest": "sha256:d65bd2fabcd731099e762bc2e747b79358032da0428ce3dc87994867fb7d36f5",
   "decisions": {
     "host:build.buildWebsite": {
-      "review": "exact-source-portable-website-build",
-      "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:build.getBuildArtifacts": {
-      "review": "immutable-build-artifact-inventory",
-      "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:build.readBuildArtifact": {
-      "review": "immutable-build-artifact-stream",
-      "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:credentials.beginWebsitePublication": {
       "review": "reviewed-exact-website-publication-intent",
@@ -144,7 +144,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -227,20 +227,20 @@
       "change": "Adds an open, read-only lookup of one panel's current slot, history entry, and active entity. It performs no lifecycle or navigation mutation."
     },
     "host:vcs.finalizeExternalDelta": {
-      "review": "context-bound-complete-external-delta-finalization",
-      "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.supersedeExternalDelta": {
-      "review": "context-bound-external-delta-retirement",
-      "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:runtime.listContexts": {
       "review": "bounded-context-id-discovery",
       "change": "Adds an open read of context identifiers optionally narrowed by a caller-supplied prefix. It exposes no context contents or mutation authority and lets userland discover its own durable operation journals without host-owned lifecycle state."
     },
     "host:vcs.registerExternalDelta": {
-      "review": "context-bound-exact-external-delta-registration",
-      "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:hubControl.routeWorkspace": {
       "review": "read-only-exact-workspace-routing",
@@ -307,28 +307,28 @@
       "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
     },
     "host:build.gc": {
-      "review": "read-only-execution-retention-report",
-      "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:build.getPerformanceProfile": {
-      "review": "bounded-canonical-build-performance-read",
-      "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:hostPerformance.snapshot": {
       "review": "bounded-host-runtime-performance-read",
       "change": "Adds an open read-only snapshot of workspace-server CPU and memory counters, at most 240 retained event-loop summaries, and workerd RSS plus aggregate occupancy. It exposes no process control, command execution, host filesystem, URLs, payloads, credentials, or inspector endpoint and cannot enable or extend profiling."
     },
     "host:eval.events": {
-      "review": "owner-scoped-bounded-eval-event-catchup",
-      "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:evalEventIngress.publish": {
-      "review": "authenticated-internal-eval-event-publication",
-      "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience."
+      "review": "sealed-eval-kernel-observability",
+      "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience. Only the live sealed EvalDO may publish through the host-minted sink for its exact runtime, context, and run. Guest execution sessions cannot impersonate kernel bookkeeping. Callback lifetime is detached from the completed initiating RPC."
     },
     "host:evalExecutionRoots.retain": {
-      "review": "typed-internal-eval-execution-root-retention",
-      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention."
+      "review": "sealed-eval-kernel-retention",
+      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
     },
     "host:runtime.faultAbortAgentVessel": {
       "review": "sealed-exact-vessel-system-test-abort",
@@ -347,28 +347,28 @@
       "change": "Allows a verified user to revoke only that user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
     },
     "host:runtime.reserveEntity": {
-      "review": "caller-owned-buildable-entity-reservation",
-      "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:runtime.activateReservedEntity": {
-      "review": "caller-owned-sealed-reservation-activation",
-      "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve": {
       "review": "host-only-generic-entity-reservation",
       "change": "Generalizes the WorkspaceDO reservation write from panels to the enumerated buildable entity kinds. The host supplies the already validated immutable identity fields, and the receiver atomically creates or returns the exact reserved entity without executing code or widening caller authority."
     },
     "host:eval.start": {
-      "review": "caller-owned-durable-eval-acceptance",
-      "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:eval.get": {
-      "review": "owner-scoped-eval-recovery-read",
-      "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:build.inspectExecution": {
-      "review": "immutable-execution-retention-inspection",
-      "change": "Adds an open, read-only explanation of one immutable execution digest. It returns only the artifact reference, authoritative owners, and reconstructibility diagnostics already held by retention, and cannot publish, acquire, or delete an artifact."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open, read-only explanation of one immutable execution digest. It returns only the artifact reference, authoritative owners, and reconstructibility diagnostics already held by retention, and cannot publish, acquire, or delete an artifact. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease": {
       "review": "host-only-eval-kernel-residency-refresh",
@@ -383,20 +383,20 @@
       "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
     },
     "host:eval.dispose": {
-      "review": "owner-scoped-finite-eval-release",
-      "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:durableWork.inspect": {
       "review": "bounded-payload-free-scheduler-diagnostics",
       "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
     },
     "host:vcs.listDirectory": {
-      "review": "bounded-semantic-immediate-child-read",
-      "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.readMemory": {
-      "review": "exact-range-semantic-read-memory-projection",
-      "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:permissions.safetyStatus": {
       "review": "bounded-live-authority-safety-read",
@@ -555,16 +555,16 @@
       "change": "Binds rollback authority to the exact operation, runtime kind, and release identity while presenting the human release name. Reusable authority no longer spans unrelated lifecycle actions or units."
     },
     "host:build.getTestArtifact": {
-      "review": "immutable-production-test-artifact-read",
-      "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:build.resolveTestSuite": {
-      "review": "exact-workspace-test-suite-metadata-read",
-      "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:runtime.replaceResourceBindings": {
-      "review": "owner-scoped-runtime-resource-reconciliation",
-      "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
       "review": "host-only-runtime-resource-binding-commit",
@@ -636,11 +636,11 @@
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.setWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-change",
@@ -652,7 +652,7 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.removeWorkspaceMember": {
       "review": "workspace-membership-owned-removal",
@@ -775,8 +775,8 @@
       "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:vcs.mainState": {
-      "review": "workspace-main-metadata-read",
-      "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels": {
       "review": "host-owned-once-only-template-panel-initialization",
@@ -895,8 +895,8 @@
       "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
     },
     "host:workers.listServices": {
-      "review": "cross-workspace-service-metadata-discovery",
-      "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:workers.resolveService": {
       "review": "cross-workspace-service-metadata-discovery",
@@ -1029,6 +1029,350 @@
     "host:extensions.invokeProvider": {
       "review": "canonical-provider-method-read-only-containment",
       "change": "Provider dispatch performs routing only. Read-only admission is checked against the exact host-owned provider method schema in ExtensionHost before executing the selected implementation; write and unknown methods fail closed. This removes the blanket write classification that rejected upstream status queries. Provider contracts replace the previous names-only inventory, and the real dispatcher regression checks reads, writes and unknown methods. No capability grant or credential authority is added."
+    },
+    "host:build.getAboutPages": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getBuild": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getBuildMetadata": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getBuildNpm": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getBuildReport": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getEffectiveVersion": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.getPanelMetadata": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.hasUnit": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.inspectBuildProvenance": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.listRecentBuildEvents": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.listSkills": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.listUnits": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:build.recompute": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:eval.cancel": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:eval.deleteScopeValue": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:eval.readScopeTextPage": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:eval.reset": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:fs.access#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.appendFile#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.copyFile#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.exists#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.handleClose#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.handleRead#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.handleStat#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.handleWrite#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.lstat#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.mkdir#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.open#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.readBytes#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.readdir#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.readFile#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.readText#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.rename#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.rm#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.rmdir#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.stat#filesystem.read": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.truncate#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.unlink#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:fs.writeFile#filesystem.write": {
+      "review": "explicit-website-workspace-file-consent",
+      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    },
+    "host:runtime.cloneContext": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.cloneContext#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createContext": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createContext#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createEntity": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createEntity#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createSubagentContext": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.createSubagentContext#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.destroyContext": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.destroyContext#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.releaseResourceBindings": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.reserveEntity#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.retireEntity": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.retireEntity#capability:context.boundary": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.setTitle": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.supervision.appendLog": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.supervision.reportHealth": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.supervision.reportReady": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.blame": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.commit": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.compare": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.copy": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.discard": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.edit": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.history": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.importSnapshot": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.inspect": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.listFiles": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.merge": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.move": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.neighbors": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.push": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.query": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.readFile": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.resolveRepository": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.revert": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.search": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.status": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:vcs.walk": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:workers.listSources": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:workers.listStorageBackups": {
+      "review": "scoped-website-public-workspace-rpc",
+      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:workspace-state.panel.updateTitle#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace-state.slot.close#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace-state.slot.commitPreparedNavigation#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace-state.slot.create#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace-state.slot.move#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace-state.slot.updateCurrentStateArgs#capability:context.boundary": {
+      "review": "receiver-owned-context-boundary-principals",
+      "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
     }
   }
 }

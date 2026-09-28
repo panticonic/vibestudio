@@ -462,11 +462,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -507,6 +502,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -577,11 +577,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -622,6 +617,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -676,11 +676,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -721,6 +716,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -775,11 +775,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -820,6 +815,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -874,11 +874,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -919,6 +914,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -1177,11 +1177,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -1222,6 +1217,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -2741,11 +2741,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -2786,6 +2781,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -2856,11 +2856,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -2901,6 +2896,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -2955,11 +2955,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -3000,6 +2995,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -3054,11 +3054,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -3099,6 +3094,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },
@@ -3153,11 +3153,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
                 kind: "any",
                 requirements: [
                   {
-                    kind: "capability",
-                    principal: "host",
-                    capability: "context.boundary",
-                  },
-                  {
                     kind: "all",
                     requirements: [
                       {
@@ -3198,6 +3193,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
                         name: "workspace-member",
                       },
                     ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
                   },
                 ],
               },

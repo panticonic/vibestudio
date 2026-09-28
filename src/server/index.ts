@@ -3589,6 +3589,7 @@ async function main() {
         dispatcher.registerService(
           createEvalExecutionRootsService({
             doDispatch,
+            executionSessions: agentExecutionSessions,
             entityStore: evalEntityStore,
             publicationPort: executionPublicationJournal,
           })
@@ -4571,9 +4572,11 @@ async function main() {
   // Child ingress is armed exclusively by authenticated hub control requests.
   // Exact transport ownership is injected from the advertised workspace's
   // hub-owned reach tree, outside resettable semantic/runtime state.
-  let irohIngress: import("./irohIngress.js").IrohIngress<
-    import("@vibestudio/iroh-transport/node").NodePhysicalEndpoint
-  > | null = null;
+  let irohIngress:
+    | import("./irohIngress.js").IrohIngress<
+        import("@vibestudio/iroh-transport/node").NodePhysicalEndpoint
+      >
+    | null = null;
   const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
   const workspaceRelayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
   const currentIrohReach = (): import("@vibestudio/iroh-transport").IrohReach | null =>
@@ -5091,6 +5094,18 @@ async function main() {
           );
           if (!fact) return null;
           const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;
+          // A website starts work as a website, not as a human message author.
+          // Its immutable host-retained launch origin attests the account that
+          // connected it. Use that account to admit the causal task without
+          // relabelling website-authored messages as human actions.
+          const origin = binding
+            ? entityCache.resolveActive(binding.entityId)?.executionAuthority
+            : undefined;
+          const launchUser =
+            origin?.kind === "website"
+              ? userStore.getUser(origin.website.userId.slice("user:".length))
+              : null;
+          const taskUser = origin?.kind === "website" ? launchUser : user;
           const inheritedTaskAuthority = binding
             ? taskAuthorities.resolveCausalBinding(binding, parent, entityCache)
             : null;
@@ -5100,7 +5115,7 @@ async function main() {
                 ? { userId: user.id, handle: user.handle }
                 : null,
             taskAuthority:
-              user && user.revokedAt === undefined && fact.active && binding
+              taskUser && taskUser.revokedAt === undefined && fact.active && binding
                 ? (inheritedTaskAuthority ??
                   (() => {
                     const coordinates = {
@@ -6174,6 +6189,7 @@ async function main() {
           agentBinding: current.agentBinding,
           parentId: current.parentId,
           ownerUserId: current.ownerUserId,
+          executionAuthority: current.executionAuthority,
         });
       }
       await getEntityStore().advanceExecutions(advances);
@@ -6546,11 +6562,14 @@ async function main() {
     (await import("./services/extensionUnitDriver.js")).createExtensionUnitDriver(
       () => extensionHostForGateway,
       async (releaseId) => {
-        const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+        const buildSystem =
+          container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
         const node = buildSystem
           ?.getGraph()
           .allNodes()
-          .find((candidate) => candidate.name === releaseId || candidate.relativePath === releaseId);
+          .find(
+            (candidate) => candidate.name === releaseId || candidate.relativePath === releaseId
+          );
         if (!node) return;
         for (const target of ["electron", "react-native", "terminal"] as const) {
           if (

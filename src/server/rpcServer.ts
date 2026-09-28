@@ -1,3 +1,4 @@
+import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { bindInvocationParent } from "@vibestudio/rpc/internal";
 import {
   validateWebsiteMethodPolicy,
@@ -1473,8 +1474,18 @@ export class RpcServer {
     }
     if (!causal) return caller;
     const taskAuthority = caller.executionSession?.taskAuthority ?? caller.taskAuthority;
+    const executionAuthority =
+      caller.executionSession?.authorityOrigin ??
+      this.deps.entityCache?.resolveActive(caller.runtime.id)?.executionAuthority ??
+      (caller.agentBinding
+        ? this.deps.entityCache?.resolveActive(caller.agentBinding.entityId)?.executionAuthority
+        : undefined);
+    if (executionAuthority && !taskAuthority && !causal.taskAuthority) {
+      throw createRelayError("Scoped execution requires an active causal task", "EACCES");
+    }
     return {
       ...caller,
+      ...(executionAuthority ? { executionAuthority } : {}),
       ...(causal.initiatingUser ? { subject: causal.initiatingUser } : {}),
       ...(!taskAuthority && causal.taskAuthority ? { taskAuthority: causal.taskAuthority } : {}),
     };
@@ -3776,15 +3787,21 @@ export class RpcServer {
     authenticatedCaller?: VerifiedCaller
   ): RelayAuthCheck {
     const website = authenticatedCaller?.website ?? this.deps.websiteDocuments?.fact(callerId);
+    const scopedWebsite =
+      authenticatedCaller?.executionAuthority ??
+      authenticatedCaller?.executionSession?.authorityOrigin;
     const isWebsite =
+      !!scopedWebsite ||
       !!website ||
       this.deps.entityCache?.resolveActive(callerId)?.source.repoPath.startsWith("browser:") ===
         true;
     if (isWebsite) {
       if (
-        !website?.connected ||
+        (!scopedWebsite && !website?.connected) ||
         (authenticatedCaller?.website &&
-          !this.deps.capabilityGrantStore?.isSubjectExecutionCurrent(website.binding))
+          !this.deps.capabilityGrantStore?.isSubjectExecutionCurrent(
+            authenticatedCaller.website.binding
+          ))
       )
         return { ok: false, reason: "Connect this website to the workspace first" };
       if (method && !targetId.startsWith("do:")) {
@@ -4077,11 +4094,15 @@ export class RpcServer {
       throw createRelayError(`${input.method} requires a system-test instance`, "EACCES");
     }
     const initiatingWebsite = input.initiatingWebsite ?? input.caller.website;
-    if (
-      input.caller.website &&
-      (workspaceAuthority?.methodWebsite ?? productPolicy?.website)?.kind !== "eligible"
-    )
-      throw createRelayError("This receiver operation is closed to websites", "EACCES");
+    // Direct objects enforce their live (including inherited) declaration at
+    // the receiver using this host's fresh attestation. Known host/service
+    // declarations can additionally reject here, before delivery.
+    const websitePolicy = workspaceAuthority?.methodWebsite ?? productPolicy?.website;
+    if (websiteAuthorityIdentity(input.caller) && websitePolicy?.kind === "closed")
+      throw createRelayError(
+        `${input.ref.source}:${input.ref.className}.${input.method} is closed to websites: ${websitePolicy.reason}`,
+        "EACCES"
+      );
     const preparedDeclaration = productPolicy?.prepared;
     const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
     const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;

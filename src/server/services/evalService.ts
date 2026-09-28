@@ -1,3 +1,4 @@
+import { executionAuthorityForCaller, retainExecutionAuthority } from "./executionAuthority.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -50,7 +51,7 @@ export type EvalShutdown = (deadlineMs?: number) => Promise<void>;
 export const evalServiceDocumentation = {
   name: "eval",
   description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-  authority: { principals: ["code", "user", "host"] },
+  authority: { principals: ["code", "user", "host", "website"] },
   methods: evalMethods,
 } satisfies Omit<ServiceDefinition, "handler">;
 
@@ -735,6 +736,12 @@ export function createEvalService(deps: {
     }
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
+        authorityOrigin: retainExecutionAuthority(
+          executionAuthorityForCaller(ctx.caller, store.cache),
+          ctx.authorizingCaller
+            ? executionAuthorityForCaller(ctx.authorizingCaller, store.cache)
+            : undefined
+        ),
         controllerRuntimeId: ctx.caller.runtime.id,
         mode: mission ? "mission" : testPolicy ? "test" : "interactive",
         ownerUser,

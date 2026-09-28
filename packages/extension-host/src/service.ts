@@ -1,3 +1,4 @@
+import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1423,13 +1424,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   private assertWebsiteMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
-    const website = verifiedInitiator(ctx).website;
+    const caller = verifiedInitiator(ctx);
+    const website = websiteAuthorityIdentity(caller);
     if (!website) return;
     const build = entry.activeBundleKey
       ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
       : null;
     const policy = extensionMetadataDetails(build?.metadata)?.methodAuthority?.[method]?.website;
-    if (!website.connected || policy?.kind !== "eligible")
+    if ((caller.website && !caller.website.connected) || policy?.kind !== "eligible")
       throw new ServiceError(
         "extensions",
         method,

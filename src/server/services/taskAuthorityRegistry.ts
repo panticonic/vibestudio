@@ -36,6 +36,17 @@ export class TaskAuthorityRegistry {
     if (!session.taskAuthority) {
       throw new Error(`Runtime ${runtimeId} has no task authority`);
     }
+    // Admission authenticates both the eval runtime and its immutable agent
+    // binding. Keep that agent in the same closure so a later local lifecycle
+    // tool (for example spawning a child) need not have an eval in flight.
+    const agentId = session.agentBinding?.entityId;
+    if (agentId) {
+      const existing = this.members.get(agentId);
+      if (existing && existing !== session.taskAuthority) {
+        throw new Error(`Runtime ${agentId} is already bound to another task authority`);
+      }
+      this.members.set(agentId, session.taskAuthority);
+    }
     this.executionRoots.set(runtimeId, session.taskAuthority);
     this.members.set(runtimeId, session.taskAuthority);
   }

@@ -31,6 +31,21 @@ describe("InvocationContext", () => {
     expect(context.current()).toBeUndefined();
   });
 
+  it("detaches accepted background work while preserving its foreground caller", async () => {
+    const context = new InvocationContext<string>();
+    let work!: Promise<void>;
+    context.run("website-launch", () => {
+      work = context.runDetached(async () => {
+        expect(context.current()).toBeUndefined();
+        await Promise.resolve();
+        expect(context.current()).toBeUndefined();
+      });
+      expect(context.current()).toBe("website-launch");
+    });
+    await work;
+    expect(context.current()).toBeUndefined();
+  });
+
   it("clears a failed invocation without affecting another invocation", async () => {
     const context = new InvocationContext<string>();
     const failed = context.run("failed", async () => {

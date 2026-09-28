@@ -61,7 +61,7 @@ export function contextBoundaryAuthority(input: {
         {
           capability: CONTEXT_BOUNDARY_CAPABILITY,
           requirement: fixedPreparedAuthorityRequirement(
-            requirementForPrincipals(["host", "user", "code"], CONTEXT_BOUNDARY_CAPABILITY)
+            requirementForPrincipals(input.principals, CONTEXT_BOUNDARY_CAPABILITY)
           ),
           tier: input.tier,
         },

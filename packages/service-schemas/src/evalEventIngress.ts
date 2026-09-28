@@ -5,10 +5,14 @@ import { evalRunEventSchema } from "./eval.js";
 /** Host-internal, execution-session-authenticated live-event ingress. */
 export const evalEventIngressMethods = defineServiceMethods({
   publish: {
-    website: {"kind":"closed","reason":"The evalEventIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The evalEventIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
-      session: "family",
+      session: "codeOnly",
       residency: "observability",
       family: "evalEventIngress.mutate",
       rationale:

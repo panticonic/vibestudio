@@ -805,9 +805,9 @@ export interface WorkspaceTestArtifactV1 {
 export const buildMethods = defineServiceMethods({
   listUnits: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -825,9 +825,9 @@ export const buildMethods = defineServiceMethods({
   },
   getBuild: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -892,9 +892,9 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildArtifacts: {
     website: {
-      kind: "closed",
-      reason:
-        "Build artifacts can disclose private workspace code and are available only to workspace tooling.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -912,9 +912,9 @@ export const buildMethods = defineServiceMethods({
   },
   buildWebsite: {
     website: {
-      kind: "closed",
-      reason:
-        "Website compilation can disclose private workspace source and is available only to workspace tooling.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -935,9 +935,9 @@ export const buildMethods = defineServiceMethods({
   },
   readBuildArtifact: {
     website: {
-      kind: "closed",
-      reason:
-        "Build artifacts can disclose private workspace code and are available only to workspace tooling.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -956,9 +956,9 @@ export const buildMethods = defineServiceMethods({
   },
   getTestArtifact: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Ordinary workspace compilation and dependency inspection retain their resource and acquisition approvals; this operation does not execute native code.",
     } as const,
     tier: {
       tier: "open",
@@ -986,9 +986,9 @@ export const buildMethods = defineServiceMethods({
   },
   resolveTestSuite: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Ordinary workspace compilation and dependency inspection retain their resource and acquisition approvals; this operation does not execute native code.",
     } as const,
     tier: {
       tier: "open",
@@ -1005,9 +1005,9 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildNpm: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Ordinary workspace compilation and dependency inspection retain their resource and acquisition approvals; this operation does not execute native code.",
     } as const,
     capability: "workspace.dependencies.inspect",
     tier: {
@@ -1044,9 +1044,9 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildMetadata: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1068,9 +1068,9 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildReport: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1170,9 +1170,9 @@ export const buildMethods = defineServiceMethods({
   },
   getEffectiveVersion: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1189,9 +1189,9 @@ export const buildMethods = defineServiceMethods({
   },
   inspectBuildProvenance: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1380,9 +1380,9 @@ export const buildMethods = defineServiceMethods({
   },
   getAboutPages: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1398,9 +1398,9 @@ export const buildMethods = defineServiceMethods({
   },
   hasUnit: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1416,9 +1416,9 @@ export const buildMethods = defineServiceMethods({
   },
   getPanelMetadata: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",
@@ -1435,9 +1435,9 @@ export const buildMethods = defineServiceMethods({
   },
   listSkills: {
     website: {
-      kind: "closed",
-      reason:
-        "The build receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      kind: "eligible",
+      rationale:
+        "Workspace build and authoring artifacts use ordinary source and resource approvals.",
     } as const,
     tier: {
       tier: "open",

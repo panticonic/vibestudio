@@ -3250,7 +3250,7 @@ export const HOST_AUTHORITY_METHODS = {
   "evalEventIngress.publish": {
     tier: {
       tier: "open",
-      session: "family",
+      session: "codeOnly",
       residency: "observability",
       family: "evalEventIngress.mutate",
       rationale:
@@ -3262,11 +3262,11 @@ export const HOST_AUTHORITY_METHODS = {
   "evalExecutionRoots.retain": {
     tier: {
       tier: "open",
-      session: "family",
+      session: "codeOnly",
       residency: "untrusted-execution",
       family: "evalExecutionRoots.control",
       rationale:
-        "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified",
+        "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
     },
     capability: null,
     presentation: null,
@@ -3398,9 +3398,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3419,9 +3419,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3452,9 +3453,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3485,9 +3487,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3530,9 +3532,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3551,9 +3554,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3572,9 +3575,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3593,9 +3596,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3614,9 +3618,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3635,9 +3639,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3680,9 +3685,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3701,9 +3707,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3722,9 +3728,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3743,9 +3749,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3776,9 +3782,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3809,9 +3815,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3830,9 +3837,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3851,9 +3859,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3872,9 +3881,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share a workspace file with this website",
+      title: "Share workspace files with this website",
       action: "read workspace files",
-      description: "This website will receive the selected file or directory contents.",
+      description: "This website and agents it starts can read all files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3905,9 +3914,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3926,9 +3936,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3959,9 +3970,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change a workspace file",
+      title: "Let this website change workspace files",
       action: "change workspace files",
-      description: "This website can change the selected workspace file or directory.",
+      description:
+        "This website and agents it starts can create, change, and delete files in this workspace.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -9501,9 +9513,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "filesystem.read": {
-    title: "Share a workspace file with this website",
+    title: "Share workspace files with this website",
     action: "read workspace files",
-    description: "This website will receive the selected file or directory contents.",
+    description: "This website and agents it starts can read all files in this workspace.",
     group: "workspace",
     authorityCategory: {
       domain: "files",
@@ -9511,9 +9523,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "filesystem.write": {
-    title: "Let this website change a workspace file",
+    title: "Let this website change workspace files",
     action: "change workspace files",
-    description: "This website can change the selected workspace file or directory.",
+    description:
+      "This website and agents it starts can create, change, and delete files in this workspace.",
     group: "workspace",
     authorityCategory: {
       domain: "files",

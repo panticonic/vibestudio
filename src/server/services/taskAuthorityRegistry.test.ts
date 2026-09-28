@@ -60,6 +60,36 @@ function activate(cache: EntityCache, id: string, parentId?: string): void {
 }
 
 describe("TaskAuthorityRegistry", () => {
+  it("retains an admitted agent's task for subsequent local child creation", () => {
+    const cache = new EntityCache();
+    const registry = new TaskAuthorityRegistry();
+    activate(cache, "agent:parent");
+    activate(cache, "eval:parent");
+    registry.bindExecution({
+      ...execution("eval:parent", "task:parent"),
+      agentBinding: {
+        entityId: "agent:parent",
+        channelId: "channel:one",
+        bindingId: "binding:parent",
+      },
+    });
+    expect(
+      registry.inheritRuntime("agent:child", { runtime: { id: "agent:parent", kind: "do" } }, cache)
+    ).toBe("task:parent");
+    activate(cache, "agent:child");
+    expect(registry.resolveRuntime("agent:child", cache)).toBe("task:parent");
+    expect(() =>
+      registry.bindExecution({
+        ...execution("eval:other", "task:other"),
+        agentBinding: {
+          entityId: "agent:parent",
+          channelId: "channel:other",
+          bindingId: "binding:other",
+        },
+      })
+    ).toThrow(/already bound/);
+  });
+
   it("retains the authenticated channel coordinates behind an opaque task principal", () => {
     const registry = new TaskAuthorityRegistry();
     const coordinates = {

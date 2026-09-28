@@ -36,6 +36,7 @@ type ExistingDeclaredWorkspaceServiceIdentity = Pick<
   | "activeExecutionDigest"
   | "ownerUserId"
   | "agentBinding"
+  | "executionAuthority"
 >;
 
 /**
@@ -157,6 +158,7 @@ export function declaredWorkspaceServiceActivationInput(
     className: plan.className,
     key: plan.key,
     ownerUserId: existing ? existing.ownerUserId : systemOwnerUserId,
+    executionAuthority: existing?.executionAuthority,
     ...(existing?.agentBinding ? { agentBinding: existing.agentBinding } : {}),
   };
 }

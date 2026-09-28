@@ -8,10 +8,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * mutable instance fields and never to a global serialization queue.
  */
 export class InvocationContext<T> {
-  private readonly storage = new AsyncLocalStorage<T>();
+  private readonly storage = new AsyncLocalStorage<T | undefined>();
 
   current(): T | undefined {
     return this.storage.getStore();
+  }
+
+  /** Accepted background work owns its lifetime; it cannot borrow the
+   * transient caller/authority of the request that scheduled it. */
+  runDetached<R>(operation: () => R): R {
+    return this.storage.run(undefined, operation);
   }
 
   run<R>(context: T, operation: () => R): R {

@@ -53,6 +53,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         active_build_key TEXT,
         active_execution_digest TEXT,
         active_authority TEXT,
+        execution_authority TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,

@@ -415,7 +415,11 @@ export const evalDeleteScopeValueArgsSchema = z
 
 export const evalMethods = defineServiceMethods({
   start: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -430,7 +434,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   get: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -445,7 +453,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   events: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -460,7 +472,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   reset: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     capability: "code-runner.reset",
     tier: {
       tier: "critical",
@@ -487,7 +503,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   dispose: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -503,7 +523,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   readScopeTextPage: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -524,7 +548,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   deleteScopeValue: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -539,7 +567,11 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   cancel: {
-    website: {"kind":"closed","reason":"The eval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

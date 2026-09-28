@@ -151,7 +151,11 @@ describe("EvalDO cancellation + forced recovery", () => {
       "@workspace/eval";
     const ensureEngine = priv<(execution: unknown) => Promise<unknown>>(instance, "ensureEngine");
 
-    setPriv(instance, "loadLibraryModule", vi.fn(async () => ({})));
+    setPriv(
+      instance,
+      "loadLibraryModule",
+      vi.fn(async () => ({}))
+    );
     await expect(ensureEngine.call(instance, {})).rejects.toThrow(
       /uses host contract undefined; this runtime requires 1/
     );
@@ -166,7 +170,11 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
 
     const compatible = { EVAL_ENGINE_HOST_CONTRACT_VERSION };
-    setPriv(instance, "loadLibraryModule", vi.fn(async () => compatible));
+    setPriv(
+      instance,
+      "loadLibraryModule",
+      vi.fn(async () => compatible)
+    );
     await expect(ensureEngine.call(instance, {})).resolves.toBe(compatible);
   });
 
@@ -619,7 +627,8 @@ describe("EvalDO cancellation + forced recovery", () => {
     const deliveryCalls = call.mock.calls as unknown as Array<
       [string, string, unknown[], RpcCallOptions]
     >;
-    expect(executionSessionNonceFor(deliveryCalls[0]?.[3])).toBe("session-background-123456");
+    // Terminal delivery is sealed-kernel bookkeeping, not a guest-authored effect.
+    expect(executionSessionNonceFor(deliveryCalls[0]?.[3])).toBeUndefined();
   });
 
   it("durably retains verified workspace import executions until disposal", async () => {
@@ -634,11 +643,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
     await instance.startRun({ runId: "conflicting-run", code: "return 1" });
     expect(() =>
-      instance.retainExecutionRoot(
-        "conflicting-run",
-        "@workspace/example",
-        executionArtifact("d")
-      )
+      instance.retainExecutionRoot("conflicting-run", "@workspace/example", executionArtifact("d"))
     ).toThrow(
       expect.objectContaining({
         code: "eval_module_execution_conflict",
@@ -1078,7 +1083,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       | [string, string, unknown[], RpcCallOptions]
       | undefined;
     const progressOptions = progressCall?.[3];
-    expect(executionSessionNonceFor(progressOptions)).toBe("session-authority-123456");
+    expect(executionSessionNonceFor(progressOptions)).toBeUndefined();
 
     instance.appendAuthorityEvent("authority-lifecycle", "authority-decided", {
       acquisitionId: "acq-1",
@@ -2975,7 +2980,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       [string, string, unknown[], RpcCallOptions]
     >;
     const firstDelivery = deliveryCalls.find(([, method]) => method === "onEvalComplete");
-    expect(executionSessionNonceFor(firstDelivery?.[3])).toBe("session-redeliver-123456");
+    expect(executionSessionNonceFor(firstDelivery?.[3])).toBeUndefined();
     // The failed push durably queued one redelivery entry.
     await vi.waitFor(() => {
       expect(redeliveryState(sql)).toEqual({ "redeliver-run": 1 });

@@ -573,6 +573,38 @@ describe("WorkspaceDO.entityActivate", () => {
     ).toThrow(/agentBinding/);
   });
 
+  it("retains execution authority across recovery and refuses scope substitution", async () => {
+    const executionAuthority = {
+      kind: "website" as const,
+      website: {
+        subject: "website:one" as const,
+        userId: "user:one" as const,
+        workspaceId: "workspace:one",
+        origin: "https://example.com",
+        binding: { subject: "website:one" as const, generation: 0 },
+      },
+    };
+    const input = doInput({
+      executionAuthority,
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+    });
+    const created = instance.entityActivate(input);
+    expect(created.executionAuthority).toEqual(executionAuthority);
+    expect(instance.entityActivate(input).executionAuthority).toEqual(executionAuthority);
+    expect(() => instance.entityActivate(doInput())).toThrow(/executionAuthority/);
+    expect(() =>
+      instance.entityAdvanceExecution({ ...input, executionAuthority: undefined })
+    ).toThrow(/executionAuthority/);
+    expect(
+      instance.entityAdvanceExecution({
+        ...input,
+        source: { ...input.source, effectiveVersion: "v2" },
+      }).executionAuthority
+    ).toEqual(executionAuthority);
+  });
+
   it("normalizes agent bindings into only the non-derivable entity edge and channel", async () => {
     const { instance: isolated, sql } = await createTestDO(WorkspaceDOTestable);
     const sessionId = canonicalEntityId({ kind: "session", key: "external" });

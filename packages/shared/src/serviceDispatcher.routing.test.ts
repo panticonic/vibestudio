@@ -10,6 +10,41 @@ import {
 import { testAuthority } from "./serviceDispatcherTestUtils.js";
 
 describe("ServiceDispatcher ownership", () => {
+  it("keeps private host operations closed to accepted website execution", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const handler = vi.fn();
+    dispatcher.registerService({
+      name: "privateState",
+      authority: { principals: ["code"] },
+      methods: {
+        read: {
+          args: z.tuple([]),
+          website: { kind: "closed", reason: "Private host state" },
+          tier: { tier: "open", session: "family", rationale: "Host implementation" },
+        },
+      },
+      handler,
+    });
+    dispatcher.markInitialized();
+    const caller = {
+      ...createVerifiedCaller("agent:scoped", "do"),
+      taskAuthority: "task:scoped" as const,
+      executionAuthority: {
+        kind: "website" as const,
+        website: {
+          subject: "website:one" as const,
+          userId: "user:one" as const,
+          workspaceId: "workspace:one",
+          origin: "https://example.com",
+          binding: { subject: "website:one" as const, generation: 0 },
+        },
+      },
+    };
+    await expect(dispatcher.dispatch({ caller }, "privateState", "read", [])).rejects.toMatchObject(
+      { code: "EACCES" }
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
   it("rejects disconnected websites before method lookup, argument parsing, or resource acquisition", async () => {
     const dispatcher = new ServiceDispatcher();
     const resolver = vi.fn();

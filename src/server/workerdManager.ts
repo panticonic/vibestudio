@@ -1832,6 +1832,12 @@ export class WorkerdManager {
     };
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
+      if (
+        process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
+        process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
+      ) {
+        env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
+      }
     }
     forwardDiagnosticEnv(env);
     if (instance.parentId) env["PARENT_ID"] = instance.parentId;
@@ -2059,6 +2065,12 @@ export class WorkerdManager {
     };
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
+      if (
+        process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
+        process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
+      ) {
+        env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
+      }
     }
     forwardDiagnosticEnv(env);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;

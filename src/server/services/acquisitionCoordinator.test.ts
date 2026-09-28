@@ -194,6 +194,74 @@ describe("AcquisitionCoordinator", () => {
     }
   );
 
+  it("keeps accepted website task consent on the website subject after document disconnect", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "website-task-acquisition-")),
+    });
+    const subject = grantStore.ensureWebsiteSubject({
+      userId: "user:u",
+      workspaceId: "workspace-1",
+      origin: "https://example.com",
+    });
+    const request = vi.fn(async () => "task" as const);
+    const coordinator = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request } as never,
+    });
+    const snap = {
+      ...snapshot(),
+      callerPrincipal: subject.subject,
+      sourceWorkspaceId: subject.workspaceId,
+      taskAuthority: "task:website-invention" as const,
+      subjectBinding: { subject: subject.subject, generation: subject.generation },
+    };
+    const executionAuthority = {
+      kind: "website" as const,
+      website: {
+        subject: subject.subject,
+        userId: subject.userId,
+        workspaceId: subject.workspaceId,
+        origin: subject.identityKey,
+        binding: snap.subjectBinding,
+      },
+    };
+    try {
+      await expect(
+        coordinator.requestAndWait({
+          snapshot: snap,
+          snapshotDigest: invocationSnapshotDigest(snap),
+          tier: "gated",
+          caller: {
+            ...createVerifiedCaller("agent:invention", "agent", null, null, {
+              userId: "u",
+              handle: "user",
+            }),
+            executionAuthority,
+            taskAuthority: snap.taskAuthority,
+          },
+          renderedAction: "read invention data",
+          resource: { kind: "exact", key: snap.resourceKey },
+          presentation: reviewedPresentation(),
+        })
+      ).resolves.toMatchObject({ state: "decided", decision: "task" });
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({ allowedDecisions: ["once", "task", "always", "deny"] })
+      );
+      expect(grantStore.grantsForSubjects([subject.subject], snap.capability)).toEqual([
+        expect.objectContaining({
+          subject: subject.subject,
+          constraints: expect.objectContaining({
+            subjectGeneration: subject.generation,
+            taskAuthority: snap.taskAuthority,
+          }),
+        }),
+      ]);
+      expect(grantStore.grantsForSubjects([snap.taskAuthority], snap.capability)).toEqual([]);
+    } finally {
+      grantStore.close();
+    }
+  });
+
   it.each(["waiting", "waiting-abortable", "late"])(
     "preserves presentation failures for an owner waiter (%s)",
     async (mode) => {

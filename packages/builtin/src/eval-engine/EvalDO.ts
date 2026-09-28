@@ -1255,14 +1255,16 @@ export class EvalDO extends DurableObjectBase {
     if (!this.ctx.waitUntil) {
       throw new Error("eval: Durable Object context does not support background execution");
     }
-    const execution = new Promise<void>((resolve) => setTimeout(resolve, 0))
-      .then(() => this.executeAndDeliver(runId))
-      .catch((error) => {
-        console.error(
-          `[EvalDO] background run ${runId} failed`,
-          error instanceof Error ? (error.stack ?? error.message) : String(error)
-        );
-      });
+    const execution = this.runDetached(() =>
+      new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() =>
+        this.executeAndDeliver(runId)
+      )
+    ).catch((error) => {
+      console.error(
+        `[EvalDO] background run ${runId} failed`,
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      );
+    });
     this.ctx.waitUntil(execution);
   }
 
@@ -1296,19 +1298,21 @@ export class EvalDO extends DurableObjectBase {
       throw new Error(`eval: run ${runId} has no execution session for terminal delivery`);
     }
     const options: RpcCallOptions = {};
-    bindExecutionSession(options, args.executionSessionNonce);
-    await this.rpc.call(
-      args.resultReceiverRef!,
-      "onEvalComplete",
-      [
-        {
-          runId,
-          agentInvocationId: args.agentInvocationId,
-          result,
-          channelId: args.channelId,
-        },
-      ],
-      options
+
+    await this.runDetached(() =>
+      this.rpc.call(
+        args.resultReceiverRef!,
+        "onEvalComplete",
+        [
+          {
+            runId,
+            agentInvocationId: args.agentInvocationId,
+            result,
+            channelId: args.channelId,
+          },
+        ],
+        options
+      )
     );
   }
 
@@ -1894,12 +1898,9 @@ export class EvalDO extends DurableObjectBase {
     this.ctx.waitUntil?.(activity);
   }
 
-  /**
-   * Best-effort progress is still part of the admitted eval execution. Bind it
-   * to that durable execution session so connectionless RPC does not inherit
-   * the transient authority parent of whichever callback happened to emit it.
-   * That callback may return before a waitUntil delivery reaches the server.
-   */
+  /** Kernel-owned progress is authenticated as the sealed EvalDO. Detaching
+   * its callback lifetime prevents borrowing a completed inbound invocation;
+   * evaluated code never receives this control RPC client. */
   private async deliverEvalProgress(
     runId: string | undefined,
     args: RunArgs,
@@ -1916,19 +1917,21 @@ export class EvalDO extends DurableObjectBase {
       return;
     }
     const options: RpcCallOptions = signal ? { signal } : {};
-    bindExecutionSession(options, args.executionSessionNonce);
-    await this.rpc.call(
-      args.agentRef,
-      "onEvalProgress",
-      [
-        {
-          runId,
-          agentInvocationId: args.agentInvocationId,
-          channelId: args.channelId,
-          ...progress,
-        },
-      ],
-      options
+    const agentRef = args.agentRef;
+    await this.runDetached(() =>
+      this.rpc.call(
+        agentRef,
+        "onEvalProgress",
+        [
+          {
+            runId,
+            agentInvocationId: args.agentInvocationId,
+            channelId: args.channelId,
+            ...progress,
+          },
+        ],
+        options
+      )
     );
   }
 
@@ -2167,13 +2170,11 @@ export class EvalDO extends DurableObjectBase {
       payload: JSON.parse(encoded),
     };
     const options: RpcCallOptions = {};
-    bindExecutionSession(options, args.executionSessionNonce);
-    if (args.causalParent) options.causalParent = args.causalParent;
     const eventIngress = createTypedServiceClient(
       "evalEventIngress",
       evalEventIngressMethods,
       (service, method, callArgs) =>
-        this.rpc.call("main", `${service}.${method}`, callArgs, options)
+        this.runDetached(() => this.rpc.call("main", `${service}.${method}`, callArgs, options))
     );
     const previous = this.liveEventDeliveries.get(runId) ?? Promise.resolve();
     let publish: Promise<void>;
@@ -2724,7 +2725,9 @@ export class EvalDO extends DurableObjectBase {
       // typed schemas, call help('<name>') (rich bindings show the ergonomic
       // surface) or use the docs_open/docs_search tools (raw catalog).
       services: (await execution.docs.listServices()).map((s) => s.name),
-      importable: Object.keys(rt).sort(),
+      importable: [
+        ...new Set([...Object.keys(rt), ...Object.keys(this.portableHelpers ?? {})]),
+      ].sort(),
       ambient: [...EVAL_AMBIENT_ONLY],
       guidance:
         "Use rich runtime bindings directly (`workers`, `vcs`, `fs`, ...), or import them from " +
@@ -3464,7 +3467,9 @@ export class EvalDO extends DurableObjectBase {
     const roots = createTypedServiceClient(
       "evalExecutionRoots",
       evalExecutionRootsMethods,
-      (service, method, args) => execution.rpc.call("main", `${service}.${method}`, args)
+      // Artifact retention belongs to the sealed kernel, not evaluated code.
+      (service, method, args) =>
+        this.runDetached(() => this.rpc.call("main", `${service}.${method}`, args))
     );
     await roots.retain(
       execution.runId,

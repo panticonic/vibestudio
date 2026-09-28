@@ -44,6 +44,31 @@ function admission(
 }
 
 describe("AgentExecutionSessionRegistry test policy", () => {
+  it("cannot drop a website launch scope by replaying or reusing a warm eval", () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const input = {
+      ...admission(),
+      authorityOrigin: {
+        kind: "website" as const,
+        website: {
+          subject: "website:one" as const,
+          userId: "user:alice" as const,
+          workspaceId: "workspace:one",
+          origin: "https://example.com",
+          binding: { subject: "website:one" as const, generation: 0 },
+        },
+      },
+    };
+    const first = registry.admit(input);
+    expect(registry.admit(input)).toBe(first);
+    expect(() => registry.admit(admission())).toThrow();
+    registry.close(first.executor.runtimeId, first.executor.evalRunId);
+    expect(() => registry.admit(admission(first.executor.runtimeId, "run:two"))).toThrow(
+      /authorityOrigin/
+    );
+    const second = registry.admit({ ...input, ...admission(first.executor.runtimeId, "run:two") });
+    expect(second.authorityOrigin).toEqual(input.authorityOrigin);
+  });
   it("mints policies only for canonical system-test runs and inherits by context", () => {
     const registry = new AgentExecutionSessionRegistry();
     expect(() => registry.createTestPolicy("ordinary-agent:run")).toThrow(

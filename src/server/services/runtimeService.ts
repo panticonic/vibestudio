@@ -1,3 +1,8 @@
+import {
+  assertExecutionAuthorityMatches,
+  executionAuthorityForCaller,
+  retainExecutionAuthority,
+} from "./executionAuthority.js";
 /**
  * runtime.* — the only path through which entity identities are created or retired.
  *
@@ -210,6 +215,8 @@ export interface RuntimeServiceResult {
 }
 
 interface RuntimeCreationActors {
+  /** Scope retained when copying an existing executable entity. */
+  retainedExecutionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   /** Authenticated principal that owns and controls the new runtime lifecycle. */
   lifecycleCaller: VerifiedCaller;
   /** Host-verified root initiator whose human subject owns the new runtime. */
@@ -758,6 +765,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // reuse of the same key (different source or context) is a typed
     // collision, never a silent merge onto someone else's live entity.
     const preexisting = await store.resolveRecord(canonicalId);
+    if (preexisting)
+      assertExecutionAuthorityMatches(
+        retainExecutionAuthority(
+          executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+          actors.retainedExecutionAuthority
+        ),
+        preexisting.executionAuthority
+      );
     if (preexisting && preexisting.status !== "retired") {
       if (preexisting.source.repoPath !== spec.execution.source) {
         throw new IdentityCollisionError(canonicalId, {
@@ -814,6 +829,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       agentBinding,
       parentId: caller.runtime.id,
       ownerUserId: contextOwner.subject?.userId,
+      executionAuthority: retainExecutionAuthority(
+        executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+        actors.retainedExecutionAuthority
+      ),
       ...(ownerContextId && ownerContextId !== contextId
         ? {
             lifecycleOwner: {
@@ -930,6 +949,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       agentBinding: existing.agentBinding,
       parentId: existing.parentId,
       ownerUserId: existing.ownerUserId,
+      executionAuthority: existing.executionAuthority,
     });
     if (
       record.kind === "panel" &&
@@ -1020,6 +1040,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
     }
     const existing = await store.resolveRecord(canonicalId);
+    if (existing)
+      assertExecutionAuthorityMatches(
+        retainExecutionAuthority(
+          executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+          actors.retainedExecutionAuthority
+        ),
+        existing.executionAuthority
+      );
 
     // Entity identity columns are write-once, so re-attaching an inert session
     // without an explicit context must reuse its original context coordinate.
@@ -1114,6 +1142,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       // carries the inherited userId, so lineage propagates. Undefined for a
       // bootstrap caller with no subject.
       ownerUserId: actors.initiatingCaller.subject?.userId,
+      executionAuthority: retainExecutionAuthority(
+        executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+        actors.retainedExecutionAuthority
+      ),
     };
     const record = await store.activate(activateInput);
     inheritTaskAuthority(record.id, actors);
@@ -1458,6 +1490,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       agentBinding: record.agentBinding,
       parentId: record.parentId,
       ownerUserId: record.ownerUserId,
+      executionAuthority: record.executionAuthority,
     });
     await deps.hooks.onDurableObjectActivated?.(advanced);
     await deps.hooks.restartDurableObjectIncarnation(advanced);
@@ -1630,7 +1663,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
           }
           const handle = await activateEntity(
-            { lifecycleCaller: caller, initiatingCaller: caller },
+            {
+              lifecycleCaller: caller,
+              initiatingCaller: caller,
+              retainedExecutionAuthority: src.executionAuthority,
+            },
             buildCloneSpec(src, targetCtx, newKey),
             targetCtx
           );
@@ -2054,7 +2091,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   const definition: ServiceDefinition = {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    authority: { principals: ["code", "user", "host"] },
+    authority: { principals: ["code", "user", "host", "website"] },
     methods: runtimeMethods,
     authorityPreparation: {
       "runtime.createEntity.contextBoundary": (ctx, [rawSpec]) =>

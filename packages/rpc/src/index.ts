@@ -70,6 +70,7 @@ export type {
   AuthorizationContext,
   AuthoritySubjectBinding,
   WebsiteAuthorityFact,
+  ExecutionAuthorityOrigin,
   AuthorizationOrigin,
   AuthorizationDecision,
   InvocationSnapshot,

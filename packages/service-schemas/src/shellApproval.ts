@@ -175,7 +175,7 @@ const pendingApprovalBaseShape = {
         .object({
           origin: z.string().url(),
           workspaceId: z.string().min(1),
-          documentId: z.string().min(1),
+          documentId: z.string().min(1).optional(),
         })
         .strict()
         .optional(),

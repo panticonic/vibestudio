@@ -2663,53 +2663,76 @@ describe("RpcServer relay behavior", () => {
     expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("streamed");
   });
 
-  it("authorizes a routed unary DO call with its verified causal task", async () => {
-    const resolveExactCausalInvocation = vi.fn(async () => ({
-      initiatingUser: { userId: "usr_initiator", handle: "initiator" },
-      taskAuthority: "task:routed-turn" as const,
-    }));
-    const { server } = createServer({ resolveExactCausalInvocation });
-    const relayToDO = vi.spyOn(testServer(server), "relayToDO").mockResolvedValue({ ok: true });
-    const binding = {
-      entityId: "entity:agent",
-      contextId: "context:agent",
-      channelId: "channel:agent",
-    };
-    const client = createClient();
-    client.caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
-    const causalParent = {
-      kind: "trajectory-invocation" as const,
-      ...channelTrajectoryFor(binding.channelId),
-      invocationId: "invocation:routed-tool",
-    };
+  it.each([false, true])(
+    "authorizes a routed unary DO call with its verified causal task (website scope: %s)",
+    async (scoped) => {
+      const resolveExactCausalInvocation = vi.fn(async () => ({
+        initiatingUser: { userId: "usr_initiator", handle: "initiator" },
+        taskAuthority: "task:routed-turn" as const,
+      }));
+      const { server, entityCache } = createServer({ resolveExactCausalInvocation });
+      const relayToDO = vi.spyOn(testServer(server), "relayToDO").mockResolvedValue({ ok: true });
+      const binding = {
+        entityId: "entity:agent",
+        contextId: "context:agent",
+        channelId: "channel:agent",
+      };
+      const executionAuthority = {
+        kind: "website" as const,
+        website: {
+          subject: "website:example" as const,
+          userId: "user:usr_initiator" as const,
+          workspaceId: "test",
+          origin: "https://example.com",
+          binding: { subject: "website:example" as const, generation: 1 },
+        },
+      };
+      if (scoped)
+        entityCache._onActivate({
+          ...makeRecord(binding.entityId, "do", {
+            contextId: binding.contextId,
+            agentBinding: binding,
+          }),
+          executionAuthority,
+        });
+      const client = createClient();
+      client.caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        ...channelTrajectoryFor(binding.channelId),
+        invocationId: "invocation:routed-tool",
+      };
 
-    await handleRoute(server, client, "do:workers/example:Example:one", {
-      type: "request",
-      requestId: "routed-causal-task",
-      fromId: client.caller.runtime.id,
-      method: "example.write",
-      args: [],
-      causalParent,
-    });
+      await handleRoute(server, client, "do:workers/example:Example:one", {
+        type: "request",
+        requestId: "routed-causal-task",
+        fromId: client.caller.runtime.id,
+        method: "example.write",
+        args: [],
+        causalParent,
+      });
 
-    expect(relayToDO).toHaveBeenCalledWith(
-      client.caller.runtime.id,
-      client.caller.runtime.kind,
-      "do:workers/example:Example:one",
-      "example.write",
-      [],
-      expect.objectContaining({ causalParent }),
-      expect.objectContaining({
-        authenticatedCaller: expect.objectContaining({
-          subject: { userId: "usr_initiator", handle: "initiator" },
-          taskAuthority: "task:routed-turn",
-        }),
-        authorizingCaller: expect.objectContaining({
-          taskAuthority: "task:routed-turn",
-        }),
-      })
-    );
-  });
+      expect(relayToDO).toHaveBeenCalledWith(
+        client.caller.runtime.id,
+        client.caller.runtime.kind,
+        "do:workers/example:Example:one",
+        "example.write",
+        [],
+        expect.objectContaining({ causalParent }),
+        expect.objectContaining({
+          authenticatedCaller: expect.objectContaining({
+            subject: { userId: "usr_initiator", handle: "initiator" },
+            taskAuthority: "task:routed-turn",
+            ...(scoped ? { executionAuthority } : {}),
+          }),
+          authorizingCaller: expect.objectContaining({
+            taskAuthority: "task:routed-turn",
+            ...(scoped ? { executionAuthority } : {}),
+          }),
+        })
+      );
+    }
+  );
 
   it("retains the admission-bound sealed panel identity for a routed DO stream", async () => {
     const capabilityGrantStore = createTestGrantStore();
@@ -6093,6 +6116,53 @@ describe("RpcServer native process sessions", () => {
 });
 
 describe("website dynamic endpoint admission", () => {
+  it("attests direct agents for enforcement by their live inherited receiver declaration", async () => {
+    const capabilityGrantStore = createTestGrantStore();
+    const subject = capabilityGrantStore.ensureWebsiteSubject({
+      userId: "user:user-1",
+      workspaceId: "test-workspace",
+      origin: "https://example.com",
+    });
+    const binding = {
+      subject: subject.subject,
+      generation: subject.generation,
+      documentId: "document:invention",
+    };
+    capabilityGrantStore.registerSubjectExecution(binding);
+    const { server } = createServer({ capabilityGrantStore });
+    const caller = {
+      ...createVerifiedCaller("panel:website", "panel", null, null, {
+        userId: "user-1",
+        handle: "user1",
+      }),
+      website: {
+        subject: subject.subject,
+        userId: subject.userId,
+        workspaceId: subject.workspaceId,
+        origin: subject.identityKey,
+        binding,
+        connected: true,
+      },
+    };
+    const ref = {
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      objectKey: "invention",
+    };
+    const result = testServer(server).directDOAuthorization({
+      caller,
+      ref,
+      method: "subscribeChannel",
+      args: [],
+    });
+    await expect(result).resolves.toMatchObject({
+      context: {
+        authorizingOrigin: { kind: "website", principal: subject.subject },
+        website: { subject: subject.subject },
+      },
+    });
+  });
+
   it("requires connection and an explicit live receiver declaration for each delivery kind", async () => {
     let connected = true;
     const { server, entityCache } = createServer({

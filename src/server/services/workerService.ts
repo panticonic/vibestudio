@@ -357,7 +357,7 @@ export function createWorkerService(deps: {
           .object({ operationId: z.string(), intent: z.string(), createdAt: z.number() })
           .passthrough()
       ),
-      authority: { principals: ["user", "host", "code"] },
+      authority: { principals: ["user", "host", "code", "website"] },
       access: { sensitivity: "read" },
     },
     restoreStorageBackup: {
@@ -382,7 +382,7 @@ export function createWorkerService(deps: {
   return {
     name: "workers",
     description: "Worker discovery and workspace service resolution",
-    authority: { principals: ["user", "host", "code"] },
+    authority: { principals: ["user", "host", "code", "website"] },
     methods,
     authorityPreparation: {
       "workers.resolveService.workspace-service": async (ctx, [query, objectKey]) => {

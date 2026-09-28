@@ -106,7 +106,7 @@ const runtimeContextBoundaryAuthority = (method: string, tier: "gated" | "critic
     service: "runtime",
     method,
     primaryCapability,
-    principals: ["code", "user", "host"],
+    principals: ["code", "user", "host", "website"],
     tier,
   });
 };
@@ -631,7 +631,11 @@ export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
 
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -701,7 +705,11 @@ export const runtimeMethods = defineServiceMethods({
     ],
   },
   reserveEntity: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -718,7 +726,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   activateReservedEntity: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -731,11 +743,15 @@ export const runtimeMethods = defineServiceMethods({
       "Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity.",
     args: z.tuple([CodeEntityReservationSpecSchema]),
     returns: RuntimeEntityHandleSchema,
-    authority: { principals: ["host", "user", "code"] },
+    authority: { principals: ["host", "user", "code", "website"] },
     access: { sensitivity: "write" },
   },
   faultAbortAgentVessel: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "System-test-only fault injection: abort one exact agent Durable Object facet while preserving its durable state and runtime image.",
     args: z.tuple([z.object({ targetId: z.string().min(1).max(512) }).strict()]),
@@ -753,7 +769,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retireEntity: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -779,7 +799,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
   },
   releaseResourceBindings: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -791,11 +815,15 @@ export const runtimeMethods = defineServiceMethods({
     description: "Release every host-owned resource binding attached to one owned runtime entity.",
     args: z.tuple([z.object({ id: z.string().min(1) }).strict()]),
     returns: z.void(),
-    authority: { principals: ["host", "user", "code"] },
+    authority: { principals: ["host", "user", "code", "website"] },
     access: { sensitivity: "write" },
   },
   replaceResourceBindings: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -815,11 +843,15 @@ export const runtimeMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: z.void(),
-    authority: { principals: ["host", "user", "code"] },
+    authority: { principals: ["host", "user", "code", "website"] },
     access: { sensitivity: "write" },
   },
   recoverExecution: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.execution.recover",
     tier: {
       tier: "open",
@@ -846,7 +878,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   listEntities: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -882,7 +918,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [] }, { args: [{ kind: "session" }] }],
   },
   resolveContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -898,7 +938,11 @@ export const runtimeMethods = defineServiceMethods({
     authority: RUNTIME_AGENT_READ_POLICY,
   },
   listContexts: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -925,7 +969,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [] }, { args: [{ prefix: "template-composer-operation-" }] }],
   },
   setTitle: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -951,12 +999,16 @@ export const runtimeMethods = defineServiceMethods({
     // Single source of truth for setTitle's access: executable view/worker code
     // may title its own runtime. The compositional dispatcher enforces this exact
     // code-principal requirement; the handler performs no duplicate kind check.
-    authority: { principals: ["code"] },
+    authority: { principals: ["code", "website"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
   },
   createContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -984,7 +1036,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
   cloneContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     capability: "context.clone",
     tier: {
       tier: "gated",
@@ -1050,7 +1106,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{ sourceContextId: "ctx-abc" }] }],
   },
   rebindAgentChannel: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -1074,7 +1134,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   destroyContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1116,7 +1180,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{ contextId: "ctx-abc" }] }],
   },
   forkSemanticContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     capability: "context.semantic.fork",
     tier: {
       tier: "gated",
@@ -1156,7 +1224,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   dropSemanticContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     capability: "context.semantic.drop",
     tier: {
       tier: "critical",
@@ -1181,7 +1253,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   listOwnedContexts: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1220,7 +1296,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{ contextId: "ctx-abc", kind: "lifecycle" }] }],
   },
   recordContextEdge: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "context.relationships.record",
     tier: {
       tier: "gated",
@@ -1263,7 +1343,11 @@ export const runtimeMethods = defineServiceMethods({
     ],
   },
   createSubagentContext: {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace execution and context lifecycle use ordinary ownership and resource approvals; arbitrary descendants retain their launch scope.",
+    } as const,
     capability: "subagents.create",
     tier: {
       tier: "gated",
@@ -1310,7 +1394,11 @@ export const runtimeMethods = defineServiceMethods({
     ],
   },
   "supervision.list": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1328,7 +1416,11 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "supervision.describe": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1344,7 +1436,11 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "supervision.health": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1362,7 +1458,11 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "supervision.logs": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1380,7 +1480,11 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "supervision.reportReady": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -1393,11 +1497,15 @@ export const runtimeMethods = defineServiceMethods({
       "Report that the calling executable entity completed activation and declare its invocation routes.",
     args: z.tuple([RuntimeSupervisionReadyReportSchema]),
     returns: z.null(),
-    authority: { principals: ["code"] },
+    authority: { principals: ["code", "website"] },
     access: { sensitivity: "write" },
   },
   "supervision.reportHealth": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -1409,11 +1517,15 @@ export const runtimeMethods = defineServiceMethods({
     description: "Report health for the calling supervised executable entity.",
     args: z.tuple([RuntimeSupervisionHealthReportSchema]),
     returns: z.null(),
-    authority: { principals: ["code"] },
+    authority: { principals: ["code", "website"] },
     access: { sensitivity: "write" },
   },
   "supervision.appendLog": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -1425,11 +1537,15 @@ export const runtimeMethods = defineServiceMethods({
     description: "Append a structured log record for the calling supervised executable entity.",
     args: z.tuple([RuntimeSupervisionLogReportSchema]),
     returns: z.null(),
-    authority: { principals: ["code"] },
+    authority: { principals: ["code", "website"] },
     access: { sensitivity: "write" },
   },
   "supervision.restart": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.supervision.manage",
     tier: {
       tier: "gated",
@@ -1453,7 +1569,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   "supervision.activate": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.supervision.manage",
     tier: {
       tier: "gated",
@@ -1477,7 +1597,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   "supervision.prepare": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.supervision.manage",
     tier: {
       tier: "gated",
@@ -1501,7 +1625,11 @@ export const runtimeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   "supervision.retire": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.supervision.manage",
     tier: {
       tier: "gated",
@@ -1524,7 +1652,11 @@ export const runtimeMethods = defineServiceMethods({
     access: RETIRE_ACCESS,
   },
   "supervision.versions": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1539,7 +1671,11 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "supervision.rollback": {
-    website: {"kind":"closed","reason":"The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The runtime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "runtime.supervision.manage",
     tier: {
       tier: "gated",

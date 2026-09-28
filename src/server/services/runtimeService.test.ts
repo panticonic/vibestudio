@@ -1054,6 +1054,56 @@ describe("runtimeService deferred panel activation", () => {
 });
 
 describe("runtimeService.createEntity (do kind)", () => {
+  it("persists website launch authority before descendants and rejects cross-origin identity reuse", async () => {
+    const { service, instance, prepareDurableObject } = await buildDeps();
+    const website = {
+      subject: "website:invention" as const,
+      userId: "user:creator" as const,
+      workspaceId: "workspace:test",
+      origin: "https://example.com",
+      connected: true,
+      binding: { subject: "website:invention" as const, generation: 1, documentId: "page:1" },
+    };
+    const caller = {
+      ...panelCaller("panel:website"),
+      subject: { userId: "creator", handle: "creator" },
+      website,
+    };
+    const spec = {
+      kind: "do",
+      execution: { surface: "code", source: "workers/agent" },
+      className: "AgentDO",
+      key: "website-agent",
+      contextId: "website-context",
+    } as const;
+    const handle = (await service.handler({ caller }, "createEntity", [spec])) as { id: string };
+    const retained = instance.entityResolve(handle.id)!.executionAuthority;
+    expect(retained).toMatchObject({
+      kind: "website",
+      website: { subject: website.subject, binding: { generation: 1 } },
+    });
+    expect(retained!.website.binding.documentId).toBeUndefined();
+    const childCaller = { ...workerCaller(handle.id), subject: caller.subject };
+    const child = (await service.handler({ caller: childCaller }, "createEntity", [
+      { ...spec, key: "website-child" },
+    ])) as { id: string };
+    expect(instance.entityResolve(child.id)!.executionAuthority).toEqual(retained);
+    const priorBuildCount = (prepareDurableObject as ReturnType<typeof vi.fn>).mock.calls.length;
+    await expect(
+      service.handler(
+        {
+          caller: {
+            ...caller,
+            website: { ...website, binding: { ...website.binding, generation: 2 } },
+          },
+        },
+        "createEntity",
+        [spec]
+      )
+    ).rejects.toThrow(/different launch subject/);
+    expect(prepareDurableObject).toHaveBeenCalledTimes(priorBuildCount);
+  });
+
   it("snapshots the verified creator task onto a new runtime", async () => {
     const { service, taskAuthorities, entityCache } = await buildDeps();
     const taskAuthority = "task:closure-one" as const;
@@ -1931,7 +1981,7 @@ describe("runtimeService.setTitle", () => {
     });
   });
 
-  // setTitle is code-authority-only: view/worker code may title its own runtime,
+  // setTitle admits code and website origins: each may title its own runtime,
   // while host callers carry no code principal. Exercise that declaration through
   // the real compositional dispatcher rather than bypassing it in the handler.
   it("the dispatcher rejects shell/server setTitle without code authority", async () => {
@@ -1949,7 +1999,7 @@ describe("runtimeService.setTitle", () => {
           "setTitle",
           ["T"]
         )
-      ).rejects.toThrow(/code principal is required/i);
+      ).rejects.toThrow(/no authority branch admits the (user|host) origin/i);
     }
     expect(setEntityTitle).not.toHaveBeenCalled();
   });

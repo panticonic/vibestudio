@@ -146,14 +146,20 @@ export function authorizeVerifiedCaller(
   locks: import("@vibestudio/rpc").AuthorityLock[];
 } {
   const now = facts.now ?? Date.now();
-  const website = caller.website;
-  const initiatingWebsite = facts.initiatingWebsite ?? website;
+  const executionAuthority = caller.executionAuthority ?? caller.executionSession?.authorityOrigin;
+  if (executionAuthority && !caller.executionSession && !caller.taskAuthority) {
+    throw new Error("Execution authority requires a live execution or verified causal task");
+  }
+  const website = caller.website ?? executionAuthority?.website;
+  const initiatingWebsite = facts.initiatingWebsite ?? caller.website;
   if (website) {
     const stored = facts.grantStore?.getAuthoritySubject(website.subject);
     if (
       caller.hostOriginated ||
       !stored ||
-      !facts.grantStore?.isSubjectExecutionCurrent(website.binding) ||
+      (caller.website
+        ? !facts.grantStore?.isSubjectExecutionCurrent(website.binding)
+        : website.binding.documentId !== undefined) ||
       stored.userId !== website.userId ||
       stored.workspaceId !== website.workspaceId ||
       stored.identityKey !== website.origin ||
@@ -244,7 +250,8 @@ export function authorizeVerifiedCaller(
       : undefined;
   const context: AuthorizationContext = {
     ...(installation ? { installation } : {}),
-    ...(website ? { website } : {}),
+    ...(caller.website ? { website: caller.website } : {}),
+    ...(executionAuthority ? { executionAuthority } : {}),
     ...(initiatingWebsite ? { initiatingWebsite } : {}),
     ...(website ? { subjectBinding: website.binding } : {}),
     sourceWorkspaceId: caller.workspaceId ?? facts.workspaceId,

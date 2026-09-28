@@ -200,14 +200,19 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
       },
     };
   }
-  if (attestation.context.website && declaration.website.kind !== "eligible") {
+  if (
+    (attestation.context.website || attestation.context.executionAuthority) &&
+    declaration.website.kind !== "eligible"
+  ) {
     const reason = `${method}: receiver is closed to websites`;
     return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
   }
   const now = input.now ?? Date.now();
-  if (input.caller?.workspaceId &&
-      input.caller.workspaceId !== attestation.context.workspace?.workspaceId &&
-      declaration.crossWorkspace !== true) {
+  if (
+    input.caller?.workspaceId &&
+    input.caller.workspaceId !== attestation.context.workspace?.workspaceId &&
+    declaration.crossWorkspace !== true
+  ) {
     const reason = `${method}: receiver does not accept cross-workspace RPC`;
     return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
   }

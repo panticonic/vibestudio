@@ -1048,9 +1048,9 @@ async function authorizeProtectedPublication(
     },
     {
       website: {
-        kind: "closed",
-        reason:
-          "The mainAdvanceApproval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        kind: "eligible",
+        rationale:
+          "Workspace publication remains subject to exact candidate review and ordinary protected-ref approvals.",
       } as const,
       service: "vcs",
       method: "vcsPush",
@@ -1058,7 +1058,7 @@ async function authorizeProtectedPublication(
       resourceKey: input.resourceKey,
       // The code family already admits evaluated sessions; naming session again
       // duplicates the same branch and repeats one missing-grant reason.
-      requirement: requirementForPrincipals(["host", "user", "code"], input.capability),
+      requirement: requirementForPrincipals(["host", "user", "code", "website"], input.capability),
       tier: input.tier,
       sessionAdmission: "family",
       args: input.args,

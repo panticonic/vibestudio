@@ -60,6 +60,7 @@ interface DbEntityRow {
   active_build_key: string | null;
   active_execution_digest: string | null;
   active_authority: string | null;
+  execution_authority: string | null;
   context_id: string;
   class_name: string | null;
   key: string;
@@ -253,6 +254,7 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "active_build_key",
   "active_execution_digest",
   "active_authority",
+  "execution_authority",
   "context_id",
   "class_name",
   "key",
@@ -312,7 +314,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 35;
+  static override schemaVersion = 36;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -336,6 +338,7 @@ export class WorkspaceDO extends DurableObjectBase {
         active_build_key TEXT,
         active_execution_digest TEXT,
         active_authority TEXT,
+        execution_authority TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,
@@ -718,11 +721,11 @@ export class WorkspaceDO extends DurableObjectBase {
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version, active_build_key,
           active_execution_digest,
-          active_authority,
+          active_authority, execution_authority,
           context_id, class_name, key, state_args, agent_entity_id, agent_channel_id,
           parent_id, owner_user_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -730,6 +733,7 @@ export class WorkspaceDO extends DurableObjectBase {
         nextBuildKey,
         nextExecutionDigest,
         nextAuthority,
+        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
         input.contextId,
         input.className ?? null,
         input.key,
@@ -788,13 +792,14 @@ export class WorkspaceDO extends DurableObjectBase {
       this.sql.exec(
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version, active_build_key,
-          active_execution_digest, active_authority, context_id, class_name, key,
+          active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
           state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id,
           created_at, status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
+        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
         input.contextId,
         input.className ?? null,
         input.key,
@@ -3146,6 +3151,8 @@ export class WorkspaceDO extends DurableObjectBase {
         channelId: row.agent_channel_id,
       };
     }
+    if (row.execution_authority !== null)
+      record.executionAuthority = JSON.parse(row.execution_authority);
     if (row.parent_id !== null) record.parentId = row.parent_id;
     // Mirror the owning-user stamp onto the cache record so lineage-inheriting
     // callers resolve it synchronously (WP0 §6, principalIdentity.resolveUserSubject).
@@ -3176,6 +3183,11 @@ export class WorkspaceDO extends DurableObjectBase {
     input: EntityActivateInput
   ): void {
     const checks: Array<{ field: string; existing: unknown; attempted: unknown }> = [
+      {
+        field: "executionAuthority",
+        existing: existing.execution_authority,
+        attempted: input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+      },
       { field: "kind", existing: existing.kind, attempted: input.kind },
       {
         field: "source.repoPath",

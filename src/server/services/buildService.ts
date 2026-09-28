@@ -78,7 +78,7 @@ export function createBuildService(deps: {
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
-    authority: { principals: ["code", "user", "host"] },
+    authority: { principals: ["code", "user", "host", "website"] },
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       listUnits: () => deps.listUnits(),

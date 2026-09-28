@@ -59,6 +59,41 @@ function attestation(
 }
 
 describe("directRpcInvocationResourceKey", () => {
+  it("keeps closed receivers closed to accepted website execution", () => {
+    const scoped = {
+      ...context,
+      executionAuthority: {
+        kind: "website" as const,
+        website: {
+          subject: "website:example" as const,
+          userId: "user:test" as const,
+          workspaceId: "ws",
+          origin: "https://example.com",
+          binding: { subject: "website:example" as const, generation: 1 },
+        },
+      },
+    };
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: attestation({ context: scoped }),
+        audience: "do:x",
+        resourceKey: "do:x",
+        capability: "rpc:read",
+        now: 100,
+        declaration: {
+          website: { kind: "closed", reason: "Private state" },
+          principals: ["code"],
+          tier: "open",
+          sensitivity: "read",
+          effect: { kind: "open" },
+        },
+      })
+    ).toMatchObject({ code: "EACCES", reason: "read: receiver is closed to websites" });
+  });
+
   it("keeps service admission on the target object when a method protects a separate resource", () => {
     const audience = "do:workers/notes:Notes:main";
     const resourceKey = `notes:${audience}`;
@@ -146,7 +181,10 @@ describe("directRpcInvocationResourceKey", () => {
       directRpcInvocationResourceKey({
         audience: "do:workers/browser-data:BrowserDataDO:key",
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "gated",
           sensitivity: "write",
           principals: ["code"],
@@ -163,7 +201,10 @@ describe("directRpcInvocationResourceKey", () => {
       directRpcInvocationResourceKey({
         audience: "do:workers/example:ExampleDO:key",
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           sensitivity: "read",
           principals: ["code"],
@@ -179,14 +220,32 @@ describe("directRpcInvocationResourceKey", () => {
 describe("directRpcDenial", () => {
   it("requires the actual receiver to opt in to a foreign workspace call", () => {
     const input = {
-      kind: "call" as const, method: "read", caller: { workspaceId: "other" },
+      kind: "call" as const,
+      method: "read",
+      caller: { workspaceId: "other" },
       attestation: attestation(),
       declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const, tier: "open" as const, principals: ["code" as const], sensitivity: "read" as const, effect: { kind: "open" as const } },
-      audience: "do:x", resourceKey: "do:x", capability: "rpc:read", now: 100,
+        website: {
+          kind: "eligible",
+          rationale: "Explicit website receiver policy for this fixture.",
+        } as const,
+        tier: "open" as const,
+        principals: ["code" as const],
+        sensitivity: "read" as const,
+        effect: { kind: "open" as const },
+      },
+      audience: "do:x",
+      resourceKey: "do:x",
+      capability: "rpc:read",
+      now: 100,
     };
-    expect(directRpcDenial(input)).toMatchObject({ code: "EACCES", reason: expect.stringContaining("cross-workspace") });
-    expect(directRpcDenial({ ...input, declaration: { ...input.declaration, crossWorkspace: true } })).toBeNull();
+    expect(directRpcDenial(input)).toMatchObject({
+      code: "EACCES",
+      reason: expect.stringContaining("cross-workspace"),
+    });
+    expect(
+      directRpcDenial({ ...input, declaration: { ...input.declaration, crossWorkspace: true } })
+    ).toBeNull();
     expect(directRpcDenial({ ...input, caller: { workspaceId: "ws" } })).toBeNull();
   });
   it("identifies an undeclared receiver as a provider defect, not an acquirable grant", () => {
@@ -219,7 +278,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: attestation(),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -279,7 +341,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: authorization,
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "gated",
           requires: anyOf(
             requiredCapability("host", "browser-data.write"),
@@ -308,7 +373,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: attestation({ issuedAt: 200, expiresAt: 50 }),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -337,7 +405,10 @@ describe("directRpcDenial", () => {
           capability: "files.read",
         }),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -359,7 +430,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: attestation({ [field]: "other" }),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -381,7 +455,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: attestation({ readOnly: true }),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "write",
@@ -436,7 +513,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: dynamic,
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code", "user"],
           sensitivity: "read",
@@ -458,7 +538,10 @@ describe("directRpcDenial", () => {
           targetRequirement: { kind: "capability", principal: "user", capability },
         },
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code", "user"],
           sensitivity: "read",
@@ -498,7 +581,10 @@ describe("directRpcDenial", () => {
           grants: [],
         }),
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -551,7 +637,10 @@ describe("directRpcDenial", () => {
         caller: null,
         attestation: dynamic,
         declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
@@ -604,7 +693,10 @@ describe("directRpcDenial", () => {
       caller: null,
       attestation: critical,
       declaration: {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+        website: {
+          kind: "eligible",
+          rationale: "Explicit website receiver policy for this fixture.",
+        } as const,
         tier: "critical" as const,
         principals: ["code" as const],
         sensitivity: "destructive" as const,
@@ -636,7 +728,10 @@ describe("directRpcDenial", () => {
       executingCode: null,
     };
     const declaration = {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+      website: {
+        kind: "eligible",
+        rationale: "Explicit website receiver policy for this fixture.",
+      } as const,
       tier: "gated" as const,
       principals: ["session" as const],
       sensitivity: "write" as const,
@@ -722,7 +817,10 @@ describe("event intake", () => {
     class Receiver {
       static eventIntake = [
         {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+          website: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           topicPrefix: "channel:",
           tier: "open",
           sensitivity: "write",
@@ -746,7 +844,10 @@ describe("event intake", () => {
       assertEventIntakeRules({
         eventIntake: [
           {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+            website: {
+              kind: "eligible",
+              rationale: "Explicit website receiver policy for this fixture.",
+            } as const,
             topicPrefix: "*",
             tier: "open",
             sensitivity: "write",
@@ -760,7 +861,10 @@ describe("event intake", () => {
       assertEventIntakeRules({
         eventIntake: [
           {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
+            website: {
+              kind: "eligible",
+              rationale: "Explicit website receiver policy for this fixture.",
+            } as const,
             topicPrefix: "channel:",
             tier: "open",
             sensitivity: "write",

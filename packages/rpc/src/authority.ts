@@ -149,6 +149,14 @@ export interface WebsiteAuthorityFact {
   connected: boolean;
 }
 
+/** Host-retained authority for accepted arbitrary execution. Unlike a document
+ * connection this survives disconnect, but never subject revocation. Document
+ * grants are deliberately not transferred to durable work. */
+export interface ExecutionAuthorityOrigin {
+  kind: "website";
+  website: Omit<WebsiteAuthorityFact, "connected">;
+}
+
 export interface CodeLineageFact {
   class: "internal" | "external" | "unknown";
   externalKeys: readonly string[];
@@ -252,6 +260,8 @@ export interface AgentExecutionTestPolicySpec {
  * capability token and never accepted from caller input.
  */
 export interface ExecutionAdmissionFact {
+  /** Immutable launch authority, authenticated by the owning host. */
+  authorityOrigin?: ExecutionAuthorityOrigin;
   v: 2;
   authoritySessionId: string;
   authoritySessionVersion: number;
@@ -299,6 +309,8 @@ export interface ExecutionAdmissionFact {
  * authorize eval calls directly.
  */
 export interface AuthorizationContext {
+  /** Accepted execution uses its launch subject, not its harness's grants. */
+  executionAuthority?: ExecutionAuthorityOrigin;
   /** Live website principal of this authenticated caller, when it is a browser document. */
   website?: WebsiteAuthorityFact;
   /** Host-attested origin attribution for review/audit; never a transitive authority ceiling. */

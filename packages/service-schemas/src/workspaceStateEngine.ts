@@ -60,6 +60,26 @@ const entityActivationSchema = z
     activeBuildKey: z.string().min(1).optional(),
     activeExecutionDigest: z.string().min(1).optional(),
     activeAuthority: UnitAuthorityManifestSchema.optional(),
+    executionAuthority: z
+      .object({
+        kind: z.literal("website"),
+        website: z
+          .object({
+            subject: z.string().startsWith("website:"),
+            userId: z.string().startsWith("user:"),
+            workspaceId: z.string().min(1),
+            origin: z.string().url(),
+            binding: z
+              .object({
+                subject: z.string().startsWith("website:"),
+                generation: z.number().int().nonnegative(),
+              })
+              .strict(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
     contextId: z.string().min(1),
     className: z.string().min(1).optional(),
     key: z.string().min(1),

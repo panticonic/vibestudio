@@ -5,14 +5,18 @@ import { executionArtifactRefSchema } from "./build.js";
 /** Host-internal retention ingress for immutable eval execution artifacts. */
 export const evalExecutionRootsMethods = defineServiceMethods({
   retain: {
-    website: {"kind":"closed","reason":"The evalExecutionRoots receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The evalExecutionRoots receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
-      session: "family",
+      session: "codeOnly",
       residency: "untrusted-execution",
       family: "evalExecutionRoots.control",
       rationale:
-        "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified",
+        "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
     },
     args: z.tuple([z.string().min(1), z.string().min(1), executionArtifactRefSchema]),
     returns: z.object({ retained: z.literal(true) }).strict(),

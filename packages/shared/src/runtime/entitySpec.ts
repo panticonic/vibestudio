@@ -247,6 +247,8 @@ export function canonicalizeWorkspaceFilePath(wsRelPath: string): string {
 }
 
 export interface EntityRecord {
+  /** Host-owned scope for arbitrary execution launched by this entity. */
+  executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   // ── Identity (immutable after first write) ──
   id: string;
   kind: EntityKind;
@@ -306,6 +308,7 @@ export interface EntityRecord {
  * that executable principals need after cache eviction or restart.
  */
 export interface EntityActivationInput {
+  executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   kind: EntityKind;
   source: EntitySource;
   activeBuildKey?: string;

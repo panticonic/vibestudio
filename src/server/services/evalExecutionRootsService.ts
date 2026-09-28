@@ -1,3 +1,5 @@
+import { requireEvalKernel } from "./evalKernelAuthority.js";
+import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -19,16 +21,25 @@ export function createEvalExecutionRootsService(deps: {
   doDispatch: HeldDoDispatcher;
   entityStore: WorkspaceEntityStore;
   publicationPort: ExecutionPublicationPort;
+  executionSessions: Pick<AgentExecutionSessionRegistry, "resolve" | "resolveInvocation">;
 }): ServiceDefinition {
   return {
     name: "evalExecutionRoots",
     description: "Internal publication interlock for eval workspace imports",
-    authority: { principals: ["session"] },
+    authority: { principals: ["code"] },
     methods: evalExecutionRootsMethods,
     handler: defineServiceHandler("evalExecutionRoots", evalExecutionRootsMethods, {
       retain: async (ctx, [runId, moduleSpecifier, artifactInput]) => {
-        const execution = ctx.caller.executionSession;
-        const entity = deps.entityStore.cache.resolveActive(ctx.caller.runtime.id);
+        const admitted = deps.executionSessions.resolve(ctx.caller.runtime.id);
+        const execution = admitted
+          ? deps.executionSessions.resolveInvocation(ctx.caller.runtime.id, admitted.nonce)
+          : null;
+        const entity = requireEvalKernel(
+          ctx.caller,
+          deps.entityStore.cache,
+          "evalExecutionRoots",
+          "retain"
+        );
         if (
           !execution ||
           execution.executor.kind !== "eval" ||

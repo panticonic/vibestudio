@@ -211,7 +211,8 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
   if (!input.resourceKey || input.resourceKey !== input.resourceKey.trim()) {
     throw new Error("Authority resource key must be a non-empty canonical string");
   }
-  const website = input.context.website;
+  const executionAuthority = input.context.executionAuthority;
+  const website = input.context.website ?? executionAuthority?.website;
   if (input.context.authorizingOrigin.kind === "website" || website) {
     const binding = website?.binding;
     const effectBinding = input.context.subjectBinding;
@@ -233,7 +234,10 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       binding.generation !== website.binding.generation ||
       !Number.isSafeInteger(binding.generation) ||
       binding.generation < 0 ||
-      !binding.documentId ||
+      (executionAuthority
+        ? binding.documentId !== undefined ||
+          (!input.context.executionSession && !input.context.session.taskAuthority)
+        : !binding.documentId) ||
       (input.context.authorizingOrigin.kind === "website" &&
         (!effectBinding ||
           effectBinding.subject !== binding.subject ||
@@ -251,7 +255,10 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         requirement: input.requirement,
       };
     }
-    if (!website.connected || input.context.session.expiresAt <= now) {
+    if (
+      (!executionAuthority && !input.context.website?.connected) ||
+      input.context.session.expiresAt <= now
+    ) {
       return {
         allowed: false,
         code: "connection-required",
@@ -730,6 +737,11 @@ function grantConstraintsMatch(
   if (!constraints) return true;
   if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id)
     return false;
+  if (
+    constraints.taskAuthority !== undefined &&
+    constraints.taskAuthority !== context.session.taskAuthority
+  )
+    return false;
   if (constraints.taskRef !== undefined && constraints.taskRef !== context.session.taskRef)
     return false;
   if (
@@ -753,7 +765,6 @@ function grantConstraintsMatch(
   }
   return true;
 }
-
 
 /**
  * Structural well-formedness only.

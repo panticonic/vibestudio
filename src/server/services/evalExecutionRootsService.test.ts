@@ -86,71 +86,108 @@ function context(): ServiceContext {
   return {
     caller: {
       runtime: { id: runtimeId, kind: "do" },
-      executionSession: execution(),
+      code: {
+        callerId: runtimeId,
+        callerKind: "do",
+        repoPath: "vibestudio/internal",
+        effectiveVersion: "one",
+        executionDigest: "d".repeat(64),
+        requested: [],
+      },
       subject: { userId: "one", handle: "one" },
     },
   };
 }
 
 describe("eval execution root publication ingress", () => {
-  it("journals the exact artifact around the authenticated EvalDO durable write", async () => {
-    const reserve = vi.fn(() => ({ reservationId: "reservation:one", epoch: 1 }));
-    const finalize = vi.fn();
-    const dispatch = vi.fn(async () => undefined);
-    const service = createEvalExecutionRootsService({
-      publicationPort: { reserve, finalize },
-      doDispatch: { dispatch } as never,
-      entityStore: {
-        cache: {
-          resolveActive: () => ({
-            id: runtimeId,
-            kind: "do",
-            className: "EvalDO",
-            source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
-            contextId: "context:one",
-          }),
-        },
-      } as never,
-    });
-    const ref = artifact();
+  it.each(["kernel", "code-owner"])(
+    "journals the exact artifact with %s attribution",
+    async (attribution) => {
+      const reserve = vi.fn(() => ({ reservationId: "reservation:one", epoch: 1 }));
+      const finalize = vi.fn();
+      const dispatch = vi.fn(async () => undefined);
+      const service = createEvalExecutionRootsService({
+        executionSessions: { resolve: () => execution(), resolveInvocation: () => execution() },
+        publicationPort: { reserve, finalize },
+        doDispatch: { dispatch } as never,
+        entityStore: {
+          cache: {
+            resolveActive: () => ({
+              id: runtimeId,
+              kind: "do",
+              className: "EvalDO",
+              source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
+              contextId: "context:one",
+              activeExecutionDigest: "d".repeat(64),
+            }),
+          },
+        } as never,
+      });
+      const ref = artifact();
+      const ctx = context();
+      if (attribution === "code-owner") {
+        ctx.caller.code = {
+          ...ctx.caller.code!,
+          repoPath: "workers/owner",
+          executionDigest: "e".repeat(64),
+          evalOrigin: { ownerId: "do:workers/owner:Owner:one" },
+        };
+      }
 
-    await expect(
-      service.handler(context(), "retain", [runId, "@workspace/example", ref])
-    ).resolves.toEqual({ retained: true });
-    expect(reserve).toHaveBeenCalledWith({
-      owner: "eval-run",
-      ownerId: `${runtimeId}:${runId}:@workspace/example`,
-      artifacts: [{ buildKey: ref.buildKey, executionDigest: ref.executionDigest }],
-    });
-    expect(dispatch).toHaveBeenCalledWith(
-      { source: "vibestudio/internal", className: "EvalDO", objectKey: "object-one" },
-      "retainExecutionRoot",
-      runId,
-      "@workspace/example",
-      ref
-    );
-    expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
-  });
+      await expect(
+        service.handler(ctx, "retain", [runId, "@workspace/example", ref])
+      ).resolves.toEqual({ retained: true });
+      expect(reserve).toHaveBeenCalledWith({
+        owner: "eval-run",
+        ownerId: `${runtimeId}:${runId}:@workspace/example`,
+        artifacts: [{ buildKey: ref.buildKey, executionDigest: ref.executionDigest }],
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        { source: "vibestudio/internal", className: "EvalDO", objectKey: "object-one" },
+        "retainExecutionRoot",
+        runId,
+        "@workspace/example",
+        ref
+      );
+      expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
+    }
+  );
 
-  it("refuses a run that is not the authenticated execution session", async () => {
-    const service = createEvalExecutionRootsService({
-      publicationPort: { reserve: vi.fn(), finalize: vi.fn() } as never,
-      doDispatch: { dispatch: vi.fn() } as never,
-      entityStore: {
-        cache: {
-          resolveActive: () => ({
-            id: runtimeId,
-            kind: "do",
-            className: "EvalDO",
-            source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
-            contextId: "context:one",
-          }),
-        },
-      } as never,
-    });
+  it.each(["wrong-run", "evaluated-code", "website-code", "wrong-kernel"])(
+    "rejects %s at the sealed kernel boundary",
+    async (kind) => {
+      const service = createEvalExecutionRootsService({
+        executionSessions: { resolve: () => execution(), resolveInvocation: () => execution() },
+        publicationPort: { reserve: vi.fn(), finalize: vi.fn() } as never,
+        doDispatch: { dispatch: vi.fn() } as never,
+        entityStore: {
+          cache: {
+            resolveActive: () => ({
+              id: runtimeId,
+              kind: "do",
+              className: "EvalDO",
+              source: {
+                repoPath: kind === "wrong-kernel" ? "workers/forged" : "vibestudio/internal",
+                effectiveVersion: "one",
+              },
+              contextId: "context:one",
+              activeExecutionDigest: "d".repeat(64),
+            }),
+          },
+        } as never,
+      });
 
-    await expect(
-      service.handler(context(), "retain", ["run:forged", "@workspace/example", artifact()])
-    ).rejects.toMatchObject({ code: "EACCES" });
-  });
+      const ctx = context();
+      if (kind === "evaluated-code") ctx.caller.executionSession = execution();
+      if (kind === "website-code")
+        ctx.caller.executionAuthority = { kind: "website", website: {} } as never;
+      await expect(
+        service.handler(ctx, "retain", [
+          kind === "wrong-run" ? "run:forged" : runId,
+          "@workspace/example",
+          artifact(),
+        ])
+      ).rejects.toMatchObject({ code: "EACCES" });
+    }
+  );
 });

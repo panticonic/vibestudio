@@ -116,7 +116,7 @@ Authority principals: `user`
 
 Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -225,7 +225,7 @@ Authority principals: `code`, `host`, `user`
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -489,7 +489,7 @@ Authority principals: `code`, `host`, `user`
 
 Runtime entity creation and retirement
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -565,7 +565,7 @@ Authority principals: `code`, `host`, `user`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -636,7 +636,7 @@ Authority principals: `code`, `host`, `user`
 
 Worker discovery and workspace service resolution
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|

@@ -231,25 +231,47 @@ export type FsStatWire = z.infer<typeof statSchema>;
 export type FsDirentWire = z.infer<typeof direntSchema>;
 export type FsGrepResult = z.infer<typeof grepResultSchema>;
 
-function fileAuthority(effect: "read" | "write", indices: readonly number[]) {
+function fileAuthority(effect: "read" | "write") {
   const capability = `filesystem.${effect}`;
   const requirement = requirementForPrincipals(["code", "host", "user", "website"], "$method");
   const authority: MethodAuthorityDescriptor = {
     requirement,
-    resource: { kind: "literal", key: "workspace-files", presentation: { type: "workspace-file", label: "Workspace file" } },
-    additional: indices.map(index => ({
-      capability, requirement: requirementForPrincipals(["website"], capability),
-      resource: { kind: "argument", index },
-      tier: "gated", when: { origins: ["website"] },
-    })),
+    resource: {
+      kind: "literal",
+      key: "workspace-files",
+      presentation: { type: "workspace-file", label: "Workspace file" },
+    },
+    additional: [
+      {
+        capability,
+        requirement: requirementForPrincipals(["website"], capability),
+        resource: {
+          kind: "literal",
+          key: "workspace-files",
+          presentation: { type: "workspace-file", label: "All files in this workspace" },
+        },
+        tier: "gated",
+        when: { origins: ["website"] },
+      },
+    ],
   };
   return {
     capability,
     presentation: {
-      title: effect === "read" ? "Share a workspace file with this website" : "Let this website change a workspace file",
+      title:
+        effect === "read"
+          ? "Share workspace files with this website"
+          : "Let this website change workspace files",
       action: effect === "read" ? "read workspace files" : "change workspace files",
-      description: effect === "read" ? "This website will receive the selected file or directory contents." : "This website can change the selected workspace file or directory.",
-      group: "workspace", authorityCategory: { domain: "files" as const, verb: effect === "read" ? "see" as const : "act" as const },
+      description:
+        effect === "read"
+          ? "This website and agents it starts can read all files in this workspace."
+          : "This website and agents it starts can create, change, and delete files in this workspace.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files" as const,
+        verb: effect === "read" ? ("see" as const) : ("act" as const),
+      },
     },
     authority,
   };
@@ -258,8 +280,11 @@ function fileAuthority(effect: "read" | "write", indices: readonly number[]) {
 export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -283,8 +308,11 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   readText: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -304,8 +332,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/src/index.ts", { offset: 200, limit: 100, maxBytes: 51_200 }] }],
   },
   readBytes: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -325,8 +356,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/assets/data.bin", { offset: 0, limit: 51_200 }] }],
   },
   writeFile: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -349,8 +383,11 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   appendFile: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -371,8 +408,11 @@ export const fsMethods = defineServiceMethods({
   },
   // Directories
   readdir: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -392,8 +432,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/"] }, { args: ["/src", { withFileTypes: true, recursive: true }] }],
   },
   mkdir: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -413,8 +456,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/.tmp/a/b/c", { recursive: true }] }],
   },
   rmdir: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -430,8 +476,11 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   rm: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -452,8 +501,11 @@ export const fsMethods = defineServiceMethods({
   },
   // Stat / metadata
   stat: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -469,8 +521,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   lstat: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -486,8 +541,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   exists: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -502,8 +560,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   access: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -523,8 +584,11 @@ export const fsMethods = defineServiceMethods({
   },
   // File manipulation
   unlink: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -540,8 +604,11 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   copyFile: {
-    ...fileAuthority("write", [0, 1]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -561,8 +628,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [".tmp/a.txt", ".tmp/b.txt"] }],
   },
   rename: {
-    ...fileAuthority("write", [0, 1]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -585,7 +655,11 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   nativeRoots: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -601,7 +675,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   realpath: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -617,7 +695,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   ensureMaterialized: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -633,8 +715,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   truncate: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -654,7 +739,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/logs/run.log", 0] }],
   },
   readlink: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -670,7 +759,11 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   symlink: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -690,7 +783,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/.tmp/target.txt", "/.tmp/target-link.txt", "file"] }],
   },
   chmod: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -710,7 +807,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/run.sh", 493] }],
   },
   utimes: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -730,7 +831,10 @@ export const fsMethods = defineServiceMethods({
   },
   // Search
   grep: {
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -750,7 +854,10 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["TODO", { glob: "*.ts", contextLines: 2 }] }],
   },
   glob: {
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -771,8 +878,11 @@ export const fsMethods = defineServiceMethods({
   },
   // File handles
   open: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -796,8 +906,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/data.bin", "r"] }],
   },
   handleRead: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -820,8 +933,11 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [1, 4096, null] }],
   },
   handleWrite: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -840,8 +956,11 @@ export const fsMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   handleClose: {
-    ...fileAuthority("write", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("write"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -859,8 +978,11 @@ export const fsMethods = defineServiceMethods({
     },
   },
   handleStat: {
-    ...fileAuthority("read", [0]),
-    website: {"kind":"eligible","rationale":"Workspace files require the website’s ordinary scoped resource consent."} as const,
+    ...fileAuthority("read"),
+    website: {
+      kind: "eligible",
+      rationale: "Workspace files require the website’s ordinary scoped resource consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -877,7 +999,11 @@ export const fsMethods = defineServiceMethods({
   },
   // Tmp files
   mktemp: {
-    website: {"kind":"closed","reason":"The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The fs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

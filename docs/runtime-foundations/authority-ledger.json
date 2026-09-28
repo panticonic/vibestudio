@@ -11604,7 +11604,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11627,8 +11628,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.buildWebsite),allOf(capability(user,service:build.buildWebsite),workspace-member),allOf(capability(code,service:build.buildWebsite),workspace-member))",
       "r3b": {
-        "review": "exact-source-portable-website-build",
-        "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Builds only a manifest-declared browser entry from the caller-selected exact workspace ref. The result is an immutable artifact handle with content-free metadata; this operation publishes nothing and grants no credential or external-network authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.buildWebsite",
       "parityAssertion": "generated-census:host-authority"
@@ -11650,7 +11651,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11673,8 +11675,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.gc),allOf(capability(user,service:build.gc),workspace-member),allOf(capability(code,service:build.gc),workspace-member))",
       "r3b": {
-        "review": "read-only-execution-retention-report",
-        "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.gc",
       "parityAssertion": "generated-census:host-authority"
@@ -11696,7 +11698,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11719,8 +11722,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getAboutPages),allOf(capability(user,service:build.getAboutPages),workspace-member),allOf(capability(code,service:build.getAboutPages),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getAboutPages",
       "parityAssertion": "generated-census:host-authority"
@@ -11742,7 +11745,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11765,8 +11769,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getBuild),allOf(capability(user,service:build.getBuild),workspace-member),allOf(capability(code,service:build.getBuild),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getBuild",
       "parityAssertion": "generated-census:host-authority"
@@ -11788,7 +11792,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11811,8 +11816,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getBuildArtifacts),allOf(capability(user,service:build.getBuildArtifacts),workspace-member),allOf(capability(code,service:build.getBuildArtifacts),workspace-member))",
       "r3b": {
-        "review": "immutable-build-artifact-inventory",
-        "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Reads the content-free artifact inventory for one immutable build key already available in the workspace build store. It performs no compilation, publication, credential access, or workspace mutation. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getBuildArtifacts",
       "parityAssertion": "generated-census:host-authority"
@@ -11834,7 +11839,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11857,8 +11863,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getBuildMetadata),allOf(capability(user,service:build.getBuildMetadata),workspace-member),allOf(capability(code,service:build.getBuildMetadata),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getBuildMetadata",
       "parityAssertion": "generated-census:host-authority"
@@ -11880,7 +11886,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -11903,8 +11910,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getBuildNpm),allOf(capability(user,service:build.getBuildNpm),workspace-member),allOf(capability(code,service:build.getBuildNpm),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getBuildNpm",
       "parityAssertion": "generated-census:host-authority"
@@ -11926,7 +11933,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11949,8 +11957,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getBuildReport),allOf(capability(user,service:build.getBuildReport),workspace-member),allOf(capability(code,service:build.getBuildReport),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getBuildReport",
       "parityAssertion": "generated-census:host-authority"
@@ -11972,7 +11980,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -11995,8 +12004,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getEffectiveVersion),allOf(capability(user,service:build.getEffectiveVersion),workspace-member),allOf(capability(code,service:build.getEffectiveVersion),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getEffectiveVersion",
       "parityAssertion": "generated-census:host-authority"
@@ -12018,7 +12027,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12041,8 +12051,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getPanelMetadata),allOf(capability(user,service:build.getPanelMetadata),workspace-member),allOf(capability(code,service:build.getPanelMetadata),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getPanelMetadata",
       "parityAssertion": "generated-census:host-authority"
@@ -12064,7 +12074,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12087,8 +12098,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getPerformanceProfile),allOf(capability(user,service:build.getPerformanceProfile),workspace-member),allOf(capability(code,service:build.getPerformanceProfile),workspace-member))",
       "r3b": {
-        "review": "bounded-canonical-build-performance-read",
-        "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getPerformanceProfile",
       "parityAssertion": "generated-census:host-authority"
@@ -12110,7 +12121,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12133,8 +12145,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.getTestArtifact),allOf(capability(user,service:build.getTestArtifact),workspace-member),allOf(capability(code,service:build.getTestArtifact),workspace-member))",
       "r3b": {
-        "review": "immutable-production-test-artifact-read",
-        "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.getTestArtifact",
       "parityAssertion": "generated-census:host-authority"
@@ -12156,7 +12168,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12179,8 +12192,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.hasUnit),allOf(capability(user,service:build.hasUnit),workspace-member),allOf(capability(code,service:build.hasUnit),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.hasUnit",
       "parityAssertion": "generated-census:host-authority"
@@ -12202,7 +12215,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12225,8 +12239,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.inspectBuildProvenance),allOf(capability(user,service:build.inspectBuildProvenance),workspace-member),allOf(capability(code,service:build.inspectBuildProvenance),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.inspectBuildProvenance",
       "parityAssertion": "generated-census:host-authority"
@@ -12248,7 +12262,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12271,8 +12286,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.inspectExecution),allOf(capability(user,service:build.inspectExecution),workspace-member),allOf(capability(code,service:build.inspectExecution),workspace-member))",
       "r3b": {
-        "review": "immutable-execution-retention-inspection",
-        "change": "Adds an open, read-only explanation of one immutable execution digest. It returns only the artifact reference, authoritative owners, and reconstructibility diagnostics already held by retention, and cannot publish, acquire, or delete an artifact."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open, read-only explanation of one immutable execution digest. It returns only the artifact reference, authoritative owners, and reconstructibility diagnostics already held by retention, and cannot publish, acquire, or delete an artifact. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.inspectExecution",
       "parityAssertion": "generated-census:host-authority"
@@ -12294,7 +12309,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12317,8 +12333,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.listRecentBuildEvents),allOf(capability(user,service:build.listRecentBuildEvents),workspace-member),allOf(capability(code,service:build.listRecentBuildEvents),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.listRecentBuildEvents",
       "parityAssertion": "generated-census:host-authority"
@@ -12340,7 +12356,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12363,8 +12380,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.listSkills),allOf(capability(user,service:build.listSkills),workspace-member),allOf(capability(code,service:build.listSkills),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.listSkills",
       "parityAssertion": "generated-census:host-authority"
@@ -12386,7 +12403,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12409,8 +12427,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.listUnits),allOf(capability(user,service:build.listUnits),workspace-member),allOf(capability(code,service:build.listUnits),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.listUnits",
       "parityAssertion": "generated-census:host-authority"
@@ -12432,7 +12450,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12455,8 +12474,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.readBuildArtifact),allOf(capability(user,service:build.readBuildArtifact),workspace-member),allOf(capability(code,service:build.readBuildArtifact),workspace-member))",
       "r3b": {
-        "review": "immutable-build-artifact-stream",
-        "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Streams one named artifact from an immutable cached build through the existing bounded stream transport. Artifact identity is fixed by the build key and path; the operation performs no external upload or credential use. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.readBuildArtifact",
       "parityAssertion": "generated-census:host-authority"
@@ -12478,7 +12497,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -12501,8 +12521,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.recompute),allOf(capability(user,service:build.recompute),workspace-member),allOf(capability(code,service:build.recompute),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.recompute",
       "parityAssertion": "generated-census:host-authority"
@@ -12524,7 +12544,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -12547,8 +12568,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:build.resolveTestSuite),allOf(capability(user,service:build.resolveTestSuite),workspace-member),allOf(capability(code,service:build.resolveTestSuite),workspace-member))",
       "r3b": {
-        "review": "exact-workspace-test-suite-metadata-read",
-        "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:build.resolveTestSuite",
       "parityAssertion": "generated-census:host-authority"
@@ -15572,7 +15593,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15595,8 +15617,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.cancel),allOf(capability(user,service:eval.cancel),workspace-member),allOf(capability(code,service:eval.cancel),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.cancel",
       "parityAssertion": "generated-census:host-authority"
@@ -15618,7 +15640,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15641,8 +15664,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.deleteScopeValue),allOf(capability(user,service:eval.deleteScopeValue),workspace-member),allOf(capability(code,service:eval.deleteScopeValue),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.deleteScopeValue",
       "parityAssertion": "generated-census:host-authority"
@@ -15664,7 +15687,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -15687,8 +15711,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.dispose),allOf(capability(user,service:eval.dispose),workspace-member),allOf(capability(code,service:eval.dispose),workspace-member))",
       "r3b": {
-        "review": "owner-scoped-finite-eval-release",
-        "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.dispose",
       "parityAssertion": "generated-census:host-authority"
@@ -15710,7 +15734,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15733,8 +15758,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.events),allOf(capability(user,service:eval.events),workspace-member),allOf(capability(code,service:eval.events),workspace-member))",
       "r3b": {
-        "review": "owner-scoped-bounded-eval-event-catchup",
-        "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.events",
       "parityAssertion": "generated-census:host-authority"
@@ -15756,7 +15781,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15779,8 +15805,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.get),allOf(capability(user,service:eval.get),workspace-member),allOf(capability(code,service:eval.get),workspace-member))",
       "r3b": {
-        "review": "owner-scoped-eval-recovery-read",
-        "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.get",
       "parityAssertion": "generated-census:host-authority"
@@ -15802,7 +15828,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -15825,8 +15852,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.readScopeTextPage),allOf(capability(user,service:eval.readScopeTextPage),workspace-member),allOf(capability(code,service:eval.readScopeTextPage),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.readScopeTextPage",
       "parityAssertion": "generated-census:host-authority"
@@ -15848,7 +15875,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -15871,8 +15899,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.reset),allOf(capability(user,service:eval.reset),workspace-member),allOf(capability(code,service:eval.reset),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.reset",
       "parityAssertion": "generated-census:host-authority"
@@ -15894,7 +15922,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15917,8 +15946,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:eval.start),allOf(capability(user,service:eval.start),workspace-member),allOf(capability(code,service:eval.start),workspace-member))",
       "r3b": {
-        "review": "caller-owned-durable-eval-acceptance",
-        "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.start",
       "parityAssertion": "generated-census:host-authority"
@@ -15929,7 +15958,7 @@
       "owner": "evalEventIngress",
       "method": "publish",
       "tier": "open",
-      "sessionAdmission": "family",
+      "sessionAdmission": "codeOnly",
       "residency": "observability",
       "mechanismFamily": "evalEventIngress.mutate",
       "reviewRationale": "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver",
@@ -15938,7 +15967,7 @@
         "key": "service:evalEventIngress.publish"
       },
       "authorityPrincipals": [
-        "session"
+        "code"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -15959,10 +15988,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf()",
+      "r3aRequirement": "allOf(capability(code,service:evalEventIngress.publish),workspace-member)",
       "r3b": {
-        "review": "authenticated-internal-eval-event-publication",
-        "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience."
+        "review": "sealed-eval-kernel-observability",
+        "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience. Only the live sealed EvalDO may publish through the host-minted sink for its exact runtime, context, and run. Guest execution sessions cannot impersonate kernel bookkeeping. Callback lifetime is detached from the completed initiating RPC."
       },
       "capability": "service:evalEventIngress.publish",
       "parityAssertion": "generated-census:host-authority"
@@ -15973,16 +16002,16 @@
       "owner": "evalExecutionRoots",
       "method": "retain",
       "tier": "open",
-      "sessionAdmission": "family",
+      "sessionAdmission": "codeOnly",
       "residency": "untrusted-execution",
       "mechanismFamily": "evalExecutionRoots.control",
-      "reviewRationale": "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified",
+      "reviewRationale": "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:evalExecutionRoots.retain"
       },
       "authorityPrincipals": [
-        "session"
+        "code"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -16003,10 +16032,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf()",
+      "r3aRequirement": "allOf(capability(code,service:evalExecutionRoots.retain),workspace-member)",
       "r3b": {
-        "review": "typed-internal-eval-execution-root-retention",
-        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention."
+        "review": "sealed-eval-kernel-retention",
+        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
       },
       "capability": "service:evalExecutionRoots.retain",
       "parityAssertion": "generated-census:host-authority"
@@ -16633,8 +16662,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -16659,8 +16692,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -16728,8 +16761,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -16754,8 +16791,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -16869,8 +16906,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -16895,51 +16936,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:fs.copyFile#filesystem.write",
-      "rpcPlane": "host-service",
-      "owner": "fs",
-      "method": "copyFile",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "fs.control",
-      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
-      "capability": "filesystem.write",
-      "resourceDerivation": {
-        "kind": "argument",
-        "index": 1
-      },
-      "authorityPrincipals": [
-        "website"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared additional authority leaf satisfied",
-        "denied": "missing additional authority leaf fails with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
-      "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17053,8 +17051,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17079,8 +17081,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17240,8 +17242,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17266,8 +17272,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17335,8 +17341,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17361,8 +17371,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17430,8 +17440,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17456,8 +17470,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17525,8 +17539,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17551,8 +17569,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17620,8 +17638,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17646,8 +17668,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17715,8 +17737,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17741,8 +17767,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17902,8 +17928,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -17928,8 +17958,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -17997,8 +18027,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18023,8 +18057,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18092,8 +18126,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18118,8 +18156,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18187,8 +18225,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18213,8 +18255,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18328,8 +18370,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18354,8 +18400,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18469,8 +18515,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18495,51 +18545,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:fs.rename#filesystem.write",
-      "rpcPlane": "host-service",
-      "owner": "fs",
-      "method": "rename",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "fs.control",
-      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
-      "capability": "filesystem.write",
-      "resourceDerivation": {
-        "kind": "argument",
-        "index": 1
-      },
-      "authorityPrincipals": [
-        "website"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared additional authority leaf satisfied",
-        "denied": "missing additional authority leaf fails with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
-      "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18607,8 +18614,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18633,8 +18644,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18702,8 +18713,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18728,8 +18743,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18797,8 +18812,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.read",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18823,8 +18842,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -18938,8 +18957,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -18964,8 +18987,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -19033,8 +19056,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -19059,8 +19086,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -19174,8 +19201,12 @@
       "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
       "capability": "filesystem.write",
       "resourceDerivation": {
-        "kind": "argument",
-        "index": 0
+        "kind": "literal",
+        "key": "workspace-files",
+        "presentation": {
+          "type": "workspace-file",
+          "label": "All files in this workspace"
+        }
       },
       "authorityPrincipals": [
         "website"
@@ -19200,8 +19231,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
       "r3b": {
-        "review": "schema-owned-additional-leaf",
-        "change": null
+        "review": "explicit-website-workspace-file-consent",
+        "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -24672,7 +24703,8 @@
       "authorityPrincipals": [
         "host",
         "user",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24695,8 +24727,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.activateReservedEntity),allOf(capability(user,service:runtime.activateReservedEntity),workspace-member),allOf(capability(code,service:runtime.activateReservedEntity),workspace-member))",
       "r3b": {
-        "review": "caller-owned-sealed-reservation-activation",
-        "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.activateReservedEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -24718,7 +24750,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24739,10 +24772,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.clone\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.clone\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.clone\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.cloneContext",
       "parityAssertion": "generated-census:host-authority"
@@ -24766,7 +24799,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24785,10 +24819,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -24809,7 +24843,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24830,10 +24865,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.createContext",
       "parityAssertion": "generated-census:host-authority"
@@ -24857,7 +24892,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24876,10 +24912,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -24900,7 +24936,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24921,10 +24958,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.createEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -24948,7 +24985,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24967,10 +25005,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -24991,7 +25029,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25012,10 +25051,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"subagents.create\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"subagents.create\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.createSubagentContext",
       "parityAssertion": "generated-census:host-authority"
@@ -25039,7 +25078,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25058,10 +25098,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -25082,7 +25122,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -25103,10 +25144,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.destroyContext",
       "parityAssertion": "generated-census:host-authority"
@@ -25130,7 +25171,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -25149,10 +25191,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -25582,7 +25624,8 @@
       "authorityPrincipals": [
         "host",
         "user",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25605,8 +25648,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.releaseResourceBindings),allOf(capability(user,service:runtime.releaseResourceBindings),workspace-member),allOf(capability(code,service:runtime.releaseResourceBindings),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.releaseResourceBindings",
       "parityAssertion": "generated-census:host-authority"
@@ -25628,7 +25671,8 @@
       "authorityPrincipals": [
         "host",
         "user",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25651,8 +25695,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.replaceResourceBindings),allOf(capability(user,service:runtime.replaceResourceBindings),workspace-member),allOf(capability(code,service:runtime.replaceResourceBindings),workspace-member))",
       "r3b": {
-        "review": "owner-scoped-runtime-resource-reconciliation",
-        "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.replaceResourceBindings",
       "parityAssertion": "generated-census:host-authority"
@@ -25674,7 +25718,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25695,10 +25740,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "caller-owned-buildable-entity-reservation",
-        "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.reserveEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -25722,7 +25767,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25741,10 +25787,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -25811,7 +25857,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -25832,10 +25879,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.retireEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -25859,7 +25906,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -25878,10 +25926,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -25900,7 +25948,8 @@
         "key": "service:runtime.setTitle"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -25923,8 +25972,8 @@
       ],
       "r3aRequirement": "allOf(capability(code,service:runtime.setTitle),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.setTitle",
       "parityAssertion": "generated-census:host-authority"
@@ -26001,7 +26050,8 @@
         "key": "service:runtime.supervision.appendLog"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -26024,8 +26074,8 @@
       ],
       "r3aRequirement": "allOf(capability(code,service:runtime.supervision.appendLog),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.supervision.appendLog",
       "parityAssertion": "generated-census:host-authority"
@@ -26286,7 +26336,8 @@
         "key": "service:runtime.supervision.reportHealth"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -26309,8 +26360,8 @@
       ],
       "r3aRequirement": "allOf(capability(code,service:runtime.supervision.reportHealth),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.supervision.reportHealth",
       "parityAssertion": "generated-census:host-authority"
@@ -26330,7 +26381,8 @@
         "key": "service:runtime.supervision.reportReady"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -26353,8 +26405,8 @@
       ],
       "r3aRequirement": "allOf(capability(code,service:runtime.supervision.reportReady),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:runtime.supervision.reportReady",
       "parityAssertion": "generated-census:host-authority"
@@ -28247,7 +28299,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28270,8 +28323,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.blame),allOf(capability(user,service:vcs.blame),workspace-member),allOf(capability(code,service:vcs.blame),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.blame",
       "parityAssertion": "generated-census:host-authority"
@@ -28293,7 +28346,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28316,8 +28370,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.commit),allOf(capability(user,service:vcs.commit),workspace-member),allOf(capability(code,service:vcs.commit),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.commit",
       "parityAssertion": "generated-census:host-authority"
@@ -28339,7 +28393,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28362,8 +28417,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.compare),allOf(capability(user,service:vcs.compare),workspace-member),allOf(capability(code,service:vcs.compare),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.compare",
       "parityAssertion": "generated-census:host-authority"
@@ -28385,7 +28440,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28408,8 +28464,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.copy),allOf(capability(user,service:vcs.copy),workspace-member),allOf(capability(code,service:vcs.copy),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.copy",
       "parityAssertion": "generated-census:host-authority"
@@ -28431,7 +28487,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -28454,8 +28511,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.discard),allOf(capability(user,service:vcs.discard),workspace-member),allOf(capability(code,service:vcs.discard),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.discard",
       "parityAssertion": "generated-census:host-authority"
@@ -28477,7 +28534,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28500,8 +28558,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.edit),allOf(capability(user,service:vcs.edit),workspace-member),allOf(capability(code,service:vcs.edit),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.edit",
       "parityAssertion": "generated-census:host-authority"
@@ -28523,7 +28581,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28546,8 +28605,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.finalizeExternalDelta),allOf(capability(user,service:vcs.finalizeExternalDelta),workspace-member),allOf(capability(code,service:vcs.finalizeExternalDelta),workspace-member))",
       "r3b": {
-        "review": "context-bound-complete-external-delta-finalization",
-        "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.finalizeExternalDelta",
       "parityAssertion": "generated-census:host-authority"
@@ -28569,7 +28628,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28592,8 +28652,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.history),allOf(capability(user,service:vcs.history),workspace-member),allOf(capability(code,service:vcs.history),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.history",
       "parityAssertion": "generated-census:host-authority"
@@ -28615,7 +28675,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28638,8 +28699,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.importSnapshot),allOf(capability(user,service:vcs.importSnapshot),workspace-member),allOf(capability(code,service:vcs.importSnapshot),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.importSnapshot",
       "parityAssertion": "generated-census:host-authority"
@@ -28661,7 +28722,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28684,8 +28746,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.inspect),allOf(capability(user,service:vcs.inspect),workspace-member),allOf(capability(code,service:vcs.inspect),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.inspect",
       "parityAssertion": "generated-census:host-authority"
@@ -28707,7 +28769,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28730,8 +28793,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.listDirectory),allOf(capability(user,service:vcs.listDirectory),workspace-member),allOf(capability(code,service:vcs.listDirectory),workspace-member))",
       "r3b": {
-        "review": "bounded-semantic-immediate-child-read",
-        "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.listDirectory",
       "parityAssertion": "generated-census:host-authority"
@@ -28753,7 +28816,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28776,8 +28840,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.listFiles),allOf(capability(user,service:vcs.listFiles),workspace-member),allOf(capability(code,service:vcs.listFiles),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.listFiles",
       "parityAssertion": "generated-census:host-authority"
@@ -28799,7 +28863,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28822,8 +28887,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.mainState),allOf(capability(user,service:vcs.mainState),workspace-member),allOf(capability(code,service:vcs.mainState),workspace-member))",
       "r3b": {
-        "review": "workspace-main-metadata-read",
-        "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.mainState",
       "parityAssertion": "generated-census:host-authority"
@@ -28845,7 +28910,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28868,8 +28934,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.merge),allOf(capability(user,service:vcs.merge),workspace-member),allOf(capability(code,service:vcs.merge),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.merge",
       "parityAssertion": "generated-census:host-authority"
@@ -28891,7 +28957,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -28914,8 +28981,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.move),allOf(capability(user,service:vcs.move),workspace-member),allOf(capability(code,service:vcs.move),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.move",
       "parityAssertion": "generated-census:host-authority"
@@ -28937,7 +29004,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28960,8 +29028,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.neighbors),allOf(capability(user,service:vcs.neighbors),workspace-member),allOf(capability(code,service:vcs.neighbors),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.neighbors",
       "parityAssertion": "generated-census:host-authority"
@@ -28983,7 +29051,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -29006,8 +29075,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.push),allOf(capability(user,service:vcs.push),workspace-member),allOf(capability(code,service:vcs.push),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.push",
       "parityAssertion": "generated-census:host-authority"
@@ -29029,7 +29098,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29052,8 +29122,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.query),allOf(capability(user,service:vcs.query),workspace-member),allOf(capability(code,service:vcs.query),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.query",
       "parityAssertion": "generated-census:host-authority"
@@ -29075,7 +29145,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29098,8 +29169,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.readFile),allOf(capability(user,service:vcs.readFile),workspace-member),allOf(capability(code,service:vcs.readFile),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.readFile",
       "parityAssertion": "generated-census:host-authority"
@@ -29121,7 +29192,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29144,8 +29216,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.readMemory),allOf(capability(user,service:vcs.readMemory),workspace-member),allOf(capability(code,service:vcs.readMemory),workspace-member))",
       "r3b": {
-        "review": "exact-range-semantic-read-memory-projection",
-        "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.readMemory",
       "parityAssertion": "generated-census:host-authority"
@@ -29167,7 +29239,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -29190,8 +29263,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.registerExternalDelta),allOf(capability(user,service:vcs.registerExternalDelta),workspace-member),allOf(capability(code,service:vcs.registerExternalDelta),workspace-member))",
       "r3b": {
-        "review": "context-bound-exact-external-delta-registration",
-        "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.registerExternalDelta",
       "parityAssertion": "generated-census:host-authority"
@@ -29213,7 +29286,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29236,8 +29310,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.resolveRepository),allOf(capability(user,service:vcs.resolveRepository),workspace-member),allOf(capability(code,service:vcs.resolveRepository),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.resolveRepository",
       "parityAssertion": "generated-census:host-authority"
@@ -29259,7 +29333,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -29282,8 +29357,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.revert),allOf(capability(user,service:vcs.revert),workspace-member),allOf(capability(code,service:vcs.revert),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.revert",
       "parityAssertion": "generated-census:host-authority"
@@ -29305,7 +29380,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29328,8 +29404,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.search),allOf(capability(user,service:vcs.search),workspace-member),allOf(capability(code,service:vcs.search),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.search",
       "parityAssertion": "generated-census:host-authority"
@@ -29351,7 +29427,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29374,8 +29451,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.status),allOf(capability(user,service:vcs.status),workspace-member),allOf(capability(code,service:vcs.status),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.status",
       "parityAssertion": "generated-census:host-authority"
@@ -29397,7 +29474,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -29420,8 +29498,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.supersedeExternalDelta),allOf(capability(user,service:vcs.supersedeExternalDelta),workspace-member),allOf(capability(code,service:vcs.supersedeExternalDelta),workspace-member))",
       "r3b": {
-        "review": "context-bound-external-delta-retirement",
-        "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.supersedeExternalDelta",
       "parityAssertion": "generated-census:host-authority"
@@ -29443,7 +29521,8 @@
       "authorityPrincipals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29466,8 +29545,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:vcs.walk),allOf(capability(user,service:vcs.walk),workspace-member),allOf(capability(code,service:vcs.walk),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:vcs.walk",
       "parityAssertion": "generated-census:host-authority"
@@ -31915,7 +31994,8 @@
       "authorityPrincipals": [
         "user",
         "host",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -31938,8 +32018,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:workers.listServices),allOf(capability(user,service:workers.listServices),workspace-member),allOf(capability(code,service:workers.listServices),workspace-member))",
       "r3b": {
-        "review": "cross-workspace-service-metadata-discovery",
-        "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:workers.listServices",
       "parityAssertion": "generated-census:host-authority"
@@ -31961,7 +32041,8 @@
       "authorityPrincipals": [
         "user",
         "host",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -31984,8 +32065,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:workers.listSources),allOf(capability(user,service:workers.listSources),workspace-member),allOf(capability(code,service:workers.listSources),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:workers.listSources",
       "parityAssertion": "generated-census:host-authority"
@@ -32007,7 +32088,8 @@
       "authorityPrincipals": [
         "user",
         "host",
-        "code"
+        "code",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -32030,8 +32112,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:workers.listStorageBackups),allOf(capability(user,service:workers.listStorageBackups),workspace-member),allOf(capability(code,service:workers.listStorageBackups),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "scoped-website-public-workspace-rpc",
+        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:workers.listStorageBackups",
       "parityAssertion": "generated-census:host-authority"
@@ -32906,10 +32988,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -33273,10 +33355,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -33500,10 +33582,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -33591,10 +33673,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -33820,10 +33902,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -33957,10 +34039,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
       "parityAssertion": "generated-census:host-authority"
     },

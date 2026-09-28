@@ -1,3 +1,4 @@
+import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type {
   AcquisitionInfo,
   AuthorizationContext,
@@ -1318,14 +1319,15 @@ export class AcquisitionCoordinator {
     const taskSubject =
       input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId;
     const taskTitle = this.deps.resolveTaskTitle ? await this.taskTitleFor(taskSubject) : undefined;
-    const displayedWebsite = input.caller.website ?? input.snapshot.initiatingWebsite;
+    const displayedWebsite =
+      websiteAuthorityIdentity(input.caller) ?? input.snapshot.initiatingWebsite;
     const requestBase = {
       authoritySubject: {
         principal: input.snapshot.callerPrincipal,
         ...(input.snapshot.callerPrincipal.startsWith("code:") && input.caller.code
           ? { reviewedVersion: input.caller.code.effectiveVersion }
           : {}),
-        ...(displayedWebsite?.binding.documentId
+        ...(displayedWebsite
           ? {
               website: {
                 origin: displayedWebsite.origin,
@@ -1727,8 +1729,10 @@ export class AcquisitionCoordinator {
         effect: "allow",
         capability: input.snapshot.capability,
         resource: input.resource,
-        subject: input.snapshot.taskAuthority,
+        subject: binding?.subject ?? input.snapshot.taskAuthority,
         constraints: {
+          ...subjectConstraints,
+          ...(binding ? { taskAuthority: input.snapshot.taskAuthority } : {}),
           ...(input.snapshot.sourceWorkspaceId
             ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
             : {}),
@@ -2179,7 +2183,11 @@ function decisionsForOrigin(
   if (input.snapshot.subjectBinding?.subject === input.snapshot.callerPrincipal) {
     return [
       "once",
-      ...(input.snapshot.subjectBinding.documentId ? ["session" as const] : []),
+      ...(input.snapshot.subjectBinding.documentId
+        ? ["session" as const]
+        : input.snapshot.taskAuthority
+          ? ["task" as const]
+          : []),
       "always",
       "deny",
     ];

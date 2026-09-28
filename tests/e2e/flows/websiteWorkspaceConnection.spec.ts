@@ -19,10 +19,7 @@ import {
   executePanelScript,
   type TestApp,
 } from "../../setup/electronSetup";
-import {
-  clickWindowPointThroughNativeInput,
-  moveWindowPointerThroughNativeInput,
-} from "../../setup/nativeInput";
+import { clickNativeApproval } from "../support/nativeApproval";
 import { requireE2eRootTemplate } from "../../setup/e2eRootTemplate";
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 import {
@@ -56,9 +53,9 @@ test("website SDK requires explicit connection and retires access on document re
   const templatePin = requireE2eRootTemplate().pin;
   const html = `<!doctype html><title>Workspace website acceptance</title>
     <button id="connect">Connect</button><button id="discover">Discover</button><button id="closed">Try host inventory</button>
-    <button id="inspect">Inspect template</button><button id="create">Create workspace</button><button id="receipt">Read receipt</button>
+    <button id="eval">Run scoped eval</button><button id="launch">Launch agent</button><button id="inspect">Inspect template</button><button id="create">Create workspace</button><button id="receipt">Read receipt</button>
     <p id="status">Loading SDK</p><script type="module">
-    import { connectWorkspace, workspaceConnection, callMain, templates, workspaces } from '/runtime.js';
+    import { connectWorkspace, workspaceConnection, callMain, templates, workspaces, rpc, contextId, launchAgentIntoChannel } from '/runtime.js';
     const output = value => document.querySelector('#status').textContent = value;
     const templatePin = ${JSON.stringify(templatePin)};
     const operationId = sessionStorage.getItem('operationId') || crypto.randomUUID();
@@ -67,6 +64,24 @@ test("website SDK requires explicit connection and retires access on document re
     document.querySelector('#connect').onclick = () => attempt(async () => { await connectWorkspace(); return 'connected:' + workspaceConnection.connected; });
     document.querySelector('#discover').onclick = () => attempt(async () => { const entries = await callMain('docs.search', 'read', { limit: 5 }); return 'discovered:' + Array.isArray(entries); });
     document.querySelector('#closed').onclick = () => attempt(async () => { await callMain('websiteHosting.list'); return 'unexpected inventory access'; });
+    document.querySelector('#launch').onclick = () => attempt(async () => {
+      const key = 'website-agent-' + operationId;
+      await callMain('runtime.createEntity', { kind: 'do', execution: { surface: 'code', source: 'workers/pubsub-channel' }, className: 'PubSubChannel', key, contextId });
+      const launched = await launchAgentIntoChannel(rpc, { source: 'workers/agent-worker', className: 'AiChatWorker', key, contextId, channelId: key, replay: true });
+      return 'launched:' + launched.subscription.ok;
+    });
+    document.querySelector('#eval').onclick = () => attempt(async () => {
+      const runId = crypto.randomUUID();
+      const scope = { key: 'website-authority-acceptance', lifecycle: 'finite' };
+      const code = "const runtime = await import('@workspace/runtime'); const entries = await runtime.rpc.call('main', 'docs.listSurfaces', []); let closed = false; try { await runtime.rpc.call('main', 'websiteHosting.list', []); } catch (error) { closed = /closed to websites/.test(error.message); } return { discovered: Array.isArray(entries), closed };";
+      await callMain('eval.start', { runId, scope, source: { kind: 'inline', code } });
+      for (let attempt = 0; attempt < 120; attempt++) {
+        const state = await callMain('eval.get', { runId, scopeKey: scope.key });
+        if (state.result) return 'eval:' + JSON.stringify(state.result);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      throw new Error('Scoped eval did not settle');
+    });
     document.querySelector('#inspect').onclick = () => attempt(async () => { const result = await templates.inspect({ pin: templatePin }); return 'inspected:' + result.pin.commit; });
     document.querySelector('#create').onclick = () => attempt(async () => { const result = await workspaces.create({ operationId, workspace: 'website-installation-acceptance', rootTemplate: templatePin }); sessionStorage.setItem('createdWorkspaceId', result.workspaceId); return 'created:' + result.workspaceId; });
     document.querySelector('#receipt').onclick = () => attempt(async () => { const result = await workspaces.receipt({ operationId }); return 'receipt:' + (result?.workspaceId === sessionStorage.getItem('createdWorkspaceId')); });
@@ -164,87 +179,7 @@ test("website SDK requires explicit connection and retires access on document re
       return approval;
     };
     const denied = await visibleConnectionApproval();
-    const clickApproval = async (button: Locator) => {
-      const target = await button.evaluate(async (element) => {
-        element.scrollIntoView({ block: "center", inline: "nearest" });
-        // Native input uses window coordinates. Wait for the real entrance
-        // transform before measuring them, as Playwright's own click does.
-        const card = element.closest(".approval-card");
-        await Promise.all(
-          (card?.getAnimations() ?? [])
-            .filter((animation) =>
-              Number.isFinite(Number(animation.effect?.getComputedTiming().endTime))
-            )
-            .map((animation) => animation.finished.catch(() => undefined))
-        );
-
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        );
-        const rect = element.getBoundingClientRect();
-        return {
-          url: location.href,
-          approvalId: element.closest("[data-approval-id]")!.getAttribute("data-approval-id")!,
-          x: rect.x + rect.width / 2,
-          y: rect.y + rect.height / 2,
-        };
-      });
-      const point = await app!.app.evaluate(async ({ BaseWindow }, target) => {
-        const matches: Array<{ x: number; y: number }> = [];
-        const selector = `[data-approval-id=${JSON.stringify(target.approvalId)}]`;
-        const visit = async (view: Electron.View, x: number, y: number) => {
-          if (!view.getVisible()) return;
-          const bounds = view.getBounds();
-          x += bounds.x;
-          y += bounds.y;
-          if ("webContents" in view) {
-            const contents = (view as Electron.WebContentsView).webContents;
-            if (
-              contents.getURL() === target.url &&
-              (await contents.executeJavaScript(
-                `Boolean(document.querySelector(${JSON.stringify(selector)}))`
-              ))
-            ) {
-              const zoom = contents.getZoomFactor();
-              matches.push({
-                x: Math.round(x + target.x * zoom),
-                y: Math.round(y + target.y * zoom),
-              });
-            }
-          }
-          for (const child of view.children) await visit(child, x, y);
-        };
-        const window = BaseWindow.getAllWindows()[0];
-        if (!window?.isVisible()) throw new Error("Native consent window is not visible");
-        for (const child of window.contentView.children) await visit(child, 0, 0);
-        if (matches.length !== 1)
-          throw new Error(`Expected one visible native approval, found ${matches.length}`);
-        return matches[0]!;
-      }, target);
-      // Observe actual OS pointer delivery to this button before sending consent input.
-      await moveWindowPointerThroughNativeInput(app!, point);
-      await expect.poll(() => button.evaluate((element) => element.matches(":hover"))).toBe(true);
-      const nativeCapture = await app!.app.evaluate(async ({ desktopCapturer, screen }) => {
-        const display = screen.getPrimaryDisplay();
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: display.size,
-        });
-        const source =
-          sources.find((source) => source.display_id === String(display.id)) ?? sources[0];
-        if (!source) throw new Error("Owned native display capture is unavailable");
-        return source.thumbnail.toPNG().toString("base64");
-      });
-      await test.info().attach("native-consent", {
-        body: Buffer.from(nativeCapture, "base64"),
-        contentType: "image/png",
-      });
-      await test.info().attach("native-consent-point", {
-        body: JSON.stringify({ point, target }),
-        contentType: "application/json",
-      });
-      await clickWindowPointThroughNativeInput(app!, point);
-    };
+    const clickApproval = (button: Locator) => clickNativeApproval(app!, button);
     await clickApproval(denied.getByRole("button", { name: "Don't allow", exact: true }));
     await expect.poll(pendingConnections).toEqual([]);
     await expect.poll(text).toContain("Workspace connection was declined");
@@ -264,6 +199,12 @@ test("website SDK requires explicit connection and retires access on document re
     await expect(shell.locator('[data-panel-trust="connected-website"]').first()).toBeVisible();
     await clickPanelSelector(app, panel.id, "#discover");
     await expect.poll(text).toContain("discovered:true");
+    await clickPanelSelector(app, panel.id, "#eval");
+    await expect.poll(text, { timeout: 90_000 }).toContain("eval:");
+    expect(await text()).toContain('"discovered":true,"closed":true');
+    await clickPanelSelector(app, panel.id, "#launch");
+    await expect.poll(text, { timeout: 90_000 }).toMatch(/launched:|error:/);
+    expect(await text()).toContain("launched:true");
     await clickPanelSelector(app, panel.id, "#closed");
     await expect.poll(text).toContain("error:");
     expect(await text()).not.toContain("unexpected inventory access");

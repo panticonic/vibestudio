@@ -53,7 +53,14 @@ function context(): ServiceContext {
   return {
     caller: {
       runtime: { id: runtimeId, kind: "do" },
-      executionSession: execution(),
+      code: {
+        callerId: runtimeId,
+        callerKind: "do",
+        repoPath: "vibestudio/internal",
+        effectiveVersion: "one",
+        executionDigest: "d".repeat(64),
+        requested: [],
+      },
       subject: { userId: "one", handle: "one" },
     },
   };
@@ -84,6 +91,7 @@ function setup(input: { owner: string; initiator: string }) {
           className: "EvalDO",
           source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
           contextId: "context:one",
+          activeExecutionDigest: "d".repeat(64),
           parentId: input.owner,
           stateArgs: { ownerPrincipalId: input.owner, subKey: "notebook" },
         }),
@@ -143,7 +151,20 @@ describe("eval event ingress", () => {
         runId,
         { ...event, kind: "authority-decided" },
       ])
-    ).rejects.toThrow(/does not belong to the authenticated execution session/);
+    ).rejects.toThrow(/does not belong to the authenticated kernel/);
+    expect(emitToWatchesOfCaller).not.toHaveBeenCalled();
+  });
+
+  it("refuses guest-authored lifecycle events even with a real run sink", async () => {
+    const { service, emitToWatchesOfCaller } = setup({
+      owner: "panel:owner",
+      initiator: "panel:owner",
+    });
+    const ctx = context();
+    ctx.caller.executionSession = execution();
+    await expect(service.handler(ctx, "publish", [sinkNonce, runId, event])).rejects.toThrow(
+      /sealed eval kernel/
+    );
     expect(emitToWatchesOfCaller).not.toHaveBeenCalled();
   });
 

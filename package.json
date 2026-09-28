@@ -119,6 +119,8 @@
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.config.ts",
+    "test:invention-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.config.ts tests/e2e/flows/websiteInventionsSmoke.spec.ts",
+    "test:live-e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.live.config.ts",
     "test:e2e:headed": "NODE_ENV=development VIBESTUDIO_E2E_USE_HOST_DISPLAY=1 node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.config.ts --headed",
     "test:all": "pnpm test && pnpm test:e2e",
     "prepare": "husky"

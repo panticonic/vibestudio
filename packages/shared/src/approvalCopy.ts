@@ -390,8 +390,10 @@ export function getStandardApprovalDecisionActions(
     ...(copy.version ? [{ decision: "version" as const, ...copy.version }] : []),
     {
       decision: "always",
-      label: approval.kind === "capability" && approval.capability === "workspace.connect"
-        ? "Remember this connection" : "Remember this permission",
+      label:
+        approval.kind === "capability" && approval.capability === "workspace.connect"
+          ? "Remember this connection"
+          : "Remember this permission",
       description: approval.authoritySubject?.website
         ? `Applies to future pages and code from ${approval.authoritySubject.website.origin} in this workspace. You can revoke it in Permissions.`
         : "Remember for this identity, including future executions. You can revoke it in Permissions.",
@@ -627,16 +629,27 @@ function buildCapabilityActionCopy(approval: PendingCapabilityApproval): Approva
 export function getStandardActionCopy(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): ApprovalActionCopy {
-  if (approval.kind === "capability" && approval.capability === "workspace.connect" && approval.authoritySubject?.website) {
+  if (
+    approval.kind === "capability" &&
+    approval.capability === "workspace.connect" &&
+    approval.authoritySubject?.website
+  ) {
     return {
       once: { label: "Connect", description: "Connect this website to this workspace." },
-      session: { label: "Connect this page", description: "Ends when this page disconnects or is replaced." },
+      session: {
+        label: "Connect this page",
+        description: "Ends when this page disconnects or is replaced.",
+      },
       version: null,
       denyDescription: "Keep this website disconnected from the workspace.",
     };
   }
-  if ((approval.authoritySubject?.website && !approval.authoritySubject.reviewedVersion) || (approval.kind === "capability" && approval.snapshot?.subjectBinding)) {
-    const document = approval.authoritySubject?.website?.documentId ??
+  if (
+    (approval.authoritySubject?.website && !approval.authoritySubject.reviewedVersion) ||
+    (approval.kind === "capability" && approval.snapshot?.subjectBinding)
+  ) {
+    const document =
+      approval.authoritySubject?.website?.documentId ??
       (approval.kind === "capability" ? approval.snapshot?.subjectBinding?.documentId : undefined);
     return {
       once: { label: "Allow once", description: "Allow only this exact operation." },
@@ -775,7 +788,9 @@ export function getApprovalIdentityDetails(
       details.push(
         { label: "Website origin", value: identity.website.origin },
         { label: "Source workspace", value: identity.website.workspaceId },
-        { label: "Initiating document", value: identity.website.documentId }
+        ...(identity.website.documentId
+          ? [{ label: "Initiating document", value: identity.website.documentId }]
+          : [])
       );
     }
     if (identity.reviewedVersion)

@@ -424,7 +424,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     name: "vcs",
     description:
       "One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.",
-    authority: { principals: ["user", "code", "host"] },
+    authority: { principals: ["user", "code", "host", "website"] },
     methods: vcsMethods,
     handler: defineServiceHandler("vcs", vcsMethods, handlers),
   };

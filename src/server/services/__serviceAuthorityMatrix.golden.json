@@ -1864,7 +1864,8 @@
       "principals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ]
     },
     "methods": {
@@ -4392,7 +4393,8 @@
       "principals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ]
     },
     "methods": {
@@ -4546,7 +4548,7 @@
   "evalEventIngress": {
     "service": {
       "principals": [
-        "session"
+        "code"
       ]
     },
     "methods": {
@@ -4559,7 +4561,7 @@
         },
         "tier": {
           "tier": "open",
-          "session": "family",
+          "session": "codeOnly",
           "residency": "observability",
           "family": "evalEventIngress.mutate",
           "rationale": "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver"
@@ -4572,7 +4574,7 @@
   "evalExecutionRoots": {
     "service": {
       "principals": [
-        "session"
+        "code"
       ]
     },
     "methods": {
@@ -4585,10 +4587,10 @@
         },
         "tier": {
           "tier": "open",
-          "session": "family",
+          "session": "codeOnly",
           "residency": "untrusted-execution",
           "family": "evalExecutionRoots.control",
-          "rationale": "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified"
+          "rationale": "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified"
         },
         "capability": null,
         "presentation": null
@@ -5191,8 +5193,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5215,9 +5221,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5319,8 +5325,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5343,9 +5353,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5464,35 +5474,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
-              }
-            },
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "argument",
-                "index": 1
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5515,9 +5502,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5636,8 +5623,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5660,9 +5651,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5798,8 +5789,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5822,9 +5817,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5926,8 +5921,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -5950,9 +5949,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6054,8 +6053,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6078,9 +6081,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6182,8 +6185,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6206,9 +6213,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6310,8 +6317,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6334,9 +6345,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6438,8 +6449,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6462,9 +6477,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6600,8 +6615,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6624,9 +6643,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6728,8 +6747,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6752,9 +6775,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6856,8 +6879,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -6880,9 +6907,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6984,8 +7011,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7008,9 +7039,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7129,8 +7160,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7153,9 +7188,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7274,35 +7309,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
-              }
-            },
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "argument",
-                "index": 1
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7325,9 +7337,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7429,8 +7441,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7453,9 +7469,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7557,8 +7573,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7581,9 +7601,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7685,8 +7705,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7709,9 +7733,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share a workspace file with this website",
+          "title": "Share workspace files with this website",
           "action": "read workspace files",
-          "description": "This website will receive the selected file or directory contents.",
+          "description": "This website and agents it starts can read all files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7830,8 +7854,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7854,9 +7882,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7958,8 +7986,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -7982,9 +8014,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -8103,8 +8135,12 @@
                 ]
               },
               "resource": {
-                "kind": "argument",
-                "index": 0
+                "kind": "literal",
+                "key": "workspace-files",
+                "presentation": {
+                  "type": "workspace-file",
+                  "label": "All files in this workspace"
+                }
               },
               "tier": "gated",
               "when": {
@@ -8127,9 +8163,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change a workspace file",
+          "title": "Let this website change workspace files",
           "action": "change workspace files",
-          "description": "This website can change the selected workspace file or directory.",
+          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -12083,7 +12119,8 @@
       "principals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ]
     },
     "methods": {
@@ -12092,7 +12129,8 @@
           "principals": [
             "host",
             "user",
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -12113,7 +12151,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -12164,6 +12203,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.clone"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.clone"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -12179,25 +12232,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -12218,6 +12252,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -12272,7 +12339,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -12323,6 +12391,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.boundary"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -12338,25 +12420,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -12377,6 +12440,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -12410,7 +12506,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -12461,6 +12558,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.boundary"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -12476,25 +12587,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -12515,6 +12607,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -12579,7 +12704,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -12630,6 +12756,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "subagents.create"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -12645,25 +12785,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -12684,6 +12805,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -12726,7 +12880,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -12777,6 +12932,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.boundary"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -12792,25 +12961,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -12831,6 +12981,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -13096,7 +13279,8 @@
           "principals": [
             "host",
             "user",
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -13117,7 +13301,8 @@
           "principals": [
             "host",
             "user",
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -13138,7 +13323,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -13189,6 +13375,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.boundary"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -13204,25 +13404,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -13243,6 +13424,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -13297,7 +13511,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ],
           "requirement": {
             "kind": "any",
@@ -13348,6 +13563,20 @@
                 "kind": "capability",
                 "principal": "host",
                 "capability": "context.boundary"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -13363,25 +13592,6 @@
                 "requirement": {
                   "kind": "any",
                   "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
                     {
                       "kind": "all",
                       "requirements": [
@@ -13402,6 +13612,39 @@
                         {
                           "kind": "capability",
                           "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "website",
                           "capability": "context.boundary"
                         },
                         {
@@ -13433,7 +13676,8 @@
       "setTitle": {
         "authority": {
           "principals": [
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -13543,7 +13787,8 @@
       "supervision.appendLog": {
         "authority": {
           "principals": [
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -13737,7 +13982,8 @@
       "supervision.reportHealth": {
         "authority": {
           "principals": [
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -13756,7 +14002,8 @@
       "supervision.reportReady": {
         "authority": {
           "principals": [
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -15606,7 +15853,8 @@
       "principals": [
         "user",
         "code",
-        "host"
+        "host",
+        "website"
       ]
     },
     "methods": {
@@ -16474,7 +16722,8 @@
       "principals": [
         "user",
         "host",
-        "code"
+        "code",
+        "website"
       ]
     },
     "methods": {
@@ -16518,7 +16767,8 @@
           "principals": [
             "user",
             "host",
-            "code"
+            "code",
+            "website"
           ]
         },
         "access": {
@@ -17579,11 +17829,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -17624,6 +17869,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },
@@ -17910,11 +18160,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -17955,6 +18200,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },
@@ -18178,11 +18428,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -18223,6 +18468,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },
@@ -18332,11 +18582,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -18377,6 +18622,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },
@@ -18573,11 +18823,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -18618,6 +18863,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },
@@ -18754,11 +19004,6 @@
                   "kind": "any",
                   "requirements": [
                     {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
                       "kind": "all",
                       "requirements": [
                         {
@@ -18799,6 +19044,11 @@
                           "name": "workspace-member"
                         }
                       ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
                     }
                   ]
                 },

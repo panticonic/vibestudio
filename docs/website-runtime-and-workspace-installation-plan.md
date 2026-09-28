@@ -74,8 +74,11 @@ Further implemented slices (2026-09-08):
   Invocation snapshots retain website attribution for review/audit. Admission, grants and
   approval retirement use the actual current caller and its subject binding (Host
   `4573c344a`); an initiating
-  website is not a transitive authority or lifetime ceiling on reviewed receiver work.
-  Events, queued agents, cross-workspace calls, and every streaming path still need audit.
+  website attribution is not itself a transitive authority ceiling on reviewed receiver work.
+  Accepted arbitrary execution now has a separate host-retained authority origin,
+  described in [website execution authority](website-execution-authority-plan.md).
+  That origin survives page disconnect and constrains agent tools, eval and descendants;
+  it must not be confused with service-implementation attribution.
 - Trusted desktop/mobile header and tree trust styling shares a race-safe inventory observer.
   Base `26678c0` and Host `5e8ab815c` record the styling slice. Host `f8d910463` and
   Base `d456174` add native Android/iOS providers, document-bound reply transport,

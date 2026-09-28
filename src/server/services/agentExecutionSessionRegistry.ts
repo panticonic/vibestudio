@@ -556,6 +556,8 @@ function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boo
   const { eventSinkNonce: _factSink, ...factEval } = fact.executor;
   const { eventSinkNonce: _inputSink, ...inputEval } = input.executor;
   return (
+    JSON.stringify(fact.authorityOrigin ?? null) ===
+      JSON.stringify(input.authorityOrigin ?? null) &&
     fact.mode === input.mode &&
     fact.controllerRuntimeId === input.controllerRuntimeId &&
     fact.ownerUser === input.ownerUser &&
@@ -585,6 +587,8 @@ function sameGenericAdmission(
   return (
     fact.admissionKey === input.admissionKey &&
     fact.controllerRuntimeId === input.controllerRuntimeId &&
+    JSON.stringify(fact.authorityOrigin ?? null) ===
+      JSON.stringify(input.authorityOrigin ?? null) &&
     fact.mode === input.mode &&
     fact.ownerUser === input.ownerUser &&
     fact.workspaceId === input.workspaceId &&
@@ -608,6 +612,7 @@ function trustUnitDrift(fact: ExecutionAdmissionFact, input: AdmissionInput): st
   const changed = (name: string, left: unknown, right: unknown): void => {
     if (JSON.stringify(left) !== JSON.stringify(right)) drift.push(name);
   };
+  changed("authorityOrigin", fact.authorityOrigin ?? null, input.authorityOrigin ?? null);
   changed("mode", fact.mode, input.mode);
   changed("ownerUser", fact.ownerUser, input.ownerUser);
   changed("workspaceId", fact.workspaceId, input.workspaceId);

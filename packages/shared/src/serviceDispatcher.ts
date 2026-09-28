@@ -242,6 +242,9 @@ export interface VerifiedCodeIdentity {
  * active runtime entity when installed worker/DO code relays that agent's work.
  */
 export interface VerifiedCaller {
+  /** Scope of a host-verified live causal tool invocation. Sealed service
+   * implementation calls do not acquire this merely through attribution. */
+  executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   /** Host-attested live website initiator. Never copied from an RPC payload. */
   website?: import("@vibestudio/rpc").WebsiteAuthorityFact;
   /** Ordinary workspace identity attested by the owning host, never from the RPC payload. */
@@ -321,6 +324,18 @@ export function createVerifiedCaller(
     ...(testPolicy ? { testPolicy } : {}),
     ...(subject ? { subject } : {}),
   };
+}
+
+/** The permission subject of a page or its accepted arbitrary execution.
+ * Document liveness remains a separate transport check. */
+export function websiteAuthorityIdentity(
+  caller: VerifiedCaller
+): Omit<import("@vibestudio/rpc").WebsiteAuthorityFact, "connected"> | undefined {
+  return (
+    caller.website ??
+    caller.executionAuthority?.website ??
+    caller.executionSession?.authorityOrigin?.website
+  );
 }
 
 /** Construct a genuine product-host operation. Never use for relayed userland calls. */
@@ -1260,7 +1275,7 @@ export class ServiceDispatcher {
     service: string,
     method: string
   ): void {
-    if (ctx.caller.website && policy?.kind !== "eligible")
+    if (websiteAuthorityIdentity(ctx.caller) && policy?.kind !== "eligible")
       throw new ServiceAccessError(
         service,
         method,
@@ -2210,10 +2225,7 @@ export class ServiceDispatcher {
               failure: authorityFailure,
             },
             wouldPrompt: {
-              cardType:
-                tier === "critical"
-                  ? "confirm.critical"
-                  : "permission.gated",
+              cardType: tier === "critical" ? "confirm.critical" : "permission.gated",
               renderedAction,
             },
             acquisition: { input: acquisitionInput, context: resolved.context },
@@ -2337,10 +2349,7 @@ export class ServiceDispatcher {
           capability,
           resourceKey,
           tier,
-          cardType:
-            tier === "critical"
-              ? "confirm.critical"
-              : "permission.gated",
+          cardType: tier === "critical" ? "confirm.critical" : "permission.gated",
           renderedAction,
           pending: false,
         };

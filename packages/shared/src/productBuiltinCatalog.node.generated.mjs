@@ -494,11 +494,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -539,6 +534,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -624,11 +624,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -669,6 +664,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -725,11 +725,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -770,6 +765,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -826,11 +826,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -871,6 +866,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -927,11 +927,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -972,6 +967,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -1242,11 +1242,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -1287,6 +1282,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -2828,11 +2828,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -2873,6 +2868,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -2958,11 +2958,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -3003,6 +2998,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -3059,11 +3059,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -3104,6 +3099,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -3160,11 +3160,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -3205,6 +3200,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
@@ -3261,11 +3261,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                 "kind": "any",
                 "requirements": [
                   {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
                     "kind": "all",
                     "requirements": [
                       {
@@ -3306,6 +3301,11 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
                         "name": "workspace-member"
                       }
                     ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
                   }
                 ]
               },
