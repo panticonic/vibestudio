@@ -122,20 +122,27 @@ function authoritySourceFiles(input: {
   sourceFiles: readonly ts.SourceFile[];
 }): ts.SourceFile[] {
   const checker = input.project.checker;
-  const sourceFileSet = new Set(input.sourceFiles);
+  const sourcesByPath = new Map(
+    input.sourceFiles.map((sourceFile) => [path.resolve(sourceFile.fileName), sourceFile])
+  );
   const reverseImports = new Map<ts.SourceFile, Set<ts.SourceFile>>();
 
   for (const importer of input.sourceFiles) {
-    for (const statement of importer.statements) {
-      const moduleSpecifier =
-        ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
-          ? statement.moduleSpecifier
-          : undefined;
-      if (!moduleSpecifier) continue;
-      const symbol = unalias(checker, checker.getSymbolAtLocation(moduleSpecifier));
-      for (const declaration of declarationsOf(input.project, symbol)) {
-        const imported = declaration.getSourceFile();
-        if (!sourceFileSet.has(imported)) continue;
+    const moduleSpecifiers = importer.statements.flatMap((statement) =>
+      (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
+      statement.moduleSpecifier
+        ? [statement.moduleSpecifier]
+        : []
+    );
+    if (moduleSpecifiers.length === 0) continue;
+    // Native declaration handles already carry their source path. Do not
+    // fetch an imported dependency's AST just to reject it as out of scope.
+    // Batch this module's independent symbol queries across the compiler IPC.
+    for (const rawSymbol of checker.getSymbolAtLocation(moduleSpecifiers)) {
+      const symbol = unalias(checker, rawSymbol);
+      for (const declaration of symbol?.declarations ?? []) {
+        const imported = sourcesByPath.get(path.resolve(declaration.path));
+        if (!imported) continue;
         let importers = reverseImports.get(imported);
         if (!importers) {
           importers = new Set();
@@ -391,19 +398,20 @@ export function analyzeWorkspaceServiceCalls(
   input: AnalyzeWorkspaceServiceCallsInput
 ): WorkspaceServiceCallFact[] {
   const checker = input.project.checker;
+  const unitRoots = input.units.map(
+    (unit) => `${path.resolve(input.sourceRoot, unit.relativePath)}${path.sep}`
+  );
   const programSourceFiles = input.project.program
     .getSourceFileNames()
+    // Keep the compiler's full semantic project for symbol resolution, but
+    // materialize syntax only for the workspace sources this pass inspects.
+    .filter((fileName) => {
+      const file = path.resolve(fileName);
+      return unitRoots.some((root) => file.startsWith(root));
+    })
     .flatMap((fileName) => {
       const sourceFile = input.project.program.getSourceFile(fileName);
-      return sourceFile ? [sourceFile] : [];
-    })
-    .filter((sourceFile) => {
-      if (sourceFile.isDeclarationFile) return false;
-      const file = path.resolve(sourceFile.fileName);
-      return input.units.some((unit) => {
-        const root = `${path.resolve(input.sourceRoot, unit.relativePath)}${path.sep}`;
-        return file.startsWith(root);
-      });
+      return sourceFile && !sourceFile.isDeclarationFile ? [sourceFile] : [];
     });
   const sourceFiles = authoritySourceFiles({
     project: input.project,

@@ -121,19 +121,19 @@ function sourceClosure(
   const consumerRoot = path.resolve(sourceRoot, unitRelativePath);
   const consumerSources = project.program
     .getSourceFileNames()
-    .flatMap((fileName) => {
-      const sourceFile = project.program.getSourceFile(fileName);
-      return sourceFile ? [sourceFile] : [];
-    })
-    .filter((sourceFile) => {
-      if (sourceFile.isDeclarationFile) return false;
-      const file = path.resolve(sourceFile.fileName);
+    // Source files are remote ASTs. Select the owning unit from their names
+    // before asking the native compiler to serialize any syntax trees.
+    .filter((fileName) => {
+      const file = path.resolve(fileName);
       const owned = unitRoots.find(({ root }) => `${file}${path.sep}`.startsWith(root));
       return owned
         ? path.resolve(sourceRoot, owned.unit.relativePath) === consumerRoot
         : `${file}${path.sep}`.startsWith(`${consumerRoot}${path.sep}`);
     })
-    .map((sourceFile) => sourceFile.text);
+    .flatMap((fileName) => {
+      const sourceFile = project.program.getSourceFile(fileName);
+      return sourceFile && !sourceFile.isDeclarationFile ? [sourceFile.text] : [];
+    });
   const dependencySources = (executableModules ?? [])
     .filter(
       (module) =>

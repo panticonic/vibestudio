@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypeCheckService } from "@vibestudio/typecheck";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
@@ -91,6 +91,42 @@ const catalog = {
 };
 
 describe("userland authority fold", () => {
+  it("does not fetch remote ASTs outside the consumer and workspace source scope", async () => {
+    const { root, project } = programForFiles({
+      "panels/consumer/index.ts": `
+        import type { Shape } from "../../irrelevant/large";
+        export const value: Shape = { value: 1 };
+      `,
+      "irrelevant/large.d.ts": "export interface Shape { value: number }",
+    });
+    const program = project.program;
+    const getSourceFile = program.getSourceFile.bind(program);
+    const unrelated = join(root, "irrelevant/large.d.ts");
+    expect(program.getSourceFileNames()).toContain(unrelated);
+    const spy = vi.spyOn(program, "getSourceFile").mockImplementation((fileName) => {
+      if (fileName === unrelated) throw new Error("Unrelated AST should stay in the compiler");
+      return getSourceFile(fileName);
+    });
+    try {
+      const diagnostics = await authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: "panels/consumer",
+        units: [{ name: "consumer", relativePath: "panels/consumer" }],
+        manifest: { authority: { requests: [], provides: [] } },
+        environment: createExactWorkspaceAuthorityEnvironment({
+          stateHash: "state:exact",
+          services: [],
+          resolveCatalog: async () => catalog,
+        }),
+      });
+      expect(diagnostics).toEqual([]);
+      expect(spy).not.toHaveBeenCalledWith(unrelated);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("uses a workspace dependency's own service declaration for its calls", async () => {
     const { root, project } = programForFiles({
       "index.ts": `import { notes } from "./packages/orchestration"; export { notes };`,
