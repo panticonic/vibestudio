@@ -100,6 +100,27 @@ describe("execution artifact ref wire schema", () => {
 });
 
 describe("build method effects", () => {
+  it("carries the sealed service authority identity through build metadata RPC", () => {
+    const metadata = {
+      kind: "worker",
+      name: "@workspace-workers/test",
+      buildKey: digest,
+      sourcePath: "workers/test",
+      ev: "ev:test",
+      sourceStateHash: `state:${digest}`,
+      sourcemap: false,
+      serviceAuthorityDigest: digest,
+      details: { kind: "generic" },
+      builtAt: new Date(0).toISOString(),
+    };
+    expect(buildMethods.getBuildMetadata.returns.parse(metadata)).toEqual(metadata);
+    for (const serviceAuthorityDigest of ["", "not-a-digest", "A".repeat(64)]) {
+      expect(
+        buildMetadataSchema.safeParse({ ...metadata, serviceAuthorityDigest }).success
+      ).toBe(false);
+    }
+  });
+
   it("preserves publication schema diagnostics on the public wire", () => {
     expect(
       buildDiagnosticSchema.parse({

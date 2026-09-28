@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
+import { waitForAndroidBoot } from "./lib/android-avd.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -331,17 +332,6 @@ async function hasAdbDevice(device) {
   } catch {
     return false;
   }
-}
-
-async function waitForAndroidBoot(device, timeoutMs = 180_000) {
-  await adb(device, "wait-for-device");
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const { stdout } = await adb(device, "shell", "getprop", "sys.boot_completed");
-    if (stdout.trim() === "1") return;
-    await sleep(1000);
-  }
-  throw new Error("Timed out waiting for Android boot completion");
 }
 
 async function main() {

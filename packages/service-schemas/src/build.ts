@@ -295,6 +295,7 @@ export const buildMetadataSchema = z
       )
       .optional(),
     authority: UnitAuthorityManifestSchema.optional(),
+    serviceAuthorityDigest: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
     executableModules: z.array(executableModuleSchema).optional(),
     stateArgsSchema: z
       .record(z.unknown())

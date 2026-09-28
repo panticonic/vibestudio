@@ -37,6 +37,38 @@ export function selectReadyAndroidDevice(readyDevices, requestedDevice = null) {
   return [...readyDevices].sort((left, right) => left.localeCompare(right))[0] ?? null;
 }
 
+/** A booting device can reconnect to adb before its boot property is ready. */
+export async function waitForAndroidBoot(
+  device,
+  timeoutMs = 180_000,
+  exec = execFileAsync
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = null;
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await exec(
+        "adb",
+        ["-s", device, "shell", "getprop", "sys.boot_completed"],
+        { timeout: Math.min(10_000, deadline - Date.now()), windowsHide: true }
+      );
+      if (stdout.trim() === "1") return;
+      lastFailure = null;
+    } catch (error) {
+      if (error.code === "ENOENT") throw error;
+      lastFailure = error;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remaining)));
+  }
+  throw new Error(
+    `Timed out waiting for Android boot completion on ${device}` +
+      (lastFailure ? `: ${lastFailure.message}` : ""),
+    { cause: lastFailure }
+  );
+}
+
 async function listAvds(emulatorCommand) {
   const { stdout } = await execFileAsync(emulatorCommand, ["-list-avds"]);
   return stdout

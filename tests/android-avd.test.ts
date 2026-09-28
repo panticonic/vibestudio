@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ANDROID_AVD,
   androidEmulatorSerial,
@@ -10,7 +10,47 @@ import {
   selectAndroidSystemImage,
   selectExistingAndroidAvd,
   selectReadyAndroidDevice,
+  waitForAndroidBoot,
 } from "../scripts/cli/lib/android-avd.mjs";
+
+describe("Android boot readiness", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("waits through adb disconnects until the owned device reports boot completion", async () => {
+    vi.useFakeTimers();
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("device not found"))
+      .mockResolvedValueOnce({ stdout: "0\n" })
+      .mockRejectedValueOnce(new Error("device offline"))
+      .mockResolvedValueOnce({ stdout: "1\n" });
+    const ready = waitForAndroidBoot("emulator-5556", 5_000, exec);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await ready;
+    expect(exec).toHaveBeenCalledTimes(4);
+    for (const [, args] of exec.mock.calls) {
+      expect(args).toEqual(["-s", "emulator-5556", "shell", "getprop", "sys.boot_completed"]);
+    }
+  });
+
+  it("bounds each probe and reports the last adb failure at the deadline", async () => {
+    vi.useFakeTimers();
+    const exec = vi.fn().mockRejectedValue(new Error("device offline"));
+    const failed = expect(waitForAndroidBoot("emulator-5556", 1_500, exec)).rejects.toThrow(
+      /emulator-5556: device offline/
+    );
+    await vi.advanceTimersByTimeAsync(1_500);
+    await failed;
+    expect(exec.mock.calls.map(([, , options]) => options.timeout)).toEqual([1_500, 500]);
+  });
+
+  it("fails immediately when adb cannot be launched", async () => {
+    const error = Object.assign(new Error("adb is missing"), { code: "ENOENT" });
+    const exec = vi.fn().mockRejectedValue(error);
+    await expect(waitForAndroidBoot("emulator-5556", 5_000, exec)).rejects.toBe(error);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("Android AVD resolution", () => {
   it("derives the owned adb serial from the emulator's reported console port", () => {
