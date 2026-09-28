@@ -59,6 +59,11 @@ const contracts = [
     ],
   },
   {
+    path: "dist/adblock-engine-worker.cjs",
+    runtime: "desktop filter compilation worker",
+    format: "cjs",
+  },
+  {
     path: "dist/fs-disk-worker.cjs",
     runtime: "confined native filesystem worker",
     format: "cjs",

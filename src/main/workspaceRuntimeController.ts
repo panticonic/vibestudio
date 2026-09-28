@@ -405,6 +405,18 @@ export function createDesktopWorkspaceRuntime(deps: {
       throw error;
     }));
   };
+  // These prerequisites own resources. Drain every sibling before startup
+  // cleanup, including when one fails before another finishes acquiring one.
+  const together = async <T extends readonly unknown[]>(tasks: {
+    [K in keyof T]: Promise<T[K]>;
+  }): Promise<T> => {
+    try {
+      return await Promise.all(tasks);
+    } catch (error) {
+      await Promise.allSettled(tasks);
+      throw error;
+    }
+  };
   let starting: Promise<void> | null = null;
   const close = () => {
     closed = true;
@@ -423,7 +435,10 @@ export function createDesktopWorkspaceRuntime(deps: {
     (starting ??= (async () => {
       try {
         assertOpen();
-        const partition = await browserPartition;
+        const [partition] = await together([
+          browserPartition,
+          controller.orchestrator.registerRuntimeClient(),
+        ] as const);
         assertOpen();
         const panelView = () => {
           const value = window.getWorkspacePanelView(workspaceId);
@@ -479,10 +494,8 @@ export function createDesktopWorkspaceRuntime(deps: {
             },
           })
         );
-        await controller.orchestrator.registerRuntimeClient();
-        assertOpen();
         const hostConnectionId = controller.orchestrator.getRuntimeClientSessionId();
-        downloads = new BrowserDownloadManager({
+        const downloadManager = new BrowserDownloadManager({
           browserSession: session.fromPartition(partition),
           environmentKey: browserPermissions.getEnvironmentKey(),
           hostId: `desktop:${hostConnectionId}`,
@@ -492,8 +505,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           requestSiteCapability: (contents, capability) =>
             browserPermissions.requestSiteCapability(contents, capability),
         });
-        await downloads.start();
-        assertOpen();
+        downloads = downloadManager;
         if (!deps.personal)
           container.registerRpc(
             createBrowserEnvironmentService({
@@ -502,21 +514,22 @@ export function createDesktopWorkspaceRuntime(deps: {
               browserDataBrokerRepoPath: null,
             })
           );
-        personalBrowser = deps.personal
-          ? await (
-              await import("./personalBrowserServices.js")
-            ).registerPersonalBrowserServices({
-              connection,
-              container,
-              eventService,
-              window,
-              browserPermissions,
-              browserPartition: partition,
-              downloads,
-              hostConnectionId,
-              adBlockManager: deps.adBlockManager,
-            })
-          : null;
+        const personalServices = deps.personal
+          ? import("./personalBrowserServices.js").then(({ registerPersonalBrowserServices }) =>
+              registerPersonalBrowserServices({
+                connection,
+                container,
+                eventService,
+                window,
+                browserPermissions,
+                browserPartition: partition,
+                downloads: downloadManager,
+                hostConnectionId,
+                adBlockManager: deps.adBlockManager,
+              })
+            )
+          : Promise.resolve(null);
+        [personalBrowser] = await together([personalServices, downloadManager.start()] as const);
         assertOpen();
         await container.startAll();
         assertOpen();

@@ -456,6 +456,18 @@ const clientConfig = {
   },
 };
 
+const adblockWorkerConfig = {
+  entryPoints: ["src/main/adblock/filterEngineWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/adblock-engine-worker.cjs",
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
 const mainConfig = {
   entryPoints: ["src/main/index.ts"],
   bundle: true,
@@ -760,6 +772,7 @@ async function build() {
     const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
     const initialHostBuilds = await Promise.all([
       buildHostArtifact(mainConfig),
+      buildHostArtifact(adblockWorkerConfig),
       ...preloadConfigs.map((config) => buildHostArtifact(config)),
       buildHostArtifact(browserTransportConfig),
       buildHostArtifact(internalDoBundleConfig),

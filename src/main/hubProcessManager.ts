@@ -71,8 +71,13 @@ function hubStartupFailureDetail(logPath: string): string | null {
   }
 }
 
+/** Presentation can prepare its selected workspace as soon as account routing
+ * resolves it; transport-only clients need not open an unused workspace. */
+export type InitialWorkspaceResolved = (workspaceId: string, prepare: () => Promise<void>) => void;
+
 export interface HubProcessManagerConfig {
   workspaceName: string | null;
+  onInitialWorkspaceResolved?: InitialWorkspaceResolved;
   appRoot: string;
   appVersion: string;
   /** SHA-256 identity of the exact server bundle this desktop will execute. */
@@ -518,6 +523,12 @@ export class HubProcessManager {
     // The requested project is a focus target, never a replacement client app.
     const { personal, system } = await hubControl.ensureUserWorkspaces();
     workspace ??= personal;
+    const initialWorkspaceId = workspace.workspaceId;
+    if (initialWorkspaceId !== system.workspaceId) {
+      this.config.onInitialWorkspaceResolved?.(initialWorkspaceId, async () => {
+        await hubControl.routeWorkspace({ workspaceId: initialWorkspaceId });
+      });
+    }
     const routed = await hubControl.routeWorkspace({ workspaceId: system.workspaceId });
     if (routed.workspaceId !== system.workspaceId || routed.workspace !== system.name) {
       throw new Error("Hub routed a different workspace than the designated System");

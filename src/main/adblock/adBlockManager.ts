@@ -10,7 +10,7 @@
  */
 
 import { FiltersEngine, Request } from "@ghostery/adblocker";
-import fetch from "cross-fetch";
+import { buildFilterEngine } from "./filterEngineBuilder.js";
 import * as fs from "fs";
 import * as path from "path";
 import { ipcMain, type Session } from "electron";
@@ -183,7 +183,7 @@ export class AdBlockManager {
     // Try to load from cache first (fast startup)
     if (fs.existsSync(this.cachePath)) {
       try {
-        const data = fs.readFileSync(this.cachePath);
+        const data = await fs.promises.readFile(this.cachePath);
         this.engine = FiltersEngine.deserialize(new Uint8Array(data));
         console.log("[AdBlock] Loaded from cache");
         // Start update timer even when loading from cache
@@ -252,13 +252,12 @@ export class AdBlockManager {
     log.info(` Building engine from ${lists.length} filter lists...`);
 
     try {
-      this.engine = await FiltersEngine.fromLists(fetch, lists, {
-        enableCompression: true,
-      });
+      const serialized = await buildFilterEngine(lists);
+      this.engine = FiltersEngine.deserialize(serialized);
 
-      // Cache for fast startup
-      const serialized = this.engine.serialize();
-      fs.writeFileSync(this.cachePath, Buffer.from(serialized));
+      // The worker already serialized the engine; disk persistence must not
+      // block native input while the initial workspace is opening.
+      await fs.promises.writeFile(this.cachePath, serialized);
 
       // Update lastUpdated timestamp
       this.config.lastUpdated = Date.now();

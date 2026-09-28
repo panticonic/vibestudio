@@ -27,6 +27,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
     for (const entry of [
       "server-electron.cjs",
+      "adblock-engine-worker.cjs",
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
       "fs-disk-worker.cjs",
@@ -69,6 +70,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
     for (const entry of [
       "server-electron.cjs",
+      "adblock-engine-worker.cjs",
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
       "fs-disk-worker.cjs",

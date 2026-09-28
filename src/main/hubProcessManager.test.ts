@@ -131,6 +131,7 @@ function manager(
   centralData: ReturnType<typeof makeCentralData>,
   options: {
     workspaceName?: string | null;
+    onInitialWorkspaceResolved?: (workspaceId: string, prepare: () => Promise<void>) => void;
     onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   } = {}
 ) {
@@ -141,6 +142,7 @@ function manager(
     buildId: BUILD_ID,
     centralData: centralData as never,
     onCrash: vi.fn(),
+    onInitialWorkspaceResolved: options.onInitialWorkspaceResolved,
     ...(options.onOwnedHubSpawn ? { onOwnedHubSpawn: options.onOwnedHubSpawn } : {}),
   });
 }
@@ -310,7 +312,10 @@ describe("HubProcessManager", () => {
       vi.stubGlobal("fetch", fetchMock);
       const centralData = makeCentralData();
 
-      const target = await manager(centralData, { workspaceName }).attachOrSpawn({
+      const target = await manager(centralData, {
+        workspaceName,
+        onInitialWorkspaceResolved: (id) => lifecycle.push(`focus:${id}`),
+      }).attachOrSpawn({
         onHubReady: () => lifecycle.push("hub-ready"),
       });
 
@@ -323,7 +328,11 @@ describe("HubProcessManager", () => {
         wsUrl: "ws://127.0.0.1:5000/_r/ws/system/rpc",
       });
       expect(spawnMock).not.toHaveBeenCalled();
-      expect(lifecycle).toEqual(["hub-ready", "route-workspace"]);
+      expect(lifecycle).toEqual([
+        "hub-ready",
+        `focus:${workspaceName ? "ws_alpha" : "ws_personal"}`,
+        "route-workspace",
+      ]);
     }
   );
 

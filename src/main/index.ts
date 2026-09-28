@@ -2251,22 +2251,25 @@ app.on("ready", async () => {
     }
     // Catalog admission is checked even for a cached native runtime. A removal
     // cannot be bypassed by a stale UI selection or delayed list response.
-    await sessions.get(id);
+    const connection = sessions.get(id);
     const existing = desktopWorkspaceRuntimes.get(id);
-    if (existing) return existing;
+    if (existing) {
+      await connection;
+      return existing;
+    }
     const opening = Promise.resolve().then(async () => {
       const session = assertPresent(serverSession);
-      const members = (await session.hubControlClient.call(
-        "hubControl",
-        "listWorkspaces",
-        []
-      )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+      const [workspaceConnection, members] = await Promise.all([
+        connection,
+        session.hubControlClient.call("hubControl", "listWorkspaces", []) as Promise<
+          import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]
+        >,
+      ]);
       const membership = members.find((entry) => entry.workspaceId === id);
       if (!membership) throw new Error("Workspace access was removed");
-      const connection = await session.workspaceSessions.get(id);
       const { createDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
       const runtime = createDesktopWorkspaceRuntime({
-        connection,
+        connection: workspaceConnection,
         personal: membership.privateRole === "personal",
         app: {
           shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
@@ -2381,6 +2384,17 @@ app.on("ready", async () => {
           if (response === 1) return "attach";
           return "cancel";
         },
+        onInitialWorkspaceResolved: IS_HEADLESS_HOST
+          ? undefined
+          : (id, prepare) => {
+              // The hub remains the owner of child startup. Request the known
+              // focus target alongside System, before either desktop is built.
+              void prepare().catch((error: unknown) => {
+                log.warn(
+                  `[workspace] Could not prepare initial workspace ${id}: ${formatUnknownError(error)}`
+                );
+              });
+            },
         onStartupProgress: (progress) => {
           bootstrapStartupProgress = progress;
           pushBootstrapConnectionState();
@@ -2827,6 +2841,18 @@ app.on("ready", async () => {
     };
     await catalogEvents.subscribe("hub:workspace-catalog-changed");
 
+    // The selected workspace is already known. Prepare it through the same
+    // owned, single-flight path while System mounts the desktop application.
+    // A failure is surfaced by the shell's ordinary open/retry UI.
+    if (
+      !IS_HEADLESS_HOST &&
+      conn.initialFocusedWorkspaceId &&
+      conn.initialFocusedWorkspaceId !== conn.workspaceId
+    ) {
+      void ensureDesktopWorkspace(conn.initialFocusedWorkspaceId).catch((error: unknown) => {
+        log.warn(`[workspace] Initial workspace preparation failed: ${formatUnknownError(error)}`);
+      });
+    }
     try {
       await systemRuntimePublication.start();
     } finally {

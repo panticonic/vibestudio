@@ -36,6 +36,7 @@ import {
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "./owned-process-tree.mjs";
+import { readCurrentHostBuildGeneration, releaseHostBuildGeneration } from "./host-build-generations.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createMacosTestKeychain } from "./macos-test-keychain.mjs";
 import {
@@ -55,7 +56,7 @@ import {
 const electronBinary = resolveElectronExecutableForVibestudio();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const mainPath = path.join(repoRoot, "dist", "main.cjs");
+let desktopGeneration = null;
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = "@workspace-apps/shell";
 const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
@@ -660,6 +661,10 @@ function hasElectronDisplay() {
 }
 
 async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvironment, register) {
+  // Pin the whole emitted desktop, including bootstrap HTML and preloads.
+  // A concurrent build may replace mutable dist while this run is launching.
+  desktopGeneration ??= readCurrentHostBuildGeneration(repoRoot, "desktop");
+  const mainPath = path.join(desktopGeneration, "main.cjs");
   if (!fs.existsSync(mainPath)) {
     throw new Error(`Electron main entry not found at ${mainPath}. Run pnpm build first.`);
   }
@@ -706,9 +711,8 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
       "--no-sandbox",
       ...desktopEnvironment.electronArgs,
       `--user-data-dir=${userDataDir}`,
-      // Load the application package, as pnpm dev does, so Electron uses its
-      // actual version/name metadata when starting the owned local server.
-      repoRoot,
+      // The immutable generation carries the application package metadata.
+      desktopGeneration,
       ...(deepLink ? [deepLink] : []),
     ],
     env,
@@ -2135,6 +2139,10 @@ async function main() {
           cleanupErrors.push(error);
         }
       }
+      if (desktopGeneration && localTreesGone) {
+        releaseHostBuildGeneration(desktopGeneration);
+        desktopGeneration = null;
+      }
       if (cleanupErrors.length)
         throw new AggregateError(cleanupErrors, "Desktop smoke cleanup failed");
     })();
@@ -2253,6 +2261,12 @@ async function main() {
         "waiting for initial Personal focus",
         Math.max(1000, deadlineMs - Date.now())
       );
+      const openingTiming = await page.evaluate(() =>
+        performance.getEntriesByName("workspace:initial-open").map(({ duration }) => ({
+          durationMs: Math.round(duration),
+        }))
+      );
+      console.log(`[desktop-smoke] Initial workspace timing: ${JSON.stringify(openingTiming)}`);
       const personal = catalog.find((entry) => entry.privateRole === "personal");
       if (options.websiteConnection) {
         if (!personal) throw new Error("Local startup is missing Personal workspace");

@@ -415,6 +415,7 @@ async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<s
     } catch {
       return;
     }
+    const packages: Array<{ root: string; name: string; entry: fs.Dirent }> = [];
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       if (entry.name.startsWith("@") && entry.isDirectory()) {
@@ -422,36 +423,55 @@ async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<s
           await fs.promises.readdir(path.join(directory, entry.name), { withFileTypes: true })
         ).sort((a, b) => a.name.localeCompare(b.name));
         for (const scoped of scopeEntries) {
-          await visitPackage(
-            path.join(directory, entry.name, scoped.name),
-            `${logicalPrefix}${entry.name}/${scoped.name}`,
-            scoped
-          );
+          packages.push({
+            root: path.join(directory, entry.name, scoped.name),
+            name: `${logicalPrefix}${entry.name}/${scoped.name}`,
+            entry: scoped,
+          });
         }
-        continue;
+      } else {
+        packages.push({
+          root: path.join(directory, entry.name),
+          name: `${logicalPrefix}${entry.name}`,
+          entry,
+        });
       }
-      await visitPackage(path.join(directory, entry.name), `${logicalPrefix}${entry.name}`, entry);
     }
-  };
-
-  const visitPackage = async (
-    packageRoot: string,
-    logicalName: string,
-    entry: fs.Dirent
-  ): Promise<void> => {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) return;
-    const manifestPath = path.join(packageRoot, "package.json");
-    try {
-      const contents = await fs.promises.readFile(manifestPath);
-      records.push(`package\0${logicalName}\0${await fullHash(contents)}\0`);
-    } catch {
-      return;
+    // Read a bounded batch concurrently, then fold it in the original sorted
+    // depth-first order. Scheduling must never change a content-addressed key.
+    // Recursing only after the batch settles bounds I/O across nested npm trees.
+    const batchSize = 16;
+    for (let offset = 0; offset < packages.length; offset += batchSize) {
+      const batch = packages.slice(offset, offset + batchSize);
+      const loaded = await Promise.all(
+        batch.map(async ({ root, name, entry }) => {
+          if (!entry.isDirectory() && !entry.isSymbolicLink()) return null;
+          let manifestHash: string;
+          try {
+            manifestHash = await fullHash(
+              await fs.promises.readFile(path.join(root, "package.json"))
+            );
+          } catch {
+            return null;
+          }
+          const packageRecord = `package\0${name}\0${manifestHash}\0`;
+          return entry.isSymbolicLink()
+            ? {
+                record: packageRecord + `link\0${name}\0${await fs.promises.readlink(root)}\0`,
+                nested: false,
+              }
+            : { record: packageRecord, nested: true };
+        })
+      );
+      for (let index = 0; index < batch.length; index++) {
+        const result = loaded[index];
+        if (!result) continue;
+        records.push(result.record);
+        const pkg = batch[index]!;
+        if (result.nested)
+          await visitNodeModules(path.join(pkg.root, "node_modules"), `${pkg.name}/node_modules/`);
+      }
     }
-    if (entry.isSymbolicLink()) {
-      records.push(`link\0${logicalName}\0${await fs.promises.readlink(packageRoot)}\0`);
-      return;
-    }
-    await visitNodeModules(path.join(packageRoot, "node_modules"), `${logicalName}/node_modules/`);
   };
 
   await visitNodeModules(nodeModulesRoot, "");
@@ -511,6 +531,10 @@ async function computeRootDependencyFingerprint(
   // Domain tag; bumped when the input set/encoding changes.
   hash.update("root-deps-v6\0");
 
+  const [localPackages, installedDependencies] = await Promise.all([
+    localPackageFingerprintInputs(root),
+    installedDependencyFingerprintInputs(root),
+  ]);
   const files: RootDependencyFingerprintFile[] = [];
   for (const input of dependencyFingerprintInputs(root, workspaceRoot)) {
     const file = input.file;
@@ -533,14 +557,14 @@ async function computeRootDependencyFingerprint(
     }
     files.push({ file, path: filePath, present, contentHash });
   }
-  for (const input of await localPackageFingerprintInputs(root)) {
+  for (const input of localPackages) {
     hash.update(input.file);
     hash.update("\0tree\0");
     hash.update(input.contentHash ?? "absent");
     hash.update("\0");
     files.push(input);
   }
-  for (const input of await installedDependencyFingerprintInputs(root)) {
+  for (const input of installedDependencies) {
     hash.update(input.file);
     hash.update("\0installed-tree\0");
     hash.update(input.contentHash ?? "absent");

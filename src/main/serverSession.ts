@@ -14,7 +14,7 @@ import { createHash, randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot, getServerProcessBuildId } from "./paths.js";
-import { HubProcessManager } from "./hubProcessManager.js";
+import { HubProcessManager, type InitialWorkspaceResolved } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
@@ -216,6 +216,7 @@ export async function establishServerSession(args: {
   ) => Promise<"attach" | "replace" | "cancel">;
   /** Structured startup progress for the bootstrap timeline. */
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
+  onInitialWorkspaceResolved?: InitialWorkspaceResolved;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: IrohReconnectProgress) => void;
@@ -248,6 +249,7 @@ export async function establishServerSession(args: {
     buildId: getServerProcessBuildId(),
     centralData: args.centralData,
     confirmExistingHub: args.confirmExistingLocalHub,
+    onInitialWorkspaceResolved: args.onInitialWorkspaceResolved,
     onCrash: (code) => {
       console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
       relaunchApp({ exitCode: 1 });
@@ -415,6 +417,7 @@ export async function establishServerSession(args: {
 /** The connect-callback subset both remote-session paths forward to the pipe. */
 type RemoteConnectArgs = {
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
+  onInitialWorkspaceResolved?: InitialWorkspaceResolved;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: IrohReconnectProgress) => void;
@@ -471,6 +474,9 @@ async function establishRemoteSession(
       hubControlClient.call(svc, method, args)
     );
     const pair = await hub.ensureUserWorkspaces();
+    args.onInitialWorkspaceResolved?.(pair.personal.workspaceId, async () => {
+      await hub.routeWorkspace({ workspaceId: pair.personal.workspaceId });
+    });
     const initialFocusedWorkspaceId = pair.personal.workspaceId;
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });
     const serverClient = await supervisor.connect(storedReach(route.workspaceReach), {
@@ -596,6 +602,9 @@ async function establishFreshPairSession(
       controlClient.call(svc, method, args)
     );
     const pair = await hub.ensureUserWorkspaces();
+    args.onInitialWorkspaceResolved?.(pair.personal.workspaceId, async () => {
+      await hub.routeWorkspace({ workspaceId: pair.personal.workspaceId });
+    });
     // A server-wide invite has no workspace target. Start in Personal, just
     // like local startup; System is the shell's source, not the default focus.
     const route = await hub.routeWorkspace({ workspaceId: pair.system.workspaceId });

@@ -358,6 +358,35 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
 }
 
 describe("workspace runtime ownership", () => {
+  it("registers the runtime while browser permissions are still loading", async () => {
+    const permissions = deferred<string>();
+    edges.partition.mockReturnValueOnce(permissions.promise);
+    const owner = fixture("parallel");
+    const starting = owner.runtime.start();
+    await vi.waitFor(() => expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce());
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+    permissions.resolve("partition");
+    await starting;
+    expect(owner.window.attachWorkspaceServices).toHaveBeenCalledOnce();
+  });
+
+  it("drains a late lease acquisition before cleaning a failed parallel start", async () => {
+    const permissions = deferred<string>();
+    const lease = deferred<void>();
+    edges.partition.mockReturnValueOnce(permissions.promise);
+    const owner = fixture("parallel-failure");
+    owner.orchestrator.registerRuntimeClient.mockReturnValueOnce(lease.promise);
+    const starting = owner.runtime.start();
+    const failed = expect(starting).rejects.toThrow("permission snapshot failed");
+    permissions.reject(new Error("permission snapshot failed"));
+    await vi.waitFor(() => expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce());
+    expect(owner.orchestrator.unregisterRuntimeClient).not.toHaveBeenCalled();
+    lease.resolve();
+    await failed;
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+  });
+
   it("offers the same native navigation service in Personal, System and ordinary workspaces", async () => {
     const owners = [fixture("personal", true), fixture("system"), fixture("project")];
     for (const owner of owners) {

@@ -4,6 +4,7 @@
  */
 
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setUserDataPath } from "@vibestudio/env-paths";
@@ -432,6 +433,36 @@ describe("effectiveVersion", () => {
       expect(info.files.every((f) => f.path.startsWith(dir))).toBe(true);
       expect(info.files.every((f) => f.present && f.contentHash)).toBe(true);
       expect(info.value).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("preserves the installed tree digest across batched manifests, scopes, links and nesting", async () => {
+      const dir = path.join(root, "batched");
+      writeRootFiles(dir, '{"name":"host"}', "lock", "ws");
+      const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+      const records: string[] = [];
+      const manifest = (relative: string, name: string) => {
+        const folder = path.join(dir, "node_modules", relative);
+        fs.mkdirSync(folder, { recursive: true });
+        const contents = JSON.stringify({ name });
+        fs.writeFileSync(path.join(folder, "package.json"), contents);
+        records.push(`package\0${relative.replaceAll(path.sep, "/")}\0${hash(contents)}\0`);
+      };
+      // Expected records describe the original sorted depth-first encoding,
+      // including a child before its parent's following sibling.
+      manifest("@scope/alpha", "scoped");
+      manifest("a", "parent");
+      manifest("a/node_modules/child", "nested");
+      for (let i = 0; i < 35; i++) manifest(`p${String(i).padStart(2, "0")}`, `package-${i}`);
+      fs.symlinkSync("a", path.join(dir, "node_modules", "z-link"), "dir");
+      records.push(
+        `package\0z-link\0${hash(JSON.stringify({ name: "parent" }))}\0link\0z-link\0a\0`
+      );
+      fs.mkdirSync(path.join(dir, "node_modules", "empty"));
+      await setBuildRootConfig({ appRoot: dir });
+      const installed = getRootDependencyFingerprintInfo().files.find(
+        (file) => file.file === "installed-node-modules:0"
+      );
+      expect(installed?.contentHash).toBe(hash(records.join("")));
     });
 
     it("yields the event loop while fingerprinting local package trees", async () => {

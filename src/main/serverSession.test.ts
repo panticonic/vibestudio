@@ -46,12 +46,18 @@ const entries = [
 beforeEach(() => vi.clearAllMocks());
 describe("remote startup workspace focus", () => {
   it("pairs the account into Personal while hosting the shell in System", async () => {
+    let finishPersonal!: () => void;
+    const personalHost = new Promise<void>((resolve) => {
+      finishPersonal = resolve;
+    });
+    let preparing: Promise<void> | undefined;
     const hub = {
       call: vi.fn(async (_service: string, method: string, args: unknown[]) => {
         if (method === "ensureUserWorkspaces") return pair;
         if (method === "listWorkspaces") return entries;
         if (method === "routeWorkspace") {
           const id = (args[0] as { workspaceId: string }).workspaceId;
+          if (id === "personal-id") await personalHost;
           const entry = entries.find((entry) => entry.workspaceId === id)!;
           return {
             workspaceId: id,
@@ -87,8 +93,17 @@ describe("remote startup workspace focus", () => {
       mode: null,
       pendingPairing: { ...reach, code: "test-code" },
       centralData: {} as CentralDataManager,
+      onInitialWorkspaceResolved: (id, prepare) => {
+        expect(id).toBe("personal-id");
+        preparing = prepare();
+      },
     });
     try {
+      // System is usable while the independent Personal host is still starting.
+      expect(preparing).toBeDefined();
+      expect(hub.call).toHaveBeenCalledWith("hubControl", "routeWorkspace", [
+        { workspaceId: "personal-id" },
+      ]);
       expect(connection.initialFocusedWorkspaceId).toBe("personal-id");
       expect(connection.workspaceId).toBe("system-id");
       expect(mocks.save).toHaveBeenCalledWith(
@@ -99,6 +114,8 @@ describe("remote startup workspace focus", () => {
       );
       expect(mocks.connect).toHaveBeenLastCalledWith(workspaceReach, expect.any(Object));
     } finally {
+      finishPersonal();
+      await preparing;
       await connection.close();
     }
     expect(workspace.close).toHaveBeenCalledOnce();
