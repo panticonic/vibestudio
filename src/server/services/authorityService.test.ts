@@ -119,9 +119,13 @@ describe("authorityService", () => {
     expect(revokeSubject).not.toHaveBeenCalledWith(otherSubject);
   });
 
-  it("forwards the inbound cancellation signal to an authority wait", async () => {
+  it("forwards cancellation and keeps internal grant identity out of the wait result", async () => {
     const signal = new AbortController().signal;
-    const awaitDecision = vi.fn(async () => ({ state: "closed" as const }));
+    const awaitDecision = vi.fn(async () => ({
+      state: "decided" as const,
+      decision: "once" as const,
+      grantId: "grant:internal",
+    }));
     const service = createAuthorityService({
       dispatcher: { preflightAuthority: vi.fn() } as never,
       acquisitions: { awaitDecision } as never,
@@ -133,7 +137,7 @@ describe("authorityService", () => {
         "awaitDecision",
         [{ acquisitionId: "acq:1" }]
       )
-    ).resolves.toEqual({ state: "closed" });
+    ).resolves.toEqual({ state: "decided", decision: "once" });
     expect(awaitDecision).toHaveBeenCalledWith({
       acquisitionId: "acq:1",
       ownerRuntimeId: "agent:1",

@@ -52,8 +52,10 @@ export function derivedCacheDatabasePath(root: string): string {
 
 /** Per-root quotas sum to a bounded profile-wide shared cache footprint. */
 export function derivedCacheMaxBytes(root: string): number {
-  return DERIVED_CACHE_MAX_BYTES_BY_ROOT[path.basename(canonicalRoot(root))] ??
-    DEFAULT_DERIVED_CACHE_MAX_BYTES;
+  return (
+    DERIVED_CACHE_MAX_BYTES_BY_ROOT[path.basename(canonicalRoot(root))] ??
+    DEFAULT_DERIVED_CACHE_MAX_BYTES
+  );
 }
 
 function canonicalRoot(root: string): string {
@@ -152,32 +154,37 @@ export class DerivedCacheCoordinator {
   constructor(filePath: string) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(filePath);
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS cache_entries (
-        root TEXT NOT NULL,
-        key TEXT NOT NULL,
-        bytes INTEGER NOT NULL DEFAULT 0,
-        last_access INTEGER NOT NULL,
-        PRIMARY KEY (root, key)
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS cache_leases (
-        lease_id TEXT PRIMARY KEY,
-        root TEXT NOT NULL,
-        key TEXT NOT NULL,
-        owner_id TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
-      ) STRICT;
-      CREATE INDEX IF NOT EXISTS cache_leases_entry
-        ON cache_leases(root, key, expires_at);
-      CREATE TABLE IF NOT EXISTS cache_maintenance (
-        root TEXT PRIMARY KEY,
-        owner_id TEXT,
-        expires_at INTEGER NOT NULL DEFAULT 0,
-        last_pruned_at INTEGER NOT NULL DEFAULT 0
-      ) STRICT;
-    `);
+    try {
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      this.enableWriteAheadLogging();
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cache_entries (
+          root TEXT NOT NULL,
+          key TEXT NOT NULL,
+          bytes INTEGER NOT NULL DEFAULT 0,
+          last_access INTEGER NOT NULL,
+          PRIMARY KEY (root, key)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS cache_leases (
+          lease_id TEXT PRIMARY KEY,
+          root TEXT NOT NULL,
+          key TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS cache_leases_entry
+          ON cache_leases(root, key, expires_at);
+        CREATE TABLE IF NOT EXISTS cache_maintenance (
+          root TEXT PRIMARY KEY,
+          owner_id TEXT,
+          expires_at INTEGER NOT NULL DEFAULT 0,
+          last_pruned_at INTEGER NOT NULL DEFAULT 0
+        ) STRICT;
+      `);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   acquire(rootInput: string, key: string): DerivedCacheLease {
@@ -456,6 +463,28 @@ export class DerivedCacheCoordinator {
     }
   }
 
+  private enableWriteAheadLogging(): void {
+    const current = this.db.prepare("PRAGMA journal_mode").get() as
+      | { journal_mode?: string }
+      | undefined;
+    if (current?.journal_mode?.toLowerCase() === "wal") return;
+
+    // journal_mode changes do not honor SQLite's busy handler consistently.
+    // During a cold parallel start, one opener owns the persistent transition
+    // and its siblings can otherwise block for the full timeout or fail startup.
+    // WAL is an optimization, not a correctness requirement: attempt the
+    // transition without waiting and retain the normal timeout for real cache
+    // reads and writes. The winning opener establishes WAL for future opens.
+    this.db.exec("PRAGMA busy_timeout = 0");
+    try {
+      this.db.exec("PRAGMA journal_mode = WAL");
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+    } finally {
+      this.db.exec("PRAGMA busy_timeout = 5000");
+    }
+  }
+
   private deleteExpiredLeases(now: number): void {
     this.db.prepare("DELETE FROM cache_leases WHERE expires_at <= ?").run(now);
   }
@@ -484,6 +513,15 @@ export class DerivedCacheCoordinator {
       throw error;
     }
   }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "errcode" in error &&
+    (error as { errcode?: unknown }).errcode === 5
+  );
 }
 
 const coordinators = new Map<string, DerivedCacheCoordinator>();
