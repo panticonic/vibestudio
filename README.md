@@ -197,8 +197,12 @@ one-time root-device invite contract. Run it with `pnpm test:remote-transport`.
 
 ### Develop (contributors)
 
-Requires Node.js 22.19+, pnpm, and the normal Electron system libraries. Linux
-contributors running Electron E2E tests also need the isolated X11/native-input
+Requires Node.js 22.19+, pnpm, and the normal Electron system libraries.
+Bootstrap rejects unsupported Node.js versions before installing dependencies.
+If you use nvm, run `nvm install` and `nvm use` from this checkout to select
+the version pinned in `.nvmrc` before running `pnpm bootstrap`.
+
+Linux contributors running Electron E2E tests also need the isolated X11/native-input
 tooling:
 
 ```bash
