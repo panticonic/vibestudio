@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import type { OwnedProcessIdentity } from "../dev/ownedProcessIdentity.js";
+import type { OwnedProcessIdentity } from "./ownedProcessIdentity.mjs";
 import {
-  registerOwnedHubWithDevRunner,
-  type DevRunnerIpcTarget,
-} from "./devRunnerHubRegistration.js";
+  registerOwnedProcessGroup,
+  type OwnedProcessRegistrationTarget,
+} from "./ownedProcessRegistration.mjs";
 
 const identity: OwnedProcessIdentity = {
   version: 1,
@@ -14,20 +14,20 @@ const identity: OwnedProcessIdentity = {
   startCoordinate: "birth",
 };
 
-function target(): EventEmitter & DevRunnerIpcTarget & { send: ReturnType<typeof vi.fn> } {
+function target(): EventEmitter &
+  OwnedProcessRegistrationTarget & { send: ReturnType<typeof vi.fn> } {
   const emitter = new EventEmitter() as EventEmitter &
-    DevRunnerIpcTarget & {
+    OwnedProcessRegistrationTarget & {
       send: ReturnType<typeof vi.fn>;
     };
-  emitter.env = { VIBESTUDIO_DEV_RUNNER_IPC: "1" };
   emitter.send = vi.fn();
   return emitter;
 }
 
-describe("development runner hub registration", () => {
+describe("native process-group registration", () => {
   it("settles only the matching accepted registration and removes lifecycle listeners", async () => {
     const ipc = target();
-    const registration = registerOwnedHubWithDevRunner(identity, ipc);
+    const registration = registerOwnedProcessGroup(identity, ipc);
     const request = ipc.send.mock.calls[0]?.[0] as { registrationId: string };
     ipc.emit("message", {
       type: "vibestudio:owned-process-group-accepted",
@@ -45,7 +45,7 @@ describe("development runner hub registration", () => {
 
   it("rejects explicit refusal and IPC disconnect without leaving listeners", async () => {
     const rejected = target();
-    const rejectedRegistration = registerOwnedHubWithDevRunner(identity, rejected);
+    const rejectedRegistration = registerOwnedProcessGroup(identity, rejected);
     const request = rejected.send.mock.calls[0]?.[0] as { registrationId: string };
     rejected.emit("message", {
       type: "vibestudio:owned-process-group-rejected",
@@ -55,7 +55,7 @@ describe("development runner hub registration", () => {
     expect(rejected.listenerCount("disconnect")).toBe(0);
 
     const disconnected = target();
-    const disconnectedRegistration = registerOwnedHubWithDevRunner(identity, disconnected);
+    const disconnectedRegistration = registerOwnedProcessGroup(identity, disconnected);
     disconnected.emit("disconnect");
     await expect(disconnectedRegistration).rejects.toThrow("disconnected before accepting");
     expect(disconnected.listenerCount("message")).toBe(0);

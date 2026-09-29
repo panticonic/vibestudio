@@ -788,6 +788,66 @@ describe("AppHost", () => {
     expect(approval).toMatchObject({ units: [], identityKeys: [], unchangedCount: 0 });
   });
 
+  it("admits code-only app changes without restaging unchanged service authority", async () => {
+    const { host, appPath, buildSystem } = makeHarness({
+      readWorkspaceFileAtState: async (_state, filePath) =>
+        filePath === "meta/vibestudio.yml"
+          ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+          : null,
+    });
+    const packagePath = path.join(appPath, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    manifest.vibestudio.authority.serviceRequests = [
+      { protocol: "example.tasks.v1", availability: "required" },
+    ];
+    fs.writeFileSync(packagePath, JSON.stringify(manifest));
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const current = await buildSystem.resolveBuildUnitIdentity();
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...current,
+      effectiveVersion: "ev-next",
+    });
+
+    const approval = await host.unitChangeApprovalForCommit("state:next");
+
+    expect(approval.units).toEqual([]);
+    expect(approval.unchangedCount).toBe(1);
+    expect(approval.identityKeys).toHaveLength(1);
+  });
+
+  it("reviews a changed service contract even when the app manifest is unchanged", async () => {
+    const { host, buildSystem } = makeHarness({
+      readWorkspaceFileAtState: async (_state, filePath) =>
+        filePath === "meta/vibestudio.yml"
+          ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+          : null,
+    });
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const current = await buildSystem.resolveBuildUnitIdentity();
+    const serviceReviews = [
+      {
+        capability: "workspace-service:example.tasks.v1",
+        providerUnit: "workers/tasks",
+        catalogDigest: "changed-contract",
+        presentation: {
+          action: "manage tasks",
+          authorityCategory: { domain: "automation" as const, verb: "manage" as const },
+          notability: "everyday" as const,
+        },
+      },
+    ];
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...current,
+      effectiveVersion: "ev-next",
+      serviceReviews,
+    } as never);
+
+    const approval = await host.unitChangeApprovalForCommit("state:next");
+
+    expect(approval.unchangedCount).toBe(0);
+    expect(approval.units).toMatchObject([{ authority: { serviceReviews } }]);
+  });
+
   it("treats an omitted static app capability list as an empty declaration", async () => {
     const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
       filePath === "meta/vibestudio.yml"

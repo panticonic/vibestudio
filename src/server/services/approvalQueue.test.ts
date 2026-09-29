@@ -1174,10 +1174,6 @@ describe("approvalQueue", () => {
             authority: {
               provides: [],
               serviceRequests: [],
-              previousServiceRequests: [],
-              previousProvides: [],
-              rows: [],
-              diff: { added: [], removed: [], unchanged: [], retiered: [] },
               requests: browserDefinitions.map((definition) => ({
                 capability: `userland:workers/browser-data/${definition.name}#*`,
                 resource: {
@@ -1248,10 +1244,6 @@ describe("approvalQueue", () => {
           provides: [],
           requests: [],
           serviceRequests: [],
-          previousServiceRequests: [],
-          previousProvides: [],
-          rows: [],
-          diff: { added: [], removed: [], unchanged: [], retiered: [] },
         },
       });
       void queue.request(request);
@@ -1711,13 +1703,7 @@ describe("install review provenance and result", () => {
         },
       ],
       serviceRequests: [],
-      previousServiceRequests: [],
       provides: [],
-      // The review derives its own rows from `requests`; these carry the
-      // producer's precomputed view, which this fixture does not exercise.
-      previousProvides: [],
-      rows: [],
-      diff: { added: [], removed: [], unchanged: [], retiered: [] },
     },
   });
 

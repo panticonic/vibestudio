@@ -1,11 +1,8 @@
 import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
-import {
-  authorityReviewFromManifest,
-  type UnitChangeApprovalProvider,
-  type UnitChangeReview,
-} from "@vibestudio/unit-host";
+import type { UnitChangeApprovalProvider, UnitChangeReview } from "@vibestudio/unit-host";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { BuildSystemV2, BuildUnitIdentityResolution } from "../buildV2/index.js";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
@@ -107,24 +104,14 @@ export function createBuildUnitChangeApprovalProvider(deps: {
     }
 
     const previousAuthority = previous
-      ? authorityReviewFromManifest(
+      ? parseUnitAuthorityManifest(
           previous.manifest.authority,
-          previous.unitName,
-          { requests: [], serviceRequests: [], provides: [] },
-          deps.describeCapability,
-          candidate.kind
+          `${previous.unitName} vibestudio.authority`
         )
       : { requests: [], serviceRequests: [], provides: [] };
-    const authority = authorityReviewFromManifest(
+    const authority = parseUnitAuthorityManifest(
       manifest.authority,
-      candidate.unitName,
-      {
-        requests: previousAuthority.requests,
-        serviceRequests: previousAuthority.serviceRequests,
-        provides: previousAuthority.provides,
-      },
-      deps.describeCapability,
-      candidate.kind
+      `${candidate.unitName} vibestudio.authority`
     );
     const serviceBindings = candidate.serviceBindings ?? [];
     const serviceReviews = candidate.serviceReviews ?? [];

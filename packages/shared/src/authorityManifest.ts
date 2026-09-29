@@ -62,6 +62,21 @@ export const NO_SERVICE_PROTOCOL_REQUESTS: readonly WorkspaceServiceProtocolRequ
   Object.freeze([]);
 export const NO_USERLAND_CAPABILITIES: readonly UserlandCapabilityDefinition[] = Object.freeze([]);
 
+function rejectUnknownFields(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string
+): void {
+  const unknown = Object.keys(record)
+    .filter((key) => !allowed.includes(key))
+    .sort();
+  if (unknown.length > 0) {
+    throw new Error(
+      `${label} has unknown field(s): ${unknown.join(", ")}. Allowed fields: ${allowed.join(", ")}`
+    );
+  }
+}
+
 /**
  * Host runtime protocol used by every extension bundle, independently of the
  * extension's own source. These requests are sealed into the effective build
@@ -86,12 +101,11 @@ export function parseAuthorityRequests(
     }
     const candidate = request as Record<string, unknown>;
     const requestLabel = `${label}.requests[${index}]`;
-    const unknownKeys = Object.keys(candidate).filter(
-      (key) => !["capability", "resource", "tier", "evidence", "packages"].includes(key)
+    rejectUnknownFields(
+      candidate,
+      ["capability", "resource", "tier", "evidence", "packages"],
+      requestLabel
     );
-    if (unknownKeys.length > 0) {
-      throw new Error(`${requestLabel} has unknown field(s): ${unknownKeys.join(", ")}`);
-    }
     if (typeof candidate["capability"] !== "string") {
       throw new Error(`${requestLabel}.capability must be a string`);
     }
@@ -162,13 +176,7 @@ export function parseUnitAuthorityManifest(
     throw new Error(`${label} must be an object`);
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const unknownKeys = keys.filter(
-    (key) => key !== "requests" && key !== "serviceRequests" && key !== "provides"
-  );
-  if (unknownKeys.length > 0) {
-    throw new Error(`${label} has unknown field(s): ${unknownKeys.join(", ")}`);
-  }
+  rejectUnknownFields(record, ["requests", "serviceRequests", "provides"], label);
   if (!Object.prototype.hasOwnProperty.call(record, "requests")) {
     throw new Error(`${label} must contain a requests array`);
   }
@@ -198,12 +206,7 @@ export function parseWorkspaceServiceProtocolRequests(
       throw new Error(`${entryLabel} must be an object`);
     }
     const candidate = entry as Record<string, unknown>;
-    const unknown = Object.keys(candidate).filter(
-      (key) => key !== "protocol" && key !== "availability"
-    );
-    if (unknown.length > 0) {
-      throw new Error(`${entryLabel} has unknown field(s): ${unknown.join(", ")}`);
-    }
+    rejectUnknownFields(candidate, ["protocol", "availability"], entryLabel);
     if (typeof candidate["protocol"] !== "string") {
       throw new Error(`${entryLabel}.protocol must be a string`);
     }
@@ -238,22 +241,22 @@ export function parseUserlandCapabilities(
       throw new Error(`${entryLabel} must be an object`);
     }
     const candidate = entry as Record<string, unknown>;
-    const allowed = new Set([
-      "name",
-      "title",
-      "action",
-      "description",
-      "tier",
-      "sensitivity",
-      "resourceType",
-      "presentation",
-      "notability",
-      "grantScopes",
-    ]);
-    const unknown = Object.keys(candidate).filter((key) => !allowed.has(key));
-    if (unknown.length > 0) {
-      throw new Error(`${entryLabel} has unknown field(s): ${unknown.join(", ")}`);
-    }
+    rejectUnknownFields(
+      candidate,
+      [
+        "name",
+        "title",
+        "action",
+        "description",
+        "tier",
+        "sensitivity",
+        "resourceType",
+        "presentation",
+        "notability",
+        "grantScopes",
+      ],
+      entryLabel
+    );
     const name = boundedCapabilityText(candidate["name"], `${entryLabel}.name`, 96);
     if (!/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(name)) {
       throw new Error(`${entryLabel}.name is not a canonical local capability name`);
@@ -287,14 +290,7 @@ export function parseUserlandCapabilities(
       throw new Error(`${entryLabel}.presentation must declare a domain and verb`);
     }
     const presentationRecord = presentation as Record<string, unknown>;
-    const presentationUnknown = Object.keys(presentationRecord).filter(
-      (key) => key !== "domain" && key !== "verb"
-    );
-    if (presentationUnknown.length > 0) {
-      throw new Error(
-        `${entryLabel}.presentation has unknown field(s): ${presentationUnknown.join(", ")}`
-      );
-    }
+    rejectUnknownFields(presentationRecord, ["domain", "verb"], `${entryLabel}.presentation`);
     const domain = presentationRecord["domain"];
     const verb = presentationRecord["verb"];
     if (

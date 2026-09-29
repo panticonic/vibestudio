@@ -43,6 +43,7 @@ import type {
   UnitAuthorityManifest,
   UnitAuthorityRequest,
 } from "@vibestudio/shared/authorityManifest";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredExtensions } from "@vibestudio/workspace/configParser";
 import {
@@ -52,7 +53,6 @@ import {
 } from "@vibestudio/shared/unitManifest";
 import {
   UnitHost,
-  authorityReviewFromManifest,
   UnitRegistry,
   UnitTrustResolver,
   FileUnitIdentityApprovalStore,
@@ -65,7 +65,7 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
-  authorityReviewFromPackageJson,
+  unitAuthorityManifestFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
   type UnitApprovalCoordinator,
@@ -627,7 +627,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * without building or activating it. Startup uses this planning phase to put
    * deferred extensions in the same review as apps, panels, and workers.
    */
-  async reviewDeclared(declared: UnitDeclaration[]): Promise<{ units: ReviewedUnit[]; identityKeys: string[] }> {
+  async reviewDeclared(
+    declared: UnitDeclaration[]
+  ): Promise<{ units: ReviewedUnit[]; identityKeys: string[] }> {
     const review = await this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
   }
@@ -847,24 +849,26 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           )
         : null;
       const previousAuthority = previousPackageJson
-        ? authorityReviewFromPackageJson(
+        ? unitAuthorityManifestFromPackageJson(
             previousPackageJson,
             current?.unitName ?? candidate.unitName
           )
         : { requests: [], provides: [] };
-      const authority = authorityReviewFromPackageJson(
-        packageJsonSource,
-        candidate.unitName,
-        previousAuthority,
-        this.deps.describeCapability,
-        "extension"
-      );
+      const authority = unitAuthorityManifestFromPackageJson(packageJsonSource, candidate.unitName);
       identityKeys.push(identityKey);
       identityKeysByRepo.set(candidate.unitPath, identityKey);
       if (
         current &&
-        canonicalAuthority(previousAuthority) ===
-          canonicalAuthority({ requests: authority.requests, provides: authority.provides })
+        canonicalAuthority({
+          manifest: previousAuthority,
+          serviceBindings: current.serviceBindings,
+          serviceReviews: current.serviceReviews,
+        }) ===
+          canonicalAuthority({
+            manifest: authority,
+            serviceBindings: candidate.serviceBindings,
+            serviceReviews: candidate.serviceReviews,
+          })
       ) {
         unchangedCount += 1;
         continue;
@@ -891,7 +895,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         }),
         target: null,
         capabilities,
-        authority: { ...authority, serviceBindings: [...candidate.serviceBindings], serviceReviews: [...candidate.serviceReviews] },
+        authority: {
+          ...authority,
+          serviceBindings: [...candidate.serviceBindings],
+          serviceReviews: [...candidate.serviceReviews],
+        },
       });
       if (current) previousRequests.set(candidate.unitPath, previousAuthority.requests);
     }
@@ -2136,15 +2144,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ref: string
   ): Promise<ReviewedUnit> {
     const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity(node.relativePath, ref);
-    if (!candidate || candidate.unitName !== node.name || candidate.effectiveVersion !== this.deps.buildSystem.getEffectiveVersion(node.name))
+    if (
+      !candidate ||
+      candidate.unitName !== node.name ||
+      candidate.effectiveVersion !== this.deps.buildSystem.getEffectiveVersion(node.name)
+    )
       throw new Error(`Exact review source changed for ${node.relativePath}`);
-    const active = this.registry.get(node.name);
-    const previousAuthority = active?.activeBundleKey
-      ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
-          requests: [],
-          provides: [],
-        })
-      : { requests: [], provides: [] };
     return {
       ...createReviewedUnitBase({
         unitKind: "extension",
@@ -2161,12 +2166,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       target: null,
       capabilities: extensionRuntimeCapabilities(),
       authority: {
-        ...authorityReviewFromManifest(
+        ...parseUnitAuthorityManifest(
           candidate.manifest.authority,
-          node.name,
-          previousAuthority,
-          this.deps.describeCapability,
-          "extension"
+          `${node.name} vibestudio.authority`
         ),
         serviceBindings: [...candidate.serviceBindings],
         serviceReviews: [...candidate.serviceReviews],

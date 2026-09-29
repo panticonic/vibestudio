@@ -47,6 +47,33 @@ describe("unit authority manifest", () => {
     ).toThrow(/duplicate protocol/);
   });
 
+  it("reports the canonical fields when an author supplies a noncanonical service route", () => {
+    const authority = {
+      requests: [],
+      serviceRequests: [{ service: "example.tasks.v1", protocol: "example.tasks.v1" }],
+      provides: [],
+    };
+    expect(() =>
+      parseUnitAuthorityManifest(authority, "panels/tasks/package.json vibestudio.authority")
+    ).toThrow(
+      /serviceRequests\[0\].*unknown field\(s\): service.*Allowed fields: protocol, availability/
+    );
+    // Removing the unknown identity is not sufficient: the canonical route
+    // still requires an explicit availability policy.
+    expect(() =>
+      parseUnitAuthorityManifest({
+        ...authority,
+        serviceRequests: [{ protocol: "example.tasks.v1" }],
+      })
+    ).toThrow(/availability must be "required" or "optional"/);
+    expect(
+      parseUnitAuthorityManifest({
+        ...authority,
+        serviceRequests: [{ protocol: "example.tasks.v1", availability: "required" }],
+      }).serviceRequests
+    ).toEqual([{ protocol: "example.tasks.v1", availability: "required" }]);
+  });
+
   it("requires exact installed-code requests and rejects dynamic wildcard authority", () => {
     expect(() =>
       parseUnitAuthorityManifest({

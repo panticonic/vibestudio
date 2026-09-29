@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import type { BuildUnitIdentityResolution } from "../buildV2/index.js";
 import { createBuildUnitChangeApprovalProvider } from "./buildUnitChangeApprovalProvider.js";
+import {
+  installReviewRows,
+  reviewedUserlandDefinitions,
+} from "@vibestudio/shared/authority/unitInstallReview";
 
 const state = `state:${"a".repeat(64)}`;
 const previousState = `state:${"b".repeat(64)}`;
@@ -72,6 +76,114 @@ function approvalStore() {
 }
 
 describe("createBuildUnitChangeApprovalProvider", () => {
+  it("composes a new provider and consumer before rendering receiver-owned authority", async () => {
+    const capability = "userland:workers/task-store/tasks.delete#*";
+    const writeCapability = "userland:workers/task-store/tasks.write#*";
+    const definition: UserlandCapabilityDefinition = {
+      name: "tasks.delete",
+      title: "Delete tasks",
+      action: "delete stored tasks",
+      tier: "gated",
+      sensitivity: "destructive",
+      resourceType: "task",
+      presentation: { domain: "files", verb: "manage" },
+      notability: "headline",
+      grantScopes: ["once"],
+    };
+    const writeDefinition: UserlandCapabilityDefinition = {
+      ...definition,
+      name: "tasks.write",
+      title: "Change tasks",
+      action: "change stored tasks",
+      sensitivity: "write",
+      grantScopes: ["once", "version"],
+    };
+    const candidates = [
+      identity({
+        unitPath: "workers/task-store",
+        unitName: "@workspace-workers/task-store",
+        kind: "worker",
+        stateHash: state,
+        manifest: { authority: { requests: [], provides: [definition, writeDefinition] } },
+      }),
+      identity({
+        unitPath: "panels/task-manager",
+        unitName: "@workspace-panels/task-manager",
+        stateHash: state,
+        manifest: {
+          authority: {
+            requests: [capability, writeCapability].map((capability) => ({
+              capability,
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated" as const,
+              evidence: "bounded-dynamic" as const,
+            })),
+            provides: [],
+          },
+        },
+      }),
+    ];
+    const liveResolver = vi.fn(() => {
+      throw new Error("The provider has not been published to live state");
+    });
+    const provider = createBuildUnitChangeApprovalProvider({
+      getBuildSystem: () =>
+        ({
+          listBuildUnitIdentities: async (ref?: string) => (ref ? candidates : []),
+        }) as never,
+      admissionStore: approvalStore() as never,
+      describeCapability: liveResolver,
+    });
+    const review = await provider.unitChangeApprovalForCommit(state);
+    expect(review.units).toHaveLength(2);
+    expect(liveResolver).not.toHaveBeenCalled();
+    const consumer = review.units.find((unit) => unit.source.repo === "panels/task-manager")!;
+    const definitions = reviewedUserlandDefinitions(
+      review.units.map((unit) => ({
+        repoPath: unit.source.repo,
+        authority: unit.authority!,
+      }))
+    );
+    const rows = installReviewRows({
+      requests: consumer.authority!.requests,
+      userlandDefinitions: definitions,
+    });
+    expect(rows.notableRows).toContainEqual(
+      expect.objectContaining({
+        row: expect.objectContaining({
+          capability,
+          domain: "files",
+          action: "delete stored tasks",
+        }),
+        selectable: false,
+        timing: "asks-when-needed",
+      })
+    );
+    expect(rows.notableRows).toContainEqual(
+      expect.objectContaining({
+        row: expect.objectContaining({
+          capability: writeCapability,
+          domain: "files",
+          action: "change stored tasks",
+        }),
+        selectable: true,
+        timing: "on-add",
+      })
+    );
+    // An actual undeclared receiver still cannot be cleared. The composed
+    // review is the decision boundary for both known and unknown requests.
+    const unknown = installReviewRows({
+      requests: consumer.authority!.requests,
+      userlandDefinitions: new Map(),
+    });
+    expect(unknown.notableRows).toContainEqual(
+      expect.objectContaining({
+        row: expect.objectContaining({ capability, unrecognized: true }),
+        selectable: false,
+      })
+    );
+  });
+
   const serviceReview = (action: string) => ({
     capability: "workspace-service:task-board-store",
     providerUnit: "meta/task-board-store",
@@ -83,7 +195,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     },
   });
 
-  it("uses the workspace resolver for both sides of an authority diff", async () => {
+  it("retains both exact declarations without projecting isolated permission rows", async () => {
     const buildSystem = {
       listBuildUnitIdentities: vi.fn(async (ref?: string) => [
         identity({
@@ -106,11 +218,14 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       describeCapability,
     });
 
-    await expect(provider.unitChangeApprovalForCommit(state)).resolves.toMatchObject({
+    const review = await provider.unitChangeApprovalForCommit(state);
+    expect(review).toMatchObject({
       units: [{ authority: { requests: [{ capability: "provider.effect.next" }] } }],
     });
-    expect(describeCapability).toHaveBeenCalledWith("provider.effect.previous", "panel");
-    expect(describeCapability).toHaveBeenCalledWith("provider.effect.next", "panel");
+    expect(review.previousRequests?.get("panels/example")).toMatchObject([
+      { capability: "provider.effect.previous" },
+    ]);
+    expect(describeCapability).not.toHaveBeenCalled();
   });
 
   it("uses a manifest title when a unit has no separate display name", async () => {
@@ -236,15 +351,10 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       unitKind: "panel",
       displayName: "Example panel",
       ev: "ev-new",
-      authority: {
-        diff: {
-          added: [expect.objectContaining({ capability: "notifications" })],
-          removed: [expect.objectContaining({ capability: "window-management" })],
-        },
-      },
+      authority: { requests: [expect.objectContaining({ capability: "notifications" })] },
     });
-    expect(review.units[0]?.authority?.rows).toContainEqual(
-      expect.objectContaining({ capability: "notifications", domain: "computer" })
+    expect(review.previousRequests?.get("panels/example")).toContainEqual(
+      expect.objectContaining({ capability: "window-management" })
     );
     expect(review.identityKeys[0]).toMatch(/^workspace-unit:[0-9a-f]{64}$/u);
 
@@ -315,7 +425,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     expect(review.units).toHaveLength(1);
     expect(review.units[0]?.authority).toMatchObject({
       requests: expect.any(Array),
-      previousProvides: [],
       provides: [service],
     });
   });

@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerClient } from "./serverClient.js";
-import { captureOwnedProcessIdentity } from "../dev/ownedProcessIdentity.js";
+import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
+import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 
 const MARKER = ".vibestudio-development-client.json";
 const CHUNK_BYTES = 1024 * 1024;
@@ -19,18 +20,24 @@ interface LaunchClaim {
   expiresAt: number;
 }
 
+interface OwnedClient {
+  requestId: string;
+  child: ChildProcess;
+  root: string;
+  completion: Promise<void> | null;
+  group: OwnedProcessGroup;
+  registered: ReturnType<typeof createOwnedProcessGroupReceiver> | null;
+  retirement: Promise<void> | null;
+}
+
 export class CurrentHostDevelopmentClientExecutor {
-  private readonly children = new Map<
-    string,
-    {
-      child: ChildProcess;
-      root: string;
-      exitReport: Promise<void> | null;
-    }
-  >();
+  private readonly children = new Map<string, OwnedClient>();
   private heartbeat: NodeJS.Timeout | null = null;
   private readonly heartbeatRegistrations = new Set<Promise<void>>();
   private closed = false;
+  private readonly pendingLaunches = new Map<string, Promise<void>>();
+  private startup: Promise<void> | null = null;
+  private closing: Promise<void> | null = null;
   private readonly executorDigest: string;
   private readonly providerId: string;
 
@@ -44,7 +51,6 @@ export class CurrentHostDevelopmentClientExecutor {
       nativeModulesRoot?: string | null;
       /** Argv this executor was started with, for device-scoped switches. */
       processArgv?: readonly string[];
-      captureProcessIdentity?: typeof captureOwnedProcessIdentity;
       now?: () => number;
       log?: (message: string) => void;
     }
@@ -54,8 +60,14 @@ export class CurrentHostDevelopmentClientExecutor {
     this.providerId = `electron-${this.executorDigest.slice(0, 24)}`;
   }
 
-  async start(): Promise<void> {
-    this.closed = false;
+  start(): Promise<void> {
+    if (this.closed)
+      return Promise.reject(coded("ESHUTDOWN", "Development client executor is closed"));
+    this.startup ??= this.startOnce();
+    return this.startup;
+  }
+
+  private async startOnce(): Promise<void> {
     await this.register();
     if (this.closed) return;
     this.heartbeat = setInterval(() => {
@@ -71,34 +83,99 @@ export class CurrentHostDevelopmentClientExecutor {
     this.heartbeat.unref();
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
     this.closed = true;
+    this.closing ??= this.closeOnce();
+    return this.closing;
+  }
+
+  private async closeOnce(): Promise<void> {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
-    await Promise.all(this.heartbeatRegistrations);
-    await Promise.allSettled(
+    const inflight = await Promise.allSettled([
+      this.startup,
+      ...this.heartbeatRegistrations,
+      ...this.pendingLaunches.values(),
+    ]);
+    const retired = await Promise.allSettled(
       [...this.children.entries()].map(async ([requestId, owned]) => {
-        await stopChildGroup(owned.child);
+        await this.retireClient(owned);
         await this.reportExit(requestId, owned.child.exitCode, owned.child.signalCode);
       })
     );
+    const failures = [...inflight, ...retired].flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length)
+      throw Object.assign(
+        new AggregateError(failures, "Development client executor retirement failed"),
+        { code: "EOWNERSHIP" }
+      );
   }
 
-  async handleLaunchRequest(payload: unknown): Promise<void> {
+  handleLaunchRequest(payload: unknown): Promise<void> {
+    if (this.closed)
+      return Promise.reject(coded("ESHUTDOWN", "Development client executor is closed"));
     const requestId = requestIdFrom(payload);
+    const pending = this.pendingLaunches.get(requestId);
+    if (pending) return pending;
+    const owned = this.children.get(requestId);
+    if (owned) return owned.completion ?? Promise.resolve();
+    const operation = this.executeLaunchRequest(payload);
+    this.pendingLaunches.set(requestId, operation);
+    return operation.finally(() => {
+      this.pendingLaunches.delete(requestId);
+    });
+  }
+
+  private async executeLaunchRequest(payload: unknown): Promise<void> {
+    const requestId = requestIdFrom(payload);
+    let preparedRoot: string | null = null;
+    let launchedClient: OwnedClient | null = null;
     try {
+      if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closed");
       const claim = (await this.deps.client.call("developmentClientExecutor", "claim", [
         { requestId },
       ])) as LaunchClaim;
       if (claim.requestId !== requestId || claim.expiresAt <= this.now()) {
         throw coded("ESTALE", "Development client launch request expired");
       }
+      if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closing");
       const root = await this.materialize(claim);
-      const child = this.launch(root, claim);
-      this.children.set(requestId, { child, root, exitReport: null });
-      const identity = (this.deps.captureProcessIdentity ?? captureOwnedProcessIdentity)(
-        child.pid!
-      );
+      preparedRoot = root;
+      if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closing");
+      const child = await this.launch(root, claim);
+      const group = OwnedProcessGroup.create(child, { termTimeoutMs: 10_000 });
+      const registered = group.identity
+        ? createOwnedProcessGroupReceiver(
+            child,
+            group.identity,
+            (identity) => OwnedProcessGroup.adopt(identity),
+            { forwardToParent: typeof process.send === "function" }
+          )
+        : null;
+      launchedClient = {
+        requestId,
+        child,
+        root,
+        group,
+        registered,
+        retirement: null,
+        completion: null,
+      };
+      this.children.set(requestId, launchedClient);
+      const identity = group.identity;
+      if (!identity)
+        throw coded(
+          "EEXECUTOR_UNAVAILABLE",
+          "Durable client ownership is unavailable on this platform"
+        );
+      child.once("exit", (exitCode, signal) => {
+        void this.reportExit(requestId, exitCode, signal).catch((error) => {
+          this.deps.log?.(`Development client exit receipt failed: ${message(error)}`);
+        });
+      });
+      if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closing");
       fs.writeFileSync(
         path.join(root, MARKER),
         `${JSON.stringify({
@@ -117,27 +194,39 @@ export class CurrentHostDevelopmentClientExecutor {
           ownershipDigest,
         },
       ]);
-      child.once("exit", (exitCode, signal) => {
-        void this.reportExit(requestId, exitCode, signal).catch((error) => {
-          this.deps.log?.(`Development client exit receipt failed: ${message(error)}`);
-        });
-      });
     } catch (error) {
-      const owned = this.children.get(requestId);
+      const owned = launchedClient ?? this.children.get(requestId);
       if (owned) {
-        await stopChildGroup(owned.child).catch(() => {});
-        this.children.delete(requestId);
-        try {
-          cleanupOwnedRoot(this.deps.stateRoot, owned.root, requestId);
-        } catch (cleanupError) {
-          this.deps.log?.(`Development client launch cleanup failed: ${message(cleanupError)}`);
-        }
+        await this.completeClient(owned, async (cleanupError) => {
+          const failure = cleanupError
+            ? Object.assign(
+                new AggregateError([error, cleanupError], "Client launch and retirement failed"),
+                { code: "EOWNERSHIP" }
+              )
+            : error;
+          await this.deps.client.call("developmentClientExecutor", "fail", [
+            { requestId, code: code(failure), message: message(failure).slice(0, 2_000) },
+          ]);
+        });
+        return;
       }
-      await this.deps.client
-        .call("developmentClientExecutor", "fail", [
-          { requestId, code: code(error), message: message(error).slice(0, 2_000) },
-        ])
-        .catch(() => {});
+      let failure = error;
+      try {
+        if (preparedRoot && fs.existsSync(preparedRoot)) {
+          cleanupOwnedRoot(this.deps.stateRoot, preparedRoot, requestId);
+        }
+      } catch (cleanupError) {
+        failure = Object.assign(
+          new AggregateError(
+            [error, cleanupError],
+            "Development client launch and retirement failed"
+          ),
+          { code: "EOWNERSHIP" }
+        );
+      }
+      await this.deps.client.call("developmentClientExecutor", "fail", [
+        { requestId, code: code(failure), message: message(failure).slice(0, 2_000) },
+      ]);
     }
   }
 
@@ -152,7 +241,7 @@ export class CurrentHostDevelopmentClientExecutor {
     if (expectedPid !== owned.child.pid) {
       throw coded("EOWNERSHIP", "Development client stop PID does not match its launch");
     }
-    await stopChildGroup(owned.child);
+    await this.retireClient(owned);
     await this.reportExit(requestId, owned.child.exitCode, owned.child.signalCode);
   }
 
@@ -170,75 +259,97 @@ export class CurrentHostDevelopmentClientExecutor {
   private async materialize(claim: LaunchClaim): Promise<string> {
     const root = path.join(this.deps.stateRoot, claim.requestId);
     assertOwnedRootCoordinate(this.deps.stateRoot, root);
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      path.join(root, MARKER),
-      `${JSON.stringify({
-        version: 1,
-        requestId: claim.requestId,
-        executionDigest: claim.executionDigest,
-      })}\n`,
-      { mode: 0o600, flag: "wx" }
-    );
-    const seen = new Set<string>();
-    for (const artifact of claim.artifacts) {
-      const relative = canonicalArtifactPath(artifact.path);
-      if (seen.has(relative)) throw coded("EARTIFACT_DRIFT", "Duplicate client artifact path");
-      seen.add(relative);
-      const target = path.join(root, ...relative.split("/"));
-      assertOwnedRootCoordinate(root, target);
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-      const fd = fs.openSync(target, "wx", 0o600);
-      const hash = createHash("sha256");
-      let offset = 0;
-      try {
-        while (offset < artifact.byteLength) {
-          const chunk = (await this.deps.client.call("developmentClientExecutor", "readArtifact", [
-            {
-              requestId: claim.requestId,
-              path: artifact.path,
-              offset,
-              length: Math.min(CHUNK_BYTES, artifact.byteLength - offset),
-            },
-          ])) as { base64: string; nextOffset: number; eof: boolean };
-          const bytes = Buffer.from(chunk.base64, "base64");
-          if (bytes.length === 0 || chunk.nextOffset !== offset + bytes.length) {
-            throw coded("EARTIFACT_DRIFT", "Client artifact transport returned a bad range");
+    fs.mkdirSync(this.deps.stateRoot, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(root, { mode: 0o700 });
+    try {
+      fs.writeFileSync(
+        path.join(root, MARKER),
+        `${JSON.stringify({
+          version: 1,
+          requestId: claim.requestId,
+          executionDigest: claim.executionDigest,
+        })}\n`,
+        { mode: 0o600, flag: "wx" }
+      );
+      const seen = new Set<string>();
+      for (const artifact of claim.artifacts) {
+        const relative = canonicalArtifactPath(artifact.path);
+        if (seen.has(relative)) throw coded("EARTIFACT_DRIFT", "Duplicate client artifact path");
+        seen.add(relative);
+        const target = path.join(root, ...relative.split("/"));
+        assertOwnedRootCoordinate(root, target);
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+        const fd = fs.openSync(target, "wx", 0o600);
+        const hash = createHash("sha256");
+        let offset = 0;
+        try {
+          while (offset < artifact.byteLength) {
+            if (this.closed)
+              throw coded("ESHUTDOWN", "Client materialization cancelled by owner closure");
+            const chunk = (await this.deps.client.call(
+              "developmentClientExecutor",
+              "readArtifact",
+              [
+                {
+                  requestId: claim.requestId,
+                  path: artifact.path,
+                  offset,
+                  length: Math.min(CHUNK_BYTES, artifact.byteLength - offset),
+                },
+              ]
+            )) as { base64: string; nextOffset: number; eof: boolean };
+            if (this.closed)
+              throw coded("ESHUTDOWN", "Client materialization cancelled by owner closure");
+            const bytes = Buffer.from(chunk.base64, "base64");
+            if (bytes.length === 0 || chunk.nextOffset !== offset + bytes.length) {
+              throw coded("EARTIFACT_DRIFT", "Client artifact transport returned a bad range");
+            }
+            fs.writeSync(fd, bytes);
+            hash.update(bytes);
+            offset = chunk.nextOffset;
+            if (chunk.eof !== (offset === artifact.byteLength)) {
+              throw coded("EARTIFACT_DRIFT", "Client artifact transport returned a bad EOF");
+            }
           }
-          fs.writeSync(fd, bytes);
-          hash.update(bytes);
-          offset = chunk.nextOffset;
-          if (chunk.eof !== (offset === artifact.byteLength)) {
-            throw coded("EARTIFACT_DRIFT", "Client artifact transport returned a bad EOF");
-          }
+          fs.fsyncSync(fd);
+        } finally {
+          fs.closeSync(fd);
         }
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
+        if (`sha256-${hash.digest("hex")}` !== artifact.integrity) {
+          throw coded("EARTIFACT_DRIFT", `Client artifact integrity failed: ${artifact.path}`);
+        }
+        fs.chmodSync(target, artifact.path === "dist/main.cjs" ? 0o500 : 0o400);
       }
-      if (`sha256-${hash.digest("hex")}` !== artifact.integrity) {
-        throw coded("EARTIFACT_DRIFT", `Client artifact integrity failed: ${artifact.path}`);
+      if (!seen.has("dist/main.cjs")) {
+        throw coded("EARTIFACT_DRIFT", "Client bundle has no exact main entry");
       }
-      fs.chmodSync(target, artifact.path === "dist/main.cjs" ? 0o500 : 0o400);
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        `${JSON.stringify({
+          name: "vibestudio-development-client",
+          private: true,
+          main: "dist/main.cjs",
+        })}\n`,
+        { mode: 0o400, flag: "wx" }
+      );
+      linkNativeDependencies(root, this.deps.nativeModulesRoot ?? nativeModulesRoot());
+      return root;
+    } catch (error) {
+      // The factory owns this newly created directory; no child has been
+      // launched. Roll back partial bytes even if marker creation failed.
+      try {
+        fs.rmSync(root, { recursive: true });
+      } catch (cleanupError) {
+        throw Object.assign(
+          new AggregateError([error, cleanupError], "Client materialization rollback failed"),
+          { code: "EOWNERSHIP" }
+        );
+      }
+      throw error;
     }
-    if (!seen.has("dist/main.cjs")) {
-      throw coded("EARTIFACT_DRIFT", "Client bundle has no exact main entry");
-    }
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      `${JSON.stringify({
-        name: "vibestudio-development-client",
-        private: true,
-        main: "dist/main.cjs",
-      })}\n`,
-      { mode: 0o400, flag: "wx" }
-    );
-    linkNativeDependencies(root, this.deps.nativeModulesRoot ?? nativeModulesRoot());
-    return root;
   }
 
-  private launch(root: string, claim: LaunchClaim): ChildProcess {
+  private async launch(root: string, claim: LaunchClaim): Promise<ChildProcess> {
     const executable = fs.realpathSync(this.deps.electronExecutable ?? process.execPath);
     if (sha256(fs.readFileSync(executable)) !== this.executorDigest) {
       throw coded("EEXECUTOR_DRIFT", "Electron executor changed after registration");
@@ -261,12 +372,47 @@ export class CurrentHostDevelopmentClientExecutor {
         windowsHide: true,
       }
     );
-    if (!child.pid) throw coded("ESPAWN", "Electron executor returned no child PID");
-    return child;
+    // spawn() returns before the kernel launch result. Its error is asynchronous;
+    // a failed launch still owns an IPC handle until ChildProcess emits close.
+    return await new Promise<ChildProcess>((resolve, reject) => {
+      let failure: Error | null = null;
+      const onError = (error: Error) => {
+        failure = error;
+      };
+      const onClose = () => {
+        child.off("spawn", onSpawn);
+        child.off("error", onError);
+        reject(failure ?? coded("ESPAWN", "Client closed before its spawn receipt"));
+      };
+      const onSpawn = () => {
+        child.off("close", onClose);
+        child.off("error", onError);
+        resolve(child);
+      };
+      child.once("error", onError);
+      child.once("close", onClose);
+      child.once("spawn", onSpawn);
+    });
   }
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  private retireClient(owned: OwnedClient): Promise<void> {
+    owned.retirement ??= (async () => {
+      const results = await Promise.allSettled([owned.group.retire(), owned.registered?.close()]);
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length)
+        throw Object.assign(
+          new AggregateError(failures, "Development client resources did not retire"),
+          { code: "EOWNERSHIP" }
+        );
+      cleanupOwnedRoot(this.deps.stateRoot, owned.root, owned.requestId);
+    })();
+    return owned.retirement;
   }
 
   private reportExit(
@@ -276,26 +422,42 @@ export class CurrentHostDevelopmentClientExecutor {
   ): Promise<void> {
     const owned = this.children.get(requestId);
     if (!owned?.child.pid) return Promise.resolve();
-    if (owned.exitReport) return owned.exitReport;
-    owned.exitReport = (async () => {
-      let cleanupError: string | undefined;
-      try {
-        cleanupOwnedRoot(this.deps.stateRoot, owned.root, requestId);
-      } catch (error) {
-        cleanupError = message(error).slice(0, 2_000);
-      }
+    return this.completeClient(owned, async (cleanupError) => {
       await this.deps.client.call("developmentClientExecutor", "exited", [
         {
           requestId,
           childPid: owned.child.pid,
           exitCode,
           signal,
-          ...(cleanupError ? { cleanupError } : {}),
+          ...(cleanupError ? { cleanupError: message(cleanupError).slice(0, 2_000) } : {}),
         },
       ]);
-      this.children.delete(requestId);
-    })();
-    return owned.exitReport;
+    });
+  }
+
+  private completeClient(
+    owned: OwnedClient,
+    report: (cleanupError: unknown | null) => Promise<void>
+  ): Promise<void> {
+    // Select the terminal path before signaling the native group: termination
+    // can produce an exit event while a failed launch is still completing.
+    owned.completion ??= Promise.resolve().then(async () => {
+      let cleanupError: unknown | null = null;
+      try {
+        await this.retireClient(owned);
+      } catch (error) {
+        cleanupError = error;
+      }
+      try {
+        await report(cleanupError);
+      } finally {
+        // Failed receipt delivery must not retain an already retired client.
+        // Retirement failures retain their known owner/root for diagnosis.
+        if (!cleanupError) this.children.delete(owned.requestId);
+      }
+      if (cleanupError) throw coded("EOWNERSHIP", message(cleanupError));
+    });
+    return owned.completion;
   }
 }
 
@@ -368,27 +530,6 @@ function clientEnvironment(claim: LaunchClaim): NodeJS.ProcessEnv {
   env["VIBESTUDIO_DEVELOPMENT_EXECUTION_DIGEST"] = claim.executionDigest;
   env["VIBESTUDIO_DEVELOPMENT_MAIN_BUILD_ID"] = claim.mainEntryBuildId;
   return env;
-}
-
-async function stopChildGroup(child: ChildProcess): Promise<void> {
-  signalChild(child, "SIGTERM");
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), 10_000)),
-  ]);
-  if (!exited) {
-    signalChild(child, "SIGKILL");
-    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  }
-}
-
-function signalChild(child: ChildProcess, signal: NodeJS.Signals): void {
-  try {
-    if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
-    else child.kill(signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
 }
 
 function canonicalArtifactPath(value: string): string {

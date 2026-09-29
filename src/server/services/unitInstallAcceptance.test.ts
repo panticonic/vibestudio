@@ -313,11 +313,7 @@ describe("acceptUnitInstallReview", () => {
         authority: {
           ...identity.authority,
           serviceRequests: [],
-          previousServiceRequests: [],
           serviceReviews,
-          previousProvides: [],
-          rows: [],
-          diff: { added: [], removed: [], unchanged: [], retiered: [] },
         },
       },
       identityKey: "candidate-task-board",

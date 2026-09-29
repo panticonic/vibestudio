@@ -1,12 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import {
-  describeCapability,
-  summarizeAuthorityManifest,
-  type CapabilityPresentationResolver,
-  type CapabilityRequesterKind,
-} from "@vibestudio/shared/authorityPresentation";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type {
   InstallReviewOrigin,
@@ -24,62 +18,17 @@ function unitErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Read the explicit manifest reviewed for a unit version and produce the same
- * exact + human-oriented change packet consumed by desktop and mobile. */
-export function readUnitAuthorityReview(
-  unitPath: string,
-  label: string,
-  previous: UnitAuthorityManifest = { requests: [], provides: [] },
-  presentationFor?: CapabilityPresentationResolver,
-  requesterKind?: CapabilityRequesterKind
-) {
-  return authorityReviewFromPackageJson(
-    fs.readFileSync(path.join(unitPath, "package.json"), "utf8"),
-    label,
-    previous,
-    presentationFor,
-    requesterKind
-  );
-}
-
-/** Build a review packet from the candidate package.json itself.  Source-change
- * review uses this form so approval is bound to the proposed repository state,
- * never to a mutable checkout that may be ahead of or behind that state. */
-export function authorityReviewFromPackageJson(
+/** Parse the candidate package.json without resolving it against live state. */
+export function unitAuthorityManifestFromPackageJson(
   packageJsonSource: string,
-  label: string,
-  previous: UnitAuthorityManifest = { requests: [], provides: [] },
-  presentationFor?: CapabilityPresentationResolver,
-  requesterKind?: CapabilityRequesterKind
-) {
+  label: string
+): UnitAuthorityManifest {
   const packageJson = JSON.parse(packageJsonSource) as {
     vibestudio?: { authority?: unknown };
   };
-  return authorityReviewFromManifest(
+  return parseUnitAuthorityManifest(
     packageJson.vibestudio?.authority,
-    label,
-    previous,
-    presentationFor,
-    requesterKind
-  );
-}
-
-/** Build a review packet from an exact graph manifest that was already read
- * from package.json during workspace discovery. */
-export function authorityReviewFromManifest(
-  authority: unknown,
-  label: string,
-  previous: UnitAuthorityManifest = { requests: [], provides: [] },
-  presentationFor?: CapabilityPresentationResolver,
-  requesterKind?: CapabilityRequesterKind
-) {
-  if (authority === undefined) {
-    throw new Error(`${label} must declare vibestudio.authority`);
-  }
-  const manifest = parseUnitAuthorityManifest(authority, `${label} vibestudio.authority`);
-  const resolver = presentationFor ?? describeCapability;
-  return summarizeAuthorityManifest(manifest, previous, (capability) =>
-    resolver(capability, requesterKind)
+    `${label} vibestudio.authority`
   );
 }
 
@@ -784,7 +733,9 @@ export class UnitHost<
     return entries;
   }
 
-  async approvalForDeclarations(declared: Decl[]): Promise<{ entries: ApprovalEntry[]; identityKeys: string[] }> {
+  async approvalForDeclarations(
+    declared: Decl[]
+  ): Promise<{ entries: ApprovalEntry[]; identityKeys: string[] }> {
     const entries: ApprovalEntry[] = [];
     const identityKeys: string[] = [];
     for (const decl of declared) {
@@ -1046,7 +997,9 @@ export class UnitHost<
     maxConcurrentApplies?: number
   ): Promise<void> {
     if (this.opts.approvalCoordinator) {
-      const entries = await Promise.all(items.map(({ node, decl }) => this.opts.approvalEntry(node, decl)));
+      const entries = await Promise.all(
+        items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
+      );
       const origins = await this.opts.approvalOrigins?.(entries);
       await this.opts.approvalCoordinator.enqueue({
         entries,
@@ -1063,7 +1016,9 @@ export class UnitHost<
       });
       return;
     }
-    const entries = await Promise.all(items.map(({ node, decl }) => this.opts.approvalEntry(node, decl)));
+    const entries = await Promise.all(
+      items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
+    );
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
       this.opts.onApprovalDenied(items);

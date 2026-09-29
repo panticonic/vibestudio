@@ -2449,10 +2449,16 @@ app.on("ready", async () => {
         log: (message) => log.warn(message),
       });
       serverClientRef.onDirectEvent("development:client-launch-request", (payload) => {
-        void currentHostDevelopmentExecutor?.handleLaunchRequest(payload);
+        void currentHostDevelopmentExecutor
+          ?.handleLaunchRequest(payload)
+          .catch((error: unknown) => {
+            log.warn(`[development] client launch receipt failed: ${formatUnknownError(error)}`);
+          });
       });
       serverClientRef.onDirectEvent("development:client-stop-request", (payload) => {
-        void currentHostDevelopmentExecutor?.handleStopRequest(payload);
+        void currentHostDevelopmentExecutor?.handleStopRequest(payload).catch((error: unknown) => {
+          log.warn(`[development] client stop failed: ${formatUnknownError(error)}`);
+        });
       });
       await currentHostDevelopmentExecutor.start().catch((error: unknown) => {
         log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);

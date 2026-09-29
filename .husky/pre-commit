@@ -1,1 +1,3 @@
+# Checks inspect external template repositories; do not inherit the hook repository.
+unset $(git rev-parse --local-env-vars)
 pnpm check:commit

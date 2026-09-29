@@ -7,7 +7,6 @@ import { gzip } from "node:zlib";
 import { promisify } from "node:util";
 import {
   UnitHost,
-  authorityReviewFromManifest,
   UnitRegistry,
   UnitTrustResolver,
   FileUnitIdentityApprovalStore,
@@ -21,7 +20,7 @@ import {
   requestUnitInstallReview,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
-  authorityReviewFromPackageJson,
+  unitAuthorityManifestFromPackageJson,
   type UnitBuildIdentity,
   type UnitDescriptor,
   type UnitApprovalCoordinator,
@@ -30,6 +29,7 @@ import {
   type UnitReconcileTrigger,
   type UnitRegistryEntryBase,
 } from "@vibestudio/unit-host";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName, NotificationPayload } from "@vibestudio/shared/events";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
@@ -769,25 +769,27 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           )
         : null;
       const previousAuthority = previousPackageJson
-        ? authorityReviewFromPackageJson(
+        ? unitAuthorityManifestFromPackageJson(
             previousPackageJson,
             current?.unitName ?? candidate.unitName
           )
         : { requests: [], provides: [] };
-      const authority = authorityReviewFromPackageJson(
-        packageJsonSource,
-        candidate.unitName,
-        previousAuthority,
-        this.deps.describeCapability,
-        "app"
-      );
+      const authority = unitAuthorityManifestFromPackageJson(packageJsonSource, candidate.unitName);
       identityKeys.push(identityKey);
       identityKeysByRepo.set(candidate.unitPath, identityKey);
       if (
         current &&
         !providerChanged &&
-        canonicalAuthority(previousAuthority) ===
-          canonicalAuthority({ requests: authority.requests, provides: authority.provides })
+        canonicalAuthority({
+          manifest: previousAuthority,
+          serviceBindings: current.serviceBindings,
+          serviceReviews: current.serviceReviews,
+        }) ===
+          canonicalAuthority({
+            manifest: authority,
+            serviceBindings: candidate.serviceBindings,
+            serviceReviews: candidate.serviceReviews,
+          })
       ) {
         unchangedCount += 1;
         continue;
@@ -2205,12 +2207,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       throw new Error(`Exact review source changed for ${node.relativePath}`);
     const details = this.appBuildDetails(node.name);
     const active = this.registry.get(node.name);
-    const previousAuthority = active?.activeBundleKey
-      ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
-          requests: [],
-          provides: [],
-        })
-      : { requests: [], provides: [] };
     return {
       ...createReviewedUnitBase({
         unitKind: "app",
@@ -2227,12 +2223,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
       authority: {
-        ...authorityReviewFromManifest(
+        ...parseUnitAuthorityManifest(
           candidate.manifest.authority,
-          node.name,
-          previousAuthority,
-          this.deps.describeCapability,
-          "app"
+          `${node.name} vibestudio.authority`
         ),
         serviceBindings: [...candidate.serviceBindings],
         serviceReviews: [...candidate.serviceReviews],

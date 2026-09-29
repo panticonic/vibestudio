@@ -282,6 +282,40 @@ describe("DevelopmentClientExecutorRegistry", () => {
     ).resolves.toBeNull();
   });
 
+  it("rejects stop when failed startup cannot prove native retirement", async () => {
+    const f = fixture();
+    await register(f, "shell:initiating");
+    const binding = f.registry.select({
+      ownerUserId: "user:one",
+      executorId: "shell:initiating",
+      platform: process.platform,
+      arch: process.arch,
+    })!;
+    const launch = f.registry.launch({
+      runId: "run:retirement-failed",
+      binding,
+      mainEntryBuildId: MAIN,
+      executionDigest: DIGEST,
+      recipeId: "recipe:one",
+      artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
+      pairingDeepLink: "vibestudio://connect?request=opaque",
+    });
+    const readiness = expect(launch.ready).rejects.toMatchObject({ code: "EOWNERSHIP" });
+    const stopping = expect(f.registry.stop("run:retirement-failed")).rejects.toMatchObject({
+      code: "ECLEANUP",
+    });
+
+    await f.invoke(caller("shell:initiating", "user:one"), "fail", [
+      {
+        requestId: launch.requestId,
+        code: "EOWNERSHIP",
+        message: "Owned descendants did not retire",
+      },
+    ]);
+
+    await Promise.all([readiness, stopping]);
+  });
+
   it("holds a stop requested during launch until the selected provider proves process exit", async () => {
     const f = fixture();
     await register(f, "shell:initiating");

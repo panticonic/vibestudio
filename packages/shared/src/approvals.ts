@@ -525,19 +525,14 @@ export interface ReviewedUnit {
   ev?: string | null;
   /** Native or host capabilities granted by running this unit. */
   capabilities: string[];
-  /** Exact, version-bound manifest review plus human-oriented change groups. */
+  /** Exact version-bound facts; rows are rendered after composing the review. */
   authority?: {
     requests: readonly UnitAuthorityRequest[];
-    serviceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
-    previousServiceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
+    serviceRequests?: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
     serviceBindings?: readonly ServiceBindingFact[];
     serviceReviews?: readonly WorkspaceServiceReviewFact[];
     /** Receiver-owned userland capabilities in the proposed exact build. */
     provides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
-    /** Receiver-owned capabilities in the previously approved exact build. */
-    previousProvides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
-    rows: import("./authority/authorityRows.js").AuthorityRow[];
-    diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
   };
   dependencyEvs?: Record<string, string>;
   externalDeps?: Record<string, string>;

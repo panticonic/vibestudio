@@ -274,7 +274,8 @@ export class DevelopmentClientExecutorRegistry {
           request.settle.reject(coded(input.code, input.message));
           if (request.stop) {
             clearTimeout(request.stop.timeout);
-            request.stop.resolve();
+            if (input.code === "EOWNERSHIP") request.stop.reject(coded("ECLEANUP", input.message));
+            else request.stop.resolve();
           }
           return { accepted: true as const };
         },
