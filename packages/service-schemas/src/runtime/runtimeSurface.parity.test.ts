@@ -8,6 +8,7 @@ import {
   GIT_MEMBERS,
   PANEL_TREE_MEMBERS,
   PANEL_TREE_METHOD_CATALOG,
+  PANEL_HANDLE_AUTOMATION_GUIDE,
   portableExports,
   VCS_MEMBERS,
   WEBHOOKS_MEMBERS,
@@ -15,6 +16,13 @@ import {
 import { vcsMethods } from "../vcs.js";
 
 describe("runtime surface schemaRef parity", () => {
+  it("distinguishes a CDP refresh receipt from its replacement session", () => {
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("let session = await handle.cdp.session()");
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("session = (await session.refresh()).session");
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("reacquire `session.page`");
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("not the session itself");
+  });
+
   it("every schemaRef resolves to a service-schemas source file", () => {
     const schemaDir = join(dirname(fileURLToPath(import.meta.url)), "..");
     const files = new Set(readdirSync(schemaDir));

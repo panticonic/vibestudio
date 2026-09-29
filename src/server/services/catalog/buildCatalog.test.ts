@@ -363,7 +363,7 @@ describe("buildCatalog", () => {
 
     expect(byId(projected, "runtime:workerRuntime.openPanel")).toMatchObject({
       signature: "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>",
-      description: expect.stringContaining("const session = await handle.cdp.session()"),
+      description: expect.stringContaining("session = (await session.refresh()).session"),
     });
   });
 
