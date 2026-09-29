@@ -869,9 +869,9 @@ export class PanelHttpServer {
     :root {
       color-scheme: light dark;
       --page-bg: #ffffff;
-      --heading: #14243d;
-      --muted: #58677d;
-      --accent: #204fa3;
+      --heading: #0e1a2d;
+      --muted: #445166;
+      --accent: #1d4db4;
       --error-bg: #fff1f2;
       --error-border: #fecdd3;
       --error-text: #b91c1c;
@@ -891,12 +891,12 @@ export class PanelHttpServer {
     .brand-mark .mark-dark { display: var(--mark-dark-display); }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page-bg: #1a202a;
-        --heading: #f4f5f6;
-        --muted: #c7cdd5;
-        --accent: #AFC8F0;
-        --error-bg: #242e3c;
-        --error-border: #485667;
+        --page-bg: #111419;
+        --heading: #eef1f6;
+        --muted: #b1bbcb;
+        --accent: #9dbaff;
+        --error-bg: #171b22;
+        --error-border: #434d5f;
         --error-text: #fecaca;
         --mark-light-display: none;
         --mark-dark-display: block;
@@ -1268,28 +1268,28 @@ export class PanelHttpServer {
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #14243d; background: #ffffff; }
-    h1 { color: #14243d; }
-    code { background: #f1f3f7; border: 1px solid #d4d9e2; padding: 0.1em 0.4em; border-radius: 4px; font-size: 0.8em; color: #14243d; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #0e1a2d; background: #ffffff; }
+    h1 { color: #0e1a2d; }
+    code { background: #f6f8fb; border: 1px solid #ccd4e0; padding: 0.1em 0.4em; border-radius: 4px; font-size: 0.8em; color: #0e1a2d; }
     ul { list-style: none; padding: 0; }
-    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #d4d9e2; }
-    a { color: #204fa3; text-decoration: none; font-weight: 600; }
+    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #ccd4e0; }
+    a { color: #1d4db4; text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
     .brand-header { display: flex; align-items: center; gap: 1rem; margin: 0 0 1.5rem; }
     .brand-mark { width: 58px; height: 58px; }
     .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
     .brand-mark .mark-dark { display: none; }
-    .sub { color: #58677d; margin-left: 0.5em; }
-    .empty { color: #58677d; }
+    .sub { color: #445166; margin-left: 0.5em; }
+    .empty { color: #445166; }
     .badge { font-size: 0.7em; padding: 0.15em 0.5em; border-radius: 3px; margin-left: 0.5em; text-transform: uppercase; font-weight: 600; }
     .badge.running { background: #1b5e20; color: #81c784; }
     @media (prefers-color-scheme: dark) {
-      body { color: #f4f5f6; background: #1a202a; }
-      h1 { color: #f4f5f6; }
-      code { background: #323e4e; border-color: #485667; color: #f4f5f6; }
-      li { border-bottom-color: #485667; }
-      a { color: #AFC8F0; }
-      .sub, .empty { color: #c7cdd5; }
+      body { color: #eef1f6; background: #111419; }
+      h1 { color: #eef1f6; }
+      code { background: #252b36; border-color: #434d5f; color: #eef1f6; }
+      li { border-bottom-color: #434d5f; }
+      a { color: #9dbaff; }
+      .sub, .empty { color: #b1bbcb; }
       .brand-mark .mark-light { display: none; }
       .brand-mark .mark-dark { display: block; }
     }

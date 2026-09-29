@@ -76,8 +76,8 @@ interface ApplicationWindowLifetime {
 
 export function chromeWindowColors(dark: boolean): { background: string; symbol: string } {
   return dark
-    ? { background: "#202225", symbol: "#bfc1c5" }
-    : { background: "#eaebed", symbol: "#55585e" };
+    ? { background: "#111419", symbol: "#b1bbcb" }
+    : { background: "#edf1f6", symbol: "#445166" };
 }
 
 /** Owns the Electron window and every renderer-host object whose lifetime is the window. */
