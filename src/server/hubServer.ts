@@ -2852,13 +2852,17 @@ export async function reapWorkspaceChildProcessGroup(
   const platform = deps.platform ?? process.platform;
   const pid = child.pid;
   if (platform === "win32" || !Number.isInteger(pid) || (pid ?? 0) <= 0) return;
+  const alive = deps.groupAlive ?? processGroupAlive;
+  // A reaped leader can leave only zombies, which no longer own executable
+  // work. Observe the group before signalling, and reconcile again if its
+  // final member exits during delivery; the OS error alone is not liveness.
+  if (!alive(pid as number)) return;
   try {
     (deps.killProcess ?? process.kill)(-(pid as number), "SIGKILL");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    if (!alive(pid as number)) return;
     throw new Error(`Workspace child ${pid} descendant retirement failed`, { cause: error });
   }
-  const alive = deps.groupAlive ?? processGroupAlive;
   while (alive(pid as number)) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 

@@ -116,6 +116,7 @@ vi.mock("electron", () => {
       setApplicationMenu: vi.fn(),
     },
     clipboard: { writeText: vi.fn() },
+    webContents: { getFocusedWebContents: vi.fn(() => null) },
     shell: { openExternal: vi.fn() },
   };
 });
@@ -149,7 +150,7 @@ function declareAndAttachPanelSlot(
   if (result.status === "bound") manager.attachDeclaredPanelSlot(request.panelId);
   return result;
 }
-import { BaseWindow, WebContentsView, ipcMain } from "electron";
+import { BaseWindow, WebContentsView, ipcMain, webContents } from "electron";
 
 type MockBaseWindow = InstanceType<typeof BaseWindow>;
 
@@ -2256,6 +2257,43 @@ describe("ViewManager", () => {
       expect(vm.focusView("delayed-panel")).toBe(true);
 
       expect(view.setVisible).toHaveBeenCalledWith(true);
+      expect(view.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    it("restores keyboard ownership when a delayed panel's window becomes active", () => {
+      const view = vm.createView({ id: "delayed-panel", type: "panel" });
+      vm.setViewVisible("delayed-panel", true);
+      (mockWindow.isFocused as Mock).mockReturnValue(false);
+      vm.focusView("delayed-panel");
+      expect(view.webContents.focus).not.toHaveBeenCalled();
+      (mockWindow.isFocused as Mock).mockReturnValue(true);
+      const onFocus = (mockWindow.on as Mock).mock.calls.find(([event]) => event === "focus")![1];
+      onFocus();
+      expect(view.webContents.focus).toHaveBeenCalledOnce();
+    });
+
+    it("preserves existing keyboard focus on window activation", () => {
+      const view = vm.createView({ id: "selected-panel", type: "panel" });
+      vm.setViewVisible("selected-panel", true);
+      (webContents.getFocusedWebContents as Mock).mockReturnValueOnce(vm.getShellWebContents());
+      const onFocus = (mockWindow.on as Mock).mock.calls.find(([event]) => event === "focus")![1];
+      onFocus();
+      expect(view.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    it("restores a blocking overlay instead of the selected panel on activation", () => {
+      const view = vm.createView({ id: "selected-panel", type: "panel" });
+      vm.setViewVisible("selected-panel", true);
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "light" },
+      });
+      const overlay = (WebContentsView as unknown as Mock).mock.results.at(-1)!.value;
+      const onFocus = (mockWindow.on as Mock).mock.calls.find(([event]) => event === "focus")![1];
+      onFocus();
+      expect(overlay.webContents.focus).toHaveBeenCalledOnce();
       expect(view.webContents.focus).not.toHaveBeenCalled();
     });
 

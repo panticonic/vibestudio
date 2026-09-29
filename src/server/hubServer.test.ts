@@ -287,11 +287,33 @@ describe("workspace child process-tree ownership", () => {
     await reapWorkspaceChildProcessGroup(child, {
       platform: "linux",
       killProcess,
-      groupAlive: () => false,
+      groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
     });
 
     expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
     expect(killProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not signal a group with no live runtime members", async () => {
+    const killProcess = vi.fn();
+    await reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
+      platform: "darwin",
+      killProcess,
+      groupAlive: () => false,
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("joins a group whose last member exits during signal delivery", async () => {
+    await expect(
+      reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
+        platform: "darwin",
+        killProcess: () => {
+          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        },
+        groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("retains cleanup failure when descendant retirement cannot be performed", async () => {
@@ -303,6 +325,7 @@ describe("workspace child process-tree ownership", () => {
       reapWorkspaceChildProcessGroup(child, {
         platform: "darwin",
         killProcess,
+        groupAlive: () => true,
       })
     ).rejects.toThrow("descendant retirement failed");
   });

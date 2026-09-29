@@ -82,6 +82,24 @@ export function cleanupRunTempRoot(
   removeRoot: (root: string) => void = (root) => fs.rmSync(root, { recursive: true, force: true })
 ): void {
   const resolvedRoot = path.resolve(runTempRoot);
+  const ledgerPath = process.env[E2E_CLEANUP_LEDGER_ENV];
+  if (ledgerPath && fs.existsSync(ledgerPath)) {
+    const pending = new Set<string>();
+    for (const line of fs.readFileSync(ledgerPath, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      const entry = JSON.parse(line) as CleanupLedgerEntry;
+      if (entry.event !== "path-registered" && entry.event !== "path-released") continue;
+      if (!entry.path) throw new Error("E2E cleanup ledger contains a path event without a path");
+      const ownedPath = assertRunOwnedPath(entry.path, resolvedRoot);
+      if (entry.event === "path-registered") pending.add(ownedPath);
+      else pending.delete(ownedPath);
+    }
+    if (pending.size) {
+      throw new Error(
+        `E2E fixture cleanup did not finish; preserving run state at ${resolvedRoot}. Unreleased fixtures: ${[...pending].join(", ")}`
+      );
+    }
+  }
   appendCleanupLedger({
     event: "run-cleanup-started",
     timestamp: new Date().toISOString(),

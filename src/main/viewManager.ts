@@ -536,7 +536,10 @@ export class ViewManager {
     // Compositor probes are focus-gated (no GPU readbacks while the user is
     // elsewhere); on refocus, reset the probe backoff and check immediately
     // so a stall that happened in the background recovers right away.
-    this.window.on("focus", () => this.compositorRecovery.handleWindowFocused());
+    this.window.on("focus", () => {
+      this.compositorRecovery.handleWindowFocused();
+      this.restoreWindowKeyboardFocus();
+    });
 
     this.compositorRecovery.start();
   }
@@ -1881,6 +1884,30 @@ export class ViewManager {
     const wc = managed.view.webContents;
     if (wc.isDestroyed()) return;
     wc.focus();
+  }
+
+  private restoreWindowKeyboardFocus(): void {
+    if (!this.window.isFocused() || electronWebContents.getFocusedWebContents()) return;
+    // A BaseWindow has no document of its own. If selection materialized while
+    // the app was inactive, it deliberately received no OS focus; activation
+    // must now route input to the current presentation, without disturbing an
+    // already-focused chrome control or crossing a blocking overlay.
+    const overlay = this.shellContentOverlay.getVisibleViews().at(-1);
+    if (overlay && !overlay.webContents.isDestroyed()) {
+      overlay.webContents.focus();
+      return;
+    }
+    const panelId = this.getFocusedPanelId() ?? this.visiblePanelId;
+    const panel = panelId ? this.views.get(panelId) : null;
+    if (
+      !this.nativeShellOverlay.isVisible() &&
+      !this.shellChromeInteractiveFocus &&
+      panel?.visible
+    ) {
+      this.focusVisibleView(panel);
+    } else {
+      this.getShellChromeWebContents()?.focus();
+    }
   }
 
   /**
