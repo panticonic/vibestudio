@@ -923,8 +923,7 @@ async function main() {
   const { AgentExecutionSessionRegistry } =
     await import("./services/agentExecutionSessionRegistry.js");
   const agentExecutionSessions = new AgentExecutionSessionRegistry();
-  const { TaskAuthorityRegistry, taskAuthorityPrincipal } =
-    await import("./services/taskAuthorityRegistry.js");
+  const { TaskAuthorityRegistry } = await import("./services/taskAuthorityRegistry.js");
   const taskAuthorities = new TaskAuthorityRegistry({
     executionIsActive: (runtimeId, authority) =>
       agentExecutionSessions.resolve(runtimeId)?.taskAuthority === authority,
@@ -5171,29 +5170,22 @@ async function main() {
               ? userStore.getUser(origin.website.userId.slice("user:".length))
               : null;
           const taskUser = origin?.kind === "website" ? launchUser : user;
-          const inheritedTaskAuthority = binding
-            ? taskAuthorities.resolveCausalBinding(binding, parent, entityCache)
-            : null;
           return {
             initiatingUser:
               user && user.revokedAt === undefined
                 ? { userId: user.id, handle: user.handle }
                 : null,
-            taskAuthority:
-              taskUser && taskUser.revokedAt === undefined && fact.active && binding
-                ? (inheritedTaskAuthority ??
-                  (() => {
-                    const coordinates = {
-                      workspaceId,
-                      contextId: binding.contextId,
-                      channelId: binding.channelId,
-                    };
-                    const authority = taskAuthorityPrincipal(coordinates);
-                    taskAuthorities.bindPrincipal(authority, coordinates);
-                    taskAuthorities.bindCausalOrigin(authority, binding, parent, entityCache);
-                    return authority;
-                  })())
-                : null,
+            taskAuthority: binding
+              ? taskAuthorities.resolveInvocationAuthority(
+                  { ...binding, workspaceId },
+                  parent,
+                  entityCache,
+                  {
+                    active: fact.active && taskUser?.revokedAt === undefined,
+                    mayCreateRoot: !!taskUser && taskUser.revokedAt === undefined,
+                  }
+                )
+              : null,
           };
         },
         runtimeCoordinator: panelRuntimeCoordinator,

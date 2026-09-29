@@ -829,164 +829,155 @@ export function createEvalService(deps: {
       },
       ctx.signal
     );
-    deps.taskAuthorities.bindExecution(executionSession);
-    const evalExecutor = executionSession.executor;
-    if (evalExecutor.kind !== "eval" || !evalExecutor.eventSinkNonce) {
-      deps.executionSessions.discard(evalRuntimeId, runId);
-      throw new Error("Evaluated execution admission has no live event sink");
-    }
     const activityId =
       deps.activity && deps.eventSinks ? `eval:${evalRuntimeId}:${runId}` : undefined;
-    deps.eventSinks?.register({
-      nonce: evalExecutor.eventSinkNonce,
-      runtimeId: evalRuntimeId,
-      runId,
-      contextId: owner.contextId,
-      ownerCallerId: ownerId,
-      initiatorCallerId: ctx.caller.runtime.id,
-      subKey: runArgs.scope?.key ?? "default",
-      onTerminal: () => {
-        deps.executionSessions.close(evalRuntimeId, runId);
-        if (activityId) deps.activity?.end(activityId);
-        activeRuns.get(activeRunKey(evalRuntimeId, runId))?.closeAdmission();
-      },
-    });
-    if (activityId) deps.activity?.begin(activityId);
     const discardPreparedAdmission = () => {
       deps.executionSessions.discard(evalRuntimeId, runId);
       deps.eventSinks?.close(eventSinkNonce);
       if (activityId) deps.activity?.end(activityId);
     };
-    const authorityManifestDigest = evalExecutor.authorityManifest.digest;
-    const runDigest = sha256Canonical({
-      runId,
-      ownerRuntimeId: ownerId,
-      contextId: owner.contextId,
-      source:
-        runArgs.source.kind === "inline"
-          ? {
-              kind: "inline",
-              digest: exactSource.sourceDigest,
-              pathHint: runArgs.source.pathHint ?? null,
-              syntax: runArgs.source.syntax ?? null,
-            }
-          : {
-              kind: "context-file",
-              path: runArgs.source.path,
-              digest: exactSource.sourceDigest,
-              sourceState: exactSource.sourceState,
-              contentStateHash: exactSource.contentStateHash,
-              syntax: runArgs.source.syntax ?? null,
-            },
-      scope: {
-        key: runArgs.scope?.key ?? "default",
-        lifecycle: runArgs.scope?.lifecycle ?? "persistent",
-      },
-      reset: runArgs.reset === true,
-      imports: runArgs.imports ?? {},
-      timeoutMs: runArgs.timeoutMs ?? null,
-      authorityManifestDigest,
-      attachedHost: ctx.attachedHost
-        ? {
-            sessionId: ctx.attachedHost.sessionId,
-            childGenerationId: ctx.attachedHost.childGenerationId,
-            developmentRunId: ctx.attachedHost.developmentRunId,
-            authorityCeilingDigest: ctx.attachedHost.authorityCeilingDigest,
-          }
-        : null,
-      preauthorize: normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ?? [],
-      initiatorChain: [
-        ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : null,
-        ctx.caller.runtime.id,
-        ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
-      ].filter((value): value is string => value !== null),
-    });
-    if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
-      if (!deps.preauthorize) {
-        discardPreparedAdmission();
-        throw new ServiceError(
-          "eval",
-          "start",
-          "Exact eval preauthorization is unavailable",
-          "EUNAVAILABLE",
-          undefined,
-          "service"
-        );
+    // Every resource acquired after admission belongs to one preparation transaction.
+    try {
+      deps.taskAuthorities.bindExecution(executionSession);
+      const evalExecutor = executionSession.executor;
+      if (evalExecutor.kind !== "eval" || !evalExecutor.eventSinkNonce) {
+        throw new Error("Evaluated execution admission has no live event sink");
       }
-      const principalDigest = executionSession.executionImage.executionDigest;
-      const prospectiveCtx: ServiceContext = {
-        caller: {
-          runtime: { id: evalRuntimeId, kind: "do" },
-          code: {
-            callerId: evalRuntimeId,
-            callerKind: "do",
-            repoPath: executionSession.executionImage.repoPath,
-            effectiveVersion: executionSession.executionImage.effectiveVersion,
-            executionDigest: principalDigest,
-            requested: ownerHarness?.requested ?? [],
-          },
-          ...(agentBinding ? { agentBinding } : {}),
-          executionSession,
-          ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+      deps.eventSinks?.register({
+        nonce: evalExecutor.eventSinkNonce,
+        runtimeId: evalRuntimeId,
+        runId,
+        contextId: owner.contextId,
+        ownerCallerId: ownerId,
+        initiatorCallerId: ctx.caller.runtime.id,
+        subKey: runArgs.scope?.key ?? "default",
+        onTerminal: () => {
+          deps.executionSessions.close(evalRuntimeId, runId);
+          if (activityId) deps.activity?.end(activityId);
+          activeRuns.get(activeRunKey(evalRuntimeId, runId))?.closeAdmission();
         },
-        ...(ctx.causalParent ? { causalParent: ctx.causalParent } : {}),
-        ...(evalExecutor.authorityManifest.effects === "read-only" ? { readOnly: true } : {}),
-      };
-      try {
+      });
+      if (activityId) deps.activity?.begin(activityId);
+      const authorityManifestDigest = evalExecutor.authorityManifest.digest;
+      const runDigest = sha256Canonical({
+        runId,
+        ownerRuntimeId: ownerId,
+        contextId: owner.contextId,
+        source:
+          runArgs.source.kind === "inline"
+            ? {
+                kind: "inline",
+                digest: exactSource.sourceDigest,
+                pathHint: runArgs.source.pathHint ?? null,
+                syntax: runArgs.source.syntax ?? null,
+              }
+            : {
+                kind: "context-file",
+                path: runArgs.source.path,
+                digest: exactSource.sourceDigest,
+                sourceState: exactSource.sourceState,
+                contentStateHash: exactSource.contentStateHash,
+                syntax: runArgs.source.syntax ?? null,
+              },
+        scope: {
+          key: runArgs.scope?.key ?? "default",
+          lifecycle: runArgs.scope?.lifecycle ?? "persistent",
+        },
+        reset: runArgs.reset === true,
+        imports: runArgs.imports ?? {},
+        timeoutMs: runArgs.timeoutMs ?? null,
+        authorityManifestDigest,
+        attachedHost: ctx.attachedHost
+          ? {
+              sessionId: ctx.attachedHost.sessionId,
+              childGenerationId: ctx.attachedHost.childGenerationId,
+              developmentRunId: ctx.attachedHost.developmentRunId,
+              authorityCeilingDigest: ctx.attachedHost.authorityCeilingDigest,
+            }
+          : null,
+        preauthorize: normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ?? [],
+        initiatorChain: [
+          ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : null,
+          ctx.caller.runtime.id,
+          ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
+        ].filter((value): value is string => value !== null),
+      });
+      if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
+        if (!deps.preauthorize) {
+          throw new ServiceError(
+            "eval",
+            "start",
+            "Exact eval preauthorization is unavailable",
+            "EUNAVAILABLE",
+            undefined,
+            "service"
+          );
+        }
+        const principalDigest = executionSession.executionImage.executionDigest;
+        const prospectiveCtx: ServiceContext = {
+          caller: {
+            runtime: { id: evalRuntimeId, kind: "do" },
+            code: {
+              callerId: evalRuntimeId,
+              callerKind: "do",
+              repoPath: executionSession.executionImage.repoPath,
+              effectiveVersion: executionSession.executionImage.effectiveVersion,
+              executionDigest: principalDigest,
+              requested: ownerHarness?.requested ?? [],
+            },
+            ...(agentBinding ? { agentBinding } : {}),
+            executionSession,
+            ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+          },
+          ...(ctx.causalParent ? { causalParent: ctx.causalParent } : {}),
+          ...(evalExecutor.authorityManifest.effects === "read-only" ? { readOnly: true } : {}),
+        };
         for (const operation of normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ??
           []) {
           await deps.preauthorize(prospectiveCtx, operation);
         }
-      } catch (error) {
-        discardPreparedAdmission();
-        throw error;
       }
-    }
-    const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
-    try {
+      const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
       await kernelLeases.touch(evalDoRef);
+      return {
+        evalDoRef,
+        assembledArgs: {
+          runId,
+          code: exactSource.code,
+          path: undefined,
+          sourcePath:
+            runArgs.source.kind === "inline" ? runArgs.source.pathHint : runArgs.source.path,
+          sourceDigest: exactSource.sourceDigest,
+          sourceState: exactSource.sourceState,
+          contentStateHash: exactSource.contentStateHash,
+          reset: runArgs.reset,
+          syntax: runArgs.source.syntax,
+          imports: runArgs.imports,
+          contextId: owner.contextId,
+          gatewayToken: mintGatewayToken(objectKey),
+          executionSessionNonce: executionSession.nonce,
+          causalParent: ctx.causalParent,
+          agentInvocationId: ctx.causalParent?.invocationId,
+          parent,
+          timeoutMs,
+          readOnly: evalExecutor.authorityManifest.effects === "read-only",
+          authorityManifestDigest,
+          intentDigest: runDigest,
+          eventSinkNonce: evalExecutor.eventSinkNonce,
+          resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
+          ...chatBinding,
+        },
+        agentRef: isAgentDo ? ownerId : undefined,
+        channelId: isAgentDo ? agentBinding.channelId : undefined,
+        runDigest,
+        authorityManifestDigest,
+        eventSinkNonce: evalExecutor.eventSinkNonce,
+        activityId,
+      };
     } catch (error) {
-      // Admission and kernel residency are one preparation transaction. If the
-      // lease cannot be established, no run can start and nothing downstream
-      // will reach the normal completion cleanup.
       discardPreparedAdmission();
       throw error;
     }
-    return {
-      evalDoRef,
-      assembledArgs: {
-        runId,
-        code: exactSource.code,
-        path: undefined,
-        sourcePath:
-          runArgs.source.kind === "inline" ? runArgs.source.pathHint : runArgs.source.path,
-        sourceDigest: exactSource.sourceDigest,
-        sourceState: exactSource.sourceState,
-        contentStateHash: exactSource.contentStateHash,
-        reset: runArgs.reset,
-        syntax: runArgs.source.syntax,
-        imports: runArgs.imports,
-        contextId: owner.contextId,
-        gatewayToken: mintGatewayToken(objectKey),
-        executionSessionNonce: executionSession.nonce,
-        causalParent: ctx.causalParent,
-        agentInvocationId: ctx.causalParent?.invocationId,
-        parent,
-        timeoutMs,
-        readOnly: evalExecutor.authorityManifest.effects === "read-only",
-        authorityManifestDigest,
-        intentDigest: runDigest,
-        eventSinkNonce: evalExecutor.eventSinkNonce,
-        resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
-        ...chatBinding,
-      },
-      agentRef: isAgentDo ? ownerId : undefined,
-      channelId: isAgentDo ? agentBinding.channelId : undefined,
-      runDigest,
-      authorityManifestDigest,
-      eventSinkNonce: evalExecutor.eventSinkNonce,
-      activityId,
-    };
   }
 
   return {
