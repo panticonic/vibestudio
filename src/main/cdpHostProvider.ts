@@ -115,7 +115,10 @@ export interface CdpHostProviderOptions {
         whenChannelAvailable?: () => Promise<void>;
       };
   hostConnectionId: string;
-  getViewManager: () => Pick<ViewManager, "captureView" | "openDevTools" | "getWebContents"> | null;
+  getViewManager: () => Pick<
+    ViewManager,
+    "captureView" | "openDevTools" | "getWebContents" | "setAutomationSurfaceActive"
+  > | null;
   /** First retry delay; each further consecutive failure doubles it. */
   reconnectDelayMs?: number;
   /** Ceiling for the doubling, so a long outage settles into a slow poll. */
@@ -152,6 +155,8 @@ export class CdpHostProvider {
   private readonly debuggerAttached = new Map<string, boolean>();
   private readonly debuggerAttaching = new Map<string, Promise<void>>();
   private readonly activeCdpTargets = new Set<string>();
+  /** Surface readiness for background targets; commands await the first frame. */
+  private readonly automationSurfaceReady = new Map<string, Promise<void>>();
   private readonly debuggerEventHandlers = new Map<
     string,
     {
@@ -274,7 +279,7 @@ export class CdpHostProvider {
     if (this.targets.get(targetId) !== webContentsId) return;
     this.targets.delete(targetId);
     this.sentRegistrations.delete(targetId);
-    this.activeCdpTargets.delete(targetId);
+    this.releaseAutomationSurface(targetId);
     this.detachConsoleHistory(targetId);
     this.send({ type: "cdp:unregister", targetId, tabId: webContentsId });
     this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
@@ -466,13 +471,17 @@ export class CdpHostProvider {
         return;
       case "cdp:control":
         if (typeof message.targetId === "string") {
-          if (message.active) this.activeCdpTargets.add(message.targetId);
-          else this.activeCdpTargets.delete(message.targetId);
+          if (message.active) {
+            this.activeCdpTargets.add(message.targetId);
+            this.acquireAutomationSurface(message.targetId);
+          } else {
+            this.releaseAutomationSurface(message.targetId);
+          }
         }
         return;
       case "cdp:detach":
         if (typeof message.targetId === "string") {
-          this.activeCdpTargets.delete(message.targetId);
+          this.releaseAutomationSurface(message.targetId);
           this.detachDebuggerIfIdle(message.targetId, this.getTargetContents(message.targetId), {
             force: true,
           });
@@ -489,7 +498,7 @@ export class CdpHostProvider {
           if (message.reason === "unknown_panel") {
             const contents = this.getTargetContents(message.targetId);
             this.targets.delete(message.targetId);
-            this.activeCdpTargets.delete(message.targetId);
+            this.releaseAutomationSurface(message.targetId);
             this.detachConsoleHistory(message.targetId);
             this.detachDebuggerIfIdle(message.targetId, contents, { force: true });
           }
@@ -773,6 +782,7 @@ export class CdpHostProvider {
     const { targetId, requestId, method } = message;
     if (!targetId || !requestId || !method) return;
     try {
+      await this.automationSurfaceReady.get(targetId);
       // `Page.captureScreenshot` over raw CDP blocks FOREVER on a webContents
       // whose surface isn't being composited (alive — Runtime.evaluate still
       // returns — but unslotted/hidden, so the compositor never produces a
@@ -951,12 +961,43 @@ export class CdpHostProvider {
   }
 
   private detachAll(): void {
+    for (const targetId of [...this.activeCdpTargets]) {
+      this.releaseAutomationSurface(targetId);
+    }
     for (const targetId of this.debuggerAttached.keys()) {
       this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
     }
     for (const targetId of this.consoleListeners.keys()) {
       this.detachConsoleHistory(targetId);
     }
+  }
+
+  private acquireAutomationSurface(targetId: string): void {
+    const ready = Promise.resolve(
+      this.options.getViewManager()?.setAutomationSurfaceActive(targetId, true)
+    ).then(() => undefined);
+    this.automationSurfaceReady.set(targetId, ready);
+    void ready.catch((error: unknown) => {
+      log.warn(
+        `Failed to prepare automation surface for ${targetId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
+  }
+
+  private releaseAutomationSurface(targetId: string): void {
+    this.activeCdpTargets.delete(targetId);
+    this.automationSurfaceReady.delete(targetId);
+    void Promise.resolve(
+      this.options.getViewManager()?.setAutomationSurfaceActive(targetId, false)
+    ).catch((error: unknown) => {
+      log.warn(
+        `Failed to release automation surface for ${targetId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
   }
 
   private send(message: Record<string, unknown>): void {

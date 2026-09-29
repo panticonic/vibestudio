@@ -123,7 +123,9 @@ describe("deviceCredentialStore", () => {
 
   it("blocks pairing before redemption when secure storage is unavailable", () => {
     const { store, filePath } = makeStore(unavailableCipher);
-    expect(() => store.preflightPairing()).toThrow(/cannot pair yet.*secure storage.*not used/is);
+    expect(() => store.preflightPairing()).toThrow(
+      /cannot pair yet.*encrypted credential storage.*not used/is
+    );
     expect(fs.existsSync(filePath)).toBe(false);
   });
 

@@ -62,6 +62,7 @@ function createHarness(
     toJPEG: (_quality: number) => Buffer.from("jpeg-bytes"),
     getSize: () => ({ width: 800, height: 600 }),
   }));
+  const setAutomationSurfaceActive = vi.fn(async () => undefined);
   const provider = new CdpHostProvider({
     serverUrl,
     transport: {
@@ -79,6 +80,7 @@ function createHarness(
         getWebContents: vi.fn(() => contents),
         openDevTools,
         captureView,
+        setAutomationSurfaceActive,
       }) as never,
     ...options,
   });
@@ -89,6 +91,7 @@ function createHarness(
     debuggerApi,
     openDevTools,
     captureView,
+    setAutomationSurfaceActive,
     getSocketUrl: () => socketUrl,
     getSocketProtocols: () => socketProtocols,
   };
@@ -100,7 +103,7 @@ describe("CdpHostProvider", () => {
   });
 
   it("tracks live automation control independently of debugger commands", async () => {
-    const { provider } = createHarness();
+    const { provider, setAutomationSurfaceActive } = createHarness();
 
     await provider.handleProviderMessageForTest({
       type: "cdp:control",
@@ -108,9 +111,11 @@ describe("CdpHostProvider", () => {
       active: true,
     });
     expect(provider.isTargetUnderAutomation("panel-1")).toBe(true);
+    expect(setAutomationSurfaceActive).toHaveBeenCalledWith("panel-1", true);
 
     await provider.handleProviderMessageForTest({ type: "cdp:detach", targetId: "panel-1" });
     expect(provider.isTargetUnderAutomation("panel-1")).toBe(false);
+    expect(setAutomationSurfaceActive).toHaveBeenCalledWith("panel-1", false);
   });
 
   it("authenticates during upgrade and registers targets when the socket opens", () => {

@@ -159,17 +159,20 @@ export async function resolveChromium(opts: {
     return { executablePath: opts.chromiumPath, source: "explicit" };
   }
 
+  const platform = detectBrowserPlatform();
+  if (!platform) throw new Error("Unsupported platform for Chromium download");
+
   for (const candidate of SYSTEM_CANDIDATES) {
     const found = which(candidate);
     if (found) return { executablePath: found, source: "system" };
   }
-  for (const bundle of MACOS_BUNDLES) {
-    if (fs.existsSync(bundle)) return { executablePath: bundle, source: "system" };
+  if (platform === "mac" || platform === "mac_arm") {
+    for (const bundle of MACOS_BUNDLES) {
+      if (fs.existsSync(bundle)) return { executablePath: bundle, source: "system" };
+    }
   }
 
   const browser = opts.leanBrowser ? Browser.CHROMEHEADLESSSHELL : Browser.CHROME;
-  const platform = detectBrowserPlatform();
-  if (!platform) throw new Error("Unsupported platform for Chromium download");
   const cacheDir = opts.cacheDir;
   fs.mkdirSync(cacheDir, { recursive: true });
 

@@ -6,6 +6,7 @@
  */
 
 import { safeStorage } from "electron";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { assertIrohReach, type IrohReach } from "@vibestudio/iroh-transport";
@@ -16,6 +17,8 @@ import {
   type EncryptedJsonStore,
   type StoreCipher,
 } from "./encryptedJsonStore.js";
+import { hasDeveloperIdSignature } from "@vibestudio/credential-client/macCodeSignature";
+import { createResilientStoreCipher } from "@vibestudio/credential-client/storeCipher";
 
 export type { StoreCipher };
 
@@ -213,14 +216,14 @@ export function createDeviceCredentialStore(deps: {
     preflightPairing: () => {
       if (!deps.cipher.isAvailable()) {
         throw new Error(
-          "Cannot pair yet because OS secure storage is unavailable, so Vibestudio cannot safely save the device credential. Start or unlock the desktop keyring, then retry this same pairing link. The pairing link was not used."
+          "Cannot pair yet because Vibestudio cannot initialize encrypted credential storage in this profile. Check that the profile directory is writable, then retry this same pairing link. The pairing link was not used."
         );
       }
       try {
         load();
       } catch (error) {
         throw new Error(
-          `Cannot pair yet because the saved device credentials at ${deps.filePath} are unreadable or incompatible with this Vibestudio version. Remove that file, then retry this same pairing link. The pairing link was not used.`,
+          `Cannot pair yet because the saved device credentials at ${deps.filePath} cannot be read. Restore access to their original encryption key or keychain, then retry this same pairing link. No saved credentials were changed and the pairing link was not used.`,
           { cause: error }
         );
       }
@@ -244,11 +247,25 @@ function entryTimestamp(entry: DeviceCredentialEntry): number {
 function getStore(): DeviceCredentialStore {
   if (!storeSingleton) {
     const centralPath = getCentralDataPath();
-    const cipher: StoreCipher = {
+    const osCipher: StoreCipher = {
       encrypt: (s) => safeStorage.encryptString(s),
       decrypt: (b) => safeStorage.decryptString(b),
       isAvailable: () => safeStorage.isEncryptionAvailable(),
     };
+    const useOsCipher = process.platform !== "darwin" || hasDeveloperIdSignature(process.execPath);
+    const cipher = createResilientStoreCipher({
+      primary: osCipher,
+      // Unsigned/ad-hoc macOS identities can prompt on every build or update.
+      // A real Developer ID is stable; other platforms' native stores do not
+      // share this macOS signing constraint.
+      usePrimary: () => useOsCipher,
+      keyPath: path.join(centralPath, "keys", "device-credentials.key"),
+      fs,
+      dirname: path.dirname,
+      randomBytes: crypto.randomBytes,
+      createCipheriv: crypto.createCipheriv,
+      createDecipheriv: crypto.createDecipheriv,
+    });
     storeSingleton = createDeviceCredentialStore({
       filePath: path.join(centralPath, "device-credentials.json"),
       cipher,

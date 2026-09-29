@@ -34,6 +34,7 @@ import {
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
 import { spawn, spawnSync } from "node:child_process";
+import { hasDeveloperIdSignature } from "@vibestudio/credential-client/macCodeSignature";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
 import {
   createReleaseUpdateController,
@@ -485,27 +486,6 @@ function detectLinuxPackageOwner(executable: string): "deb" | "rpm" | "pacman" |
     }
   }
   return null;
-}
-
-/**
- * Whether this macOS build is signed with a Developer ID.
- *
- * Squirrel refuses to replace a build that is only ad-hoc signed, which is what
- * a release without the Apple secrets produces — so an in-app install offered
- * there would fail at the last step. Ask the signature rather than assume it.
- */
-function hasDeveloperIdSignature(executable: string): boolean {
-  if (process.platform !== "darwin") return false;
-  try {
-    const result = spawnSync("codesign", ["--display", "--verbose=2", executable], {
-      timeout: 5_000,
-      encoding: "utf8",
-    });
-    // codesign reports the certificate chain on stderr.
-    return /Authority=Developer ID Application:/u.test(result.stderr ?? "");
-  } catch {
-    return false;
-  }
 }
 
 /** The Homebrew upgrade for the installed cask, when brew is reachable. */

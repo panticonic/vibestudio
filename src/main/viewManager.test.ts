@@ -3058,11 +3058,22 @@ describe("ViewManager", () => {
     it("reveals a hidden parent window without activating it for capture", async () => {
       vm.createView({ id: "background-panel", type: "panel" });
       (mockWindow.isVisible as Mock).mockReturnValue(false);
+      (mockWindow.isFocused as Mock).mockReturnValue(false);
 
       await vm.captureView("background-panel");
 
       expect(mockWindow.showInactive).toHaveBeenCalledTimes(1);
       expect(mockWindow.hide).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-hide a parent window the user focused during capture", async () => {
+      vm.createView({ id: "background-panel", type: "panel" });
+      (mockWindow.isVisible as Mock).mockReturnValue(false);
+      (mockWindow.isFocused as Mock).mockReturnValue(false);
+      await vm.withViewVisible("background-panel", async () => {
+        (mockWindow.isFocused as Mock).mockReturnValue(true);
+      });
+      expect(mockWindow.hide).not.toHaveBeenCalled();
     });
 
     it("captures a hidden desktop panel beneath the shell without promoting it", async () => {
@@ -3082,6 +3093,35 @@ describe("ViewManager", () => {
       expect(view.setVisible).toHaveBeenCalledWith(true);
       expect(view.setVisible).toHaveBeenLastCalledWith(false);
       expect(view.webContents.capturePage).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a background automation target composited beneath the shell", async () => {
+      vi.useFakeTimers();
+      const desktop = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellView = mockWindow.contentView.children.at(-1)!;
+      const view = desktop.createView({ id: "automated-panel", type: "panel" });
+
+      const ready = desktop.setAutomationSurfaceActive("automated-panel", true);
+      await vi.advanceTimersByTimeAsync(60);
+      await ready;
+
+      expect(desktop.isViewVisible("automated-panel")).toBe(false);
+      expect(view.setVisible).toHaveBeenLastCalledWith(true);
+      expect(mockWindow.contentView.children.indexOf(view)).toBeLessThan(
+        mockWindow.contentView.children.indexOf(shellView)
+      );
+
+      (view.setVisible as Mock).mockClear();
+      await desktop.captureView("automated-panel");
+      expect(view.setVisible).not.toHaveBeenCalled();
+
+      await desktop.setAutomationSurfaceActive("automated-panel", false);
+      expect(view.setVisible).toHaveBeenLastCalledWith(false);
+      vi.useRealTimers();
     });
 
     it("does not visibility-cycle a headed panel when Chromium capture stalls", async () => {
@@ -3131,6 +3171,50 @@ describe("ViewManager", () => {
 
       expect(image).toBeNull();
       expect(view.webContents.capturePage).not.toHaveBeenCalled();
+    });
+
+    it("bounds a stalled renderer-frame wait and restores the capture surface", async () => {
+      vi.useFakeTimers();
+      const view = vm.createView({ id: "stalled-renderer", type: "panel" });
+      (view.webContents.executeJavaScript as Mock).mockImplementation(() => new Promise(() => {}));
+      const image = vm.captureView("stalled-renderer");
+      await vi.advanceTimersByTimeAsync(3_200);
+      await expect(image).resolves.not.toBeNull();
+      expect(view.setVisible).toHaveBeenLastCalledWith(false);
+      vi.useRealTimers();
+    });
+
+    it("serializes every concurrent capture lease even after a failed operation", async () => {
+      vm.createView({ id: "concurrent-panel", type: "panel" });
+      const turns: number[] = [];
+      let release!: () => void;
+      const first = vm.withViewVisible("concurrent-panel", async () => {
+        turns.push(1);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        throw new Error("Capture failed");
+      });
+      const firstResult = expect(first).rejects.toThrow("Capture failed");
+      const second = vm.withViewVisible("concurrent-panel", async () => {
+        turns.push(2);
+      });
+      const third = vm.withViewVisible("concurrent-panel", async () => {
+        turns.push(3);
+      });
+      await vi.waitFor(() => expect(turns).toEqual([1]));
+      release();
+      await Promise.all([firstResult, second, third]);
+      expect(turns).toEqual([1, 2, 3]);
+    });
+
+    it("preserves user presentation acquired during a background capture", async () => {
+      const view = vm.createView({ id: "newly-focused-panel", type: "panel" });
+      await vm.withViewVisible("newly-focused-panel", async () => {
+        vm.setViewVisible("newly-focused-panel", true);
+      });
+      expect(vm.isViewVisible("newly-focused-panel")).toBe(true);
+      expect(view.setVisible).toHaveBeenLastCalledWith(true);
     });
 
     it("returns null for a missing view", async () => {

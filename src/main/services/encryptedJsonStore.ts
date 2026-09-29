@@ -18,12 +18,8 @@
  * discards the whole file.
  */
 
-/** Cipher seam — Electron `safeStorage` in production, identity in tests. */
-export interface StoreCipher {
-  encrypt(plaintext: string): Buffer;
-  decrypt(ciphertext: Buffer): string;
-  isAvailable(): boolean;
-}
+import type { StoreCipher } from "@vibestudio/credential-client/storeCipher";
+export type { StoreCipher } from "@vibestudio/credential-client/storeCipher";
 
 export interface EncryptedJsonStore<T> {
   load(): T | null;
@@ -89,14 +85,12 @@ export function createEncryptedJsonStore<T>(deps: {
     },
     save(value: T): void {
       // Fail loud: the persisted value is a durable secret and MUST NOT be written
-      // in plaintext. If OS secure storage (safeStorage) is unavailable (a Linux
-      // box with no keyring, or headless), refuse to persist rather than silently
-      // writing the secret in the clear. The caller surfaces this instead of
-      // leaking the secret.
+      // in plaintext. The selected cipher may use native secure storage or an
+      // encrypted local backend; neither may silently degrade to plaintext.
       if (!cipher.isAvailable()) {
         throw new Error(
-          `Refusing to persist ${secretDescription}: OS secure storage (safeStorage) ` +
-            "is unavailable, and the secret must never be stored in plaintext."
+          `Refusing to persist ${secretDescription}: encrypted storage is unavailable, ` +
+            "and the secret must never be stored in plaintext."
         );
       }
       const json = JSON.stringify(value);

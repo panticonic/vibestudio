@@ -3,6 +3,8 @@ import * as fsSync from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { getProfileDataPath } from "@vibestudio/env-paths";
+import { createResilientStoreCipher } from "./storeCipher.js";
+import { hasDeveloperIdSignature } from "./macCodeSignature.js";
 
 const IDENTIFIER_RE = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
@@ -50,6 +52,10 @@ let safeStorageCache: SafeStorage | null | undefined;
 
 function tryGetSafeStorage(): SafeStorage | null {
   if (safeStorageCache !== undefined) return safeStorageCache;
+  if (process.platform === "darwin" && !hasDeveloperIdSignature(process.execPath)) {
+    safeStorageCache = null;
+    return null;
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const electron = require("electron");
@@ -73,80 +79,44 @@ function getKeyFilePath(): string {
   return path.join(getProfileDataPath(), "keys", "store.key");
 }
 
-function loadOrCreateAesKey(): Buffer {
-  const keyPath = getKeyFilePath();
-  try {
-    const buf = fsSync.readFileSync(keyPath);
-    if (buf.length === 32) return buf;
-  } catch (err) {
-    if (!isNotFoundError(err)) throw err;
-  }
-
-  const dir = path.dirname(keyPath);
-  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") {
-    try {
-      fsSync.chmodSync(dir, 0o700);
-    } catch {
-      /* best-effort */
-    }
-  }
-
-  const key = crypto.randomBytes(32);
-  fsSync.writeFileSync(keyPath, key, { mode: 0o600 });
-  if (process.platform !== "win32") {
-    try {
-      fsSync.chmodSync(keyPath, 0o600);
-    } catch {
-      /* best-effort */
-    }
-  }
-  return key;
-}
-
-function aesEncrypt(plaintext: string): EncryptedEnvelope {
-  const key = loadOrCreateAesKey();
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return { v: "v1-aesgcm", ct: Buffer.concat([iv, tag, ct]).toString("base64") };
-}
-
-function aesDecrypt(envelope: EncryptedEnvelope): string {
-  const key = loadOrCreateAesKey();
-  const raw = Buffer.from(envelope.ct, "base64");
-  if (raw.length < 12 + 16) throw new Error("Corrupt aes-gcm envelope");
-  const iv = raw.subarray(0, 12);
-  const tag = raw.subarray(12, 28);
-  const ct = raw.subarray(28);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+function recordCipher() {
+  return createResilientStoreCipher({
+    primary: {
+      isAvailable: () => tryGetSafeStorage() !== null,
+      encrypt: (plaintext) => {
+        const ss = tryGetSafeStorage();
+        if (!ss) throw new Error("OS credential cipher is unavailable");
+        return Buffer.from(
+          JSON.stringify({
+            v: "v1-electron",
+            ct: ss.encryptString(plaintext).toString("base64"),
+          })
+        );
+      },
+      decrypt: (ciphertext) => {
+        const envelope = JSON.parse(ciphertext.toString("utf8")) as EncryptedEnvelope;
+        if (envelope.v !== "v1-electron")
+          throw new Error("Unknown encrypted JSON envelope version");
+        const ss = tryGetSafeStorage();
+        if (!ss) throw new Error("OS credential cipher is unavailable");
+        return ss.decryptString(Buffer.from(envelope.ct, "base64"));
+      },
+    },
+    keyPath: getKeyFilePath(),
+    fs: fsSync,
+    dirname: path.dirname,
+    randomBytes: crypto.randomBytes,
+    createCipheriv: crypto.createCipheriv,
+    createDecipheriv: crypto.createDecipheriv,
+  });
 }
 
 function encryptJson(plaintext: string): EncryptedEnvelope {
-  const ss = tryGetSafeStorage();
-  if (ss) {
-    return { v: "v1-electron", ct: ss.encryptString(plaintext).toString("base64") };
-  }
-  return aesEncrypt(plaintext);
+  return JSON.parse(recordCipher().encrypt(plaintext).toString("utf8")) as EncryptedEnvelope;
 }
 
 function decryptJson(envelope: EncryptedEnvelope): string {
-  if (envelope.v === "v1-electron") {
-    const ss = tryGetSafeStorage();
-    if (!ss) {
-      throw new Error(
-        "Record was encrypted with Electron safeStorage but safeStorage is unavailable in this process."
-      );
-    }
-    return ss.decryptString(Buffer.from(envelope.ct, "base64"));
-  }
-  if (envelope.v === "v1-aesgcm") {
-    return aesDecrypt(envelope);
-  }
-  throw new Error(`Unknown encrypted JSON envelope version: ${envelope.v}`);
+  return recordCipher().decrypt(Buffer.from(JSON.stringify(envelope)));
 }
 
 function serializeRecord<TRecord>(record: TRecord): string {
