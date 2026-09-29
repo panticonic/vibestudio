@@ -77,12 +77,16 @@ export function createAuthorityService(deps: {
         });
         return { revokedGrantCount };
       },
-      awaitDecision: (ctx, [input]) => {
-        return deps.acquisitions.awaitDecision({
+      awaitDecision: async (ctx, [input]) => {
+        const outcome = await deps.acquisitions.awaitDecision({
           acquisitionId: input.acquisitionId,
           ownerRuntimeId: ctx.caller.runtime.id,
           signal: ctx.signal,
         });
+        return {
+          state: outcome.state,
+          ...(outcome.decision ? { decision: outcome.decision } : {}),
+        };
       },
       preflight: (ctx, [input]) =>
         deps.dispatcher.preflightAuthority(ctx, input.service, input.method, input.args),

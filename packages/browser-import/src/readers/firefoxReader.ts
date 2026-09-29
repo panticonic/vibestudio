@@ -206,6 +206,7 @@ function firefoxSameSite(value: number): SameSiteValue {
  */
 export class FirefoxReader implements BrowserDataReader {
   async readBookmarks(profilePath: string): Promise<ImportedBookmark[]> {
+    if (!fs.existsSync(path.join(profilePath, "places.sqlite"))) return [];
     const [db, tempPath] = await openProfileDb(profilePath, "places.sqlite");
     try {
       // First, build folder map from all folders
@@ -285,6 +286,7 @@ export class FirefoxReader implements BrowserDataReader {
   }
 
   async readHistory(profilePath: string): Promise<ImportedHistoryEntry[]> {
+    if (!fs.existsSync(path.join(profilePath, "places.sqlite"))) return [];
     const [db, tempPath] = await openProfileDb(profilePath, "places.sqlite");
     try {
       const rows = db
@@ -356,6 +358,7 @@ export class FirefoxReader implements BrowserDataReader {
   }
 
   async readCookies(profilePath: string): Promise<ImportedCookie[]> {
+    if (!fs.existsSync(path.join(profilePath, "cookies.sqlite"))) return [];
     const [db, tempPath] = await openProfileDb(profilePath, "cookies.sqlite");
     try {
       const rows = db
