@@ -408,6 +408,18 @@ The fact is independent of which host, tool, replay, or alarm path observed or
 materialized the content; scheduling metadata never participates in coordinate
 identity.
 
+Authored `content-replace` accepts the same explicit text/bytes union as file
+creation and preserves the stable file identity. Text edits require a text file
+at the exact basis; a content-kind or span mismatch is `InvalidReference`, not
+a concurrent-head conflict. Semantic reads carry the stored kind and extents to
+the blob owner, which verifies them before returning that representation.
+
+The ordinary filesystem API does not expose a semantic content-kind choice. Its
+base64 envelope is a transport encoding. Managed writes, appends, truncations
+and scratch imports classify the exact resulting bytes with fatal UTF-8
+decoding, preserving a leading BOM as content. This makes classification
+independent of whether a caller used a string, stdin, or a local file.
+
 The persistent-map implementation is generic. Each root commits its route
 strategy (`utf16`, `sha256`, or another small canonical identifier); callers
 cannot supply an unauthenticated routing callback. Workspace facts use one

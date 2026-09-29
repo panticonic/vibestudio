@@ -427,8 +427,8 @@ function makeCanonicalSemanticBridge(
         } else {
           const existingContent = files.get(key);
           const content =
-            change.kind === "binary-replace"
-              ? ({ kind: "bytes", base64: change.base64 } as const)
+            change.kind === "content-replace"
+              ? change.content
               : ({
                   kind: "text",
                   text: change.edits.reduce(
@@ -1467,6 +1467,24 @@ describe("FsService", () => {
   // ─── Semantic VCS reroute ─────────────────────────────────────────────────
 
   describe("exact context projection (demand + loud assertion)", () => {
+    it("keeps filesystem text editable across base64 writes, appends and binary replacement", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge(["meta"]);
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-content-kind");
+      const envelope = (bytes: Buffer) => ({ __bin: true, data: bytes.toString("base64") });
+      const text = "\uFEFFa😀éz";
+      await svc.handleCall(ctx, "writeFile", ["meta/value", envelope(Buffer.from(text))]);
+      await svc.handleCall(ctx, "appendFile", ["meta/value", envelope(Buffer.from("!"))]);
+      expect([...files.values()]).toEqual([{ kind: "text", text: text + "!" }]);
+      await svc.handleCall(ctx, "writeFile", ["meta/value", envelope(Buffer.from([0xff]))]);
+      expect([...files.values()]).toEqual([{ kind: "bytes", base64: "/w==" }]);
+      await svc.handleCall(ctx, "writeFile", ["meta/value", text]);
+      expect([...files.values()]).toEqual([{ kind: "text", text }]);
+    });
     function makeMaterializeBridge(opts: { materialize: boolean }) {
       const calls: Array<{ contextId: string; repos: string[] | "all" }> = [];
       const present = new Set<string>();

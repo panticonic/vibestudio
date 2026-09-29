@@ -134,7 +134,7 @@ export function isSemanticWireMethod(method: string): method is SemanticWireMeth
 }
 
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
-const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const BUILDS_LOG_ID = "builds:workspace";
 const CONTENT_OBSERVATION_CONCURRENCY = 32;
 const SLOW_SEMANTIC_EFFECT_MS = 500;
@@ -882,7 +882,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           ? request["externalKeys"].map(String)
           : [],
         mode: Number(request["mode"]),
-        content: this.fileContent(bytes),
+        content: this.fileContent(bytes, request),
       };
     }
     throw new Error(`unknown semantic host read ${JSON.stringify(kind)}`);
@@ -907,17 +907,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private fileContent(
-    bytes: Uint8Array
-  ): VcsReadFileResult extends infer R
-    ? NonNullable<R> extends { content: infer C }
-      ? C
-      : never
-    : never {
-    try {
-      return { kind: "text", text: UTF8_DECODER.decode(bytes) } as never;
-    } catch {
-      return { kind: "bytes", base64: Buffer.from(bytes).toString("base64") } as never;
+    bytes: Uint8Array,
+    descriptor: Record<string, unknown>
+  ): NonNullable<VcsReadFileResult>["content"] {
+    if (descriptor["byteLength"] !== bytes.byteLength) {
+      throw new Error("semantic file byte length does not match its stored content");
     }
+    if (descriptor["contentKind"] === "bytes") {
+      if (descriptor["coordinateExtent"] !== bytes.byteLength) {
+        throw new Error("semantic byte coordinate extent does not match its stored content");
+      }
+      return { kind: "bytes", base64: Buffer.from(bytes).toString("base64") };
+    }
+    if (descriptor["contentKind"] !== "text")
+      throw new Error("semantic file lacks its content kind");
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    if (descriptor["coordinateExtent"] !== text.length) {
+      throw new Error("semantic text coordinate extent does not match its stored content");
+    }
+    return { kind: "text", text };
   }
 
   private async publishMain(

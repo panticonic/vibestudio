@@ -73,6 +73,40 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("reads the stored coordinate kind even when opaque bytes are valid UTF-8", async () => {
+    const { blobsDir, vcs } = await harness();
+    const text = "\uFEFFa😀éz";
+    const bytes = Buffer.from(text);
+    const stored = await putBytes(blobsDir, bytes);
+    let contentKind = "bytes";
+    let coordinateExtent = bytes.length;
+    await vcs.attachGad({
+      vcsReadFile: async () => ({
+        kind: "host-read",
+        request: {
+          kind: "read-semantic-blob",
+          contentHash: stored.digest,
+          contentKind,
+          byteLength: bytes.length,
+          coordinateExtent,
+          repositoryId: "repository:test",
+          fileId: "file:test",
+          repoPath: "meta",
+          path: "value",
+          mode: 0o644,
+        },
+      }),
+    } as never);
+    const read = () => vcs.semanticDirectCall("vcsReadFile", {});
+    await expect(read()).resolves.toMatchObject({
+      content: { kind: "bytes", base64: bytes.toString("base64") },
+    });
+    contentKind = "text";
+    coordinateExtent = text.length;
+    await expect(read()).resolves.toMatchObject({ content: { kind: "text", text } });
+    coordinateExtent++;
+    await expect(read()).rejects.toThrow("coordinate extent");
+  });
   it("includes workspace compiler config in partial build projections", async () => {
     const { blobsDir, vcs, deps } = await harness();
     const rootConfig = Buffer.from(

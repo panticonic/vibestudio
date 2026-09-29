@@ -59,7 +59,13 @@ type VcsEditChange =
       fileId: string;
       edits: Array<{ start: number; end: number; text: string }>;
     }
-  | { kind: "binary-replace"; repositoryId: string; fileId: string; base64: string; mode?: number }
+  | {
+      kind: "content-replace";
+      repositoryId: string;
+      fileId: string;
+      content: FsVcsContent;
+      mode?: number;
+    }
   | {
       kind: "file-create";
       repositoryId: string;
@@ -775,8 +781,19 @@ function contentToBuffer(c: FsVcsContent): Buffer {
   return c.kind === "text" ? Buffer.from(c.text, "utf8") : Buffer.from(c.base64, "base64");
 }
 
+function bytesToVcsContent(bytes: Buffer): FsVcsContent {
+  try {
+    return {
+      kind: "text",
+      text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+    };
+  } catch {
+    return { kind: "bytes", base64: bytes.toString("base64") };
+  }
+}
+
 function dataToVcsContent(data: unknown): FsVcsContent {
-  if (isBinaryEnvelope(data)) return { kind: "bytes", base64: data.data };
+  if (isBinaryEnvelope(data)) return bytesToVcsContent(Buffer.from(data.data, "base64"));
   return { kind: "text", text: data as string };
 }
 
@@ -786,10 +803,7 @@ function appendVcsContent(existing: FsVcsContent | null, data: unknown): FsVcsCo
   if (existing.kind === "text" && add.kind === "text") {
     return { kind: "text", text: existing.text + add.text };
   }
-  return {
-    kind: "bytes",
-    base64: Buffer.concat([contentToBuffer(existing), contentToBuffer(add)]).toString("base64"),
-  };
+  return bytesToVcsContent(Buffer.concat([contentToBuffer(existing), contentToBuffer(add)]));
 }
 
 function truncateVcsContent(existing: FsVcsContent | null, len: number): FsVcsContent {
@@ -799,18 +813,9 @@ function truncateVcsContent(existing: FsVcsContent | null, len: number): FsVcsCo
   const truncated = Buffer.alloc(targetLength);
   source.copy(truncated, 0, 0, Math.min(source.length, targetLength));
 
-  if (existing.kind === "bytes") {
-    return { kind: "bytes", base64: truncated.toString("base64") };
-  }
-  // POSIX truncate is byte-oriented. Preserve the text representation only
-  // when the exact result remains valid UTF-8; a cut through a code point must
-  // not be repaired with U+FFFD because that changes the requested bytes.
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(truncated);
-    return { kind: "text", text };
-  } catch {
-    return { kind: "bytes", base64: truncated.toString("base64") };
-  }
+  // POSIX truncate is byte-oriented. Decode only the complete result; a cut
+  // through a code point must remain exact bytes, never repaired with U+FFFD.
+  return bytesToVcsContent(truncated);
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,7 +1299,7 @@ export class FsService {
               kind: "file-create",
               repositoryId: destinationRepository.repositoryId,
               path: destinationRoute.repoRelPath,
-              content: { kind: "bytes", base64: bytes.toString("base64") },
+              content: bytesToVcsContent(bytes),
               mode: isExecutableMode(sourceStat.mode) ? 0o755 : 0o644,
             },
           ],
@@ -1750,36 +1755,25 @@ export class FsService {
               ];
             }
             const nextContent = requested.content;
+            const current = await bridge.readFile({
+              state: snapshot.state,
+              repositoryId: repository.repositoryId,
+              file: { kind: "id", fileId: file.fileId },
+            });
             const contentChange =
-              nextContent.kind === "bytes"
+              nextContent.kind === "text" && current?.content.kind === "text"
                 ? {
-                    kind: "binary-replace" as const,
+                    kind: "text-edit" as const,
                     repositoryId: repository.repositoryId,
                     fileId: file.fileId,
-                    base64: nextContent.base64,
+                    edits: [{ start: 0, end: current.content.text.length, text: nextContent.text }],
                   }
-                : await (async () => {
-                    const current = await bridge.readFile({
-                      state: snapshot.state,
-                      repositoryId: repository.repositoryId,
-                      file: { kind: "id", fileId: file.fileId },
-                    });
-                    return current?.content.kind === "text"
-                      ? {
-                          kind: "text-edit" as const,
-                          repositoryId: repository.repositoryId,
-                          fileId: file.fileId,
-                          edits: [
-                            { start: 0, end: current.content.text.length, text: nextContent.text },
-                          ],
-                        }
-                      : {
-                          kind: "binary-replace" as const,
-                          repositoryId: repository.repositoryId,
-                          fileId: file.fileId,
-                          base64: Buffer.from(nextContent.text, "utf8").toString("base64"),
-                        };
-                  })();
+                : {
+                    kind: "content-replace" as const,
+                    repositoryId: repository.repositoryId,
+                    fileId: file.fileId,
+                    content: nextContent,
+                  };
             return requested.mode === undefined
               ? [contentChange]
               : [

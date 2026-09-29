@@ -632,10 +632,10 @@ export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("binary-replace"),
+      kind: z.literal("content-replace"),
       repositoryId: id("Repository containing the file."),
       fileId: id("Stable file identity."),
-      base64: z.string(),
+      content: vcsFileWriteContentSchema,
       mode: z.number().int().nonnegative().max(0o777).optional(),
     })
     .strict(),

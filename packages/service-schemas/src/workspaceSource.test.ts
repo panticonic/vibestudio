@@ -8,6 +8,19 @@ import {
 } from "@vibestudio/service-schemas/workspaceSource";
 
 describe("GAD runtime schema", () => {
+  it("requires exact stored content coordinates in semantic file reads", () => {
+    const request = {
+      kind: "read-semantic-blob", state: { kind: "event", eventId: "event:test" },
+      repositoryId: "repository:test", fileId: "file:test", repoPath: "meta", path: "value",
+      contentHash: "blob:test", contentKind: "text", byteLength: 7, coordinateExtent: 4,
+      authoredChangeId: "change:test", authoredByWorkUnitId: "work:test",
+      contentClass: "internal", externalKeys: [], mode: 0o644,
+    };
+    const result = { kind: "host-read", request };
+    expect(gadWireMethods.vcsReadFile.returns!.parse(result)).toEqual(result);
+    const { contentKind: _kind, ...missing } = request;
+    expect(() => gadWireMethods.vcsReadFile.returns!.parse({ kind: "host-read", request: missing })).toThrow();
+  });
   it("transports prepared content and edit observations through transient acknowledgements", () => {
     const ingress = {
       causalParent: null,
