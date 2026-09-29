@@ -47,6 +47,36 @@ afterEach(() => {
 });
 
 describe("DerivedCacheCoordinator", () => {
+  it("does not make a contended WAL transition a startup lock", () => {
+    const root = cacheRoot();
+    const databasePath = derivedCacheDatabasePath(root);
+    const initialized = new DerivedCacheCoordinator(databasePath);
+    initialized.close();
+
+    const legacyReader = new DatabaseSync(databasePath);
+    legacyReader.exec("PRAGMA journal_mode = DELETE; BEGIN");
+    legacyReader.prepare("SELECT * FROM cache_entries").all();
+    const startedAt = performance.now();
+    let concurrent: DerivedCacheCoordinator | undefined;
+    try {
+      concurrent = new DerivedCacheCoordinator(databasePath);
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      concurrent?.close();
+      legacyReader.exec("ROLLBACK");
+      legacyReader.close();
+    }
+
+    const nextOpener = new DerivedCacheCoordinator(databasePath);
+    nextOpener.close();
+    const migrated = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    } finally {
+      migrated.close();
+    }
+  });
+
   it("charges a shared inode proportionally instead of once per pathname", async () => {
     const root = cacheRoot();
     const owner = path.join(path.dirname(root), "content-owner");
