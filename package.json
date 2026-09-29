@@ -174,7 +174,9 @@
     },
     "patchedDependencies": {
       "react-native-webview@13.16.1": "patches/react-native-webview@13.16.1.patch",
-      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch"
+      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch",
+      "react-native@0.79.7": "patches/react-native@0.79.7.patch",
+      "@react-native-firebase/messaging@23.8.8": "patches/@react-native-firebase__messaging@23.8.8.patch"
     }
   },
   "devDependencies": {

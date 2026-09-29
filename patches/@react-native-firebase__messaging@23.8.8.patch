@@ -1,0 +1,67 @@
+diff --git a/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m b/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
+index 1867f14a40f05d9dbdd04330a303a28e63e7f27c..8c12752dd46d5b0ed27f6a83a02bfd53e2267401 100644
+--- a/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
++++ b/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
+@@ -25,6 +25,18 @@
+ #import "RNFBMessaging+NSNotificationCenter.h"
+ #import "RNFBMessaging+UNUserNotificationCenter.h"
+ 
++// UIKit scenes own windows; the application delegate does not own a root view.
++static RCTRootView *RNFBMessagingRootView(void) {
++  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
++    if (![scene isKindOfClass:UIWindowScene.class]) continue;
++    for (UIWindow *window in ((UIWindowScene *)scene).windows) {
++      UIView *view = window.rootViewController.view;
++      if ([view isKindOfClass:RCTRootView.class]) return (RCTRootView *)view;
++    }
++  }
++  return nil;
++}
++
+ @implementation RNFBMessagingNSNotificationCenter
+ @synthesize isHeadless;
+ + (instancetype)sharedInstance {
+@@ -55,7 +67,7 @@
+     // ObjC - > Mutates the root React components initialProps to toggle `isHeadless` state
+     [[NSNotificationCenter defaultCenter] addObserver:strongSelf
+                                              selector:@selector(application_onDidEnterForeground)
+-                                                 name:UIApplicationWillEnterForegroundNotification
++                                                 name:UISceneWillEnterForegroundNotification
+                                                object:nil];
+   });
+ }
+@@ -76,16 +88,7 @@
+   [[RNFBMessagingUNUserNotificationCenter sharedInstance] observe];
+   [[RNFBMessagingFIRMessagingDelegate sharedInstance] observe];
+ 
+-  RCTRootView *rctRootView;
+-  if ([UIApplication sharedApplication].delegate != nil &&
+-      [UIApplication sharedApplication].delegate.window != nil &&
+-      [UIApplication sharedApplication].delegate.window.rootViewController != nil &&
+-      [UIApplication sharedApplication].delegate.window.rootViewController.view != nil &&
+-      [[UIApplication sharedApplication].delegate.window.rootViewController.view
+-          isKindOfClass:[RCTRootView class]]) {
+-    rctRootView =
+-        (RCTRootView *)[UIApplication sharedApplication].delegate.window.rootViewController.view;
+-  }
++  RCTRootView *rctRootView = RNFBMessagingRootView();
+ 
+   // #if !(TARGET_IPHONE_SIMULATOR)
+   if ([[RNFBJSON shared] getBooleanValue:@"messaging_ios_auto_register_for_remote_messages"
+@@ -149,14 +152,8 @@
+ 
+ - (void)application_onDidEnterForeground {
+   isHeadless = NO;
+-  if ([UIApplication sharedApplication].delegate != nil &&
+-      [UIApplication sharedApplication].delegate.window != nil &&
+-      [UIApplication sharedApplication].delegate.window.rootViewController != nil &&
+-      [UIApplication sharedApplication].delegate.window.rootViewController.view != nil &&
+-      [[UIApplication sharedApplication].delegate.window.rootViewController.view
+-          isKindOfClass:[RCTRootView class]]) {
+-    RCTRootView *rctRootView =
+-        (RCTRootView *)[UIApplication sharedApplication].delegate.window.rootViewController.view;
++  RCTRootView *rctRootView = RNFBMessagingRootView();
++  if (rctRootView != nil) {
+ 
+     if (rctRootView.appProperties != nil &&
+         [rctRootView.appProperties[@"isHeadless"] isEqual:@(YES)]) {

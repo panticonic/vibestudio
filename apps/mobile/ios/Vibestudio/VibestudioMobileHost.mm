@@ -338,25 +338,25 @@ RCT_EXPORT_METHOD(reloadActiveAppBundle:(RCTPromiseResolveBlock)resolve
   }
 }
 
-RCT_EXPORT_METHOD(assetStoreLookup:(NSDictionary *)namespace
+RCT_EXPORT_METHOD(assetStoreLookup:(NSDictionary *)assetNamespace
                   key:(NSString *)key
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    resolve([self lookupStoredAsset:namespace key:key]);
+    resolve([self lookupStoredAsset:assetNamespace key:key]);
   } @catch (NSException *exception) {
     reject(@"asset_store_lookup_failed", exception.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(assetStoreOpenWrite:(NSDictionary *)namespace
+RCT_EXPORT_METHOD(assetStoreOpenWrite:(NSDictionary *)assetNamespace
                   key:(NSString *)key
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSString *namespaceKey = [self validatedAssetNamespace:namespace];
+    NSString *namespaceKey = [self validatedAssetNamespace:assetNamespace];
     [self validateAssetKey:key];
     NSString *writeId = NSUUID.UUID.UUIDString.lowercaseString;
     NSURL *staging = [self assetStagingURL];
@@ -494,9 +494,9 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   }
 }
 
-- (NSDictionary *)lookupStoredAsset:(NSDictionary *)namespace key:(NSString *)key
+- (NSDictionary *)lookupStoredAsset:(NSDictionary *)assetNamespace key:(NSString *)key
 {
-  NSString *namespaceKey = [self validatedAssetNamespace:namespace];
+  NSString *namespaceKey = [self validatedAssetNamespace:assetNamespace];
   [self validateAssetKey:key];
   NSURL *indexURL = [self assetIndexURL:namespaceKey];
   if (![NSFileManager.defaultManager fileExistsAtPath:indexURL.path]) return nil;
@@ -539,12 +539,12 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   };
 }
 
-- (NSString *)validatedAssetNamespace:(NSDictionary *)namespace
+- (NSString *)validatedAssetNamespace:(NSDictionary *)assetNamespace
 {
-  NSString *server = [namespace[@"serverEndpointId"] isKindOfClass:NSString.class]
-    ? [namespace[@"serverEndpointId"] lowercaseString] : nil;
-  NSString *workspace = [namespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
-    ? namespace[@"workspaceIdentity"] : nil;
+  NSString *server = [assetNamespace[@"serverEndpointId"] isKindOfClass:NSString.class]
+    ? [assetNamespace[@"serverEndpointId"] lowercaseString] : nil;
+  NSString *workspace = [assetNamespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
+    ? assetNamespace[@"workspaceIdentity"] : nil;
   if (![self isAssetDigest:server]) {
     [NSException raise:@"VibestudioAssetNamespaceInvalid" format:@"Asset namespace has invalid server Endpoint ID"];
   }
@@ -884,7 +884,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   NSFileHandle *signatureFile = [NSFileHandle fileHandleForReadingAtPath:url.path];
   NSData *signature = [signatureFile readDataOfLength:4];
   [signatureFile closeFile];
-  const uint8_t *signatureBytes = signature.bytes;
+  const uint8_t *signatureBytes = static_cast<const uint8_t *>(signature.bytes);
   BOOL zip = signature.length == 4 && signatureBytes[0] == 0x50 && signatureBytes[1] == 0x4b &&
     ((signatureBytes[2] == 0x03 && signatureBytes[3] == 0x04) || (signatureBytes[2] == 0x05 && signatureBytes[3] == 0x06));
   if (!zip) {
@@ -901,7 +901,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   if (archiveData.length < 22) {
     [NSException raise:@"VibestudioBrowserImportZipInvalid" format:@"Browser export ZIP is truncated"];
   }
-  const uint8_t *bytes = archiveData.bytes;
+  const uint8_t *bytes = static_cast<const uint8_t *>(archiveData.bytes);
   NSUInteger searchStart = archiveData.length > 65557 ? archiveData.length - 65557 : 0;
   NSUInteger eocd = NSNotFound;
   for (NSUInteger cursor = archiveData.length - 22;; cursor--) {

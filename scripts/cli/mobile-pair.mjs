@@ -12,11 +12,10 @@ try {
       "vibestudio mobile pair --dev",
       "vibestudio mobile pair --port 3030",
     ],
-    startupHint:
-      "[mobile-pair] Install the internal APK with: vibestudio mobile install --launch",
-    bannerTitle: "Vibestudio Android pairing",
+    startupHint: "[mobile-pair] Install Vibestudio on your phone before pairing.",
+    bannerTitle: "Vibestudio mobile pairing",
     instructions:
-      "Open the QR code with the Android camera. Vibestudio will confirm and save the connection.",
+      "Scan the QR code in Vibestudio or open the pairing link on your phone. Vibestudio will confirm and save the connection.",
   });
 } catch (error) {
   console.error(`[mobile-pair] ${error instanceof Error ? error.message : String(error)}`);

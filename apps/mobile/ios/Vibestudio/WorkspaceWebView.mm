@@ -18,11 +18,6 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   return [WKWebsiteDataStore dataStoreForIdentifier:identifier];
 }
 
-// RNCWebView's configuration hook runs before WKWebView is created.
-@interface RNCWebViewImpl (WorkspaceConfiguration)
-- (WKWebViewConfiguration *)setUpWkWebViewConfig;
-@end
-
 @class WorkspaceWebView;
 @interface WorkspaceNotificationMessageHandler : NSObject <WKScriptMessageHandler>
 @property(nonatomic, weak) WorkspaceWebView *owner;

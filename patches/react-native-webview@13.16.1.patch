@@ -139,3 +139,18 @@
              permissionRequest = null;
              grantedPermissions = null;
          }
+diff --git a/apple/RNCWebViewImpl.h b/apple/RNCWebViewImpl.h
+index 1f6bbfd697a4e0b0aef2db344386b786839a1969..8576781d256d98285f9c77a0bfebbbbf66dc6502 100644
+--- a/apple/RNCWebViewImpl.h
++++ b/apple/RNCWebViewImpl.h
+@@ -143,6 +143,10 @@ shouldStartLoadForRequest:(NSMutableDictionary<NSString *, id> *)request
+ + (void)setCustomCertificatesForHost:(nullable NSDictionary *)certificates;
+ - (void)postMessage:(NSString *_Nullable)message;
+ - (void)injectJavaScript:(NSString *_Nullable)script;
++// Subclasses configure workspace isolation before creation and use the same
++// native view for document-origin validation and script delivery.
++- (WKWebViewConfiguration *)setUpWkWebViewConfig;
++- (WKWebView *_Nullable)webView;
+ - (void)goForward;
+ - (void)goBack;
+ - (void)reload;

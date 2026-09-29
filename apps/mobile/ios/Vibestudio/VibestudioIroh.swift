@@ -197,10 +197,14 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
 
   @objc func closeConnection(_ handle: String, errorCode: String, reasonBase64: String) {
     guard let connection = removeConnection(handle),
-          let code = UInt64(errorCode),
+          let code = Int64(errorCode),
           let reason = Data(base64Encoded: reasonBase64) else { return }
     removeStreams(connectionHandle: handle)
-    connection.close(errorCode: Int64(code), reason: reason)
+    do {
+      try connection.close(errorCode: code, reason: reason)
+    } catch {
+      RCTFatal(error as NSError)
+    }
   }
 
   @objc func connectionClosed(_ handle: String,
