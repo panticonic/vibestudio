@@ -96,3 +96,16 @@ export const BUILDABLE_UNIT_DIRS: readonly BuildableUnitDir[] = [
 export const WORKSPACE_PACKAGE_SCOPES: readonly string[] = BUILDABLE_UNIT_DIRS.flatMap((d) =>
   d.scope ? [d.scope] : []
 );
+
+/**
+ * Resolve the identity owned by a unit's workspace location. Manifests must
+ * agree with this identity; they never select or override their unit kind.
+ */
+export function expectedBuildUnitName(relativePath: string): string | null {
+  const normalized = relativePath.replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "");
+  const [section, name, ...rest] = normalized.split("/");
+  if (!section || !name || rest.length > 0) return null;
+  const descriptor = BUILDABLE_UNIT_DIRS.find(({ dir }) => dir === section);
+  if (!descriptor) return null;
+  return descriptor.kind === "template" ? `template:${name}` : `${descriptor.scope}${name}`;
+}

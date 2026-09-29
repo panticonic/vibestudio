@@ -415,7 +415,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
     expect(environment?.encoding).toBe("utf8");
     expect(JSON.parse(environment?.content ?? "{}")).toEqual({
-      cwd: path.join(root, "runs", plan.runId, "source"),
+      cwd: await fsp.realpath(path.join(root, "runs", plan.runId, "source")),
       declared: "production",
       base: path.join(root, "runs", plan.runId, "base"),
       ambient: null,

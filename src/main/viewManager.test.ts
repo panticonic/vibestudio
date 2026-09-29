@@ -60,10 +60,11 @@ vi.mock("electron", () => {
   const children: unknown[] = [];
   const mockContentView = {
     children,
-    addChildView: vi.fn((view: unknown) => {
+    addChildView: vi.fn((view: unknown, requestedIndex?: number) => {
       const index = children.indexOf(view);
       if (index !== -1) children.splice(index, 1);
-      children.push(view);
+      if (requestedIndex === undefined) children.push(view);
+      else children.splice(requestedIndex, 0, view);
     }),
     removeChildView: vi.fn((view: unknown) => {
       const index = children.indexOf(view);
@@ -3028,6 +3029,7 @@ describe("ViewManager", () => {
         window: mockWindow,
         shellPreload: "/path/to/preload.js",
         shellHtmlPath: "/path/to/index.html",
+        headless: true,
       });
     });
 
@@ -3061,6 +3063,64 @@ describe("ViewManager", () => {
 
       expect(mockWindow.showInactive).toHaveBeenCalledTimes(1);
       expect(mockWindow.hide).toHaveBeenCalledTimes(1);
+    });
+
+    it("captures a hidden desktop panel beneath the shell without promoting it", async () => {
+      const desktop = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellView = mockWindow.contentView.children.at(-1)!;
+      const view = desktop.createView({ id: "hidden-desktop-panel", type: "panel" });
+
+      await expect(desktop.captureView("hidden-desktop-panel")).resolves.not.toBeNull();
+      expect(mockWindow.contentView.addChildView).toHaveBeenCalledWith(view, 0);
+      expect(mockWindow.contentView.children.indexOf(view)).toBeLessThan(
+        mockWindow.contentView.children.indexOf(shellView)
+      );
+      expect(view.setVisible).toHaveBeenCalledWith(true);
+      expect(view.setVisible).toHaveBeenLastCalledWith(false);
+      expect(view.webContents.capturePage).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not visibility-cycle a headed panel when Chromium capture stalls", async () => {
+      vi.useFakeTimers();
+      const desktop = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const view = desktop.createView({ id: "visible-desktop-panel", type: "panel" });
+      desktop.setViewVisible("visible-desktop-panel", true);
+      (view.setVisible as Mock).mockClear();
+      (view.webContents.capturePage as Mock).mockImplementation(() => new Promise(() => {}));
+
+      const image = desktop.captureView("visible-desktop-panel");
+      const assertion = expect(image).rejects.toThrow("within 3 seconds");
+      await vi.advanceTimersByTimeAsync(3_100);
+      await assertion;
+
+      expect(view.setVisible).not.toHaveBeenCalled();
+      expect(view.webContents.capturePage).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it("abandons a stuck Chromium capture and retries without wedging the host command", async () => {
+      vi.useFakeTimers();
+      const view = vm.createView({ id: "stuck-panel", type: "panel" });
+      const captured = { isEmpty: () => false, getSize: () => ({ width: 100, height: 100 }) };
+      (view.webContents.capturePage as Mock)
+        .mockImplementationOnce(() => new Promise(() => {}))
+        .mockResolvedValueOnce(captured);
+
+      const image = vm.captureView("stuck-panel");
+      await vi.advanceTimersByTimeAsync(3_100);
+      await vi.runAllTimersAsync();
+
+      await expect(image).resolves.toBe(captured);
+      expect(view.webContents.capturePage).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
     });
 
     it("returns null for a destroyed panel view without capturing", async () => {

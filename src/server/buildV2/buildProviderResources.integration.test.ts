@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
@@ -53,13 +53,14 @@ it("admits a complete native provider input without granting host sources or cac
   let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
   try {
     const input = resources.input;
+    const physicalBuildsRoot = await realpath(buildsRoot);
     // All provider-visible paths fit the existing read-only builds resource.
     for (const file of [
       input.sourcePath,
       input.dependencyProjection.nodeModulesPath!,
       ...Object.values(input.dependencyProjection.modules),
     ]) {
-      expect(file.startsWith(buildsRoot + path.sep)).toBe(true);
+      expect(file.startsWith(physicalBuildsRoot + path.sep)).toBe(true);
     }
     const probe = path.join(context, "probe.cjs");
     await writeFile(

@@ -12,6 +12,7 @@ import * as path from "path";
 import type { PackageManifest } from "@vibestudio/shared/types";
 import {
   BUILDABLE_UNIT_DIRS,
+  expectedBuildUnitName,
   WORKSPACE_PACKAGE_SCOPES,
 } from "@vibestudio/workspace-contracts/sourceDirs";
 
@@ -67,11 +68,22 @@ export interface GraphNode {
   manifest: PackageManifest;
 }
 
+export interface PackageGraphManifestIssue {
+  relativePath: string;
+  kind: GraphNode["kind"];
+  manifestPath: string;
+  message: string;
+  line: number;
+  column: number;
+}
+
 export class PackageGraph {
   /** name → GraphNode */
   private nodes = new Map<string, GraphNode>();
   /** Topologically sorted node names (leaves first) */
   private topoOrder: string[] = [];
+  /** Invalid manifests remain visible so they can never masquerade as content. */
+  private manifestIssues = new Map<string, PackageGraphManifestIssue>();
 
   addNode(node: GraphNode): void {
     this.nodes.set(node.name, node);
@@ -97,6 +109,18 @@ export class PackageGraph {
 
   allNodes(): GraphNode[] {
     return Array.from(this.nodes.values());
+  }
+
+  addManifestIssue(issue: PackageGraphManifestIssue): void {
+    this.manifestIssues.set(issue.relativePath, issue);
+  }
+
+  manifestIssueForPath(relativePath: string): PackageGraphManifestIssue | undefined {
+    return this.manifestIssues.get(relativePath);
+  }
+
+  allManifestIssues(): PackageGraphManifestIssue[] {
+    return Array.from(this.manifestIssues.values());
   }
 
   /** Returns nodes in topological order (leaves first, dependents last). */
@@ -303,14 +327,72 @@ function testSuiteDeclarationErrors(value: unknown): string[] {
   return errors;
 }
 
-function readPackageJson(dir: string): PackageJson | null {
-  const p = path.join(dir, "package.json");
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as PackageJson;
-  } catch {
-    return null;
+function jsonErrorLocation(source: string, error: unknown): { line: number; column: number } {
+  const message = error instanceof Error ? error.message : String(error);
+  const explicit = /line (\d+) column (\d+)/iu.exec(message);
+  if (explicit) return { line: Number(explicit[1]), column: Number(explicit[2]) };
+  const position = /position (\d+)/iu.exec(message);
+  const offset = position ? Math.min(Number(position[1]), source.length) : 0;
+  const lines = source.slice(0, offset).split("\n");
+  return { line: lines.length, column: (lines.at(-1)?.length ?? 0) + 1 };
+}
+
+function manifestIssue(
+  relativePath: string,
+  kind: GraphNode["kind"],
+  manifestName: "package.json" | "template.json",
+  source: string | undefined,
+  error?: unknown,
+  message?: string
+): PackageGraphManifestIssue {
+  const manifestPath = `${relativePath}/${manifestName}`;
+  if (source === undefined) {
+    return {
+      relativePath,
+      kind,
+      manifestPath,
+      message: `Missing required ${manifestName}`,
+      line: 1,
+      column: 1,
+    };
   }
+  return {
+    relativePath,
+    kind,
+    manifestPath,
+    message:
+      message ??
+      `Invalid JSON in ${manifestName}: ${error instanceof Error ? error.message : String(error)}`,
+    ...jsonErrorLocation(source, error),
+  };
+}
+
+const LOCATION_SPECIFIC_BLOCKS = ["app", "extension", "panel", "worker"] as const;
+
+function packageManifestContractError(
+  relativePath: string,
+  kind: GraphNode["kind"],
+  packageJson: string
+): string | null {
+  const pkg = JSON.parse(packageJson) as PackageJson;
+  const expectedName = expectedBuildUnitName(relativePath);
+  if (!expectedName) return `Unsupported workspace unit location ${relativePath}`;
+  if (pkg.name !== expectedName) {
+    return `package.json name must be ${JSON.stringify(expectedName)} for ${relativePath}`;
+  }
+  const manifest = pkg.vibestudio as Record<string, unknown> | undefined;
+  const presentBlocks = LOCATION_SPECIFIC_BLOCKS.filter(
+    (block) => manifest?.[block] !== undefined && manifest[block] !== null
+  );
+  const requiredBlock = kind === "app" || kind === "extension" ? kind : null;
+  if (requiredBlock && !presentBlocks.includes(requiredBlock)) {
+    return `${relativePath} must declare vibestudio.${requiredBlock} configuration`;
+  }
+  const foreignBlocks = presentBlocks.filter((block) => block !== requiredBlock);
+  if (foreignBlocks.length > 0) {
+    return `${relativePath} is a ${kind} by location and cannot declare ${foreignBlocks.map((block) => `vibestudio.${block}`).join(", ")}`;
+  }
+  return null;
 }
 
 function packageNodeFromJson(
@@ -364,27 +446,53 @@ function packageNodeFromJson(
   };
 }
 
-function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind"]): GraphNode[] {
-  if (!fs.existsSync(dir)) return [];
-  const nodes: GraphNode[] = [];
+function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind"]): PackageGraph {
+  const graph = new PackageGraph();
+  if (!fs.existsSync(dir)) return graph;
 
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith(".")) continue;
 
     const unitDir = path.join(dir, entry.name);
-    const pkg = readPackageJson(unitDir);
-    if (!pkg) continue;
-    const node = packageNodeFromJson(
-      workspaceRoot,
-      path.relative(workspaceRoot, unitDir).replace(/\\/g, "/"),
-      kind,
-      JSON.stringify(pkg)
-    );
-    if (node) nodes.push(node);
+    const relativePath = path.relative(workspaceRoot, unitDir).replace(/\\/g, "/");
+    const packagePath = path.join(unitDir, "package.json");
+    if (!fs.existsSync(packagePath)) {
+      graph.addManifestIssue(manifestIssue(relativePath, kind, "package.json", undefined));
+      continue;
+    }
+    const source = fs.readFileSync(packagePath, "utf-8");
+    try {
+      JSON.parse(source);
+    } catch (error) {
+      graph.addManifestIssue(manifestIssue(relativePath, kind, "package.json", source, error));
+      continue;
+    }
+    const contractError = packageManifestContractError(relativePath, kind, source);
+    if (contractError) {
+      graph.addManifestIssue(
+        manifestIssue(relativePath, kind, "package.json", source, undefined, contractError)
+      );
+      continue;
+    }
+    const node = packageNodeFromJson(workspaceRoot, relativePath, kind, source);
+    if (node) {
+      graph.addNode(node);
+    } else {
+      graph.addManifestIssue(
+        manifestIssue(
+          relativePath,
+          kind,
+          "package.json",
+          source,
+          undefined,
+          "package.json must declare a non-empty package name"
+        )
+      );
+    }
   }
 
-  return nodes;
+  return graph;
 }
 
 function templateNodeFromJson(
@@ -431,40 +539,36 @@ import type { TemplateConfig } from "./templateResolver.js";
 import { FRAMEWORK_MODULES, frameworkModule } from "./platformModules.js";
 import { assertPresent } from "../../lintHelpers";
 
-function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
-  if (!fs.existsSync(dir)) return [];
-  const nodes: GraphNode[] = [];
+function scanTemplates(dir: string, workspaceRoot: string): PackageGraph {
+  const graph = new PackageGraph();
+  if (!fs.existsSync(dir)) return graph;
 
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith(".")) continue;
 
     const templateDir = path.join(dir, entry.name);
+    const relativePath = path.relative(workspaceRoot, templateDir).replace(/\\/g, "/");
     const configPath = path.join(templateDir, "template.json");
     if (!fs.existsSync(configPath)) {
-      console.warn(
-        `[PackageGraph] Template directory ${entry.name} has no template.json, skipping`
+      graph.addManifestIssue(manifestIssue(relativePath, "template", "template.json", undefined));
+      continue;
+    }
+
+    const source = fs.readFileSync(configPath, "utf-8");
+    try {
+      JSON.parse(source) as TemplateConfig;
+    } catch (error) {
+      graph.addManifestIssue(
+        manifestIssue(relativePath, "template", "template.json", source, error)
       );
       continue;
     }
 
-    let config: TemplateConfig = {};
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf-8")) as TemplateConfig;
-    } catch {
-      console.warn(`[PackageGraph] Failed to parse template.json in ${entry.name}`);
-    }
-
-    nodes.push(
-      templateNodeFromJson(
-        workspaceRoot,
-        path.relative(workspaceRoot, templateDir).replace(/\\/g, "/"),
-        JSON.stringify(config)
-      )
-    );
+    graph.addNode(templateNodeFromJson(workspaceRoot, relativePath, source));
   }
 
-  return nodes;
+  return graph;
 }
 
 /**
@@ -482,9 +586,10 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
       kind === "template"
         ? scanTemplates(absDir, workspaceRoot)
         : scanDirectory(absDir, workspaceRoot, kind);
-    for (const node of discovered) {
+    for (const node of discovered.allNodes()) {
       graph.addNode(node);
     }
+    for (const issue of discovered.allManifestIssues()) graph.addManifestIssue(issue);
   }
 
   return finalizePackageGraph(graph);
@@ -502,20 +607,60 @@ export function discoverPackageGraphFromManifests(
 ): PackageGraph {
   const graph = new PackageGraph();
   for (const manifest of manifests) {
+    const manifestName = manifest.kind === "template" ? "template.json" : "package.json";
+    const source = manifest.kind === "template" ? manifest.templateJson : manifest.packageJson;
+    if (source === undefined) {
+      graph.addManifestIssue(
+        manifestIssue(manifest.relativePath, manifest.kind, manifestName, undefined)
+      );
+      continue;
+    }
+    try {
+      JSON.parse(source);
+    } catch (error) {
+      graph.addManifestIssue(
+        manifestIssue(manifest.relativePath, manifest.kind, manifestName, source, error)
+      );
+      continue;
+    }
+    if (manifest.kind !== "template") {
+      const contractError = packageManifestContractError(
+        manifest.relativePath,
+        manifest.kind,
+        source
+      );
+      if (contractError) {
+        graph.addManifestIssue(
+          manifestIssue(
+            manifest.relativePath,
+            manifest.kind,
+            manifestName,
+            source,
+            undefined,
+            contractError
+          )
+        );
+        continue;
+      }
+    }
     const node =
       manifest.kind === "template"
-        ? manifest.templateJson === undefined
-          ? null
-          : templateNodeFromJson(workspaceRoot, manifest.relativePath, manifest.templateJson)
-        : manifest.packageJson === undefined
-          ? null
-          : packageNodeFromJson(
-              workspaceRoot,
-              manifest.relativePath,
-              manifest.kind,
-              manifest.packageJson
-            );
-    if (node) graph.addNode(node);
+        ? templateNodeFromJson(workspaceRoot, manifest.relativePath, source)
+        : packageNodeFromJson(workspaceRoot, manifest.relativePath, manifest.kind, source);
+    if (node) {
+      graph.addNode(node);
+    } else {
+      graph.addManifestIssue(
+        manifestIssue(
+          manifest.relativePath,
+          manifest.kind,
+          manifestName,
+          source,
+          undefined,
+          `${manifestName} does not declare a valid ${manifest.kind} unit`
+        )
+      );
+    }
   }
   return finalizePackageGraph(graph);
 }

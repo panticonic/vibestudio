@@ -55,8 +55,11 @@ export function parseExtensionMethodAuthority(
       );
     }
     const website = declaration["website"];
-    try { validateWebsiteMethodPolicy(website, `${label}.${method}`); }
-    catch (error) { throw new UnitManifestError(String(error), "MANIFEST_METHOD_AUTHORITY"); }
+    try {
+      validateWebsiteMethodPolicy(website, `${label}.${method}`);
+    } catch (error) {
+      throw new UnitManifestError(String(error), "MANIFEST_METHOD_AUTHORITY");
+    }
     const effect = declaration["effect"];
     if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
       throw new UnitManifestError(
@@ -242,7 +245,7 @@ export const appUnitManifestDescriptor: UnitManifestDescriptor = {
   label: "App",
 };
 
-const KIND_BLOCKS = ["extension", "worker", "panel", "app"] as const;
+const LOCATION_CONFIG_BLOCKS = ["extension", "app"] as const;
 
 function assertRecord(
   value: unknown,
@@ -266,17 +269,17 @@ function assertOptionalString(value: unknown, message: string, code: string): st
   return value;
 }
 
-function assertNoForeignKindBlocks(
+function assertNoForeignLocationConfig(
   record: Record<string, unknown>,
   descriptor: UnitManifestDescriptor,
   options: UnitManifestValidationOptions
 ): void {
-  const kindBlocks = KIND_BLOCKS.filter((key) => record[key] !== undefined && record[key] !== null);
-  if (kindBlocks.length !== 1 || kindBlocks[0] !== descriptor.kind) {
+  const foreignBlocks = LOCATION_CONFIG_BLOCKS.filter(
+    (key) => key !== descriptor.kind && record[key] !== undefined && record[key] !== null
+  );
+  if (foreignBlocks.length > 0) {
     throw new UnitManifestError(
-      `${descriptor.label} ${options.unitName} must declare exactly one kind block: vibestudio.${descriptor.kind} (found: ${
-        kindBlocks.length === 0 ? "none" : kindBlocks.join(", ")
-      })`,
+      `${descriptor.label} ${options.unitName} cannot declare configuration for ${foreignBlocks.join(", ")}; its location fixes its unit kind`,
       "MANIFEST_KIND"
     );
   }
@@ -584,7 +587,7 @@ export function validateUnitManifest(
   options: UnitManifestValidationOptions
 ): void {
   const record = assertRecord(manifest, descriptor.label, options);
-  assertNoForeignKindBlocks(record, descriptor, options);
+  assertNoForeignLocationConfig(record, descriptor, options);
   validateInlineSourcemap(record, descriptor, options);
 
   if (descriptor.kind === "extension") {

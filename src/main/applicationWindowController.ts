@@ -212,6 +212,7 @@ export class ApplicationWindowController {
       shellAdditionalArguments: [],
       devTools: false,
       showWindowOnShellLoad: !this.deps.isHeadlessHost,
+      headless: this.deps.isHeadlessHost,
       hidePanelViewsUntilHostedShellReady: true,
     });
     if (this.deps.onCodeIdentityChanged)

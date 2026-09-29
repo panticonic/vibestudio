@@ -110,6 +110,7 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     // and unit-relative artwork in the immutable approval snapshot; the shared
     // icon renderer controls when relative assets are fetched.
     ...(icon ? { icon } : {}),
+    ...(icon?.startsWith("./") && unit.iconState ? { iconState: unit.iconState } : {}),
     title: installReviewPartTitle(unit.source.repo),
     purpose: unit.purpose ?? "",
     repoPath: unit.source.repo,

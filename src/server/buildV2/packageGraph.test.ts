@@ -31,6 +31,31 @@ function makeNode(
 }
 
 describe("PackageGraph", () => {
+  it("rejects a package identity that disagrees with its location", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-location-owned-unit-"));
+    try {
+      const panelDir = path.join(root, "panels", "board");
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-workers/board",
+          vibestudio: { worker: {} },
+        })
+      );
+
+      const graph = discoverPackageGraph(root);
+      expect(graph.allNodes()).toEqual([]);
+      expect(graph.manifestIssueForPath("panels/board")).toMatchObject({
+        kind: "panel",
+        manifestPath: "panels/board/package.json",
+        message: 'package.json name must be "@workspace-panels/board" for panels/board',
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Basic CRUD operations
   // -------------------------------------------------------------------------
@@ -247,7 +272,6 @@ describe("discoverPackageGraph extension units", () => {
           },
           vibestudio: {
             entry: "index.tsx",
-            panel: {},
           },
         })
       );
@@ -271,7 +295,7 @@ describe("discoverPackageGraph extension units", () => {
         JSON.stringify({
           name: "@workspace-panels/chat",
           dependencies: { "@workspace/test-runtime": "workspace:*" },
-          vibestudio: { entry: "index.tsx", panel: {} },
+          vibestudio: { entry: "index.tsx" },
         })
       );
 
@@ -373,7 +397,7 @@ describe("discoverPackageGraph template framework closure", () => {
         JSON.stringify({
           name: "@workspace-panels/board",
           dependencies: { react: "^19.0.0" },
-          vibestudio: { entry: "index.tsx", panel: {} },
+          vibestudio: { entry: "index.tsx" },
         })
       );
       fs.writeFileSync(

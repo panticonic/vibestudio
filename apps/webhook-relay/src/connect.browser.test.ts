@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
 import * as http from "node:http";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { handleApexLanding } from "./oauthLanding";
 
@@ -54,7 +54,7 @@ const connectedRuntime = String.raw`
 
 `;
 
-describe("apex connected experience", () => {
+describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experience", () => {
   let browser: Browser;
   let server: http.Server;
   let origin: string;

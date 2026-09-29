@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveLocalWorkspaceStartup } from "./startup.js";
 
-const originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
+const originalInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
 const tempRoots: string[] = [];
 
 afterEach(() => {
-  if (originalXdgConfigHome === undefined) delete process.env["XDG_CONFIG_HOME"];
-  else process.env["XDG_CONFIG_HOME"] = originalXdgConfigHome;
+  if (originalInstanceRoot === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
+  else process.env["VIBESTUDIO_INSTANCE_ROOT"] = originalInstanceRoot;
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -18,7 +18,7 @@ afterEach(() => {
 function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-startup-"));
   tempRoots.push(root);
-  process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+  process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
   fs.mkdirSync(path.join(root, "build-resources"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "build-resources", "workspace-template-release.json"),
@@ -44,7 +44,7 @@ function setup() {
     })
   );
   const workspaceDir = (name: string) =>
-    path.join(process.env["XDG_CONFIG_HOME"]!, "vibestudio", "workspaces", name);
+    path.join(process.env["VIBESTUDIO_INSTANCE_ROOT"]!, "workspaces", name);
   return { root, workspaceDir };
 }
 

@@ -88,11 +88,11 @@ describe("resolveDevelopmentTemplateSet", () => {
       })
     ).resolves.toMatchObject({
       sourceCheckouts: {
-        base: path.join(templates, "base"),
-        personal: path.join(templates, "personal"),
-        system: path.join(templates, "system"),
-        "system-testing": path.join(templates, "system-testing"),
-        examples: path.join(templates, "examples"),
+        base: fs.realpathSync(path.join(templates, "base")),
+        personal: fs.realpathSync(path.join(templates, "personal")),
+        system: fs.realpathSync(path.join(templates, "system")),
+        "system-testing": fs.realpathSync(path.join(templates, "system-testing")),
+        examples: fs.realpathSync(path.join(templates, "examples")),
       },
       pins: {
         base: {

@@ -41,6 +41,7 @@ describe("install-review part names", () => {
   it("preserves custom identity for every install-review icon form", () => {
     const relative = unit("workers/mail", "@workspace-workers/mail", "Mail");
     relative.icon = "./assets/icon.svg";
+    relative.iconState = `state:${"a".repeat(64)}`;
     const semantic = unit("workers/chat", "@workspace-workers/chat", "Chat");
     semantic.icon = "💬";
 
@@ -49,8 +50,11 @@ describe("install-review part names", () => {
         unit: relative,
         identityKey: "workers/mail@ev-1",
         origin: hostBuildOrigin("1.0.0"),
-      }).icon
-    ).toBe("./assets/icon.svg");
+      })
+    ).toMatchObject({
+      icon: "./assets/icon.svg",
+      iconState: `state:${"a".repeat(64)}`,
+    });
     expect(
       reviewedUnitPart({
         unit: semantic,

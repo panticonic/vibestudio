@@ -19,7 +19,9 @@ export type { PanelPlacementHint };
 /**
  * The `vibestudio` block of a workspace package's package.json.
  *
- * One canonical shape for panels, about pages, and workers. The build pipeline
+ * A unit's workspace directory determines its kind; this block only describes
+ * behavior for that already-known kind. One canonical shape serves panels,
+ * about pages, and workers. The build pipeline
  * (`src/server/buildV2`) and the runtime panel loader (`panelTypes.ts`) both
  * read from this same type. Each consumer uses the fields it cares about and
  * ignores the rest — workers ignore `dependencies` / `stateArgs`; panels ignore
@@ -63,7 +65,7 @@ export interface PackageManifest {
       locator: { url: string };
     }>;
   };
-  /** Extension discriminator block. Presence marks this package as an extension unit. */
+  /** Extension-only configuration (valid only for packages under extensions/). */
   extension?: {
     /** v1 accepts only eager activation (`"*"`). */
     activationEvents?: string[];
@@ -85,11 +87,7 @@ export interface PackageManifest {
      */
     providerContracts?: Record<string, { methods: string[] }>;
   };
-  /** Future shared manifest discriminator for worker units. */
-  worker?: Record<string, unknown>;
-  /** Future shared manifest discriminator for panel units. */
-  panel?: Record<string, unknown>;
-  /** Native host app contract, validated by the app manifest descriptor. */
+  /** App-only host contract (valid only for packages under apps/). */
   app?: {
     target: WorkspaceAppTarget;
     capabilities?: AppCapability[];

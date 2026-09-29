@@ -217,7 +217,12 @@ describe("NativeDevelopmentExecutor", () => {
       expect.objectContaining({
         sessionId: "session-1",
         ownedRootId: result.ownedRootId,
-        repositoryRoot: path.join(fx.root, "sessions", "session-1", "repository"),
+        repositoryRoot: path.join(
+          await fs.realpath(fx.root),
+          "sessions",
+          "session-1",
+          "repository"
+        ),
       })
     );
     expect(result).toMatchObject({
@@ -446,7 +451,12 @@ describe("NativeDevelopmentExecutor", () => {
     const fx = await fixture();
     await open(fx);
     const originalRm = fs.rm.bind(fs);
-    const repositoryRoot = path.join(fx.root, "sessions", "session-1", "repository");
+    const repositoryRoot = path.join(
+      await fs.realpath(fx.root),
+      "sessions",
+      "session-1",
+      "repository"
+    );
     const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (String(target) === repositoryRoot) throw new Error("filesystem busy");
       return originalRm(target, options);

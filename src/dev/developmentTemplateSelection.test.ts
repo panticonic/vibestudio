@@ -87,7 +87,7 @@ describe("development template selection", () => {
     });
 
     expect(selection).toMatchObject({
-      sourceCheckout: fx.checkout,
+      sourceCheckout: fs.realpathSync(fx.checkout),
       changedPaths: ["meta/vibestudio.yml", "panels/example/new.ts"],
       review: {
         presentation: { name: "Example", description: "Example template." },

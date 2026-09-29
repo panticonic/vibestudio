@@ -373,6 +373,8 @@ export class ViewManager {
   /** Callbacks invoked once the workspace shell has taken over from the launch gate. */
   private hostedShellReadyCallbacks: Array<() => void> = [];
   private readonly compositorRecovery: CompositorRecovery;
+  /** Isolated renderers may retry captures by cycling their non-user-facing surface. */
+  private readonly headless: boolean;
 
   constructor(options: {
     window: BaseWindow;
@@ -383,9 +385,11 @@ export class ViewManager {
     shellAdditionalArguments?: string[];
     devTools?: boolean;
     showWindowOnShellLoad?: boolean;
+    headless?: boolean;
     hidePanelViewsUntilHostedShellReady?: boolean;
   }) {
     this.window = options.window;
+    this.headless = options.headless ?? false;
     this.hidePanelViewsUntilHostedShellReady = options.hidePanelViewsUntilHostedShellReady ?? false;
     // Create the minimal shipped bootstrap launch gate. The full shell is a
     // workspace app; this surface only owns host-target startup approval.
@@ -2457,6 +2461,12 @@ export class ViewManager {
             ? originalBounds
             : { x: 0, y: 0, width: 1280, height: 800 };
 
+        // A headed macOS client must composite the real panel to obtain a Viz
+        // frame, but appending the WebContentsView promotes its native layer
+        // above the shell. Put it at the bottom of the native child stack
+        // before revealing it: capturePage still reads the panel's own surface
+        // while the user continues to see the shell and its overlays.
+        if (!this.headless) this.window.contentView.addChildView(managed.view, 0);
         managed.view.setBounds(captureBounds);
         managed.view.setVisible(true);
 
@@ -2476,6 +2486,7 @@ export class ViewManager {
         if (!wasVisible) {
           managed.view.setVisible(false);
           managed.view.setBounds(originalBounds);
+          if (!this.headless) this.reconcileNativeLayerOrder();
         }
         if (!windowWasVisible && !this.window.isDestroyed()) {
           this.window.hide();
@@ -2520,16 +2531,31 @@ export class ViewManager {
     // Page.captureScreenshot here), so it MUST render unslotted panels instead
     // of declining. The isDestroyed bail above keeps it correct.
     let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const attempts = this.headless ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         const image = await this.withViewVisible(id, async () => {
           const bounds = managed.view.getBounds();
-          return contents.capturePage({
+          const capture = contents.capturePage({
             x: 0,
             y: 0,
             width: Math.max(1, Math.round(bounds.width)),
             height: Math.max(1, Math.round(bounds.height)),
           });
+          let timer: NodeJS.Timeout | undefined;
+          try {
+            return await Promise.race([
+              capture,
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("capturePage did not produce a frame within 3 seconds")),
+                  3_000
+                );
+              }),
+            ]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
         });
         if (!image || !image.isEmpty()) return image;
         lastError = new Error("captureScreenshot returned an empty image");
@@ -2537,7 +2563,7 @@ export class ViewManager {
         lastError = error;
       }
 
-      if (attempt < 2) {
+      if (attempt < attempts - 1) {
         // Viz can lose the first surface while a hidden WebContentsView is
         // being attached. Invalidate and cycle the view before retrying the
         // bounded capture; this recovers transient UnknownVizError failures

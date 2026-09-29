@@ -1,10 +1,9 @@
-import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   type DevelopmentExecutionSnapshot,
   type DevelopmentRecipe,
@@ -27,7 +26,6 @@ import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
 import { DevelopmentRunRoots } from "./developmentRunRoots.js";
 import { sealDevelopmentWorkspaceSources } from "./developmentWorkspaceSources.js";
 
-const execFileAsync = promisify(execFile);
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
 const REGULAR_MODE = 0o100644;
 const EXECUTABLE_MODE = 0o100755;
@@ -708,7 +706,12 @@ export class DevelopmentExecutor {
     includePnpm: boolean
   ): Promise<{ nodePath: string; pnpmCliPath: string }> {
     const projectionRoot = path.join(this.runRoot(plan.runId), "toolchain");
-    const nodePath = await fs.realpath(path.join(projectionRoot, "node"));
+    // Node installations may be a runtime closure rather than one portable
+    // file (Homebrew's executable loads libnode relative to its Cellar root).
+    // Execute the captured host runtime in place and re-verify its bytes at
+    // every spawn boundary; copying only the launcher produces an invalid
+    // executable on those platforms.
+    const nodePath = await fs.realpath(plan.executables.nodePath);
     const nodeDigest = sha256(await fs.readFile(nodePath));
     if (nodeDigest !== plan.snapshot.toolchain.node.digest) {
       throw Object.assign(new Error("Exact Node executable changed after preparation"), {
@@ -742,10 +745,7 @@ export class DevelopmentExecutor {
     await fs.rm(projectionRoot, { recursive: true, force: true });
     await fs.mkdir(projectionRoot, { recursive: true, mode: 0o700 });
     const nodeSource = await fs.realpath(plan.executables.nodePath);
-    const nodeTarget = path.join(projectionRoot, "node");
-    await fs.copyFile(nodeSource, nodeTarget, fsConstants.COPYFILE_FICLONE);
-    await fs.chmod(nodeTarget, 0o500);
-    if (sha256(await fs.readFile(nodeTarget)) !== plan.snapshot.toolchain.node.digest) {
+    if (sha256(await fs.readFile(nodeSource)) !== plan.snapshot.toolchain.node.digest) {
       throw Object.assign(new Error("Exact Node executable changed before materialization"), {
         code: "ETOOLCHAIN_DRIFT",
       });
@@ -780,21 +780,24 @@ async function resolveExactToolchain(hostExecutionDigest: string): Promise<Exact
       code: "EEXECUTOR_UNAVAILABLE",
     });
   }
-  const [nodeBytes, pnpmDigest, pnpmVersionResult] = await Promise.all([
+  const [nodeBytes, pnpmDigest, pnpmManifestBytes] = await Promise.all([
     fs.readFile(nodePath),
     hashDevelopmentPackageClosure(pnpmRootPath),
-    execFileAsync(nodePath, [pnpmCliPath, "--version"], {
-      env: { PATH: path.dirname(nodePath) },
-      windowsHide: true,
-    }),
+    fs.readFile(path.join(pnpmRootPath, "package.json"), "utf8"),
   ]);
+  const pnpmVersion = (JSON.parse(pnpmManifestBytes) as { version?: unknown }).version;
+  if (typeof pnpmVersion !== "string" || !pnpmVersion) {
+    throw Object.assign(new Error("The exact pnpm package has no valid version"), {
+      code: "EEXECUTOR_UNAVAILABLE",
+    });
+  }
   const node = {
     digest: sha256(nodeBytes),
     version: process.version,
     platform: process.platform,
     arch: process.arch,
   };
-  const pnpm = { digest: pnpmDigest, version: pnpmVersionResult.stdout.trim() };
+  const pnpm = { digest: pnpmDigest, version: pnpmVersion };
   const hostSourceBuild = { digest: hostExecutionDigest };
   return {
     executorId: domainHash(
@@ -916,6 +919,15 @@ async function resolvePnpmCli(nodePath: string): Promise<string> {
       if (!stat.isFile()) continue;
       const prefix = await fs.readFile(resolved, { encoding: "utf8" });
       if (!prefix.includes("pnpm")) continue;
+      // PATH commonly begins with package-manager shims. A shim is not an
+      // exact toolchain closure; keep searching until the resolved entry point
+      // is actually contained by a pnpm package manifest.
+      try {
+        await resolvePnpmPackageRoot(resolved);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXECUTOR_UNAVAILABLE") continue;
+        throw error;
+      }
       return resolved;
     } catch {
       // Try the next exact installed candidate.

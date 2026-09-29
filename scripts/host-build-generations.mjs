@@ -59,9 +59,20 @@ function withGenerationLock(generations, action) {
           if (probeError?.code !== "ESRCH") alive = true;
         }
       }
-      if (!alive && Date.now() - fs.statSync(lock).mtimeMs > 1_000) {
-        fs.rmSync(lock, { recursive: true, force: true });
-        continue;
+      if (!alive) {
+        let modifiedAt;
+        try {
+          modifiedAt = fs.statSync(lock).mtimeMs;
+        } catch (statError) {
+          // Another contender released or reclaimed the lock between the
+          // owner probe and stat. Retry acquisition from the new state.
+          if (statError?.code === "ENOENT") continue;
+          throw statError;
+        }
+        if (Date.now() - modifiedAt > 1_000) {
+          fs.rmSync(lock, { recursive: true, force: true });
+          continue;
+        }
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
     }

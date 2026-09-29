@@ -671,6 +671,8 @@ export interface InstallReviewPart {
   displayName?: string;
   /** Semantic icon declared by this part. */
   icon?: string;
+  /** Immutable workspace state containing a relative icon asset. */
+  iconState?: string;
   title: string;
   purpose: string;
   repoPath: string;

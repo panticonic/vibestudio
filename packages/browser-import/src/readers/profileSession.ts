@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { execFileSync } from "node:child_process";
 import type { BrowserFamily } from "../types.js";
 
 /**
@@ -12,8 +13,9 @@ import type { BrowserFamily } from "../types.js";
  * timestamps:
  *
  * - Firefox writes a `lock` symlink (POSIX) / `parent.lock` (Windows) into the
- *   profile directory at startup and removes it on exit. `.parentlock` is left
- *   behind after a clean exit, so it is deliberately not used here.
+ *   profile directory at startup and removes it on exit. On macOS it retains
+ *   `.parentlock` on disk and holds the file open while the profile is live, so
+ *   existence alone is stale but the owning open descriptor is authoritative.
  * - Chromium writes `SingletonLock` into the user-data directory, which covers
  *   every profile inside it — so it answers "is this browser running", not "is
  *   this specific profile open". That is still strictly better than treating an
@@ -32,7 +34,23 @@ export function isProfileRunning(family: BrowserFamily, profilePath: string): bo
             path.join(path.dirname(profilePath), "SingletonLock"),
           ]
         : [];
-  return candidates.some(exists);
+  return (
+    candidates.some(exists) ||
+    (family === "firefox" && darwinParentLockIsOpen(path.join(profilePath, ".parentlock")))
+  );
+}
+
+function darwinParentLockIsOpen(candidate: string): boolean {
+  if (process.platform !== "darwin" || !exists(candidate)) return false;
+  try {
+    execFileSync("/usr/sbin/lsof", ["-t", "--", candidate], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: 1_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** `existsSync` follows symlinks, and Firefox's `lock` target is a socket address. */

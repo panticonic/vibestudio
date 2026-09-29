@@ -7,6 +7,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { finished } from "node:stream/promises";
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
+import { captureOwnedProcessIdentity } from "@vibestudio/shared/ownedProcessIdentity";
+import { terminateOwnedProcessTree } from "../../../scripts/owned-process-tree.mjs";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   PhoneDeviceSchema,
@@ -95,19 +97,30 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
       finished(child.stdout!, { cleanup: true }),
       finished(child.stderr!, { cleanup: true }),
     ]);
-    // Parent loss revokes the script's whole tree through its inherited IPC
-    // lease. Retirement also owns the group if the script exits unexpectedly.
-    const revoke = () => {
-      if (child.connected) child.disconnect();
+    // Capture the root while it is alive. Cancellation must snapshot and join
+    // the complete ancestry before the kernel reparents detached descendants.
+    const identity = child.pid === undefined ? null : captureOwnedProcessIdentity(child.pid);
+    const owner = identity ? OwnedProcessGroup.adopt(identity) : null;
+    // Start retirement from the abort edge itself: `settled` cannot complete
+    // until the child exits, and waiting until `finally` would deadlock.
+    let abortRetirement: Promise<void> | null = null;
+    const retireOnAbort = () => {
+      if (child.pid === undefined || !identity) return;
+      abortRetirement ??= terminateOwnedProcessTree(child.pid, {
+        identity,
+        termTimeoutMs: 5_000,
+        killTimeoutMs: 5_000,
+      }).then((result) => {
+        if (!result.gone) throw new Error(result.detail ?? "Owned command tree did not retire");
+      });
+      void abortRetirement.catch(() => {
+        // The same idempotent retirement is awaited below, where its error is
+        // returned through the command boundary rather than as an unhandled
+        // abort-listener rejection.
+      });
     };
-    const owner =
-      child.pid === undefined
-        ? null
-        : OwnedProcessGroup.create(child, {
-            requestGracefulStop: revoke,
-          });
-    options.signal?.addEventListener("abort", revoke, { once: true });
-    if (options.signal?.aborted) revoke();
+    options.signal?.addEventListener("abort", retireOnAbort, { once: true });
+    if (options.signal?.aborted) retireOnAbort();
     try {
       const [result] = await settled;
       options.signal?.throwIfAborted();
@@ -116,8 +129,9 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
       if (options.signal?.aborted) options.signal.throwIfAborted();
       throw error;
     } finally {
-      options.signal?.removeEventListener("abort", revoke);
-      await owner?.retire();
+      options.signal?.removeEventListener("abort", retireOnAbort);
+      if (abortRetirement) await abortRetirement;
+      else await owner?.retire();
     }
   };
 }

@@ -19,7 +19,7 @@ async function sourceRoot(unit: string): Promise<string> {
   await fs.writeFile(
     path.join(unitRoot, "package.json"),
     `${JSON.stringify({
-      name: `@fixture/${unit}`,
+      name: `@workspace-panels/${unit}`,
       private: true,
       vibestudio: { title: unit },
     })}\n`
@@ -36,7 +36,7 @@ async function unitWithIcon(icon: string, body: string, iconPath = "assets/icon.
   await fs.writeFile(
     path.join(unitRoot, "package.json"),
     `${JSON.stringify({
-      name: "@fixture/iconic",
+      name: "@workspace-panels/iconic",
       private: true,
       vibestudio: { title: "Iconic", icon },
     })}\n`
@@ -99,6 +99,23 @@ describe("WorkspaceTreeScanner unit icons", () => {
 });
 
 describe("WorkspaceTreeScanner", () => {
+  it("keeps an invalid located unit navigable without advertising it as launchable", async () => {
+    const root = await sourceRoot("wrong-name");
+    const packagePath = path.join(root, "panels", "wrong-name", "package.json");
+    const pkg = JSON.parse(await fs.readFile(packagePath, "utf8")) as { name: string };
+    pkg.name = "@workspace-workers/wrong-name";
+    await fs.writeFile(packagePath, `${JSON.stringify(pkg)}\n`);
+
+    const tree = await new WorkspaceTreeScanner(root).getSourceTree();
+    const panel = tree.children
+      .find((node) => node.path === "panels")
+      ?.children.find((node) => node.path === "panels/wrong-name");
+
+    expect(panel).toMatchObject({ path: "panels/wrong-name", isUnit: true });
+    expect(panel?.packageInfo).toBeUndefined();
+    expect(panel?.launchable).toBeUndefined();
+  });
+
   it("does not materialize the source projection before the first consumer asks", async () => {
     const root = await sourceRoot("lazy");
     const provide = vi.fn(async () => root);

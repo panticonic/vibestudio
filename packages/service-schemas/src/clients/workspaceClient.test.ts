@@ -49,11 +49,11 @@ describe("createWorkspaceClient project discovery", () => {
     });
     const workspace = createWorkspaceClient({ call } as never);
 
-    await expect(workspace.projects.list()).resolves.toEqual(["projects/alpha", "projects/zeta"]);
-    await expect(workspace.projects.findForPath("projects/alpha/src.ts")).resolves.toEqual({
+    await expect(workspace.projects()).resolves.toEqual(["projects/alpha", "projects/zeta"]);
+    await expect(workspace.projectForPath("projects/alpha/src.ts")).resolves.toEqual({
       unitPath: "projects/alpha",
       relativePath: "src.ts",
     });
-    await expect(workspace.projects.findForPath("panels/chat/index.tsx")).resolves.toBeNull();
+    await expect(workspace.projectForPath("panels/chat/index.tsx")).resolves.toBeNull();
   });
 });

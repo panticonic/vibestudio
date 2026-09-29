@@ -28,7 +28,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(
         path.join(dir, "package.json"),
-        JSON.stringify({ name: `@workspace-packages/${name}`, version: "0.1.0", type: "module" })
+        JSON.stringify({ name: `@workspace/${name}`, version: "0.1.0", type: "module" })
       );
       fs.writeFileSync(path.join(dir, "index.ts"), "export const x = 1;\n");
     }

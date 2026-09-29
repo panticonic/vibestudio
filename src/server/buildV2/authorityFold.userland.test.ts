@@ -573,6 +573,46 @@ describe("userland authority fold", () => {
     expect(admission?.suggestion).toContain("A request is not a grant.");
   });
 
+  it("reports a dynamic RPC method as unbounded instead of naming the identifier as a method", async () => {
+    const { root, project } = programFor(`
+      declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
+      declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+      async function invoke(method: string) {
+        const service = await workers.resolveService("example.notes.v1");
+        await rpc.call(service.targetId, method, []);
+      }
+    `);
+    const diagnostics = await authorityDiagnosticsForProgram({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [{ name: "consumer", relativePath: "." }],
+      manifest: {
+        authority: {
+          requests: [],
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          provides: [],
+        },
+      },
+      environment: createExactWorkspaceAuthorityEnvironment({
+        stateHash: "state:exact",
+        services: [binding],
+        resolveCatalog: async () => catalog,
+      }),
+    });
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("cannot bound the RPC method"),
+        }),
+      ])
+    );
+    expect(diagnostics.map((diagnostic) => diagnostic.message).join("\n")).not.toContain(
+      "no RPC method 'method'"
+    );
+  });
+
   it("accepts an exact service target and provider-bound capability family", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };

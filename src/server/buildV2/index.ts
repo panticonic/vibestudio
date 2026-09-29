@@ -22,7 +22,7 @@ import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 
 import * as path from "path";
 import { performance } from "node:perf_hooks";
-import type { PackageGraph, GraphNode } from "./packageGraph.js";
+import type { PackageGraph, GraphNode, PackageGraphManifestIssue } from "./packageGraph.js";
 import { declaredExportSubpaths } from "./packageGraph.js";
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import {
@@ -2163,6 +2163,8 @@ export async function initBuildSystemV2(
       const resolved = resolvePinnedUnit();
       const node = resolved.node;
       if (!node) {
+        const manifestError = manifestIssueBuildError(graphAtState, unitPath);
+        if (manifestError) throw manifestError;
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
           return { bundle, format: "cjs" };
@@ -2214,6 +2216,8 @@ export async function initBuildSystemV2(
       resolved = resolveRequestedUnit();
       node = resolved.node;
       if (!node) {
+        const manifestError = manifestIssueBuildError(currentState().graph, unitPath);
+        if (manifestError) throw manifestError;
         // @vibestudio/* packages aren't in the workspace graph — they're compiled
         // platform packages in node_modules. Build them as library bundles
         // so eval can import them.
@@ -2887,7 +2891,22 @@ export async function initBuildSystemV2(
       return view.graph
         .topologicalOrder()
         .filter((node) => names.has(node.name) && node.kind !== "template")
-        .map((node) => node.name);
+        .map((node) => node.name)
+        .concat(
+          view.graph
+            .allManifestIssues()
+            .filter(
+              (issue) =>
+                issue.kind !== "template" &&
+                changedPaths.some(
+                  (changed) =>
+                    changed === issue.relativePath ||
+                    changed.startsWith(`${issue.relativePath}/`) ||
+                    issue.relativePath.startsWith(`${changed}/`)
+                )
+            )
+            .map((issue) => issue.relativePath)
+        );
     },
 
     async stageAuthorityIndex(stateHash: string, signal?: AbortSignal): Promise<void> {
@@ -2975,6 +2994,17 @@ export async function initBuildSystemV2(
       }
       const node = resolveUnit(view.graph, unitName, workspaceRoot);
       if (!node) {
+        const manifestIssue = view.graph.manifestIssueForPath(unitName);
+        if (manifestIssue) {
+          return {
+            stateHash: viewStateHash,
+            repoPath: manifestIssue.relativePath,
+            kind: manifestIssue.kind,
+            status: "failed",
+            diagnostics: [manifestIssueDiagnostic(manifestIssue)],
+            builds: [],
+          };
+        }
         const hashes = await source.unitHashes(viewStateHash, [unitName]);
         if (!hashes[unitName]) {
           throw new BuildRequestError(
@@ -3346,6 +3376,29 @@ function resolveUnit(
   }
 
   return null;
+}
+
+function manifestIssueDiagnostic(issue: PackageGraphManifestIssue): BuildDiagnostic {
+  return {
+    source: "schema",
+    severity: "error",
+    file: issue.manifestPath,
+    line: issue.line,
+    column: issue.column,
+    message: issue.message,
+  };
+}
+
+function manifestIssueBuildError(
+  graph: PackageGraph,
+  unitPath: string
+): BuildDiagnosticsError | null {
+  const issue = graph.manifestIssueForPath(unitPath);
+  return issue
+    ? new BuildDiagnosticsError(`Invalid workspace unit at ${unitPath}`, [
+        manifestIssueDiagnostic(issue),
+      ])
+    : null;
 }
 
 function resolveLibraryUnit(

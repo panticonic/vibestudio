@@ -191,6 +191,9 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         ...(typeof manifest.icon === "string" && manifest.icon.trim()
           ? { icon: manifest.icon.trim() }
           : {}),
+        ...(typeof manifest.icon === "string" && manifest.icon.trim().startsWith("./")
+          ? { iconState: candidate.stateHash }
+          : {}),
         version: candidate.packageVersion,
         source: { kind: "workspace-repo", repo: candidate.unitPath, ref: "main" },
         ev: candidate.effectiveVersion,

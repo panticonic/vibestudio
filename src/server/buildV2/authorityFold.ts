@@ -434,12 +434,10 @@ export async function authorityDiagnosticsForProgram(input: {
               selectedMethods.push(["<dynamic>", authorityEntry]);
             }
           }
-          if (selectedMethods.length > 0) {
-            addDiagnostic(
-              fact,
-              `The workspace service '${service.binding.name}' is called with an unbounded method value; static authority includes every code-reachable protected method. Narrow the method to a literal union when possible.`
-            );
-          }
+          addDiagnostic(
+            fact,
+            `Authority analysis cannot bound the RPC method called on workspace service '${service.binding.name}'. Use a literal or finite literal union so the build can verify the provider method and its authority.`
+          );
         }
       } else {
         for (const methodName of methodValues) {

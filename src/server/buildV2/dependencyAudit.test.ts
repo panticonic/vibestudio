@@ -107,6 +107,7 @@ describe("auditWorkspaceDependencies", () => {
     });
     writeUnit("apps/mobile", {
       name: "@workspace-apps/mobile",
+      vibestudio: { app: { target: "react-native" } },
       dependencies: { "@vibestudio/native-camera": "workspace:*" },
     });
 
@@ -119,6 +120,7 @@ describe("auditWorkspaceDependencies", () => {
     // Owning it at a version the peer range admits settles it.
     writeUnit("apps/mobile", {
       name: "@workspace-apps/mobile",
+      vibestudio: { app: { target: "react-native" } },
       dependencies: {
         "@vibestudio/native-camera": "workspace:*",
         "react-native-camera-kit": "16.0.1",
@@ -134,6 +136,7 @@ describe("auditWorkspaceDependencies", () => {
     });
     writeUnit("apps/shell", {
       name: "@workspace-apps/shell",
+      vibestudio: { app: { target: "electron" } },
       dependencies: { "@workspace/quickfire-core": "workspace:*", react: "19.2.4" },
     });
 

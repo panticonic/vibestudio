@@ -517,6 +517,8 @@ export interface ReviewedUnit {
   displayName: string;
   /** Semantic icon declared by the unit. */
   icon?: string;
+  /** Immutable workspace state containing a relative icon asset. */
+  iconState?: string;
   version?: string | null;
   /** One sentence, from the unit's own description: what it is for. */
   purpose?: string;
