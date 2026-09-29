@@ -18,17 +18,8 @@ export interface DORefParam {
   objectKey: string;
 }
 
-export type ResolvedWorkspaceService = {
-  origin: "workspace";
-  name?: string;
-  title?: string;
-  description?: string;
-  protocols?: string[];
-  source: string;
-} & (
-  | { kind: "durable-object"; className: string; objectKey: string; targetId: string }
-  | { kind: "worker"; routePath: string; routeBasePath: string }
-);
+import type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+export type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 export interface ResolvedDurableObjectTarget {
   kind: "durable-object";

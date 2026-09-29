@@ -371,6 +371,38 @@ const WorkspaceServiceSchema = z.union([
     .strict(),
 ]);
 
+/** The resolver's wire shape and every runtime client derive from one contract. */
+const ResolvedWorkspaceServiceBaseSchema = WorkspaceServiceSchema.options[0]
+  .pick({
+    source: true,
+    name: true,
+    title: true,
+    action: true,
+    description: true,
+    presentation: true,
+    authority: true,
+  })
+  .extend({
+    origin: z.enum(["product", "workspace"]),
+    protocol: z.string().optional(),
+    protocols: z.array(z.string()),
+  });
+export const ResolvedWorkspaceServiceSchema = z.discriminatedUnion("kind", [
+  ResolvedWorkspaceServiceBaseSchema.extend({
+    kind: z.literal("durable-object"),
+    className: z.string(),
+    context: z.literal("creator").optional(),
+    objectKey: z.string(),
+    targetId: z.string(),
+  }).strict(),
+  ResolvedWorkspaceServiceBaseSchema.extend({
+    kind: z.literal("worker"),
+    routePath: z.string(),
+    routeBasePath: z.string(),
+  }).strict(),
+]);
+export type ResolvedWorkspaceService = z.infer<typeof ResolvedWorkspaceServiceSchema>;
+
 /** Canonical structural contract for resolved `meta/vibestudio.yml` configuration. */
 export const WorkspaceConfigSchema = z
   .object({

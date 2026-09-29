@@ -24,6 +24,7 @@ import {
 } from "@vibestudio/shared/runtimeSurface";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
 import templatesRuntimeCatalog from "./generated/templatesRuntimeCatalog.json";
+import workspaceServiceResolutionSchema from "./generated/workspaceServiceResolution.json";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import {
   BLOBSTORE_METHOD_NAMES,
@@ -232,6 +233,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
       minItems: 1,
       maxItems: 2,
     },
+    returnsSchema: workspaceServiceResolutionSchema,
     examples: [{ args: ["example.notes.v1"] }],
   },
   resolveDurableObject: {

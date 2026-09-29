@@ -130,6 +130,10 @@ async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOn
       },
     ])
   );
+  writeRuntimeCatalog(catalogPath, catalogFile, catalog, checkOnly);
+}
+
+function writeRuntimeCatalog(catalogPath, catalogFile, catalog, checkOnly) {
   const next = `${JSON.stringify(catalog, null, 2)}\n`;
   const current = fs.existsSync(catalogPath) ? fs.readFileSync(catalogPath, "utf8") : null;
   if (checkOnly) {
@@ -151,6 +155,16 @@ const checkOnly = process.argv.includes("--check");
 
 await updateRuntimeCatalog("workspaceSource.ts", "gadMethods", "gadRuntimeCatalog.json", checkOnly);
 await updateRuntimeCatalog("templates.ts", "templatesMethods", "templatesRuntimeCatalog.json", checkOnly);
+
+const resolutionModule = await tsImport(
+  path.join(repoRoot, "packages/workspace-contracts/src/workspaceConfigSchema.ts"), import.meta.url
+);
+writeRuntimeCatalog(
+  path.join(repoRoot, "packages/service-schemas/src/runtime/generated/workspaceServiceResolution.json"),
+  "workspaceServiceResolution.json",
+  convertZodToJsonSchema(resolutionModule.ResolvedWorkspaceServiceSchema, { target: "openApi3" }),
+  checkOnly
+);
 
 // The authoritative schema-derived surfaces live in @vibestudio/service-schemas.
 const panelSurface = loadRuntimeSurface(

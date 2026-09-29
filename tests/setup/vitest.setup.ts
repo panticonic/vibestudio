@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { TEST_TEMP_ROOT_ENV } from "./vitestTempRoot.js";
 
 // Workers inherit the run-owned temporary root from the global setup that
@@ -12,9 +13,10 @@ process.env["VIBESTUDIO_APP_ROOT"] ??= path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../.."
 );
-process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ??= path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../dist"
+// Host tests consume the same immutable artifact generation as a native launch.
+process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ??= readCurrentHostBuildGeneration(
+  process.env["VIBESTUDIO_APP_ROOT"],
+  "desktop"
 );
 
 class ResizeObserverMock {

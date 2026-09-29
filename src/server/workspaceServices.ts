@@ -10,38 +10,8 @@ import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types
 // silently apply different policy to the same service.
 export type WorkspaceServiceAuthority = WorkspaceServiceDecl["authority"];
 
-export interface WorkspaceServiceResolution {
-  origin: "product" | "workspace";
-  name: string;
-  title?: string;
-  action: string;
-  description?: string;
-  presentation: WorkspaceServiceDecl["presentation"];
-  /**
-   * The protocol that matched this resolution request. Absent when the caller
-   * resolved by service name rather than by one of the declared protocols.
-   */
-  protocol?: string;
-  protocols: string[];
-  source: string;
-  authority: WorkspaceServiceAuthority;
-}
-
-export interface DurableObjectServiceResolution extends WorkspaceServiceResolution {
-  kind: "durable-object";
-  className: string;
-  context?: "creator";
-  objectKey: string;
-  targetId: string;
-}
-
-export interface WorkerServiceResolution extends WorkspaceServiceResolution {
-  kind: "worker";
-  routePath: string;
-  routeBasePath: string;
-}
-
-export type ResolvedWorkspaceService = DurableObjectServiceResolution | WorkerServiceResolution;
+import type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+export type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 /**
  * Resolve a manifest-declared workspace service by name or protocol.

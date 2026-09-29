@@ -12,6 +12,8 @@ import {
   type WorkspaceDeclarations,
 } from "@vibestudio/workspace/singletonRegistry";
 import { createWorkerService } from "./workerService.js";
+import { buildCatalog } from "./catalog/buildCatalog.js";
+import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";
 
 const TEST_WORKSPACE_SERVICE_PRESENTATION = {
   action: "use the test service",
@@ -209,6 +211,36 @@ function browserDataExtensionCaller() {
 }
 
 describe("workerService workspace service resolution", () => {
+  it("publishes the same discriminated result schema on runtime and service recovery docs", () => {
+    const service = createWorkerService(createDeps() as never);
+    const entries = buildCatalog({
+      definitions: [service],
+      runtimeSurfaces: {
+        workerRuntime: {
+          ...workerRuntimeSurface,
+          exports: { workers: workerRuntimeSurface.exports["workers"]! },
+        },
+      },
+    });
+    const runtimeDoc = entries.find(
+      (entry) => entry.id === "runtime:workerRuntime.workers.resolveService"
+    )!;
+    const serviceDoc = entries.find((entry) => entry.id === "service:workers.resolveService")!;
+    expect(runtimeDoc.returnsSchema).toEqual(serviceDoc.returnsSchema);
+    expect(runtimeDoc.returnsSchema).toMatchObject({
+      anyOf: [
+        {
+          properties: {
+            kind: { enum: ["durable-object"] },
+            targetId: { type: "string" },
+            objectKey: { type: "string" },
+          },
+        },
+        { properties: { kind: { enum: ["worker"] }, routeBasePath: { type: "string" } } },
+      ],
+    });
+  });
+
   it("starts cache-only provider preparation from structural service demand", async () => {
     const deps = createDeps();
     const prepareRuntimeImage = vi.fn();

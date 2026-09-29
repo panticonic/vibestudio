@@ -1,0 +1,227 @@
+{
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "presentation": {
+          "type": "object",
+          "properties": {
+            "domain": {
+              "type": "string",
+              "enum": [
+                "files",
+                "sharing",
+                "accounts",
+                "web",
+                "automation",
+                "people",
+                "computer"
+              ]
+            },
+            "verb": {
+              "type": "string",
+              "enum": [
+                "see",
+                "act",
+                "manage"
+              ]
+            },
+            "substanceKind": {
+              "type": "string",
+              "enum": [
+                "change-set",
+                "send",
+                "deletion",
+                "custom"
+              ]
+            }
+          },
+          "required": [
+            "domain",
+            "verb"
+          ],
+          "additionalProperties": false
+        },
+        "authority": {
+          "type": "object",
+          "properties": {
+            "principals": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "host",
+                  "user",
+                  "code",
+                  "session",
+                  "mission",
+                  "website"
+                ]
+              },
+              "minItems": 1
+            },
+            "binding": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "consent",
+                    "declared"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "declaredFor": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "declaredFor"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "principals"
+          ],
+          "additionalProperties": false
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "product",
+            "workspace"
+          ]
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "durable-object"
+          ]
+        },
+        "className": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string",
+          "enum": [
+            "creator"
+          ]
+        },
+        "objectKey": {
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "name",
+        "action",
+        "presentation",
+        "authority",
+        "origin",
+        "protocols",
+        "kind",
+        "className",
+        "objectKey",
+        "targetId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/anyOf/0/properties/source"
+        },
+        "name": {
+          "$ref": "#/anyOf/0/properties/name"
+        },
+        "title": {
+          "$ref": "#/anyOf/0/properties/title"
+        },
+        "action": {
+          "$ref": "#/anyOf/0/properties/action"
+        },
+        "description": {
+          "$ref": "#/anyOf/0/properties/description"
+        },
+        "presentation": {
+          "$ref": "#/anyOf/0/properties/presentation"
+        },
+        "authority": {
+          "$ref": "#/anyOf/0/properties/authority"
+        },
+        "origin": {
+          "$ref": "#/anyOf/0/properties/origin"
+        },
+        "protocol": {
+          "$ref": "#/anyOf/0/properties/protocol"
+        },
+        "protocols": {
+          "$ref": "#/anyOf/0/properties/protocols"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "worker"
+          ]
+        },
+        "routePath": {
+          "type": "string"
+        },
+        "routeBasePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "name",
+        "action",
+        "presentation",
+        "authority",
+        "origin",
+        "protocols",
+        "kind",
+        "routePath",
+        "routeBasePath"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
