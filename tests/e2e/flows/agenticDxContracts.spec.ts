@@ -1,9 +1,11 @@
 import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
+import { configureInspectionFixture } from "../support/inspectionFixture";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
+  callTestApi,
   createManagedTestWorkspace,
   ensureHostedShellReady,
   executePanelScript,
@@ -127,7 +129,10 @@ test.describe("agentic DX contracts", () => {
 
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
     test.setTimeout(240_000);
-    const workspacePath = await createManagedTestWorkspace();
+    const workspacePath = await createManagedTestWorkspace({
+      workspaceKind: "project",
+      configureSource: configureInspectionFixture,
+    });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingStartupUnits(testApp, 75_000);
@@ -140,6 +145,7 @@ test.describe("agentic DX contracts", () => {
       expect(panel).toBeTruthy();
       await waitForPanelRuntime(testApp, panel!.id);
 
+      await callTestApi(testApp, "focusPanel", [panel!.id]);
       const result = await executePanelScript<{
         screenshot: {
           mimeType: string;
@@ -180,8 +186,8 @@ test.describe("agentic DX contracts", () => {
             () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
           );
           const handle = await bounded(
-            "about panel open",
-            () => openPanel("about/about"),
+            "hosted panel open",
+            () => openPanel("panels/chat", { focus: false }),
           );
           try {
             const observation = await bounded("panel observation", () => handle.observe());
@@ -227,7 +233,7 @@ test.describe("agentic DX contracts", () => {
               },
             };
           } finally {
-            await bounded("about panel archive", () => handle.archive());
+            await bounded("hosted panel archive", () => handle.archive());
           }
         })()`
       );
@@ -240,6 +246,7 @@ test.describe("agentic DX contracts", () => {
         byteLength: expect.any(Number),
       });
       expect(result.screenshot.width).toBeGreaterThan(0);
+      expect(await callTestApi(testApp, "getFocusedPanelId", [])).toBe(panel!.id);
       expect(result.screenshot.height).toBeGreaterThan(0);
       expect(result.screenshot.byteLength).toBeGreaterThan(100);
       expect(result.blob).toEqual({
@@ -252,7 +259,7 @@ test.describe("agentic DX contracts", () => {
       expect(result.console.errorCount).toBe(0);
       expect(result.console.dropped).toBeTruthy();
       expect(result.observation).toMatchObject({
-        source: "about/about",
+        source: "panels/chat",
         phase: "ready",
         runtimeEntityId: expect.any(String),
         buildKey: expect.any(String),

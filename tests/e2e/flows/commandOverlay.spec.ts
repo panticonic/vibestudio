@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   approvePendingWorkspaceCreationReview,
+  ensureHostedShellReady,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   hasElectronDisplay,
   launchTestApp,
@@ -24,6 +25,8 @@ import {
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
+
+const commandModifiers = [process.platform === "darwin" ? "meta" : "control"];
 
 /**
  * The command overlay, end to end (quickfire-overlay-spec §1.3, §2.3, §4.1).
@@ -54,8 +57,18 @@ test.describe("command overlay", () => {
     // machine building several workspaces at once the default 120s expires
     // before the test API is exposed. Neither budget relaxes an assertion.
     testApp = await launchTestApp({ launchTimeout: 300_000 });
-    await waitHostedShellReady(testApp);
     await approvePendingWorkspaceCreationReview(testApp);
+    await waitHostedShellReady(testApp);
+    const panel = await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
+    expect(panel.presentation.state, JSON.stringify(panel)).toBe("ready");
+    await testApp.app.evaluate(
+      async (_electron, { workspaceId, panelId }) => {
+        const api = await globalThis.__testApi?.forWorkspace(workspaceId);
+        if (!api) throw new Error("Test API not available");
+        await api.focusPanel(panelId);
+      },
+      { workspaceId: testApp.workspaceId, panelId: panel.panelId }
+    );
     await captureShellConsole(testApp);
   });
 
@@ -64,7 +77,7 @@ test.describe("command overlay", () => {
   });
 
   test("opens on the command chord even while a panel holds focus", async () => {
-    expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+    expect(await pressChordOnFocusedContents(testApp, "K", commandModifiers)).toBe(true);
 
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {
@@ -88,7 +101,7 @@ test.describe("command overlay", () => {
     const previousClipboard = await testApp.app.evaluate(({ clipboard }) => clipboard.readText());
     try {
       if ((await probeCommandOverlay(testApp))?.open !== true) {
-        expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+        expect(await pressChordOnFocusedContents(testApp, "K", commandModifiers)).toBe(true);
         await expect
           .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {
             timeout: 20_000,
@@ -125,7 +138,7 @@ test.describe("command overlay", () => {
       !hasOwnedX11Display(),
       "Native outside-click coverage requires the isolated Playwright-owned X11 desktop"
     );
-    expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+    expect(await pressChordOnFocusedContents(testApp, "K", commandModifiers)).toBe(true);
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 20_000 })
       .toBe(true);
@@ -141,7 +154,7 @@ test.describe("command overlay", () => {
   });
 
   test("routes typed prose to the panel's agent and binds a conversation", async () => {
-    expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+    expect(await pressChordOnFocusedContents(testApp, "K", commandModifiers)).toBe(true);
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 20_000 })
       .toBe(true);
@@ -241,7 +254,7 @@ test.describe("command overlay", () => {
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 10_000 })
       .toBe(false);
 
-    expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+    expect(await pressChordOnFocusedContents(testApp, "K", commandModifiers)).toBe(true);
 
     // One key, resume-aware: the panel now has a conversation, so the same chord
     // that opened the palette above lands in the conversation instead.
