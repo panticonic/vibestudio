@@ -79,7 +79,7 @@
     "./nativeWorkspaceCleanup": "./src/nativeWorkspaceCleanup.ts",
     "./npmInstaller": "./src/npmInstaller.ts",
     "./ownedProcessGroup": "./src/ownedProcessGroup.ts",
-    "./ownedProcessIdentity": "./src/ownedProcessIdentity.ts",
+    "./ownedProcessIdentity": "./src/ownedProcessIdentity.mjs",
     "./panel/*": "./src/panel/*.ts",
     "./panelAccessPolicy": "./src/panelAccessPolicy.ts",
     "./panelChrome": "./src/panelChrome.ts",
@@ -132,7 +132,8 @@
     "./workspacePresence": "./src/workspacePresence.ts",
     "./workspacePushScope": "./src/workspacePushScope.ts",
     "./workspaceServiceRpc": "./src/workspaceServiceRpc.ts",
-    "./ws/*": "./src/ws/*.ts"
+    "./ws/*": "./src/ws/*.ts",
+    "./ownedProcessRegistration": "./src/ownedProcessRegistration.mjs"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

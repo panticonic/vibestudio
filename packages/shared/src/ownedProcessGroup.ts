@@ -4,7 +4,7 @@ import {
   observeOwnedProcessGroup,
   parseOwnedProcessIdentity,
   type OwnedProcessIdentity,
-} from "./ownedProcessIdentity.js";
+} from "./ownedProcessIdentity.mjs";
 
 const DEFAULT_TERM_TIMEOUT_MS = 5_000;
 const DEFAULT_KILL_TIMEOUT_MS = 5_000;
@@ -33,6 +33,7 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   private readonly child: ChildProcess | null;
   private readonly options: OwnedProcessGroupOptions;
   private retirement: Promise<void> | null = null;
+  private readonly childClosed: Promise<void> | null;
 
   private constructor(
     child: ChildProcess | null,
@@ -40,6 +41,9 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
     adoptedIdentity: OwnedProcessIdentity | null
   ) {
     this.child = child;
+    this.childClosed = child
+      ? new Promise<void>((resolve) => child.once("close", () => resolve()))
+      : null;
     this.options = options;
     if (adoptedIdentity !== null) {
       this.identity = adoptedIdentity;
@@ -77,7 +81,15 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   }
 
   retire(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
-    this.retirement ??= this.retireOnce(signal);
+    this.retirement ??= this.retireOnce(signal)
+      .then(async () => {
+        await this.childClosed;
+      })
+      .catch((cause: unknown) => {
+        throw Object.assign(new Error("Owned process-group retirement failed", { cause }), {
+          code: "EOWNERSHIP",
+        });
+      });
     return this.retirement;
   }
 
@@ -98,7 +110,13 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
 
     if (!this.identity) throw new Error("Detached process-group identity is unavailable");
     if (!this.groupExists()) return;
-    if (signal !== "SIGKILL" && this.options.requestGracefulStop && this.child) {
+    if (
+      signal !== "SIGKILL" &&
+      this.options.requestGracefulStop &&
+      this.child &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null
+    ) {
       this.options.requestGracefulStop(signal);
     } else {
       this.signal(signal);

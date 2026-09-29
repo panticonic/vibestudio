@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeOwnedProcessGroup, type OwnedProcessIdentity } from "./ownedProcessIdentity.js";
+import { observeOwnedProcessGroup, type OwnedProcessIdentity } from "./ownedProcessIdentity.mjs";
 
 const receipt: OwnedProcessIdentity = {
-  version: 1, platform: "linux", pid: 101, processGroupId: 101, startCoordinate: "1000",
+  version: 1,
+  platform: "linux",
+  pid: 101,
+  processGroupId: 101,
+  startCoordinate: "1000",
 };
 function stat(pid: number, state: string, group = 101, birth = "1000") {
   const fields = Array<string>(20).fill("0");

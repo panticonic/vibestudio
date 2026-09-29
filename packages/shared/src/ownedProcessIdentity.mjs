@@ -1,23 +1,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-
-export interface OwnedProcessIdentity {
-  version: 1;
-  platform: "linux" | "darwin";
-  pid: number;
-  processGroupId: number;
-  startCoordinate: string;
-}
-
-export type OwnedProcessObservation = "owned" | "absent" | "unknown";
-export type OwnedProcessGroupObservation = OwnedProcessObservation | "retained";
-
-/** Parse a durable process receipt without weakening or repairing it. */
-export function parseOwnedProcessIdentity(value: unknown): OwnedProcessIdentity {
+function parseOwnedProcessIdentity(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw ownershipError("Owned process identity must be an object");
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const keys = Object.keys(record).sort();
   const expected = ["pid", "platform", "processGroupId", "startCoordinate", "version"];
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
@@ -28,18 +15,16 @@ export function parseOwnedProcessIdentity(value: unknown): OwnedProcessIdentity 
     version !== 1 ||
     (platform !== "linux" && platform !== "darwin") ||
     !Number.isSafeInteger(pid) ||
-    (pid as number) <= 0 ||
+    pid <= 0 ||
     processGroupId !== pid ||
     typeof startCoordinate !== "string" ||
     startCoordinate.length === 0
   ) {
     throw ownershipError("Owned process identity is invalid");
   }
-  return { version, platform, pid: pid as number, processGroupId: pid as number, startCoordinate };
+  return { version, platform, pid, processGroupId: pid, startCoordinate };
 }
-
-/** Capture a PID-reuse-resistant coordinate for a freshly spawned group leader. */
-export function captureOwnedProcessIdentity(pid: number): OwnedProcessIdentity {
+function captureOwnedProcessIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Owned process PID is invalid");
   if (process.platform === "linux") {
     const stat = linuxStat(pid);
@@ -71,16 +56,8 @@ export function captureOwnedProcessIdentity(pid: number): OwnedProcessIdentity {
     code: "EEXECUTOR_UNAVAILABLE",
   });
 }
-
-/**
- * Observe a durable group receipt. `retained` means the original leader has
- * exited while its PGID still has live descendants. The creation receipt
- * remains authoritative for those descendants; unreaped zombies cannot work.
- */
-export function observeOwnedProcessGroup(
-  value: OwnedProcessIdentity
-): OwnedProcessGroupObservation {
-  let identity: OwnedProcessIdentity;
+function observeOwnedProcessGroup(value) {
+  let identity;
   try {
     identity = parseOwnedProcessIdentity(value);
   } catch {
@@ -93,27 +70,23 @@ export function observeOwnedProcessGroup(
     if (
       current.processGroupId !== identity.processGroupId ||
       current.startCoordinate !== identity.startCoordinate
-    ) return "unknown";
-    // A zombie retains its PID/PGID but cannot execute or hold workspace state.
-    // Its live descendants still belong to the original creation receipt.
+    )
+      return "unknown";
     return current.state === "Z" || current.state === "X"
-      ? processGroupExists(identity.processGroupId) ? "retained" : "absent"
+      ? processGroupExists(identity.processGroupId)
+        ? "retained"
+        : "absent"
       : "owned";
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") return "unknown";
+    if (error.code !== "ESRCH") return "unknown";
     return processGroupExists(identity.processGroupId) ? "retained" : "absent";
   }
 }
-
-export function observeOwnedProcess(identity: OwnedProcessIdentity): OwnedProcessObservation {
+function observeOwnedProcess(identity) {
   const observation = observeOwnedProcessGroup(identity);
   return observation === "retained" ? "unknown" : observation;
 }
-
-export function signalOwnedProcessIdentity(
-  identity: OwnedProcessIdentity,
-  signal: NodeJS.Signals
-): void {
+function signalOwnedProcessIdentity(identity, signal) {
   const observation = observeOwnedProcessGroup(identity);
   if (observation === "absent") return;
   if (observation !== "owned" && observation !== "retained") {
@@ -122,15 +95,14 @@ export function signalOwnedProcessIdentity(
   try {
     process.kill(-identity.processGroupId, signal);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    if (error.code !== "ESRCH") throw error;
   }
 }
-
-function processGroupExists(processGroupId: number): boolean {
+function processGroupExists(processGroupId) {
   try {
     process.kill(-processGroupId, 0);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    if (error.code === "ESRCH") return false;
     throw error;
   }
   if (process.platform === "linux") {
@@ -138,10 +110,14 @@ function processGroupExists(processGroupId: number): boolean {
       if (!/^\d+$/u.test(entry)) continue;
       try {
         const member = linuxStat(Number(entry));
-        if (member.processGroupId === processGroupId && member.state !== "Z" && member.state !== "X")
+        if (
+          member.processGroupId === processGroupId &&
+          member.state !== "Z" &&
+          member.state !== "X"
+        )
           return true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        if (error.code !== "ESRCH") throw error;
       }
     }
     return false;
@@ -150,20 +126,18 @@ function processGroupExists(processGroupId: number): boolean {
   if (result.status !== 0) throw ownershipError("Cannot observe native process-group members");
   return result.stdout.split(/\r?\n/u).some((line) => {
     const match = line.trim().match(/^(\d+)\s+(\S+)$/u);
-    return match !== null && Number(match[1]) === processGroupId && !/^[ZX]/u.test(match[2]!);
+    return match !== null && Number(match[1]) === processGroupId && !/^[ZX]/u.test(match[2]);
   });
 }
-
-function ownershipError(message: string): Error {
+function ownershipError(message) {
   return Object.assign(new Error(message), { code: "EOWNERSHIP" });
 }
-
-function linuxStat(pid: number): { processGroupId: number; startCoordinate: string; state: string } {
-  let raw: string;
+function linuxStat(pid) {
+  let raw;
   try {
     raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (error.code === "ENOENT") {
       throw Object.assign(new Error(`Process ${pid} does not exist`), { code: "ESRCH" });
     }
     throw error;
@@ -179,10 +153,9 @@ function linuxStat(pid: number): { processGroupId: number; startCoordinate: stri
   if (!Number.isSafeInteger(processGroupId) || processGroupId < 0 || !startCoordinate) {
     throw new Error(`Process ${pid} has an incomplete /proc identity`);
   }
-  return { processGroupId, startCoordinate, state: fields[0]! };
+  return { processGroupId, startCoordinate, state: fields[0] };
 }
-
-function darwinStat(pid: number): { processGroupId: number; startCoordinate: string; state: string } {
+function darwinStat(pid) {
   const result = spawnSync(
     "ps",
     ["-o", "pid=", "-o", "pgid=", "-o", "stat=", "-o", "lstart=", "-p", String(pid)],
@@ -195,5 +168,47 @@ function darwinStat(pid: number): { processGroupId: number; startCoordinate: str
   if (!match || Number(match[1]) !== pid) {
     throw new Error(`Process ${pid} has a malformed ps identity`);
   }
-  return { processGroupId: Number(match[2]), startCoordinate: match[4]!, state: match[3]![0]! };
+  return { processGroupId: Number(match[2]), startCoordinate: match[4], state: match[3][0] };
+}
+export {
+  captureOwnedProcessIdentity,
+  observeOwnedProcess,
+  observeOwnedProcessGroup,
+  parseOwnedProcessIdentity,
+  signalOwnedProcessIdentity,
+};
+
+/** Test membership while the native group owner is still alive. */
+export function ownedProcessDescendsFrom(rootPid, candidatePid) {
+  const parents = new Map();
+  if (process.platform === "linux") {
+    for (const entry of fs.readdirSync("/proc")) {
+      if (!/^\d+$/u.test(entry)) continue;
+      try {
+        const raw = fs.readFileSync(`/proc/${entry}/stat`, "utf8");
+        const fields = raw
+          .slice(raw.lastIndexOf(")") + 2)
+          .trim()
+          .split(/\s+/u);
+        parents.set(Number(entry), Number(fields[1]));
+      } catch (error) {
+        if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+      }
+    }
+  } else {
+    const result = spawnSync("ps", ["-eo", "pid=,ppid="], { encoding: "utf8" });
+    if (result.status !== 0) throw ownershipError("Cannot observe native process ancestry");
+    for (const line of result.stdout.split("\n")) {
+      const [pid, parent] = line.trim().split(/\s+/u).map(Number);
+      if (pid > 0 && parent >= 0) parents.set(pid, parent);
+    }
+  }
+  const visited = new Set();
+  let pid = candidatePid;
+  while (parents.has(pid) && !visited.has(pid)) {
+    if (pid === rootPid) return true;
+    visited.add(pid);
+    pid = parents.get(pid);
+  }
+  return false;
 }

@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import {
+  captureOwnedProcessIdentity,
+  observeOwnedProcessGroup,
+} from "@vibestudio/shared/ownedProcessIdentity";
 import { describe, expect, it } from "vitest";
 import { processTreeAlive, terminateOwnedProcessTree } from "../scripts/owned-process-tree.mjs";
 
@@ -107,6 +111,32 @@ describe.skipIf(process.platform === "win32")("owned POSIX process tree", () => 
       try {
         process.kill(owned.pid!, "SIGKILL");
       } catch {}
+    }
+  }, 10_000);
+
+  it("retires a retained group after its captured leader has been reaped", async () => {
+    const descendant = `process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);`;
+    const parent = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "pipe", "ignore"] });
+      child.stdout.once("data", () => { console.log("ready"); process.exit(0); });
+    `;
+    const owned = spawn(process.execPath, ["-e", parent], {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const identity = captureOwnedProcessIdentity(owned.pid!);
+    const exited = once(owned, "exit");
+    await once(owned.stdout!, "data");
+    await exited;
+    try {
+      expect(observeOwnedProcessGroup(identity)).toBe("retained");
+      await expect(
+        terminateOwnedProcessTree(owned.pid!, { identity, termTimeoutMs: 100 })
+      ).resolves.toMatchObject({ gone: true, escalated: true });
+      expect(observeOwnedProcessGroup(identity)).toBe("absent");
+    } finally {
+      await terminateOwnedProcessTree(owned.pid!, { identity, termTimeoutMs: 0 });
     }
   }, 10_000);
 

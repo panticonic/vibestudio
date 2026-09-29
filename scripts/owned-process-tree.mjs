@@ -1,6 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { observeOwnedProcess } from "./owned-process-identity.mjs";
+import {
+  captureOwnedProcessIdentity,
+  observeOwnedProcessGroup,
+  ownedProcessDescendsFrom,
+  signalOwnedProcessIdentity,
+} from "./owned-process-identity.mjs";
 
 const POLL_MS = 100;
 
@@ -11,7 +16,7 @@ const POLL_MS = 100;
 export function bindProcessLifetimeToParent() {
   if (!process.send || !process.connected)
     throw new Error("Parent-owned process requires a live inherited IPC channel");
-  process.once("disconnect", () => {
+  const onDisconnect = () => {
     if (process.platform === "win32") {
       spawnSync("taskkill", ["/T", "/F", "/PID", String(process.pid)], {
         windowsHide: true,
@@ -30,7 +35,9 @@ export function bindProcessLifetimeToParent() {
     // ownedProcessGroups deliberately excludes the caller's group. This
     // service is that group's leader and owns it, so retire it last.
     signalGroup(process.pid, "SIGKILL");
-  });
+  };
+  process.once("disconnect", onDisconnect);
+  return () => process.off("disconnect", onDisconnect);
 }
 
 export function processTreeAlive(pid, platform = process.platform) {
@@ -53,15 +60,7 @@ export function processTreeAlive(pid, platform = process.platform) {
 
 export function processTreeContains(rootPid, candidatePid, platform = process.platform) {
   if (platform === "win32") return false;
-  const table = readProcessTable(platform);
-  if (!table) return false;
-  let current = table.get(candidatePid);
-  while (current) {
-    if (current.pid === rootPid) return true;
-    if (current.ppid === current.pid) return false;
-    current = table.get(current.ppid);
-  }
-  return false;
+  return ownedProcessDescendsFrom(rootPid, candidatePid);
 }
 
 export async function terminateOwnedProcessTree(
@@ -72,9 +71,9 @@ export async function terminateOwnedProcessTree(
     throw new Error(`Invalid owned process-tree PID: ${pid}`);
   }
   if (identity) {
-    const ownership = observeOwnedProcess(identity);
+    const ownership = observeOwnedProcessGroup(identity);
     if (ownership === "absent") return { gone: true, escalated: false };
-    if (ownership !== "owned" || identity.pid !== pid) {
+    if (!["owned", "retained"].includes(ownership) || identity.pid !== pid) {
       throw Object.assign(new Error("Exact process-tree ownership can no longer be proven"), {
         code: "EOWNERSHIP",
       });
@@ -93,28 +92,97 @@ export async function terminateOwnedProcessTree(
     return { gone, escalated: true, ...(gone ? {} : { detail: result.detail }) };
   }
 
-  // The hub and its workspace children intentionally use separate POSIX
-  // process groups. Signal the hub first so it can perform its ordered
-  // graceful shutdown, but remember every descendant group while the owner
-  // is still alive. If graceful shutdown stalls, SIGKILL every group we
-  // observed; killing only the owner's group would orphan a detached child.
-  const ownedGroups = new Set();
-  refreshOwnedProcessGroups(pid, platform, ownedGroups);
-  // Signal the process as well as its groups: a non-detached child leads no
-  // group, so the group signal alone is an ESRCH that retires nothing.
-  signalGroup(pid, "SIGTERM");
-  signalPid(pid, "SIGTERM");
-  if (await waitUntilOwnedGroupsGone(pid, termTimeoutMs, platform, ownedGroups)) {
-    return { gone: true, escalated: false };
-  }
-  refreshOwnedProcessGroups(pid, platform, ownedGroups);
-  for (const group of ownedGroups) signalGroup(group, "SIGKILL");
-  signalPid(pid, "SIGKILL");
-  const gone = await waitUntilOwnedGroupsGone(pid, killTimeoutMs, platform, ownedGroups);
+  // Retain birth coordinates while ancestry is still observable. Once a
+  // leader exits, only those receipts may authorize its surviving groups;
+  // a reused PID must never become a new ancestry root or receive a signal.
+  const groups = new Map();
+  const processes = new Map();
+  if (identity) groups.set(identity.processGroupId, identity);
+  const root = readProcessTable(platform)?.get(pid);
+  if (root && root.state !== "Z" && root.state !== "X") processes.set(pid, root);
+  const refresh = () => {
+    const table = readProcessTable(platform);
+    if (!table)
+      throw Object.assign(new Error("Cannot observe owned process tree"), { code: "EOWNERSHIP" });
+    const originalRoot = processes.get(pid);
+    const currentRoot = table.get(pid);
+    if (
+      !originalRoot ||
+      !currentRoot ||
+      originalRoot.birth !== currentRoot.birth ||
+      currentRoot.state === "Z" ||
+      currentRoot.state === "X"
+    )
+      return;
+    const pending = [pid];
+    const visited = new Set();
+    while (pending.length) {
+      const memberPid = pending.pop();
+      if (visited.has(memberPid)) continue;
+      visited.add(memberPid);
+      const member = table.get(memberPid);
+      if (!member || member.state === "Z" || member.state === "X") continue;
+      processes.set(memberPid, member);
+      if (member.pgid === memberPid && !groups.has(memberPid)) {
+        try {
+          groups.set(memberPid, captureOwnedProcessIdentity(memberPid));
+        } catch (error) {
+          if (error?.code !== "ESRCH") throw error;
+        }
+      }
+      for (const entry of table.values()) if (entry.ppid === memberPid) pending.push(entry.pid);
+    }
+  };
+  const liveProcesses = () => {
+    const table = readProcessTable(platform);
+    if (!table)
+      throw Object.assign(new Error("Cannot observe owned process tree"), { code: "EOWNERSHIP" });
+    return [...processes.values()].filter((receipt) => {
+      const current = table.get(receipt.pid);
+      return (
+        current && current.birth === receipt.birth && current.state !== "Z" && current.state !== "X"
+      );
+    });
+  };
+  const settled = () => {
+    const observations = [...groups.values()].map((receipt) => observeOwnedProcessGroup(receipt));
+    if (observations.includes("unknown"))
+      throw Object.assign(new Error("Exact process-tree ownership can no longer be proven"), {
+        code: "EOWNERSHIP",
+      });
+    return liveProcesses().length === 0 && observations.every((value) => value === "absent");
+  };
+  const signal = (value) => {
+    for (const receipt of groups.values()) signalOwnedProcessIdentity(receipt, value);
+    for (const receipt of liveProcesses()) {
+      // Group signals already cover these members. Independently born children
+      // sharing their caller's group are signalled individually, never by PGID.
+      if (!groups.has(receipt.pgid)) signalPid(receipt.pid, value);
+    }
+  };
+  const wait = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      refresh();
+      if (settled()) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+  };
+  refresh();
+  // Only the root receives TERM initially: its own shutdown owns the ordered
+  // drain. Capture the tree continuously until that native owner has exited.
+  if (identity) signalOwnedProcessIdentity(identity, "SIGTERM");
+  else if (groups.has(pid)) signalOwnedProcessIdentity(groups.get(pid), "SIGTERM");
+  else if (liveProcesses().some((receipt) => receipt.pid === pid)) signalPid(pid, "SIGTERM");
+  if (await wait(termTimeoutMs)) return { gone: true, escalated: false };
+  refresh();
+  signal("SIGKILL");
+  const gone = await wait(killTimeoutMs);
   return {
     gone,
     escalated: true,
-    ...(gone ? {} : { detail: `Process group ${pid} survived SIGKILL` }),
+    ...(gone ? {} : { detail: `Owned process tree ${pid} survived SIGKILL` }),
   };
 }
 
@@ -135,6 +203,11 @@ function signalPid(pid, signal) {
 }
 
 function pidAlive(pid) {
+  const table = readProcessTable(process.platform);
+  if (table) {
+    const entry = table.get(pid);
+    return entry !== undefined && entry.state !== "Z" && entry.state !== "X";
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -159,10 +232,6 @@ export function processGroupAlive(group) {
     if (error?.code === "ESRCH") return false;
     throw error;
   }
-}
-
-function refreshOwnedProcessGroups(rootPid, platform, groups) {
-  for (const group of ownedProcessGroups(rootPid, platform)) groups.add(group);
 }
 
 function ownedProcessGroups(rootPid, platform) {
@@ -227,7 +296,7 @@ function readProcessTable(platform) {
         const ppid = Number(fields[1]);
         const pgid = Number(fields[2]);
         if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
-          table.set(pid, { pid, ppid, pgid, state: fields[0] });
+          table.set(pid, { pid, ppid, pgid, state: fields[0], birth: fields[19] });
         }
       }
       return table;
@@ -237,19 +306,19 @@ function readProcessTable(platform) {
     }
   }
 
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,pgid=,stat="], {
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,pgid=,stat=,lstart="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   const table = new Map();
   for (const line of result.stdout.split("\n")) {
-    const [pidText, ppidText, pgidText, stateText] = line.trim().split(/\s+/);
+    const [pidText, ppidText, pgidText, stateText, ...start] = line.trim().split(/\s+/);
     const pid = Number(pidText);
     const ppid = Number(ppidText);
     const pgid = Number(pgidText);
     if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
-      table.set(pid, { pid, ppid, pgid, state: stateText?.slice(0, 1) });
+      table.set(pid, { pid, ppid, pgid, state: stateText?.slice(0, 1), birth: start.join(" ") });
     }
   }
   return table;
@@ -262,21 +331,6 @@ async function waitUntilGone(pid, timeoutMs, platform) {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   } while (Date.now() < deadline);
   return !processTreeAlive(pid, platform);
-}
-
-async function waitUntilOwnedGroupsGone(rootPid, timeoutMs, platform, groups) {
-  const deadline = Date.now() + timeoutMs;
-  // The root leads no group when it was spawned without `detached`, so its own
-  // liveness is the only evidence that it retired.
-  const settled = () =>
-    !pidAlive(rootPid) && ![...groups].some((group) => processGroupAlive(group));
-  do {
-    refreshOwnedProcessGroups(rootPid, platform, groups);
-    if (settled()) return true;
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-  } while (Date.now() < deadline);
-  refreshOwnedProcessGroups(rootPid, platform, groups);
-  return settled();
 }
 
 function runTaskkill(pid) {

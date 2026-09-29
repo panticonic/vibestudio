@@ -1,10 +1,19 @@
 import { spawn } from "node:child_process";
+import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+import { tsImport } from "tsx/esm/api";
+const { OwnedProcessGroup } = await tsImport(
+  "@vibestudio/shared/ownedProcessGroup",
+  import.meta.url
+);
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createRunnerShutdown, signalExitCode } from "./run-electron-lifecycle.mjs";
 import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
-import { observeOwnedProcess } from "./owned-process-identity.mjs";
-import { processTreeContains, terminateOwnedProcessTree } from "./owned-process-tree.mjs";
+import {
+  createOwnedProcessGroupReceiver,
+  registerOwnedProcessGroup,
+} from "@vibestudio/shared/ownedProcessRegistration";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 const hostGeneration = readCurrentHostBuildGeneration(process.cwd(), "desktop");
@@ -29,12 +38,14 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-let child = null;
 const activeChildren = new Set();
 let nextArgs = initialElectronArgs();
 let typeCheckStarted = false;
-let typeCheckChild = null;
-const ownedHubs = new Map();
+let typeCheckOwner = null;
+const electronOwners = new Set();
+const registeredReceivers = new Set();
+const childOwners = new Map();
+const requestedRetirements = new Map();
 const shutdown = createRunnerShutdown({
   activeChildren,
   // The main loop owns final exit after it has reaped every registered hub.
@@ -42,32 +53,52 @@ const shutdown = createRunnerShutdown({
   exit: (code) => {
     process.exitCode = code;
   },
-  requestGracefulStop: (electron, signal) => {
-    if (electron.connected) {
-      electron.send({ type: "vibestudio:dev-shutdown", signal });
+  requestGracefulStop: (nativeChild, signal) => {
+    const owner = childOwners.get(nativeChild);
+    if (!owner) {
+      nativeChild.kill(signal);
       return;
     }
-    electron.kill(signal);
+    // Start retirement as soon as shutdown is requested. Waiting for the
+    // Electron exit before entering finally cannot contain a stalled exit.
+    requestedRetirements.set(
+      owner,
+      owner.retire(signal).then(
+        () => ({ status: "fulfilled" }),
+        (reason) => ({ status: "rejected", reason })
+      )
+    );
   },
 });
 
-function startTypeCheck() {
-  if (typeCheckStarted) return;
+async function startTypeCheck() {
+  if (typeCheckStarted || shutdown.requestedSignal()) return;
   typeCheckStarted = true;
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const current = spawn(pnpmCommand, ["type-check"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  });
-  typeCheckChild = current;
+  const current = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./parent-owned-command.mjs", import.meta.url)),
+      pnpmCommand,
+      "type-check",
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      detached: process.platform !== "win32",
+    }
+  );
+  if (current.pid) {
+    typeCheckOwner = OwnedProcessGroup.create(current);
+    childOwners.set(current, typeCheckOwner);
+  }
   activeChildren.add(current);
   let settled = false;
   const finish = () => {
     if (settled) return;
     settled = true;
     activeChildren.delete(current);
-    if (typeCheckChild === current) typeCheckChild = null;
     shutdown.childExited();
   };
   current.on("error", (error) => {
@@ -75,26 +106,21 @@ function startTypeCheck() {
     finish();
   });
   current.on("exit", finish);
+  if (typeCheckOwner?.identity) await registerOwnedProcessGroup(typeCheckOwner.identity);
 }
 
 async function stopTypeCheck() {
-  const current = typeCheckChild;
-  if (!current || current.exitCode !== null || current.signalCode !== null) return;
-  await new Promise((resolve) => {
-    const force = setTimeout(() => current.kill("SIGKILL"), 1_000);
-    current.once("exit", () => {
-      clearTimeout(force);
-      resolve();
-    });
-    current.kill("SIGTERM");
-  });
+  await typeCheckOwner?.retire();
 }
 
 async function runElectron(args) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let relaunchArgs = null;
     let settled = false;
+    let groupOwner = null;
+    let registered = null;
     const currentChild = spawn(electronBinary, args, {
+      detached: process.platform !== "win32",
       stdio: ["inherit", "inherit", "inherit", "ipc"],
       env: {
         ...process.env,
@@ -104,7 +130,28 @@ async function runElectron(args) {
         VIBESTUDIO_HOST_ARTIFACT_ROOT: hostGeneration,
       },
     });
-    child = currentChild;
+    if (currentChild.pid) {
+      const owner = OwnedProcessGroup.create(currentChild, {
+        termTimeoutMs: 5 * 60_000,
+        requestGracefulStop: (signal) => {
+          if (currentChild.connected)
+            currentChild.send({ type: "vibestudio:dev-shutdown", signal });
+          else currentChild.kill(signal);
+        },
+      });
+      groupOwner = owner;
+      electronOwners.add(owner);
+      childOwners.set(currentChild, owner);
+      if (owner.identity) {
+        registered = createOwnedProcessGroupReceiver(
+          currentChild,
+          owner.identity,
+          (identity) => OwnedProcessGroup.adopt(identity),
+          { forwardToParent: true }
+        );
+        registeredReceivers.add(registered);
+      }
+    }
     activeChildren.add(currentChild);
 
     const finish = (result) => {
@@ -117,36 +164,28 @@ async function runElectron(args) {
       if (message && message.type === "vibestudio:dev-relaunch" && isStringArray(message.args)) {
         relaunchArgs = message.args;
       }
-      if (message && message.type === "vibestudio:dev-ready") startTypeCheck();
-      if (message && message.type === "vibestudio:dev-owned-hub") {
-        const accepted =
-          typeof message.registrationId === "string" &&
-          message.identity &&
-          currentChild.pid &&
-          processTreeContains(currentChild.pid, message.identity.pid) &&
-          observeOwnedProcess(message.identity) === "owned";
-        if (!currentChild.connected || typeof message.registrationId !== "string") return;
-        if (!accepted) {
-          currentChild.send({
-            type: "vibestudio:dev-owned-hub-rejected",
-            registrationId: message.registrationId,
-          });
-          return;
-        }
-        const identity = message.identity;
-        ownedHubs.set(identity.pid, identity);
-        currentChild.send({
-          type: "vibestudio:dev-owned-hub-accepted",
-          registrationId: message.registrationId,
+      if (message && message.type === "vibestudio:dev-ready")
+        void startTypeCheck().catch((error) => {
+          console.error("[dev] compiler ownership registration failed", error);
+          shutdown.request("SIGTERM");
         });
+    });
+
+    currentChild.on("error", (error) => {
+      activeChildren.delete(currentChild);
+      shutdown.childExited();
+      if (!settled) {
+        settled = true;
+        reject(error);
       }
     });
 
+    if (groupOwner?.identity) void registerOwnedProcessGroup(groupOwner.identity).catch(reject);
+
     currentChild.on("exit", (code, signal) => {
       activeChildren.delete(currentChild);
-      if (child === currentChild) child = null;
       shutdown.childExited();
-      finish({ code, signal, relaunchArgs });
+      finish({ code, signal, relaunchArgs, child: currentChild, owner: groupOwner, registered });
     });
   });
 }
@@ -156,35 +195,61 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => shutdown.request(signal));
 }
 
-for (;;) {
-  const result = await runElectron(nextArgs);
-  if (result.relaunchArgs && !shutdown.requestedSignal()) {
-    nextArgs = result.relaunchArgs;
-    continue;
-  }
-
-  const signal = shutdown.requestedSignal() ?? result.signal;
-  await stopTypeCheck();
-  for (const identity of ownedHubs.values()) {
-    const observation = observeOwnedProcess(identity);
-    if (observation === "owned") {
-      const retired = await terminateOwnedProcessTree(identity.pid, { identity });
-      if (!retired.gone) {
-        throw new Error(
-          retired.detail ?? `Owned hub process tree ${identity.pid} survived shutdown`
-        );
+await runParentOwnedMain(async (ownerSignal) => {
+  const ownerLost = () => shutdown.request("SIGTERM");
+  ownerSignal.addEventListener("abort", ownerLost, { once: true });
+  if (ownerSignal.aborted) ownerLost();
+  try {
+    for (;;) {
+      if (ownerSignal.aborted || shutdown.requestedSignal()) break;
+      const result = await runElectron(nextArgs);
+      await result.owner?.retire();
+      await result.registered?.close();
+      registeredReceivers.delete(result.registered);
+      electronOwners.delete(result.owner);
+      childOwners.delete(result.child);
+      requestedRetirements.delete(result.owner);
+      if (result.relaunchArgs && !shutdown.requestedSignal()) {
+        nextArgs = result.relaunchArgs;
+        continue;
       }
-    } else if (observation === "unknown") {
-      throw new Error(`Cannot prove ownership of registered hub ${identity.pid} during shutdown`);
+
+      const signal = shutdown.requestedSignal() ?? result.signal;
+      if (result.signal && !shutdown.requestedSignal()) {
+        console.error(
+          `[dev] Electron terminated by ${result.signal} (shell exit ${signalExitCode(result.signal)})`
+        );
+      } else if (!signal && result.code) {
+        console.error(`[dev] Electron exited with code ${result.code}`);
+      }
+      process.exitCode = signal ? signalExitCode(signal) : (result.code ?? 0);
+      break;
     }
-  }
-  ownedHubs.clear();
-  if (result.signal && !shutdown.requestedSignal()) {
-    console.error(
-      `[dev] Electron terminated by ${result.signal} (shell exit ${signalExitCode(result.signal)})`
+  } finally {
+    ownerSignal.removeEventListener("abort", ownerLost);
+    const failures = [];
+    const requested = await Promise.all(requestedRetirements.values());
+    failures.push(
+      ...requested.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
     );
-  } else if (!signal && result.code) {
-    console.error(`[dev] Electron exited with code ${result.code}`);
+    // Joining Electron closes its IPC producer before the hub receipt set is sealed.
+    const desktop = await Promise.allSettled([...electronOwners].map((owner) => owner.retire()));
+    failures.push(
+      ...desktop.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+    );
+    try {
+      await stopTypeCheck();
+    } catch (error) {
+      failures.push(error);
+    }
+    const registered = await Promise.allSettled(
+      [...registeredReceivers].map((receiver) => receiver.close())
+    );
+    failures.push(
+      ...registered.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+    );
+    if (failures.length)
+      throw new AggregateError(failures, "Development runner resource retirement failed");
+    registeredReceivers.clear();
   }
-  process.exit(signal ? signalExitCode(signal) : (result.code ?? 0));
-}
+});

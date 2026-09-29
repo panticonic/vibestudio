@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
+import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import * as path from "node:path";
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { captureOwnedProcessIdentity, type OwnedProcessIdentity } from "./ownedProcessIdentity.js";
+import type { OwnedProcessIdentity } from "./ownedProcessIdentity.js";
+import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
+import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 
 // Workspace readiness can include one sealed npm materialization whose own
 // finite deadline is ten minutes. The process owner must outlive that child
@@ -40,7 +43,7 @@ function waitForExit(child: ChildProcess): Promise<number> {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (signal) {
-        resolve(128 + (process.platform === "win32" ? 0 : 1));
+        resolve(signalExitCode(signal));
         return;
       }
       resolve(code ?? 1);
@@ -76,39 +79,6 @@ async function waitForReady(
   }
 }
 
-function signalOwnedProcess(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    if (process.platform !== "win32" && child.pid !== undefined) {
-      process.kill(-child.pid, signal);
-    } else {
-      child.kill(signal);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
-}
-
-function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (process.platform === "win32" || pid === undefined) return;
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
-}
-
-function processGroupExists(pid: number | undefined): boolean {
-  if (process.platform === "win32" || pid === undefined) return false;
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-    throw error;
-  }
-}
-
 function forwardSignals(child: ChildProcess): () => void {
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
@@ -140,6 +110,8 @@ export class DevInstanceSupervisor {
   private stopForwarding: (() => void) | null = null;
   private exit: Promise<number> | null = null;
   private ownedIdentity: OwnedProcessIdentity | null = null;
+  private ownedGroup: OwnedProcessGroup | null = null;
+  private registeredGroups: ReturnType<typeof createOwnedProcessGroupReceiver> | null = null;
 
   constructor(private readonly options: DevInstanceSupervisorOptions) {
     if (!path.isAbsolute(options.sourceRoot)) {
@@ -191,8 +163,22 @@ export class DevInstanceSupervisor {
     }
     try {
       if (child.pid === undefined) throw new Error("DevInstanceSupervisor child has no PID");
-      this.ownedIdentity = captureOwnedProcessIdentity(child.pid);
-      await this.options.onSpawn?.(this.ownedIdentity);
+      this.ownedGroup = OwnedProcessGroup.create(child, {
+        termTimeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+        requestGracefulStop: (signal) => child.kill(signal),
+      });
+      this.ownedIdentity = this.ownedGroup.identity;
+      if (this.ownedIdentity) {
+        this.registeredGroups = createOwnedProcessGroupReceiver(
+          child,
+          this.ownedIdentity,
+          (identity) =>
+            OwnedProcessGroup.adopt(identity, {
+              termTimeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+            })
+        );
+      }
+      if (this.ownedIdentity) await this.options.onSpawn?.(this.ownedIdentity);
       if (this.options.readiness) {
         const ready = await Promise.race([
           waitForReady(
@@ -222,39 +208,26 @@ export class DevInstanceSupervisor {
     return this.exit.finally(async () => {
       this.stopForwarding?.();
       this.stopForwarding = null;
-      // The leader may exit without taking its descendants with it (for
-      // example, after an uncaught exception or an external SIGKILL). Since
-      // this supervisor created a detached process group, it remains the
-      // owner of that group and must drain it before the instance root is
-      // removed. The PID is captured before spawn and the cleanup happens
-      // immediately on leader exit, before it can be reused in practice.
-      if (this.child?.pid !== undefined && processGroupExists(this.child.pid)) {
-        signalProcessGroup(this.child.pid, "SIGTERM");
-        const deadline = Date.now() + (this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
-        while (processGroupExists(this.child.pid) && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        if (processGroupExists(this.child.pid)) signalProcessGroup(this.child.pid, "SIGKILL");
-      }
+      // Join the exact original group and every acknowledged detached group
+      // before the instance owner is permitted to remove its storage.
+      const results = await Promise.allSettled([
+        this.ownedGroup?.retire(),
+        this.registeredGroups?.close(),
+      ]);
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length)
+        throw Object.assign(
+          new AggregateError(failures, "Developer instance resources did not retire"),
+          { code: "EOWNERSHIP" }
+        );
     });
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<number> {
     if (!this.child || !this.exit) return 0;
-    signalOwnedProcess(this.child, signal);
-    if (signal === "SIGKILL") return this.wait();
-
-    const timeoutMs = this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
-    let timeout: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<"timeout">((resolve) => {
-      timeout = setTimeout(() => resolve("timeout"), timeoutMs);
-      timeout.unref();
-    });
-    const outcome = await Promise.race([this.wait().then((code) => ({ code })), timedOut]);
-    if (timeout) clearTimeout(timeout);
-    if (outcome !== "timeout") return outcome.code;
-
-    signalOwnedProcess(this.child, "SIGKILL");
+    await this.ownedGroup?.retire(signal);
     return this.wait();
   }
 }

@@ -6,6 +6,12 @@ import { spawn } from "node:child_process";
 import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
 import { afterEach, describe, expect, it } from "vitest";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
+import {
+  captureOwnedProcessIdentity,
+  observeOwnedProcessGroup,
+  type OwnedProcessIdentity,
+} from "@vibestudio/shared/ownedProcessIdentity";
+import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 
 const roots: string[] = [];
 
@@ -22,6 +28,92 @@ afterEach(() => {
 });
 
 describe("DevInstanceSupervisor", () => {
+  it.skipIf(process.platform === "win32")(
+    "joins a registered detached group after abrupt child death",
+    async () => {
+      const root = temporaryRoot();
+      const entry = path.join(root, "registered-owner.mjs");
+      const readyFile = path.join(root, "ready.json");
+      fs.writeFileSync(
+        entry,
+        `
+      import { spawn } from "node:child_process";
+      import fs from "node:fs";
+      import { registerOwnedProcessGroup } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessRegistration.mjs", import.meta.url).href)};
+      import { captureOwnedProcessIdentity } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessIdentity.mjs", import.meta.url).href)};
+      const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{}); console.log("ready"); setInterval(()=>{},1000)'], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+      await new Promise(resolve => child.stdout.once("data", resolve));
+      const identity = captureOwnedProcessIdentity(child.pid);
+      await registerOwnedProcessGroup(identity);
+      fs.writeFileSync(process.argv[2], JSON.stringify(identity));
+      setInterval(()=>{},1000);
+    `
+      );
+      let receipt: OwnedProcessIdentity | undefined;
+      const supervisor = new DevInstanceSupervisor({
+        sourceRoot: root,
+        command: process.execPath,
+        args: [entry, readyFile],
+        env: process.env,
+        stdio: "ignore",
+        stopTimeoutMs: 100,
+        readiness: {
+          file: readyFile,
+          async onReady(value) {
+            receipt = value as OwnedProcessIdentity;
+          },
+        },
+      });
+      try {
+        await supervisor.start();
+        expect(observeOwnedProcessGroup(receipt!)).toBe("owned");
+        supervisor.process!.kill("SIGKILL");
+        await expect(supervisor.wait()).resolves.toBe(137);
+        expect(observeOwnedProcessGroup(receipt!)).toBe("absent");
+      } finally {
+        await supervisor.stop("SIGKILL");
+        if (receipt) await OwnedProcessGroup.adopt(receipt).retire("SIGKILL");
+      }
+    },
+    10_000
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a transferred receipt for a process outside its child tree",
+    async () => {
+      const root = temporaryRoot();
+      const foreign = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      const foreignOwner = OwnedProcessGroup.create(foreign);
+      const receipt = captureOwnedProcessIdentity(foreign.pid!);
+      const entry = path.join(root, "unrelated-receipt.mjs");
+      fs.writeFileSync(
+        entry,
+        `
+      import { registerOwnedProcessGroup } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessRegistration.mjs", import.meta.url).href)};
+      await registerOwnedProcessGroup(${JSON.stringify(receipt)}).then(() => process.exit(3), () => process.exit(0));
+    `
+      );
+      const supervisor = new DevInstanceSupervisor({
+        sourceRoot: root,
+        command: process.execPath,
+        args: [entry],
+        env: process.env,
+        stdio: "ignore",
+      });
+      try {
+        await supervisor.start();
+        await expect(supervisor.wait()).resolves.toBe(0);
+        expect(observeOwnedProcessGroup(receipt)).toBe("owned");
+      } finally {
+        await supervisor.stop("SIGKILL");
+        await foreignOwner.retire("SIGKILL");
+      }
+    }
+  );
+
   it.skipIf(process.platform !== "linux")(
     "revokes a detached service and its worker when the supervisor is killed",
     async () => {

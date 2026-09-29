@@ -332,6 +332,7 @@ async function main(): Promise<void> {
     "development-template-checkpoints",
     instance.generationId
   );
+  let retirementFailed = false;
   try {
     const defaultTemplates =
       (await resolveDevelopmentTemplateSet({
@@ -451,22 +452,31 @@ async function main(): Promise<void> {
       mode === "server"
         ? await runServer(launchArgs, env, instance)
         : await runDesktop(launchArgs, env);
+  } catch (error) {
+    retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
+    throw error;
   } finally {
-    if (!disposable) await prunePersistentInstanceBuildCache(root, id);
-    fs.rmSync(checkpointTarget, { recursive: true, force: true });
-    fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
-    const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
-    if (cleanupError) {
-      // Preserve the registry record and root together: the stale supervisor
-      // PID makes the instance unusable, while retaining the exact root makes
-      // a leaked descendant diagnosable. Most importantly, cleanup must not
-      // replace the hub's original exit status with a bare ENOTEMPTY.
-      console.error(
-        `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
-      );
-      process.exitCode = process.exitCode || 1;
+    if (retirementFailed) {
+      // State remains owned until every executor retires. Preserve the exact
+      // registry and source checkpoints when that join cannot be established.
+      console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
     } else {
-      unregisterDevInstance(repoRoot, id);
+      if (!disposable) await prunePersistentInstanceBuildCache(root, id);
+      fs.rmSync(checkpointTarget, { recursive: true, force: true });
+      fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
+      const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
+      if (cleanupError) {
+        // Preserve the registry record and root together: the stale supervisor
+        // PID makes the instance unusable, while retaining the exact root makes
+        // a leaked descendant diagnosable. Most importantly, cleanup must not
+        // replace the hub's original exit status with a bare ENOTEMPTY.
+        console.error(
+          `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
+        );
+        process.exitCode = process.exitCode || 1;
+      } else {
+        unregisterDevInstance(repoRoot, id);
+      }
     }
   }
 }

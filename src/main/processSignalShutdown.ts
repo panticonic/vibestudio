@@ -4,13 +4,13 @@
  * canonical before-quit/will-quit resource teardown owns the whole shutdown.
  */
 interface ProcessSignalTarget {
-  on(event: "SIGINT" | "SIGTERM" | "SIGHUP", listener: () => void): unknown;
+  on(event: "SIGINT" | "SIGTERM" | "SIGHUP" | "disconnect", listener: () => void): unknown;
   on(event: "message", listener: (message: unknown) => void): unknown;
 }
 
 export function installProcessSignalShutdown(target: ProcessSignalTarget, quit: () => void): void {
   let requested = false;
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "disconnect"] as const) {
     target.on(signal, () => {
       if (requested) return;
       requested = true;

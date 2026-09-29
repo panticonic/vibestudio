@@ -29,10 +29,13 @@ describe("development runner hub registration", () => {
     const ipc = target();
     const registration = registerOwnedHubWithDevRunner(identity, ipc);
     const request = ipc.send.mock.calls[0]?.[0] as { registrationId: string };
-    ipc.emit("message", { type: "vibestudio:dev-owned-hub-accepted", registrationId: "other" });
+    ipc.emit("message", {
+      type: "vibestudio:owned-process-group-accepted",
+      registrationId: "other",
+    });
     expect(ipc.listenerCount("message")).toBe(1);
     ipc.emit("message", {
-      type: "vibestudio:dev-owned-hub-accepted",
+      type: "vibestudio:owned-process-group-accepted",
       registrationId: request.registrationId,
     });
     await expect(registration).resolves.toBeUndefined();
@@ -45,10 +48,10 @@ describe("development runner hub registration", () => {
     const rejectedRegistration = registerOwnedHubWithDevRunner(identity, rejected);
     const request = rejected.send.mock.calls[0]?.[0] as { registrationId: string };
     rejected.emit("message", {
-      type: "vibestudio:dev-owned-hub-rejected",
+      type: "vibestudio:owned-process-group-rejected",
       registrationId: request.registrationId,
     });
-    await expect(rejectedRegistration).rejects.toThrow("rejected detached hub ownership");
+    await expect(rejectedRegistration).rejects.toThrow("rejected process-group ownership");
     expect(rejected.listenerCount("disconnect")).toBe(0);
 
     const disconnected = target();
