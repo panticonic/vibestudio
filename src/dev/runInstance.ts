@@ -26,7 +26,7 @@ import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generat
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 
 const require = createRequire(import.meta.url);
-const tsxCli = require.resolve("tsx/cli");
+const tsxLoader = require.resolve("tsx");
 
 type Mode = DevInstanceRecord["kind"];
 
@@ -211,13 +211,20 @@ async function runServer(
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
-    args: [tsxCli, "src/server/index.ts", ...serverArgs],
+    args: ["--import", tsxLoader, "src/server/index.ts", ...serverArgs],
     env,
     stdio: "inherit",
     forwardParentSignals: true,
     readiness: {
       file: readyFile,
       async onReady(ready) {
+        if (
+          !ready ||
+          typeof ready !== "object" ||
+          (ready as { pid?: unknown }).pid !== supervisor.process?.pid
+        ) {
+          throw new Error("Source host readiness does not belong to its supervised server process");
+        }
         // Which private workspace this instance's CLI opens is fixed when it
         // pairs: the workspace installs the units its cases need, so it is a
         // property of the instance rather than of a single command.
@@ -297,7 +304,7 @@ async function main(): Promise<void> {
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
     process.exitCode = await run(
       process.execPath,
-      [tsxCli, "src/server/index.ts", ...parsed.forwarded],
+      ["--import", tsxLoader, "src/server/index.ts", ...parsed.forwarded],
       { env }
     );
     return;

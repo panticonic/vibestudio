@@ -47,6 +47,17 @@ function fixture() {
         nodePath: process.execPath,
         serverEntryPath: path.join(sourceRoot, "dist", "server.mjs"),
         serverBuildId: digest("a"),
+        workspaceTemplates: Object.fromEntries(
+          ["base", "personal", "system"].map((role) => [
+            role,
+            {
+              url: `git+https://example.test/${role}.git`,
+              ref: "refs/heads/main",
+              commit: "a".repeat(40),
+            },
+          ])
+        ) as import("@vibestudio/workspace/templateRelease").DefaultWorkspaceTemplates,
+        workspaceSources: [],
       })),
     },
     register(input) {
@@ -145,6 +156,24 @@ function runAndPlan(): { run: DevelopmentRun; plan: PreparedDevelopmentBuild } {
       base: {
         repositoryId: "repository:base",
         repoPath: "templates/base",
+        repositoryState: { kind: "event" as const, eventId: "event:base" },
+        repositoryManifestDigest: digest("a"),
+        materializedTreeDigest: digest("b"),
+        contentRoot: `state:${digest("c")}`,
+        sourcePlanDigest: digest("d"),
+      },
+      personal: {
+        repositoryId: "repository:personal",
+        repoPath: "templates/personal",
+        repositoryState: { kind: "event" as const, eventId: "event:base" },
+        repositoryManifestDigest: digest("a"),
+        materializedTreeDigest: digest("b"),
+        contentRoot: `state:${digest("c")}`,
+        sourcePlanDigest: digest("d"),
+      },
+      system: {
+        repositoryId: "repository:system",
+        repoPath: "templates/system",
         repositoryState: { kind: "event" as const, eventId: "event:base" },
         repositoryManifestDigest: digest("a"),
         materializedTreeDigest: digest("b"),
@@ -267,7 +296,11 @@ describe("IsolatedDevelopmentHostExecutor", () => {
       "vibestudio://connect?child"
     );
     await expect(
-      f.executor.waitForClientAttestation(managedRun, `development-client-${"2".repeat(32)}`)
+      f.executor.waitForClientAttestation(
+        managedRun,
+        `development-client-${"2".repeat(32)}`,
+        new AbortController().signal
+      )
     ).resolves.toMatchObject({ childRuntimeId: "shell:child" });
   });
 

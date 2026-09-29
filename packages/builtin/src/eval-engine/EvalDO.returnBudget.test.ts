@@ -1,12 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 
-type Reach = { compactReturnValue(value: unknown, scopeKey: string): unknown };
+type Reach = {
+  compactReturnValue(value: unknown, scopeKey: string): unknown;
+  materializeResultArtifact(
+    runId: string,
+    result: { success: boolean; console: string; returnValue: unknown }
+  ): Promise<{ returnValue?: unknown }>;
+  infrastructureExecution(): unknown;
+  compactRunResult(result: {
+    success: boolean;
+    console: string;
+    error?: string;
+    returnValue?: unknown;
+    operationJournal: import("@vibestudio/service-schemas/eval").EvalOperationJournal;
+  }): { operationJournal?: unknown };
+};
 const reach = (instance: EvalDO): Reach => instance as unknown as Reach;
 
 describe("eval return budget", () => {
+  it("keeps operation evidence when independently compacting large guest output", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const operationJournal = {
+      protocol: "workspace-operations.v1" as const,
+      entries: [
+        {
+          type: "interaction",
+          receipt: { protocol: "cdp-interaction-outcome.v1", effect: { status: "observed" } },
+        },
+      ],
+      truncated: false,
+    };
+    const result = reach(instance).compactRunResult({
+      success: false,
+      console: "x".repeat(400_000),
+      error: "later failure",
+      returnValue: { projected: true },
+      operationJournal,
+    });
+    expect(result.operationJournal).toEqual(operationJournal);
+  });
   it("returns a small value untouched", async () => {
     const { instance } = await createTestDO(EvalDO);
     const value = { ok: true };
@@ -36,5 +71,90 @@ describe("eval return budget", () => {
     expect(envelope["originalChars"]).toBeGreaterThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
     expect(envelope["scopeKey"]).toBe("$lastLargeReturn");
     expect(typeof envelope["preview"]).toBe("string");
+  });
+  it("stores large image bytes as an owned artifact before applying the JSON budget", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('image', '{}', 'running', 0)"
+    );
+    const data = btoa("x".repeat(400_000));
+    const putRetained = vi.fn(async () => ({ digest: "a".repeat(64), size: 400_000 }));
+    const releaseRetention = vi.fn(async () => {});
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained, releaseRetention },
+    });
+    const materialized = await reach(instance).materializeResultArtifact("image", {
+      success: true,
+      console: "",
+      returnValue: { data, mimeType: "image/png", width: 1280, height: 720 },
+    });
+    const compact = reach(instance).compactReturnValue(
+      materialized.returnValue,
+      "$lastLargeReturn"
+    );
+    expect(compact).toEqual({
+      protocol: "eval-image-artifact.v1",
+      digest: "a".repeat(64),
+      size: 400_000,
+      mimeType: "image/png",
+      width: 1280,
+      height: 720,
+    });
+    expect(JSON.stringify(compact).length).toBeLessThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
+    expect(putRetained).toHaveBeenCalledWith({ base64: data, owner: "eval-result:image" });
+    await instance.dispose();
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:image" });
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
+  });
+
+  it("joins a pending artifact write before releasing its ownership during disposal", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('pending-image', '{}', 'running', 0)"
+    );
+    let finish!: (value: { digest: string; size: number }) => void;
+    const pending = new Promise<{ digest: string; size: number }>((resolve) => {
+      finish = resolve;
+    });
+    const releaseRetention = vi.fn(async () => {});
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained: () => pending, releaseRetention },
+    });
+    const image = reach(instance).materializeResultArtifact("pending-image", {
+      success: true,
+      console: "",
+      returnValue: { data: "eA==", mimeType: "image/png" },
+    });
+    let disposed = false;
+    const disposal = instance.dispose().then(() => {
+      disposed = true;
+    });
+    await vi.waitFor(() =>
+      expect(sql.exec("SELECT status FROM runs").toArray()[0]?.["status"]).toBe("cancelled")
+    );
+    expect(disposed).toBe(false);
+    expect(releaseRetention).not.toHaveBeenCalled();
+    finish({ digest: "b".repeat(64), size: 1 });
+    await image;
+    await disposal;
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:pending-image" });
+  });
+
+  it("does not allocate an artifact after its run was cancelled", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('cancelled-image', '{}', 'cancelled', 0)"
+    );
+    const putRetained = vi.fn();
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained },
+    });
+    const result = {
+      success: true,
+      console: "",
+      returnValue: { data: "eA==", mimeType: "image/png" },
+    };
+    expect(await reach(instance).materializeResultArtifact("cancelled-image", result)).toBe(result);
+    expect(putRetained).not.toHaveBeenCalled();
   });
 });

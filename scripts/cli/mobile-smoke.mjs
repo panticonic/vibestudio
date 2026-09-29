@@ -20,7 +20,6 @@ import {
   resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
-import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 import { observeMobileSmokeLog } from "./lib/mobile-smoke-log.mjs";
 import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
 import {
@@ -198,8 +197,8 @@ function pipeChildOutput(child, prefix) {
   child.stderr?.on("data", (chunk) => prefixAndWrite(prefix, chunk.toString(), process.stderr));
 }
 
-function spawnManaged(command, args, options = {}) {
-  const child = spawn(command, args, {
+function spawnManaged(acquire, command, args, options = {}) {
+  const child = acquire(() => spawn(command, args, {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -207,7 +206,7 @@ function spawnManaged(command, args, options = {}) {
     // native builds can fork children which a bare ChildProcess.kill()
     // cannot prove have retired.
     detached: process.platform !== "win32",
-  });
+  }));
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
     prefixAndWrite(
@@ -959,8 +958,8 @@ function findFreePort() {
   });
 }
 
-function startLogcat(device, expectedPhases, deadlineMs, packageName) {
-  const child = spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
+function startLogcat(acquire, device, expectedPhases, deadlineMs, packageName) {
+  const child = acquire(() => spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
     cwd: repoRoot,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -968,7 +967,7 @@ function startLogcat(device, expectedPhases, deadlineMs, packageName) {
     // means owning its group. Left in the runner's own group, the teardown
     // signal lands on the runner instead.
     detached: process.platform !== "win32",
-  });
+  }));
   return observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packageName });
 }
 
@@ -1966,58 +1965,36 @@ async function main() {
     );
   }
 
-  const children = [];
-  let cleanedUp = false;
+  // This source-only tool validates its checkout before loading development
+  // ownership helpers. Packaged CLI help needs no source toolchain.
+  const { tsImport } = await import("tsx/esm/api");
+  const { runParentOwnedMain } = await import("../lib/parent-owned-main.mjs");
+  const { createOwnedProcessLifetime } = await tsImport("../development-client-lifecycle.ts", import.meta.url);
+  await runParentOwnedMain(signal => runSmoke(options, signal, createOwnedProcessLifetime));
+}
+
+async function runSmoke(options, ownerSignal, createOwnedProcessLifetime) {
+  ownerSignal.throwIfAborted();
+  const lifetime = createOwnedProcessLifetime();
   let emulatorChild = null;
   let readyInfo = null;
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-"));
   const readyFilePath = path.join(tempRoot, "server-ready.json");
   const deadlineMs = Date.now() + options.timeoutMs;
 
-  const cleanup = async () => {
-    if (cleanedUp) return;
-    cleanedUp = true;
-    // Every launched emulator is registered in `children` at startup. Retiring
-    // it a second time races two process-group terminators against the same
-    // PID and can turn an otherwise successful smoke into a cleanup failure.
-    const ownedChildren = [...children.reverse()];
-    const retirements = await Promise.allSettled(
-      ownedChildren.map(async (child) => {
-        if (!child.pid) return;
-        const result = await terminateOwnedProcessTree(child.pid, {
-          termTimeoutMs: 8_000,
-          killTimeoutMs: 5_000,
-        });
-        if (!result.gone) {
-          throw new Error(result.detail ?? `owned process tree ${child.pid} did not retire`);
-        }
-      })
-    );
-    for (const retirement of retirements) {
-      if (retirement.status === "rejected") {
-        console.error(`[mobile-smoke] cleanup failed: ${String(retirement.reason)}`);
-      }
-    }
+  let cleanupPromise;
+  const cleanup = () => cleanupPromise ??= (async () => {
+    await lifetime.retire();
     if (options.keepState) {
       console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
     } else {
-      try {
-        await fsp.unlink(readyFilePath);
-      } catch {}
-      await fsp
-        .rm(tempRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 })
-        .catch((error) => {
-          console.error(`[mobile-smoke] failed to remove temporary state ${tempRoot}: ${error}`);
-        });
+      await fsp.rm(tempRoot, { recursive: true, force: true });
     }
-  };
-
-  process.on("SIGINT", () => {
-    void cleanup().then(() => process.exit(130));
-  });
-  process.on("SIGTERM", () => {
-    void cleanup().then(() => process.exit(143));
-  });
+  })();
+  const stop = () => lifetime.requestStop();
+  ownerSignal.addEventListener("abort", stop, { once: true });
+  if (ownerSignal.aborted) stop();
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, stop);
 
   try {
     const requestedDevice = options.device;
@@ -2030,7 +2007,9 @@ async function main() {
       }
       const avd = await ensureAndroidAvd({ requestedAvd: options.avd });
       const reporter = await createEmulatorPortReporter(options.timeoutMs);
-      emulatorChild = spawnManaged(
+      try {
+        emulatorChild = spawnManaged(
+        lifetime.acquire,
         process.env.ANDROID_EMULATOR ?? "emulator",
         [
           "-avd",
@@ -2043,10 +2022,8 @@ async function main() {
           reporter.argument,
         ],
         { label: "emulator" }
-      );
-      try {
+        );
         await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
-        children.push(emulatorChild);
         const exited = new Promise((_, reject) => {
           emulatorChild.once("exit", (code, signal) => {
             reject(
@@ -2138,13 +2115,12 @@ async function main() {
     } else {
       serverEnv.VIBESTUDIO_TEST_MODE = "1";
     }
-    let serverChild = spawnManaged(process.execPath, serverArgs, {
+    let serverChild = spawnManaged(lifetime.acquire, process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server",
     });
     await waitForSpawn(serverChild, process.execPath, serverArgs);
-    children.push(serverChild);
 
     const ready = await waitForServerReady(
       readyFilePath,
@@ -2186,8 +2162,7 @@ async function main() {
       "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    const logcat = startLogcat(options.device, phases, pairingDeadlineMs, options.packageName);
-    children.push(logcat.child);
+    const logcat = startLogcat(lifetime.acquire, options.device, phases, pairingDeadlineMs, options.packageName);
     await waitForLogcatReady(options.device, logcat);
 
     const link = buildConnectLinkFromLog(invite.pairUrl);
@@ -2347,15 +2322,7 @@ async function main() {
     );
 
     const serverRestartRecoveryCount = logcat.phaseCount("workspace-recovery-complete");
-    const serverExit = new Promise((resolve) => serverChild.once("exit", resolve));
-    serverChild.kill("SIGTERM");
-    await Promise.race([serverExit, sleep(10_000)]);
-    if (serverChild.exitCode == null && serverChild.signalCode == null) {
-      serverChild.kill("SIGKILL");
-      // Do not let the replacement race the old process for the fixed gateway
-      // port. SIGKILL is asynchronous with respect to Node's ChildProcess state.
-      await serverExit;
-    }
+    await lifetime.retireChild(serverChild);
     // With the old server stopped, any later pipe miss belongs to recovery.
     const serverRestartCacheablePipeMissCount = logcat.phaseCount(
       "workspace-panel-cacheable-asset-pipe-miss"
@@ -2363,7 +2330,7 @@ async function main() {
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
-    serverChild = spawnManaged(process.execPath, serverArgs, {
+    serverChild = spawnManaged(lifetime.acquire, process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server-restart",
@@ -2382,7 +2349,6 @@ async function main() {
       options.pairingTimeoutMs,
       "the panel Iroh session to reconnect after server restart"
     );
-    children.push(serverChild);
     const restartedReady = await waitForServerReady(
       readyFilePath,
       serverChild,
@@ -2432,11 +2398,12 @@ async function main() {
         ? "[mobile-smoke] PASS remote pairing, app restart, and server restart completed with the initial agent turn"
         : "[mobile-smoke] PASS remote pairing, app restart, and server restart rendered a nonblank panel"
     );
-    await cleanup();
   } catch (error) {
-    console.error(`[mobile-smoke] ${error instanceof Error ? error.message : String(error)}`);
+    if (!ownerSignal.aborted) throw error;
+  } finally {
+    ownerSignal.removeEventListener("abort", stop);
+    for (const signal of ["SIGINT", "SIGTERM"]) process.off(signal, stop);
     await cleanup();
-    process.exit(1);
   }
 }
 

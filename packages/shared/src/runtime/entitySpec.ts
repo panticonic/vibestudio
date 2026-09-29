@@ -343,9 +343,9 @@ export interface EntityReservationInput extends EntityActivationInput {
  * Optional code build selector for runtime entities.
  *
  * `contextId` selects the entity's filesystem/state context. It does not select
- * code provenance. Omit `ref` to launch the workspace's current main build; pass
- * `"ctx:<contextId>"` or `"state:<stateHash>"` only for an intentional targeted
- * branch/state build.
+ * code provenance. Omit `ref` to build the verified caller's current semantic
+ * workspace, or main for a root host caller. An explicit `"ctx:<contextId>"`,
+ * `"state:<stateHash>"`, or immutable artifact selects that exact source.
  */
 export type RuntimeEntityBuildRef = string;
 

@@ -32,6 +32,7 @@ export function stateLayout(statePath: string) {
     gitCheckoutsDir: gitCheckoutsPath(statePath),
     runtimeImagesFile: path.join(statePath, "runtime-images.json"),
     runtimeDiagnosticsDir: path.join(statePath, "runtime-diagnostics"),
+    workerdConfigDir: path.join(statePath, "workerd-config"),
     refsDir: path.join(statePath, "refs"),
     blobsDir: path.join(statePath, "blobs"),
     buildSourcesDir: path.join(statePath, "build-sources"),

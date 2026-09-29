@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PackageManifest } from "@vibestudio/shared/types";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { directorySourceProvider } from "./buildSource.js";
@@ -9,7 +9,16 @@ import {
   createExactWorkspaceAuthorityEnvironment,
   resolveProviderCatalog,
   resolveProviderRpcCatalog,
+  type ExactWorkspaceServiceBinding,
 } from "./userlandAuthority.js";
+
+const ownedRoots = new Set<string>();
+afterEach(() => {
+  for (const root of ownedRoots) {
+    rmSync(root, { recursive: true, force: true });
+    ownedRoots.delete(root);
+  }
+});
 
 function authority(title: string) {
   return {
@@ -49,6 +58,45 @@ function providerNode(root: string, manifestAuthority: ReturnType<typeof authori
 }
 
 describe("exact userland provider catalogs", () => {
+  it("uses the canonical declaration owner when its name also identifies its protocol", async () => {
+    const binding: ExactWorkspaceServiceBinding = {
+      name: "tasks.v1",
+      protocols: ["tasks.v1"],
+      source: "workers/tasks",
+      action: "manage tasks",
+      presentation: { domain: "files", verb: "manage" },
+      principals: ["code"],
+      target: { kind: "durable-object", className: "TasksDO", defaultObjectKey: "tasks" },
+    };
+    const resolveCatalog = vi.fn(async () => ({
+      provider: {
+        unitName: "@workspace-workers/tasks",
+        source: binding.source,
+        effectiveVersion: "ev-tasks",
+        className: "TasksDO",
+      },
+      methods: new Map(),
+      digest: "tasks-catalog",
+    }));
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:tasks",
+      services: [binding],
+      resolveCatalog,
+    });
+    expect(await environment.resolveService("tasks.v1")).toMatchObject({
+      kind: "resolved",
+      service: { binding },
+    });
+    expect(resolveCatalog).toHaveBeenCalledWith(binding);
+    expect(() =>
+      createExactWorkspaceAuthorityEnvironment({
+        stateHash: "state:tasks",
+        services: [binding, { ...binding, name: "other" }],
+        resolveCatalog,
+      })
+    ).toThrow(/declared by both/);
+  });
+
   it("does not synthesize product providers outside the exact workspace catalog", async () => {
     const environment = createExactWorkspaceAuthorityEnvironment({
       stateHash: "state:catalog",
@@ -70,6 +118,7 @@ describe("exact userland provider catalogs", () => {
 
   it("projects the exact materialized provider and coalesces identical extraction", async () => {
     const root = mkdtempSync(join(tmpdir(), "vibestudio-userland-catalog-"));
+    ownedRoots.add(root);
     mkdirSync(join(root, "workers/notes"), { recursive: true });
     const manifestAuthority = authority("Delete note");
     writeFileSync(

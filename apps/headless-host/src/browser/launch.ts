@@ -16,7 +16,8 @@ const LAUNCH_TIMEOUT_MS = 30_000;
 export interface LaunchedChromium {
   wsEndpoint: string;
   process: ChildProcess;
-  kill(): void;
+  profileDir: string;
+  stop(): Promise<void>;
 }
 
 function snapNameFromExecutablePath(executablePath: string): string | null {
@@ -31,16 +32,16 @@ function isHiddenHomePath(candidate: string, homeDir: string): boolean {
   return relative.split(path.sep).some((segment) => segment.startsWith("."));
 }
 
-export function resolveChromiumProfileDir(opts: {
+export function resolveChromiumProfileRoot(opts: {
   executablePath: string;
-  profileDir: string;
+  profileRoot: string;
   homeDir?: string;
 }): string {
   const homeDir = opts.homeDir ?? os.homedir();
   const snapName = snapNameFromExecutablePath(opts.executablePath);
-  if (!snapName || !isHiddenHomePath(opts.profileDir, homeDir)) return opts.profileDir;
+  if (!snapName || !isHiddenHomePath(opts.profileRoot, homeDir)) return opts.profileRoot;
   const defaultRoot = path.join(homeDir, ".local", "state", "vibestudio", "headless-host");
-  const relativeInstance = path.relative(defaultRoot, path.resolve(opts.profileDir));
+  const relativeInstance = path.relative(defaultRoot, path.resolve(opts.profileRoot));
   const safeRelativeInstance =
     relativeInstance && !relativeInstance.startsWith("..") && !path.isAbsolute(relativeInstance)
       ? relativeInstance
@@ -58,17 +59,18 @@ export function resolveChromiumProfileDir(opts: {
 
 export async function launchChromium(opts: {
   executablePath: string;
-  profileDir: string;
+  profileRoot: string;
   extraArgs?: string[];
 }): Promise<LaunchedChromium> {
-  const profileDir = resolveChromiumProfileDir({
+  const profileRoot = resolveChromiumProfileRoot({
     executablePath: opts.executablePath,
-    profileDir: opts.profileDir,
+    profileRoot: opts.profileRoot,
   });
-  if (profileDir !== opts.profileDir) {
-    log.info(`Using snap-accessible Chromium profile dir: ${profileDir}`);
+  if (profileRoot !== opts.profileRoot) {
+    log.info(`Using snap-accessible Chromium profile dir: ${profileRoot}`);
   }
-  fs.mkdirSync(profileDir, { recursive: true });
+  fs.mkdirSync(profileRoot, { recursive: true });
+  const profileDir = fs.mkdtempSync(path.join(profileRoot, "chromium-"));
   const args = [
     "--headless=new",
     "--remote-debugging-port=0",
@@ -82,48 +84,82 @@ export async function launchChromium(opts: {
     "--window-size=1280,800",
     ...(opts.extraArgs ?? []),
   ];
-  const child = spawn(opts.executablePath, args, {
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-
-  const wsEndpoint = await new Promise<string>((resolve, reject) => {
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(
-        new Error(
-          `Chromium did not report a DevTools endpoint within ${LAUNCH_TIMEOUT_MS}ms:\n${stderr.slice(-2000)}`
-        )
-      );
-    }, LAUNCH_TIMEOUT_MS);
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-      const match = WS_URL_PATTERN.exec(stderr);
-      if (match) {
+  let child: ChildProcess;
+  try {
+    child = spawn(opts.executablePath, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      // Chromium's crash reporter and other ancillary state otherwise use the
+      // user's global config/cache even with a separate --user-data-dir.
+      env: { ...process.env,
+        XDG_CONFIG_HOME: path.join(profileDir, "config"),
+        XDG_CACHE_HOME: path.join(profileDir, "cache"),
+        CHROME_CONFIG_HOME: path.join(profileDir, "config"),
+      },
+    });
+  } catch (error) {
+    await fs.promises.rm(profileDir, { recursive: true, force: true });
+    throw error;
+  }
+  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  let retirement: Promise<void> | undefined;
+  const stop = (): Promise<void> => retirement ??= (async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
+    await fs.promises.rm(profileDir, { recursive: true, force: true });
+  })();
+  let wsEndpoint: string;
+  try {
+    wsEndpoint = await new Promise<string>((resolve, reject) => {
+      let stderr = "";
+      const cleanup = () => {
         clearTimeout(timer);
-        resolve(match[1]!);
-      }
+        child.stderr?.off("data", onData);
+        child.stderr?.resume();
+        child.off("exit", onExit);
+        child.off("error", onError);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          new Error(
+            `Chromium did not report a DevTools endpoint within ${LAUNCH_TIMEOUT_MS}ms:\n${stderr.slice(-2000)}`
+          )
+        );
+      }, LAUNCH_TIMEOUT_MS);
+      const onData = (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString()).slice(-4096);
+        const match = WS_URL_PATTERN.exec(stderr);
+        if (match) {
+          cleanup();
+          resolve(match[1]!);
+        }
+      };
+      const onExit = (code: number | null) => {
+        cleanup();
+        reject(
+          new Error(
+            `Chromium exited (code ${code}) before reporting an endpoint:\n${stderr.slice(-2000)}`
+          )
+        );
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      child.stderr?.on("data", onData);
+      child.once("exit", onExit);
+      child.once("error", onError);
     });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(
-        new Error(
-          `Chromium exited (code ${code}) before reporting an endpoint:\n${stderr.slice(-2000)}`
-        )
-      );
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
+  } catch (error) {
+    await stop();
+    throw error;
+  }
 
   log.info(`Chromium up: ${wsEndpoint}`);
   return {
     wsEndpoint,
     process: child,
-    kill: () => {
-      if (!child.killed) child.kill("SIGKILL");
-    },
+    profileDir,
+    stop,
   };
 }

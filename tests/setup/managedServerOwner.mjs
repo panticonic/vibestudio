@@ -1,7 +1,8 @@
 /** Own external live-test resources independently of the Playwright worker.
  * IPC is the lifetime lease: even SIGKILL of the worker closes it. */
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { tsImport } from "tsx/esm/api";
+const { createDevelopmentClientLifetime } = await tsImport("../../scripts/development-client-lifecycle.ts", import.meta.url);
 import { captureOwnedProcessIdentity } from "../../scripts/owned-process-identity.mjs";
 import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
 import { startEphemeralLinuxSecretService } from "../../scripts/lib/linux-secret-service.mjs";
@@ -71,6 +72,7 @@ const execute = async (file, args, options, startup = true) => {
 const [instance, directory] = process.argv.slice(2);
 if (!instance || !directory || !process.send)
   throw new Error("Managed server owner requires an IPC lease");
+const lifetime = createDevelopmentClientLifetime(directory);
 const children = [];
 let closing = false;
 let shutdown;
@@ -113,13 +115,18 @@ const start = async () => {
   );
   if (closing) return;
   const pairingLink = JSON.parse(stdout.trim().split("\n").at(-1)).pairing.deepLink;
-  const secrets = await startEphemeralLinuxSecretService(directory, children);
+  const secrets = await startEphemeralLinuxSecretService(directory, (startChild) => {
+    const child = lifetime.acquire(startChild);
+    children.push(child);
+    return child;
+  });
   if (closing) return;
   send({ kind: "ready", pairingLink, secrets, helperPids: children.map((child) => child.pid) });
 };
 let startup;
 function stop() {
   closing = true;
+  lifetime.requestStop();
   return (shutdown ??= (async () => {
     let failed = false;
     if (startupCommand) {
@@ -140,16 +147,11 @@ function stop() {
       failed = true;
       console.error(error);
     }
-    for (const child of children.reverse()) {
-      if (child.exitCode !== null || child.signalCode !== null) continue;
-      const exited = once(child, "exit");
-      child.kill("SIGTERM");
-      const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
-      try {
-        await exited;
-      } finally {
-        clearTimeout(timer);
-      }
+    try {
+      await lifetime.close();
+    } catch (error) {
+      failed = true;
+      console.error(error);
     }
     send({ kind: "stopped", failed });
     if (process.connected) process.disconnect();

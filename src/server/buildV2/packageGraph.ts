@@ -59,11 +59,10 @@ export interface GraphNode {
   /** Dependency declaration errors that block this unit without aborting graph discovery. */
   dependencyErrors?: string[];
   /**
-   * Declared `exports` subpaths from package.json (the keys, e.g. ".",
-   * "./panel"). Used by exact-state unit reports to build each declared library
-   * export, not just the root entry.
+   * Exact package.json export map, including target conditions and exclusions.
+   * Reports and imports must resolve the same public entry contract.
    */
-  exports?: string[];
+  exports?: unknown;
   /** vibestudio manifest from package.json */
   manifest: PackageManifest;
 }
@@ -360,7 +359,7 @@ function packageNodeFromJson(
     dependencyOverrides: buildDependencyOverrides(pkg),
     internalDeps,
     ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
-    ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
+    ...(Object.hasOwn(pkg, "exports") ? { exports: pkg.exports } : {}),
     manifest: pkg.vibestudio ?? {},
   };
 }
@@ -420,7 +419,8 @@ function templateNodeFromJson(
  * validating `./tests/*` itself would resolve to a non-existent `*.ts` file.
  * Conditional-only exports (a flat condition map) collapse to `["."]`.
  */
-function declaredExportSubpaths(exports: Record<string, unknown>): string[] {
+export function declaredExportSubpaths(exports: unknown): string[] {
+  if (typeof exports !== "object" || exports === null || Array.isArray(exports)) return ["."];
   const keys = Object.keys(exports);
   const subpaths = keys.filter((k) => (k === "." || k.startsWith("./")) && !k.includes("*"));
   if (subpaths.length === 0) return ["."];

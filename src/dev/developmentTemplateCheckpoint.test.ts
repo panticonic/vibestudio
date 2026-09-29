@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkpointWorkspaceSource } from "../workspaceTemplateCheckpoint.js";
 
 function git(directory: string, args: string[]): string {
@@ -15,6 +15,7 @@ function git(directory: string, args: string[]): string {
 const temporaryRoots = new Set<string>();
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of temporaryRoots) fs.rmSync(root, { recursive: true, force: true });
   temporaryRoots.clear();
 });
@@ -53,6 +54,48 @@ describe("development template checkpoint", () => {
     expect(fs.readFileSync(path.join(target, " leading space.txt"), "utf8")).toBe("visible edit\n");
     expect(git(checkout, ["rev-parse", "HEAD"])).toBe(git(original, ["rev-parse", "HEAD"]));
   });
+  it("does not admit automatic Git maintenance into an immutable checkpoint", async () => {
+    const checkout = repository();
+    const target = `${checkout}-checkpoint`;
+    const trace = `${checkout}-trace.jsonl`;
+    const configuration = `${checkout}-gitconfig`;
+    for (const item of [target, trace, configuration]) temporaryRoots.add(item);
+    fs.writeFileSync(
+      configuration,
+      "[maintenance]\n  auto = true\n[gc]\n  auto = 1\n  autoDetach = false\n"
+    );
+    vi.stubEnv("GIT_CONFIG_GLOBAL", configuration);
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    fs.writeFileSync(path.join(checkout, "tracked.txt"), "checkpoint edit\n");
+    await checkpointWorkspaceSource({ checkout, target });
+    const events = fs
+      .readFileSync(trace, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event?: string; argv?: string[] });
+    const maintenance = events.filter(
+      (event) =>
+        event.event === "child_start" &&
+        event.argv?.some((argument) => argument === "maintenance" || argument === "gc")
+    );
+    expect(maintenance).toEqual([]);
+    expect(git(target, ["show", "HEAD:tracked.txt"])).toBe("checkpoint edit");
+  });
+
+  it("seals borrowed Git objects into an independently owned checkpoint", async () => {
+    const original = repository();
+    const checkout = `${original}-shared`;
+    const target = `${original}-checkpoint`;
+    temporaryRoots.add(checkout);
+    temporaryRoots.add(target);
+    git(original, ["clone", "--shared", original, checkout]);
+    expect(fs.existsSync(path.join(checkout, ".git/objects/info/alternates"))).toBe(true);
+    await checkpointWorkspaceSource({ checkout, target });
+    expect(fs.existsSync(path.join(target, ".git/objects/info/alternates"))).toBe(false);
+    fs.rmSync(original, { recursive: true, force: true });
+    expect(git(target, ["show", "HEAD:tracked.txt"])).toBe("committed");
+  });
+
   it("seals a clean checkout independently of later source edits", async () => {
     const checkout = repository();
     const target = `${checkout}-checkpoint`;

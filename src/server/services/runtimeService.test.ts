@@ -11,7 +11,8 @@ import { createRuntimeService, type RuntimeEntityHooks } from "./runtimeService.
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
+import { TaskAuthorityRegistry, taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
+import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import {
   canonicalEntityId,
   type EntityRecord,
@@ -132,6 +133,7 @@ interface BuildDepsOptions {
   >["destroyDurableStorage"];
   onContextCreated?: Parameters<typeof createRuntimeService>[0]["onContextCreated"];
   onContextRemoved?: Parameters<typeof createRuntimeService>[0]["onContextRemoved"];
+  testPolicyForContext?: Parameters<typeof createRuntimeService>[0]["testPolicyForContext"];
   onPanelExecutionActivated?: Parameters<
     typeof createRuntimeService
   >[0]["onPanelExecutionActivated"];
@@ -203,10 +205,12 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     materializeExecution: async () => undefined,
   });
   const taskAuthorities = new TaskAuthorityRegistry();
+  const unitSupervisor = new UnitSupervisor();
 
   const runtimeResult = createRuntimeService({
     taskAuthorities,
-    unitSupervisor: new UnitSupervisor(),
+    testPolicyForContext: opts.testPolicyForContext ?? (() => null),
+    unitSupervisor,
     entityStore,
     hooks: {
       recoverExactExecution,
@@ -322,6 +326,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     spy,
     entityCache,
     taskAuthorities,
+    unitSupervisor,
     contextFolders,
     approvalQueue,
     grantStore,
@@ -847,9 +852,13 @@ describe("runtimeService deferred panel activation", () => {
     });
   });
 
-  it("atomically makes an implicit panel context a lifecycle child of its verified creator", async () => {
+  it("forks an implicit panel's source frontier before activating its isolated lifecycle context", async () => {
     const onContextCreated = vi.fn(async () => {});
-    const { service, instance } = await buildDeps({ onContextCreated });
+    const forkContext = vi.fn(async () => {});
+    const { service, instance, preparePanel } = await buildDeps({
+      onContextCreated,
+      semanticContexts: { forkContext },
+    });
     const creator = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
@@ -869,6 +878,20 @@ describe("runtimeService deferred panel activation", () => {
     ])) as { id: string; contextId: string };
 
     expect(reserved.contextId).not.toBe("ctx-creator");
+    expect(forkContext).toHaveBeenCalledWith("ctx-creator", reserved.contextId);
+    await service.handler({ caller: mediatedCreator }, "activateReservedEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/child" },
+        key: "child",
+      },
+    ]);
+    expect(preparePanel).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        source: "panels/child",
+        ref: `ctx:${reserved.contextId}`,
+      })
+    );
     expect(instance.entityResolve(reserved.id)).toMatchObject({
       parentId: creator.id,
       contextId: reserved.contextId,
@@ -1102,6 +1125,76 @@ describe("runtimeService.createEntity (do kind)", () => {
       )
     ).rejects.toThrow(/different launch subject/);
     expect(prepareDurableObject).toHaveBeenCalledTimes(priorBuildCount);
+  });
+
+  it("isolates refined case authority while ordinary descendants inherit their case task", async () => {
+    const admissions = new AgentExecutionSessionRegistry();
+    const orchestrator = admissions.createTestPolicy("system-test-runner:authority-isolation");
+    admissions.markTestContext("ctx-orchestrator", orchestrator);
+    for (const testId of ["first", "second"]) {
+      admissions.attachCasePolicy(`ctx-${testId}`, "ctx-orchestrator", {
+        testId,
+        agent: { model: "openai-codex:gpt-6-luna", approvalLevel: 2, fallback: "disabled" },
+        authority: [],
+        unexpectedPrompts: "fail",
+      });
+    }
+    const { service, taskAuthorities, entityCache } = await buildDeps({
+      testPolicyForContext: (contextId) => admissions.testPolicyForContext(contextId),
+    });
+    const orchestratorBinding = {
+      workspaceId: "workspace:test",
+      contextId: "ctx-orchestrator",
+      channelId: "channel:orchestrator",
+    };
+    const taskAuthority = taskAuthorityPrincipal(orchestratorBinding);
+    taskAuthorities.bindPrincipal(taskAuthority, orchestratorBinding);
+    taskAuthorities.bindExecution({
+      ...createTestExecutionSession({
+        runtimeId: "eval:orchestrator",
+        contextId: "ctx-orchestrator",
+        agentBinding: { entityId: "agent:orchestrator", channelId: "channel:orchestrator" },
+      }),
+      taskAuthority,
+    });
+    const creator = {
+      ...panelCaller("panel:orchestrator"),
+      taskAuthority,
+      testPolicy: orchestrator,
+    };
+    const first = (await service.handler({ caller: creator }, "createEntity", [
+      doCreateSpec({ key: "first", contextId: "ctx-first" }),
+    ])) as { id: string };
+    expect(taskAuthorities.resolveRuntime(first.id, entityCache)).toBeNull();
+
+    const caseBinding = {
+      workspaceId: "workspace:test",
+      contextId: "ctx-first",
+      channelId: "channel:first",
+    };
+    const caseTask = taskAuthorityPrincipal(caseBinding);
+    taskAuthorities.bindPrincipal(caseTask, caseBinding);
+    taskAuthorities.bindExecution({
+      ...createTestExecutionSession({
+        runtimeId: "eval:first",
+        contextId: "ctx-first",
+        agentBinding: { entityId: "agent:first", channelId: "channel:first" },
+      }),
+      taskAuthority: caseTask,
+    });
+    const parent = {
+      ...panelCaller(first.id),
+      taskAuthority: caseTask,
+      testPolicy: orchestrator,
+    };
+    const child = (await service.handler({ caller: parent }, "createEntity", [
+      doCreateSpec({ key: "ordinary-child", contextId: "ctx-first" }),
+    ])) as { id: string };
+    expect(taskAuthorities.resolveRuntime(child.id, entityCache)).toBe(caseTask);
+    const second = (await service.handler({ caller: parent }, "createEntity", [
+      doCreateSpec({ key: "second", contextId: "ctx-second" }),
+    ])) as { id: string };
+    expect(taskAuthorities.resolveRuntime(second.id, entityCache)).toBeNull();
   });
 
   it("snapshots the verified creator task onto a new runtime", async () => {
@@ -1503,7 +1596,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(reactivated?.source.effectiveVersion).toBe("ev-panel-v1");
     expect(preparePanel).toHaveBeenLastCalledWith({
       source: "panels/example",
-      ref: undefined,
+      ref: "main",
       buildKey: "b".repeat(64),
     });
   });
@@ -1617,7 +1710,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     });
     expect(resolveAppExecution).toHaveBeenCalledWith({
       source: "apps/shell",
-      ref: undefined,
+      ref: "main",
     });
   });
 
@@ -1887,6 +1980,46 @@ describe("runtimeService.createEntity context policy", () => {
 });
 
 describe("runtimeService.createEntity build refs", () => {
+  it("rebuilds from the verified author's advancing source while retaining isolated runtime storage", async () => {
+    let authorVersion = "a";
+    const preparePanel = vi.fn(async ({ source, ref }: { source: string; ref?: string }) => {
+      const version = source === "panels/counter" && ref === "ctx:author" ? authorVersion : "0";
+      return {
+        ...sealedExecution,
+        effectiveVersion: `version-${version}`,
+        buildKey: version.repeat(64),
+      };
+    });
+    const { service, instance } = await buildDeps({ preparePanel });
+    const author = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/author" },
+        key: "author",
+        contextId: "author",
+      },
+    ])) as RuntimeEntityHandle;
+    const caller = createVerifiedCaller(author.id, "server");
+    const replacement = (key: string) =>
+      service.handler({ caller }, "createEntity", [
+        {
+          kind: "panel",
+          execution: { surface: "code", source: "panels/counter" },
+          key,
+          contextId: "isolated-storage",
+        },
+      ]) as Promise<RuntimeEntityHandle>;
+
+    const first = await replacement("counter-before-edit");
+    authorVersion = "b";
+    const second = await replacement("counter-after-edit");
+
+    expect(first).toMatchObject({ contextId: "isolated-storage", buildKey: "a".repeat(64) });
+    expect(second).toMatchObject({ contextId: "isolated-storage", buildKey: "b".repeat(64) });
+    expect(instance.entityResolve(second.id)?.source.effectiveVersion).toBe("version-b");
+    expect(preparePanel).toHaveBeenLastCalledWith({ source: "panels/counter", ref: "ctx:author" });
+  });
+
   ledgerTest("execution.runtime-create-entity", async () => {
     const { service, preparePanel } = await buildDeps();
 
@@ -1909,7 +2042,7 @@ describe("runtimeService.createEntity build refs", () => {
     });
   });
 
-  it("keeps context identity separate from worker build ref", async () => {
+  it("selects main for a root host worker while retaining its explicit runtime context", async () => {
     const { service, prepareWorker } = await buildDeps();
 
     await service.handler({ caller: serverCaller }, "createEntity", [
@@ -1924,7 +2057,7 @@ describe("runtimeService.createEntity build refs", () => {
     expect(prepareWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         contextId: "ctx-branch",
-        ref: undefined,
+        ref: "main",
       })
     );
   });
@@ -1952,6 +2085,50 @@ describe("runtimeService.createEntity build refs", () => {
       })
     );
   });
+});
+
+describe("runtimeService supervision ownership", () => {
+  it.each(["restart", "retire"] as const)(
+    "admits %s of an owned runtime without global management authority",
+    async (operation) => {
+      const { service, dispatch, unitSupervisor } = await buildDeps();
+      const owner = panelCaller("panel:owner");
+      const handle = (await service.handler({ caller: owner }, "createEntity", [
+        {
+          kind: "panel",
+          execution: { surface: "code", source: "panels/counter" },
+          contextId: "ctx-owned",
+        },
+      ])) as { id: string };
+      const restart = vi.fn(async () => {});
+      const retire = vi.fn(async () => {});
+      unitSupervisor.register({
+        kind: "panel",
+        list: () => [],
+        describe: () => null,
+        health: vi.fn(),
+        logs: () => [],
+        restart,
+        retire,
+      });
+      const key = { kind: "panel", entityId: handle.id };
+      await expect(dispatch(owner, `supervision.${operation}`, [key])).resolves.toBeUndefined();
+      expect(operation === "restart" ? restart : retire).toHaveBeenCalledOnce();
+
+      const prepare = service.authorityPreparation![`runtime.supervision.${operation}.ownership`]!;
+      const foreign = await prepare({ caller: panelCaller("panel:foreign") }, [key]);
+      expect(foreign.selections).toMatchObject([
+        {
+          capability: "runtime.supervision.manage",
+          resourceKey: `${operation}:panel:${handle.id}`,
+        },
+      ]);
+      const impersonatedKind = await prepare({ caller: owner }, [{ ...key, kind: "worker" }]);
+      expect(impersonatedKind.selections).toHaveLength(1);
+      const self = await prepare({ caller: panelCaller(handle.id) }, [key]);
+      expect(self.selections).toEqual([]);
+    }
+  );
 });
 
 describe("runtimeService.setTitle", () => {
@@ -2770,10 +2947,11 @@ describe("runtimeService.cloneContext", () => {
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
     const forkContext = vi.fn(async () => {});
     const onContextCreated = vi.fn(async () => {});
-    const { service, entityCache, cloneDurableStorage, contextFolders } = await buildDeps({
-      semanticContexts: { forkContext },
-      onContextCreated,
-    });
+    const { service, entityCache, cloneDurableStorage, contextFolders, prepareDurableObject } =
+      await buildDeps({
+        semanticContexts: { forkContext },
+        onContextCreated,
+      });
     const { ch, agent } = await seedConversation(service, "ctx-src");
 
     const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
@@ -2815,6 +2993,17 @@ describe("runtimeService.cloneContext", () => {
     const cloneRec = entityCache.resolveActive(chMap.newId);
     expect(cloneRec?.contextId).toBe(result.contextId);
     expect(cloneRec?.status).toBe("active");
+    // A host caller has no authoring context. Clones must still compile the
+    // forked source frontier, never default to the caller's protected main.
+    for (const clone of result.entities) {
+      expect(prepareDurableObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: clone.newKey,
+          contextId: result.contextId,
+          ref: `ctx:${result.contextId}`,
+        })
+      );
+    }
   });
 
   it("clones only the named entities when `include` is given", async () => {
@@ -3368,8 +3557,10 @@ describe("runtimeService execution recovery", () => {
 describe("runtimeService.destroyContext", () => {
   it("retires every entity, reclaims DO storage, then drops VCS + folder", async () => {
     const dropContext = vi.fn(async () => {});
+    const onContextRemoved = vi.fn(async () => {});
     const { service, instance, destroyDurableStorage, contextFolders } = await buildDeps({
       semanticContexts: { dropContext },
+      onContextRemoved,
     });
     const { ch, agent } = await seedConversation(service, "ctx-dead");
 
@@ -3381,6 +3572,10 @@ describe("runtimeService.destroyContext", () => {
     expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
     expect(dropContext).toHaveBeenCalledWith("ctx-dead");
     expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-dead");
+    expect(onContextRemoved).toHaveBeenCalledExactlyOnceWith({ contextId: "ctx-dead" });
+    expect(onContextRemoved.mock.invocationCallOrder[0]).toBeGreaterThan(
+      contextFolders.removeContext.mock.invocationCallOrder[0]!
+    );
   });
 
   it("releases every context peer before sealing or retiring any of them", async () => {
@@ -3417,6 +3612,7 @@ describe("runtimeService.destroyContext", () => {
   });
 
   it("reports cleanup failures after attempting every context cleanup boundary", async () => {
+    const onContextRemoved = vi.fn(async () => {});
     const destroyDurableStorage = vi.fn(async () => {
       throw new Error("storage cleanup unavailable");
     });
@@ -3426,6 +3622,7 @@ describe("runtimeService.destroyContext", () => {
     const { service, contextFolders } = await buildDeps({
       destroyDurableStorage,
       semanticContexts: { dropContext },
+      onContextRemoved,
     });
     await seedDO(service, "ctx-cleanup-errors", "cleanup-agent");
 
@@ -3437,6 +3634,7 @@ describe("runtimeService.destroyContext", () => {
     expect(destroyDurableStorage).toHaveBeenCalledOnce();
     expect(dropContext).toHaveBeenCalledWith("ctx-cleanup-errors");
     expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-cleanup-errors");
+    expect(onContextRemoved).not.toHaveBeenCalled();
   });
 
   it("is free to destroy a context you fully own (every entity parented to you)", async () => {

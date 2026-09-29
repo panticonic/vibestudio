@@ -5,6 +5,8 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { finished } from "node:stream/promises";
+import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   PhoneDeviceSchema,
@@ -58,31 +60,26 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
     name: string,
     args: string[],
     options: { sensitive?: boolean; signal?: AbortSignal } = {}
-  ) =>
-    await new Promise<ScriptResult>((resolve, reject) => {
-      const script = deps.resolveScriptPath(name);
-      const child = spawn(process.execPath, [script, ...args], {
-        cwd: deps.appRoot,
-        env: mobileCliEnvironment(deps.appRoot, deps.appVersion),
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-        signal: options.signal,
-      });
+  ): Promise<ScriptResult> => {
+    options.signal?.throwIfAborted();
+    const script = deps.resolveScriptPath(name);
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd: deps.appRoot,
+      env: mobileCliEnvironment(deps.appRoot, deps.appVersion),
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    // Install listeners before observing ownership, including a refused spawn.
+    const completion = new Promise<ScriptResult>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
       const append = (current: string, chunk: Buffer) =>
         (current + chunk.toString()).slice(-1024 * 1024);
-      child.stdout.on("data", (chunk: Buffer) => (stdout = append(stdout, chunk)));
-      child.stderr.on("data", (chunk: Buffer) => (stderr = append(stderr, chunk)));
-      let processError: Error | undefined;
-      child.once("error", (error) => {
-        processError = error;
-      });
-      child.once("close", (code, signal) => {
-        if (processError) {
-          reject(processError);
-          return;
-        }
+      child.stdout!.on("data", (chunk: Buffer) => (stdout = append(stdout, chunk)));
+      child.stderr!.on("data", (chunk: Buffer) => (stderr = append(stderr, chunk)));
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
         if (code === 0) resolve({ stdout, stderr });
         else {
           const detail = options.sensitive ? "" : `: ${(stderr || stdout).trim()}`;
@@ -90,6 +87,39 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
         }
       });
     });
+    // Join the actual process exit and captured output independently. Node's
+    // aggregate `close` can remain pending after an explicit IPC revocation,
+    // even when the process was reaped and both output streams ended.
+    const settled = Promise.all([
+      completion,
+      finished(child.stdout!, { cleanup: true }),
+      finished(child.stderr!, { cleanup: true }),
+    ]);
+    // Parent loss revokes the script's whole tree through its inherited IPC
+    // lease. Retirement also owns the group if the script exits unexpectedly.
+    const revoke = () => {
+      if (child.connected) child.disconnect();
+    };
+    const owner =
+      child.pid === undefined
+        ? null
+        : OwnedProcessGroup.create(child, {
+            requestGracefulStop: revoke,
+          });
+    options.signal?.addEventListener("abort", revoke, { once: true });
+    if (options.signal?.aborted) revoke();
+    try {
+      const [result] = await settled;
+      options.signal?.throwIfAborted();
+      return result;
+    } catch (error) {
+      if (options.signal?.aborted) options.signal.throwIfAborted();
+      throw error;
+    } finally {
+      options.signal?.removeEventListener("abort", revoke);
+      await owner?.retire();
+    }
+  };
 }
 
 function jsonLine(stdout: string): unknown {
@@ -133,7 +163,10 @@ export function createPhoneProvisioningService(
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const pairingTimeoutMs = deps.pairingTimeoutMs ?? 45_000;
 
-  async function discover(platform?: PhonePlatform): Promise<PhoneDeviceDiscovery> {
+  async function discover(
+    platform?: PhonePlatform,
+    signal?: AbortSignal
+  ): Promise<PhoneDeviceDiscovery> {
     const selected = platform ? [platform] : platforms;
     const devices: PhoneDeviceDiscovery["devices"] = [];
     const issues: PhoneDeviceDiscovery["issues"] = [];
@@ -141,8 +174,11 @@ export function createPhoneProvisioningService(
       try {
         const result = LocalDiscoverySchema.parse(
           jsonLine(
-            (await runScript("mobile-device.mjs", ["devices", "--platform", candidate, "--json"]))
-              .stdout
+            (
+              await runScript("mobile-device.mjs", ["devices", "--platform", candidate, "--json"], {
+                signal,
+              })
+            ).stdout
           )
         );
         devices.push(
@@ -150,6 +186,7 @@ export function createPhoneProvisioningService(
         );
         issues.push(...result.issues.map((issue) => ({ ...issue, providerId: localProviderId })));
       } catch (error) {
+        signal?.throwIfAborted();
         issues.push({
           providerId: localProviderId,
           code: "discovery-failed",
@@ -180,7 +217,7 @@ export function createPhoneProvisioningService(
     await prepare(input, signal);
     signal.throwIfAborted();
     emit({ type: "progress", phase: "checking-device", message: "Checking your phone…" });
-    const before = await discover(input.platform);
+    const before = await discover(input.platform, signal);
     const ready = before.devices.filter(
       (device) => device.ready && (!input.deviceId || device.deviceId === input.deviceId)
     );
@@ -248,7 +285,7 @@ export function createPhoneProvisioningService(
       installStatus = "installed";
 
       if (input.platform === "android") {
-        const afterInstall = await discover("android");
+        const afterInstall = await discover("android", signal);
         const installed = afterInstall.devices.find(
           (device) => device.deviceId === selected.deviceId
         );

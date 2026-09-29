@@ -1492,6 +1492,39 @@ describe("EgressProxy", () => {
     }
   });
 
+  it("preserves internal provider failure without requesting broader network authority", async () => {
+    const approvalQueue = createApprovalQueueMock("deny");
+    const authorizeEffect = vi.fn(async () => {});
+    const { LocalModelRuntimeAuthorityError } = await import("./localModelLoopbackAuthority.js");
+    const cause = new Error("provider retired");
+    const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
+      approvalQueue,
+      authorizeEffect,
+      authorizeInternalRequest: async () => {
+        throw new LocalModelRuntimeAuthorityError(cause);
+      },
+    });
+    try {
+      await expect(
+        proxy.forwardProxyFetch({
+          caller: workerCaller("worker:test"),
+          url: "http://127.0.0.1:9/v1/chat/completions",
+          method: "POST",
+          headers: {},
+          body: "{}",
+        })
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "ELOCALMODEL_RUNTIME",
+        message: "Local model runtime authority is unavailable",
+      });
+      expect(authorizeEffect).not.toHaveBeenCalled();
+      expect(approvalQueue.request).not.toHaveBeenCalled();
+    } finally {
+      await proxy.stop();
+    }
+  });
+
   it("does not duplicate approval for an exactly attested internal request", async () => {
     const approvalQueue = createApprovalQueueMock("deny");
     const authorizeInternalRequest = vi.fn(async () => ({}));

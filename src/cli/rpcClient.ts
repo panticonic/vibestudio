@@ -499,7 +499,10 @@ export class RpcClient {
         ? [
             {
               label: "HTTP RPC dispatcher",
-              close: async () => await httpDispatcher.close(),
+              // Closing this client ends its calls just as closing its push
+              // transports does. A graceful pool close waits indefinitely for
+              // RPC responses whose semantic owner has already been cancelled.
+              close: async () => await httpDispatcher.destroy(),
             },
           ]
         : []),

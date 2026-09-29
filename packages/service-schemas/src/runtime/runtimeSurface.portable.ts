@@ -23,6 +23,7 @@ import {
   type RuntimeSurfaceEntry,
 } from "@vibestudio/shared/runtimeSurface";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
+import templatesRuntimeCatalog from "./generated/templatesRuntimeCatalog.json";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import {
   BLOBSTORE_METHOD_NAMES,
@@ -803,7 +804,9 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
   templates: namespaceEntry(
     ["inspect", "inspectAuthoring", "authoringParts", "publishAuthoring"],
-    "Exact source inspection and publication through the admitted template receiver."
+    "Exact source inspection and publication through the admitted template receiver.",
+    undefined,
+    templatesRuntimeCatalog
   ),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS, undefined, undefined, PANEL_TREE_METHOD_CATALOG),

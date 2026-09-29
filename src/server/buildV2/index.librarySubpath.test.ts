@@ -16,6 +16,7 @@ import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
+import * as buildStore from "./buildStore.js";
 import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
@@ -214,6 +215,111 @@ describe("BuildSystemV2 library package subpaths", () => {
     );
     expect(result.bundle).toContain("wildcard-workers-entry");
     expect(result.bundle).not.toContain("root-entry");
+  });
+
+  it("seals stylesheet exports and JavaScript CSS sidecars as typed artifacts", async () => {
+    const dir = path.join(workspaceRoot, "packages/styles");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/styles",
+        version: "1.0.0",
+        type: "module",
+        exports: { ".": "./index.ts", "./styles.css": "./styles.css" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(dir, "index.ts"),
+      'import "./styles.css"; export const value = "styled";\n'
+    );
+    fs.writeFileSync(
+      path.join(dir, "styles.css"),
+      '@font-face { font-family: Test; src: url("./font.woff2"); } body { color: red; }\n'
+    );
+    fs.writeFileSync(path.join(dir, "font.woff2"), Buffer.from([0, 1, 2, 3]));
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      APP_NODE_MODULES,
+      buildRoots(workspaceRoot)
+    );
+    const report = await buildSystem.getBuildReport("@workspace/styles", TEST_STATE);
+    expect(report).toMatchObject({ status: "ok", diagnostics: [] });
+    expect(report.builds).toHaveLength(4);
+    for (const target of report.builds) {
+      const built = buildStore.get(target.buildKey!)!;
+      const css = built.artifacts.find((entry) => entry.path === "bundle.css")!;
+      expect(css).toMatchObject({ contentType: "text/css; charset=utf-8", encoding: "utf8" });
+      const fontUrl = css.content.match(/url\((data:[^)]+)\)/u)?.[1];
+      expect(fontUrl).toMatch(/^data:font\/woff2[,;]/u);
+      expect(new Uint8Array(await (await fetch(fontUrl!)).arrayBuffer())).toEqual(
+        new Uint8Array([0, 1, 2, 3])
+      );
+      if (target.exportPath === "./styles.css") {
+        expect(css.role).toBe("primary");
+        expect(built.metadata.details).toEqual({ kind: "library", format: "stylesheet" });
+      } else {
+        expect(css.role).toBe("css");
+        expect(built.metadata.details).toEqual({ kind: "library", format: "async-cjs" });
+      }
+    }
+    await expect(
+      buildSystem.getBuild("@workspace/styles/styles.css", TEST_STATE, {
+        library: true,
+        libraryTarget: "worker",
+      })
+    ).rejects.toMatchObject({ code: "unsupported_module_format" });
+  });
+
+  it("rejects broken stylesheet dependencies during package verification", async () => {
+    const dir = path.join(workspaceRoot, "packages/broken-style");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/broken-style",
+        version: "1.0.0",
+        exports: { "./style.css": "./style.css" },
+      })
+    );
+    fs.writeFileSync(path.join(dir, "style.css"), '@import "./missing.css";\n');
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      APP_NODE_MODULES,
+      buildRoots(workspaceRoot)
+    );
+    const report = await buildSystem.getBuildReport("@workspace/broken-style", TEST_STATE);
+    expect(report.status).toBe("failed");
+    expect(
+      report.diagnostics.some((diagnostic) => diagnostic.message.includes("missing.css"))
+    ).toBe(true);
+  });
+
+  it("rejects browser-only package imports from worker libraries", async () => {
+    const pkgDir = path.join(workspaceRoot, "packages", "browser-only");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/browser-only",
+        exports: { ".": { "vibestudio-panel": "./index.ts" } },
+      })
+    );
+    fs.writeFileSync(path.join(pkgDir, "index.ts"), "export const browser = window.location;\n");
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      APP_NODE_MODULES,
+      buildRoots(workspaceRoot)
+    );
+    await expect(
+      buildSystem.getBuild("@workspace/browser-only", undefined, {
+        library: true,
+        libraryTarget: "worker",
+      })
+    ).rejects.toMatchObject({ code: "package_export_not_found" });
   });
 
   it("selects package export conditions by libraryTarget (panel vs eval/worker)", async () => {

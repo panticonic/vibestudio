@@ -21,6 +21,10 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
+import { tsImport } from "tsx/esm/api";
+import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+
+const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
 
 const repoRoot = process.cwd();
 
@@ -38,39 +42,10 @@ function parseArguments(argv) {
   return { instanceId, ttlMs };
 }
 
-/** Run one instance-scoped CLI command and return its last stdout line. */
-function runInstanceCli(instanceId, command) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
-        "src/dev/runCli.ts",
-        "--instance",
-        instanceId,
-        ...command,
-      ],
-      { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] }
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`${command.join(" ")} failed on ${instanceId}: ${stderr || stdout}`));
-        return;
-      }
-      resolve(stdout.trim().split("\n").at(-1) ?? "");
-    });
-  });
-}
-
 /** Mint one device invite from the running instance through its own CLI. */
-function mintPairingLink(instanceId, ttlMs) {
+function mintPairingLink(instanceId, ttlMs, acquire) {
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const child = acquire(() => spawn(
       process.execPath,
       [
         path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
@@ -83,8 +58,8 @@ function mintPairingLink(instanceId, ttlMs) {
         String(ttlMs),
         "--json",
       ],
-      { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] }
-    );
+      { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
+    ));
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -109,7 +84,7 @@ function mintPairingLink(instanceId, ttlMs) {
   });
 }
 
-async function main() {
+async function main(ownerSignal) {
   const parsed = parseArguments(process.argv.slice(2));
   if (parsed.help) {
     console.log(`Attach an Electron client-device executor to a running instance.
@@ -123,33 +98,29 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     return;
   }
   const mainEntry = path.join(repoRoot, "dist", "main.cjs");
+  ownerSignal.throwIfAborted();
   if (!fs.existsSync(mainEntry)) {
     throw new Error(`Electron main entry not found at ${mainEntry}. Run pnpm build first.`);
   }
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-client-executor-"));
-  const children = [];
+  const lifetime = createDevelopmentClientLifetime(tempRoot);
+  let stopRequested = false;
   const stop = () => {
-    for (const child of children) child.kill("SIGTERM");
+    stopRequested = true;
+    lifetime.requestStop();
   };
+  ownerSignal.addEventListener("abort", stop, { once: true });
+  if (ownerSignal.aborted) stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  // The `finally` below is the ordinary path, but an uncaught error in a child
-  // process callback exits without unwinding this function — which is how a
-  // failed pairing left a user-data tree in /tmp. `exit` runs for those too, so
-  // the tree goes back synchronously before the process is gone.
-  process.once("exit", () => {
-    try {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    } catch {
-      // Exiting; a tree we cannot remove here is not worth failing the exit.
-    }
-  });
 
   try {
-    const deepLink = await mintPairingLink(parsed.instanceId, parsed.ttlMs);
+    const deepLink = await mintPairingLink(parsed.instanceId, parsed.ttlMs, lifetime.acquire);
+    if (stopRequested) return;
     console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
-    const secrets = await startEphemeralLinuxSecretService(tempRoot, children);
+    const secrets = await startEphemeralLinuxSecretService(tempRoot, lifetime.acquire);
+    if (stopRequested) return;
 
     const userDataDir = path.join(tempRoot, "electron-user-data");
     const electron = path.join(repoRoot, "node_modules", "electron", "dist", "electron");
@@ -167,7 +138,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     delete env.VIBESTUDIO_INSTANCE;
     delete env.VIBESTUDIO_WORKSPACE;
 
-    const child = spawn(
+    const child = lifetime.acquire(() => spawn(
       "xvfb-run",
       [
         "-a",
@@ -182,9 +153,8 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         "--dev-iroh-remote",
         "--development-client-executor",
       ],
-      { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] }
-    );
-    children.push(child);
+      { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
+    ));
     let ready = false;
     const watch = (chunk) => {
       const text = chunk.toString();
@@ -199,12 +169,19 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     };
     child.stdout.on("data", watch);
     child.stderr.on("data", watch);
-    const code = await new Promise((resolve) => child.once("exit", resolve));
-    if (!ready) throw new Error(`The client executor exited before registering (code ${code})`);
+    const code = await new Promise((resolve, reject) => {
+      child.once("exit", resolve);
+      child.once("error", reject);
+    });
+    if (!ready && !stopRequested) throw new Error(`The client executor exited before registering (code ${code})`);
+  } catch (error) {
+    if (!stopRequested) throw error;
   } finally {
-    stop();
-    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    ownerSignal.removeEventListener("abort", stop);
+    await lifetime.close();
   }
 }
 
-await main();
+await runParentOwnedMain(main);

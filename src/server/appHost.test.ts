@@ -241,6 +241,9 @@ function makeHarness(
       unitPath: "apps/shell",
       unitName: "@workspace-apps/shell",
       stateHash: "state:current",
+      manifest: { authority: { requests: [], provides: [] } },
+      serviceBindings: [],
+      serviceReviews: [],
       effectiveVersion: "ev-app",
       dependencyEvs: {},
       externalDeps: {},
@@ -530,6 +533,34 @@ function createMockResponse() {
 }
 
 describe("AppHost", () => {
+  it("reviews resolved service authority from the exact app source", async () => {
+    const { host, buildSystem, graphNode } = makeHarness();
+    const candidate = await buildSystem.resolveBuildUnitIdentity();
+    const serviceBindings = [
+      {
+        protocol: "vibestudio.missions.v1",
+        availability: "required" as const,
+        serviceName: "missions",
+        providerUnit: "workers/missions",
+        catalogDigest: "b".repeat(64),
+      },
+    ];
+    const serviceReviews = [
+      {
+        capability: "workspace-service:missions",
+        providerUnit: "workers/missions",
+        catalogDigest: "b".repeat(64),
+        presentation: null,
+      },
+    ];
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...candidate,
+      serviceBindings,
+      serviceReviews,
+    } as never);
+    const review = await host.reviewDeclared([{ source: graphNode.relativePath, ref: "main" }]);
+    expect(review.units[0]?.authority).toMatchObject({ serviceBindings, serviceReviews });
+  });
   it("keeps native app source authorable outside System without staging launch reviews or runtimes", async () => {
     const { host, buildSystem, approvalQueue, graphNode, workspacePath } = makeHarness({
       isSystemWorkspace: () => false,
@@ -547,8 +578,8 @@ describe("AppHost", () => {
     buildSystem.getGraph.mockReturnValue({ allNodes: () => nodes } as never);
     const declared = nodes.map((node) => ({ source: node.relativePath, ref: "main" }));
     host.setDeclared(declared);
-    expect(host.reviewDeclared(declared)).toEqual({ units: [], identityKeys: [] });
-    expect(host.seedTrustedDeclared(declared)).toEqual([]);
+    expect(await host.reviewDeclared(declared)).toEqual({ units: [], identityKeys: [] });
+    expect(await host.seedTrustedDeclared(declared)).toEqual([]);
     await host.reconcileDeclared(declared);
     await host.whenSettled();
     expect((await host.unitChangeApprovalForCommit(`state:${"a".repeat(64)}`)).units).toEqual([]);
@@ -2050,7 +2081,7 @@ describe("AppHost", () => {
     const { host } = makeHarness({ seeded: true });
     const declared = [{ source: "apps/shell", ref: "main" }];
 
-    expect(host.seedTrustedDeclared(declared).map((unit) => unit.source.repo)).toEqual([
+    expect((await host.seedTrustedDeclared(declared)).map((unit) => unit.source.repo)).toEqual([
       "apps/shell",
     ]);
   });
@@ -2061,7 +2092,7 @@ describe("AppHost", () => {
 
     fs.writeFileSync(path.join(workspacePath, "apps/shell/index.tsx"), "export default 1;\n");
 
-    expect(host.seedTrustedDeclared(declared)).toEqual([]);
+    expect(await host.seedTrustedDeclared(declared)).toEqual([]);
   });
 
   it("still prompts for exact product-seeded app source", async () => {

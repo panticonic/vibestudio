@@ -25,15 +25,15 @@ import * as path from "path";
 
 /**
  * Conditions to walk when resolving an export subpath for the TypeScript
- * service. We prefer explicit `types` over `default` so `.d.ts` files win
- * when a package ships both compiled JS and type declarations.
+ * service. Packages can declare `types` before their runtime conditions so
+ * `.d.ts` files win while retaining the export map's standard declaration order.
  */
 export const WORKSPACE_CONDITIONS = ["types", "default"] as const;
 
 /**
  * Resolve a single subpath export from a package.json `exports` map.
  *
- * Walks `conditions` in order, recursing into nested condition objects
+ * Walks export conditions in their declared order, recursing into condition objects
  * (e.g. `{ "import": { "types": "..." } }`). Returns the resolved path
  * string or `null` if the subpath is not exported.
  *
@@ -41,18 +41,26 @@ export const WORKSPACE_CONDITIONS = ["types", "default"] as const;
  * change here affects both.
  */
 export function resolveExportSubpath(
-  exports: Record<string, unknown>,
+  exports: unknown,
   subpath: string,
   conditions: readonly string[]
 ): string | null {
-  const exportValue = exports[subpath];
-  if (exportValue !== undefined) return resolveConditionValue(exportValue, conditions);
+  if (typeof exports === "string" || exports === null || Array.isArray(exports)) {
+    return subpath === "." ? (resolveConditionValue(exports, conditions) ?? null) : null;
+  }
+  if (typeof exports !== "object") return null;
+  const map = exports as Record<string, unknown>;
+  if (!Object.keys(map).some((key) => key.startsWith("."))) {
+    return subpath === "." ? (resolveConditionValue(map, conditions) ?? null) : null;
+  }
+  const exportValue = map[subpath];
+  if (exportValue !== undefined) return resolveConditionValue(exportValue, conditions) ?? null;
 
   // package.json export maps may expose a family of subpaths with one `*`,
   // e.g. `"./tests/*": "./tests/*.ts"`. BuildV2 and the type checker share
   // this resolver, so treating export keys as exact-only makes a package that
   // is valid to Node impossible to import through either surface.
-  const patterns = Object.keys(exports)
+  const patterns = Object.keys(map)
     .map((key) => ({ key, star: key.indexOf("*") }))
     .filter(({ star }) => star >= 0)
     // Match Node's useful specificity rule: longest prefix first, then the
@@ -67,7 +75,7 @@ export function resolveExportSubpath(
 
     const matchEnd = suffix.length === 0 ? subpath.length : subpath.length - suffix.length;
     const matched = subpath.slice(prefix.length, matchEnd);
-    const target = resolveConditionValue(exports[key], conditions);
+    const target = resolveConditionValue(map[key], conditions);
     // The most-specific matching key owns the subpath. A null/unresolvable
     // target is an explicit blocker; do not fall through to a broader pattern.
     return target ? target.replaceAll("*", matched) : null;
@@ -76,16 +84,27 @@ export function resolveExportSubpath(
   return null;
 }
 
-function resolveConditionValue(value: unknown, conditions: readonly string[]): string | null {
+function resolveConditionValue(
+  value: unknown,
+  conditions: readonly string[]
+): string | null | undefined {
   if (typeof value === "string") return value;
-  if (typeof value !== "object" || value === null) return null;
-  const obj = value as Record<string, unknown>;
-  for (const cond of conditions) {
-    if (obj[cond] === undefined) continue;
-    const resolved = resolveConditionValue(obj[cond], conditions);
-    if (resolved) return resolved;
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const resolved = resolveConditionValue(candidate, conditions);
+      if (typeof resolved === "string") return resolved;
+    }
+    return null;
   }
-  return null;
+  if (typeof value !== "object") return undefined;
+  const obj = value as Record<string, unknown>;
+  for (const cond of Object.keys(obj)) {
+    if (cond !== "default" && !conditions.includes(cond)) continue;
+    const resolved = resolveConditionValue(obj[cond], conditions);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
 }
 
 // ===========================================================================

@@ -100,6 +100,13 @@ export async function resolveLocalHubControlTransport(
   credentials: CliDeviceCredentials,
   deps: LocalHubTransportDeps = {}
 ): Promise<LocalHubControlTransport | null> {
+  // A local profile already names its paired gateway. Workspace selection
+  // changes only the path; machine control belongs to that gateway's root.
+  // Reading this process's lease would instead discover the parent host when
+  // it manages a separately paired isolated child.
+  if (credentials.transport === "local") {
+    return { serverUrl: new URL(credentials.url).origin };
+  }
   const live = await resolveLiveLocalHub(credentials, deps);
   return live;
 }

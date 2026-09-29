@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { processGroupAlive } from "../../scripts/owned-process-tree.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
@@ -196,6 +197,34 @@ describe("routed workspace restoration", () => {
 });
 
 describe("workspace child process-tree ownership", () => {
+  it.runIf(process.platform !== "win32")(
+    "confirms the runtime group is gone after its leader exits first",
+    async () => {
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+      const { spawn } = require('node:child_process');
+      spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+      process.exit(0);
+    `,
+        ],
+        { detached: true, stdio: "ignore" }
+      );
+      try {
+        await new Promise<void>((resolve, reject) => {
+          child.once("exit", () => resolve());
+          child.once("error", reject);
+        });
+        expect(processGroupAlive(child.pid!)).toBe(true);
+        await reapWorkspaceChildProcessGroup(child);
+        expect(processGroupAlive(child.pid!)).toBe(false);
+      } finally {
+        if (child.pid && processGroupAlive(child.pid)) process.kill(-child.pid, "SIGKILL");
+      }
+    }
+  );
   function fakeChild(overrides: Partial<ChildProcess> = {}): ChildProcess {
     const emitter = new EventEmitter();
     return Object.assign(emitter, {
@@ -255,15 +284,18 @@ describe("workspace child process-tree ownership", () => {
       return true;
     });
 
-    await reapWorkspaceChildProcessGroup(child, { platform: "linux", killProcess });
+    await reapWorkspaceChildProcessGroup(child, {
+      platform: "linux",
+      killProcess,
+      groupAlive: () => false,
+    });
 
     expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
     expect(killProcess).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fail an orderly exit when descendant cleanup cannot be verified", async () => {
+  it("retains cleanup failure when descendant retirement cannot be performed", async () => {
     const child = fakeChild({ exitCode: 0 });
-    const warn = vi.fn();
     const killProcess = vi.fn((): true => {
       throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
     });
@@ -271,10 +303,8 @@ describe("workspace child process-tree ownership", () => {
       reapWorkspaceChildProcessGroup(child, {
         platform: "darwin",
         killProcess,
-        warn,
       })
-    ).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("descendant cleanup is unverified"));
+    ).rejects.toThrow("descendant retirement failed");
   });
 
   it("does not signal a child whose OS exit is already recorded", async () => {
@@ -340,9 +370,69 @@ describe("workspace child exit reconciliation", () => {
         ],
       ]),
       runtimes: new Map([["dev", runtime]]),
+      workspaceChildren: new Set([child]),
       shuttingDown: false,
     } as unknown as HubRuntimeState;
   }
+
+  it("keeps an unrouted child owned until descendant retirement completes", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 0,
+      signalCode: null,
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    state.runtimes.delete("dev");
+    let complete!: () => void;
+    const retired = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const flight = handleWorkspaceChildExit(
+      state,
+      {
+        workspaceName: "dev",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: 0,
+        signal: null,
+      },
+      { reap: () => retired }
+    );
+    expect(state.workspaceChildren.has(child)).toBe(true);
+    complete();
+    await flight;
+    expect(state.workspaceChildren.has(child)).toBe(false);
+  });
+
+  it("retains ownership when descendant retirement fails", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: 0,
+      signalCode: null,
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    state.runtimes.delete("dev");
+    await expect(
+      handleWorkspaceChildExit(
+        state,
+        {
+          workspaceName: "dev",
+          workspaceId: "ws_dev",
+          runtimeToken: "child-token",
+          child,
+          code: 0,
+          signal: null,
+        },
+        {
+          reap: async () => {
+            throw new Error("retirement failed");
+          },
+        }
+      )
+    ).rejects.toThrow("retirement failed");
+    expect(state.workspaceChildren.has(child)).toBe(true);
+  });
 
   it("removes a dead ready runtime, reaps its group, and recovers the same checkout", async () => {
     const child = Object.assign(new EventEmitter(), {
@@ -384,7 +474,7 @@ describe("workspace child exit reconciliation", () => {
     expect(state.workspacePresence.has("ws_dev")).toBe(false);
   });
 
-  it("does not reap or restart a child already detached by an intentional stop", async () => {
+  it("reaps an intentionally unrouted child without restarting it", async () => {
     const child = Object.assign(new EventEmitter(), {
       pid: 4321,
       exitCode: 0,
@@ -411,7 +501,8 @@ describe("workspace child exit reconciliation", () => {
       { shouldRestart: () => true, reap, restart }
     );
 
-    expect(reap).not.toHaveBeenCalled();
+    expect(reap).toHaveBeenCalledWith(child);
+    expect(state.workspaceChildren.has(child)).toBe(false);
     expect(restart).not.toHaveBeenCalled();
   });
 
@@ -882,6 +973,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       workspaceChildTokens: new Map(),
       workspacePresence: new Map(),
       runtimes: new Map([[runtime.name, runtime]]),
+      workspaceChildren: new Set([runtime.child]),
       shuttingDown: false,
     };
     state.controlTransport = {

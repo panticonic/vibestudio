@@ -7,7 +7,13 @@ import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatche
 import { createBlobstoreService, ensureLayout, getBytes, putBytes } from "./blobstoreService.js";
 import { createProtectedRefStore } from "./protectedRefStore.js";
 import { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import { retainedBlobDigests, retainBlob, withBlobContentLock } from "../storage/blobRetentions.js";
+import {
+  blobRetentionNamespace,
+  releaseBlobRetentionNamespace,
+  retainedBlobDigests,
+  retainBlob,
+  withBlobContentLock,
+} from "../storage/blobRetentions.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -52,6 +58,31 @@ async function fixture() {
 }
 
 describe("retained workspace blobs", () => {
+  it("releases all of a retired principal's owners without removing another principal's roots", async () => {
+    const f = await fixture();
+    const stored = (await f.call("owner", "putRetained", { base64: "b25l", owner: "first" })) as {
+      digest: string;
+    };
+    const other = (await f.call("owner", "putRetained", { base64: "dHdv", owner: "second" })) as {
+      digest: string;
+    };
+    await f.call("survivor", "retain", { digest: stored.digest, owner: "shared" });
+    await withBlobContentLock(f.blobsDir, async () => {
+      releaseBlobRetentionNamespace(
+        f.blobsDir,
+        blobRetentionNamespace({ kind: "do", id: "owner" })
+      );
+      releaseBlobRetentionNamespace(
+        f.blobsDir,
+        blobRetentionNamespace({ kind: "do", id: "owner" })
+      );
+    });
+    expect(retainedBlobDigests(f.blobsDir)).toEqual([stored.digest]);
+    await f.gc();
+    expect(await getBytes(f.blobsDir, stored.digest)).toEqual(Buffer.from("one"));
+    expect(await getBytes(f.blobsDir, other.digest)).toBeNull();
+  });
+
   it("survives GC and service reopening while any authenticated owner retains the bytes", async () => {
     const f = await fixture();
     const input = { base64: Buffer.from("painted scene").toString("base64"), owner: "scene" };

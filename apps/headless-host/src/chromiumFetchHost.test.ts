@@ -7,7 +7,7 @@ describe("ChromiumFetchHost", () => {
     const listeners = new Set<
       (event: { method: string; params: unknown; sessionId?: string }) => void
     >();
-    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    const send = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
       if (method === "Target.createBrowserContext") return { browserContextId: "context-1" };
       if (method === "Target.createTarget") return { targetId: "target-1" };
       if (method === "Target.attachToTarget") return { sessionId: "session-1" };

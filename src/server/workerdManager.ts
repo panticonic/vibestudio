@@ -626,8 +626,11 @@ export class WorkerdManager {
     this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
     this.sqliteIntegrityWorker = new SqliteIntegrityWorkerClient(resolveRequiredAppRoot());
-    this.configDir = path.join(os.tmpdir(), `vibestudio-workerd-${process.pid}`);
-    fs.mkdirSync(this.configDir, { recursive: true });
+    // Generated execution inputs belong to the workspace lifetime. A killed
+    // runtime cannot run its finally blocks; the instance owner must still be
+    // able to reclaim them by removing its own state root.
+    this.configDir = stateLayout(deps.statePath).workerdConfigDir;
+    fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
     this.bootGeneration = this.readBootGeneration();
     const layout = stateLayout(this.deps.statePath).databases;

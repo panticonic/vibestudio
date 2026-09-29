@@ -36,6 +36,8 @@ const pair = {
   kind: "combined" as const,
   hostRepositoryId: "repository:vibestudio",
   baseRepositoryId: "repository:base",
+  personalRepositoryId: "repository:personal",
+  systemRepositoryId: "repository:system",
 };
 
 function session(
@@ -150,6 +152,24 @@ async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedD
         contentRoot: `state:${digest("5")}`,
         sourcePlanDigest: digest("0"),
       },
+      personal: {
+        repositoryId: "repository:personal",
+        repoPath: "templates/personal",
+        repositoryState: { kind: "application", applicationId: "application:base" },
+        repositoryManifestDigest: digest("3"),
+        materializedTreeDigest: digest("4"),
+        contentRoot: `state:${digest("5")}`,
+        sourcePlanDigest: digest("0"),
+      },
+      system: {
+        repositoryId: "repository:system",
+        repoPath: "templates/system",
+        repositoryState: { kind: "application", applicationId: "application:base" },
+        repositoryManifestDigest: digest("3"),
+        materializedTreeDigest: digest("4"),
+        contentRoot: `state:${digest("5")}`,
+        sourcePlanDigest: digest("0"),
+      },
       pairDigest: digest("e"),
     },
     recipeDigest: digest("1"),
@@ -178,6 +198,8 @@ async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedD
     sourcePlans: {
       host: sourcePlan(),
       base: sourcePlan("repository:base", "templates/base"),
+      personal: sourcePlan("repository:personal", "templates/personal"),
+      system: sourcePlan("repository:system", "templates/system"),
     },
     snapshot,
     recipe,
@@ -207,6 +229,8 @@ describe("DevelopmentExecutor exact private execution", () => {
     roots.push(root);
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
+      serviceAuthorityForSource: async () =>
+        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
       workspaceId: "workspace:test",
       executionStateForContent: () => ({
         kind: "application",
@@ -224,9 +248,9 @@ describe("DevelopmentExecutor exact private execution", () => {
 
   it("prepares stable exact identities without creating a run root or process", async () => {
     const planSource = vi.fn(async (input: { repositoryId: string }) =>
-      input.repositoryId === "repository:base"
-        ? sourcePlan("repository:base", "templates/base")
-        : sourcePlan()
+      input.repositoryId === "repository:vibestudio"
+        ? sourcePlan()
+        : sourcePlan(input.repositoryId, `templates/${input.repositoryId.split(":")[1]}`)
     );
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
@@ -259,16 +283,16 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(first.snapshot.declaredEnvironment).not.toHaveProperty("PATH");
     expect(first.snapshot.pair.kind).toBe("combined");
     expect(first.snapshot.pair.pairDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(planSource).toHaveBeenCalledTimes(4);
+    expect(planSource).toHaveBeenCalledTimes(8);
     await expect(fsp.stat(path.join(root, "runs"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("verifies the host lockfile and the Base manifest, and no Base lockfile", async () => {
     const planSource = vi.fn(
       async ({ repositoryId }: { repositoryId: string; requiredFiles: readonly string[] }) =>
-        repositoryId === "repository:base"
-          ? sourcePlan("repository:base", "templates/base")
-          : sourcePlan()
+        repositoryId === "repository:vibestudio"
+          ? sourcePlan()
+          : sourcePlan(repositoryId, `templates/${repositoryId.split(":")[1]}`)
     );
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
@@ -301,9 +325,9 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       runRoots: runRoots(root),
       planSource: async ({ repositoryId }) =>
-        repositoryId === "repository:base"
-          ? sourcePlan("repository:base", "templates/base")
-          : sourcePlan(),
+        repositoryId === "repository:vibestudio"
+          ? sourcePlan()
+          : sourcePlan(repositoryId, `templates/${repositoryId.split(":")[1]}`),
       materializeSource: vi.fn(),
     });
     const recipe = developmentRecipeFixture(process.platform, process.arch);

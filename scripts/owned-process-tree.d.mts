@@ -3,6 +3,8 @@ export interface ProcessTreeTerminationResult {
   escalated: boolean;
   detail?: string;
 }
+export function bindProcessLifetimeToParent(): void;
+export function processGroupAlive(group: number): boolean;
 export function processTreeAlive(pid: number, platform?: NodeJS.Platform): boolean;
 export function processTreeContains(
   rootPid: number,

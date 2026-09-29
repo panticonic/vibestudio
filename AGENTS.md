@@ -110,8 +110,8 @@ command.
 The `self-development` tests build Vibestudio itself, which a managed instance
 can only do once the monorepo is adopted there as `projects/vibestudio`. Pass
 `--self-development` when creating the instance: the launcher mirrors this
-checkout and the linked Base checkout for their canonical upstreams, adopts
-both through the ordinary import, and publishes them to protected main before
+checkout and the linked Base, Personal, and System checkouts for their canonical upstreams, adopts
+them through the ordinary import, and publishes them to protected main before
 the first test context forks from it. Adoption is part of creating the
 instance, so a plain instance cannot be upgraded to one — stop it and create
 another. Adopting costs a few thousand files of semantic import, so do not pass

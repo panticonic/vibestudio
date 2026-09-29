@@ -20,6 +20,7 @@ import type {
   PreparedAuthoritySelection,
   ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
+import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   runtimeMethods,
@@ -27,6 +28,7 @@ import {
   type CloneContextResult,
   type RuntimeExecutionRecoveryRequest,
   type RuntimeExecutionRecoveryResult,
+  type RuntimeSupervisionEntityKey,
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
 import {
@@ -263,6 +265,10 @@ export interface RuntimeServiceDeps {
   entityStore: WorkspaceEntityStore;
   /** Host-only task closure membership, snapshotted at runtime creation. */
   taskAuthorities: import("./taskAuthorityRegistry.js").TaskAuthorityRegistry;
+  /** Host-attested execution policy for the target context's authority boundary. */
+  testPolicyForContext: (
+    contextId: string
+  ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
   /** Resolve host-owned resources before activation, then bind the exact active identity. */
   prepareResourceBindings?: (input: {
     bindings: RuntimeResourceBindingInput[];
@@ -385,12 +391,28 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   function inheritTaskAuthority(
     runtimeId: string,
-    actors: RuntimeCreationActors
+    actors: RuntimeCreationActors,
+    contextId: string
   ): import("@vibestudio/rpc").TaskGrantPrincipal | null {
-    return (
-      deps.taskAuthorities.inheritRuntime(runtimeId, actors.lifecycleCaller, store.cache) ??
-      deps.taskAuthorities.inheritRuntime(runtimeId, actors.initiatingCaller, store.cache)
-    );
+    const policy = deps.testPolicyForContext(contextId);
+    for (const caller of [actors.lifecycleCaller, actors.initiatingCaller]) {
+      // A refined execution policy starts an independent authority closure.
+      // Lifecycle ownership alone cannot carry an orchestrator's task grants
+      // into a case, or one case's grants into another. Ordinary descendants
+      // retain the same task closure. Its authenticated origin, rather than
+      // the current transport's execution policy, owns that identity: a
+      // nested invocation may carry its orchestrator's broader admission.
+      if (policy) {
+        const authority = deps.taskAuthorities.resolveCaller(caller, store.cache);
+        const origin = authority ? deps.taskAuthorities.bindingFor(authority) : null;
+        if (!origin || deps.testPolicyForContext(origin.contextId)?.policyId !== policy.policyId) {
+          continue;
+        }
+      }
+      const inherited = deps.taskAuthorities.inheritRuntime(runtimeId, caller, store.cache);
+      if (inherited) return inherited;
+    }
+    return null;
   }
 
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
@@ -842,7 +864,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           }
         : {}),
     });
-    inheritTaskAuthority(record.id, actors);
+    inheritTaskAuthority(record.id, actors, contextId);
+    // The reservation owns an isolated child frontier, not a fresh main
+    // snapshot. The canonical fork command is replayable after interruption
+    // and retains the first selected frontier on reservation retries.
+    if (ownerContextId && ownerContextId !== contextId) {
+      await deps.semanticContexts.forkContext(ownerContextId, contextId);
+    }
     // An implicit reservation is the semantic creation boundary for its
     // derived lifecycle context. Register it immediately, before activation
     // can boot panel code that creates descendants. Deferring this until the
@@ -913,14 +941,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       throw new Error(`Reserved entity ${canonicalId} is ${existing.status}`);
     }
 
-    const [prepared] = await Promise.all([
-      deps.hooks.prepare({
-        spec,
-        key: spec.key,
-        contextId: existing.contextId,
-      }),
-      setUpContext(existing.contextId),
-    ]);
+    await setUpContext(existing.contextId);
+    const prepared = await deps.hooks.prepare({
+      spec: {
+        ...spec,
+        execution: { ...spec.execution, ref: spec.execution.ref ?? `ctx:${existing.contextId}` },
+      },
+      key: spec.key,
+      contextId: existing.contextId,
+    });
     if (prepared.surface !== "code") {
       throw new Error(`Reserved entity ${canonicalId} did not prepare a code incarnation`);
     }
@@ -1035,7 +1064,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // server supervisor before this caller resumes. Snapshot the authenticated
     // task now, at the creation boundary, so that asynchronous activation
     // cannot replace the initiating task with the server principal.
-    inheritTaskAuthority(canonicalId, actors);
+    inheritTaskAuthority(canonicalId, actors, contextId);
     if (spec.execution.surface === "external" && !isOpenPanelBrowserUrl(spec.execution.url)) {
       throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
     }
@@ -1055,9 +1084,27 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       contextId = existing.contextId;
     }
 
+    await setUpContext(contextId);
     const parentKind = caller.runtime.kind;
+    // Runtime context owns filesystem/state isolation. Code selection follows
+    // the verified authoring caller unless the request pins a ref explicitly.
+    // A panel replacement may retain its isolated runtime context while its
+    // author has advanced the source in a different semantic workspace.
+    const sourceContextId =
+      spec.kind !== "session" && spec.execution.surface === "code"
+        ? await store.resolveContext(actors.initiatingCaller.runtime.id)
+        : null;
     const prepared = (await deps.hooks.prepare({
-      spec,
+      spec:
+        spec.kind !== "session" && spec.execution.surface === "code"
+          ? {
+              ...spec,
+              execution: {
+                ...spec.execution,
+                ref: spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
+              },
+            }
+          : spec,
       key,
       contextId,
       ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
@@ -1104,10 +1151,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const targetId = prepared.target.id;
 
-    // A context is a GAD-owned semantic workspace frontier shared by every
-    // runtime entity attached to the same context id.
-    await setUpContext(contextId);
-
     const agentBinding = selfAgentChannelId
       ? {
           entityId: canonicalId,
@@ -1148,7 +1191,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ),
     };
     const record = await store.activate(activateInput);
-    inheritTaskAuthority(record.id, actors);
+    inheritTaskAuthority(record.id, actors, contextId);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
     }
@@ -1504,7 +1547,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   /** Build a clone spec from a source record: same source + class, new key/context.
-   * `ref` is omitted so the clone follows the cloned semantic context's exact
+   * `ref` selects the clone's semantic context explicitly, independent of the
+   * requesting caller's authoring context. The clone follows that context's exact
    * working head. Code and cloned durable state therefore share one boundary. */
   function buildCloneSpec(
     src: EntityRecord,
@@ -1517,7 +1561,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       return {
         kind: "do",
-        execution: { surface: "code", source: src.source.repoPath },
+        execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
         className: src.className,
         key: newKey,
         contextId,
@@ -1526,7 +1570,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     return {
       kind: "worker",
-      execution: { surface: "code", source: src.source.repoPath },
+      execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
       key: newKey,
       contextId,
       stateArgs: src.stateArgs,
@@ -1812,6 +1856,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         failures.push(new Error(`Failed to remove ${label} for ${contextId}`, { cause }));
       }
     }
+    if (failures.length === 0) {
+      try {
+        await deps.onContextRemoved?.({ contextId });
+      } catch (cause) {
+        failures.push(new Error(`Context removal notification failed for ${contextId}`, { cause }));
+      }
+    }
     return failures;
   }
 
@@ -2094,6 +2145,28 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     authority: { principals: ["code", "user", "host", "website"] },
     methods: runtimeMethods,
     authorityPreparation: {
+      ...Object.fromEntries(
+        (["restart", "retire"] as const).map((operation) => [
+          `runtime.supervision.${operation}.ownership`,
+          async (ctx: ServiceContext, [rawKey]: unknown[]) => {
+            const key = rawKey as RuntimeSupervisionEntityKey;
+            const target = await store.resolveRecord(key.entityId);
+            const ownsTarget = target?.kind === key.kind && callerOwnsEntity(ctx.caller, target);
+            return {
+              selections:
+                isTrustedRuntimeHost(ctx.caller) || ownsTarget
+                  ? []
+                  : [
+                      fixedPreparedAuthoritySelection({
+                        capability: "runtime.supervision.manage",
+                        resourceKey: `${operation}:${key.kind}:${key.entityId}`,
+                      }),
+                    ],
+              payload: null,
+            };
+          },
+        ])
+      ),
       "runtime.createEntity.contextBoundary": (ctx, [rawSpec]) =>
         prepareEntityContextBoundary(ctx, rawSpec),
       "runtime.reserveEntity.contextBoundary": (ctx, [rawSpec]) =>

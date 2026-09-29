@@ -2,13 +2,24 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 
+// Checkpoint construction owns every writer. Git's automatic maintenance may
+// detach a pack rewrite after commit, racing the exact snapshot reader.
+export const CHECKPOINT_GIT_CONFIG = [
+  "-c",
+  "core.longpaths=true",
+  "-c",
+  "maintenance.auto=false",
+  "-c",
+  "gc.auto=0",
+] as const;
+
 function git(directory: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
   // A checkpoint lands the whole workspace inside a private temporary tree, so
   // its deepest paths are the developer's plus wherever the checkpoint sits.
   // Windows refuses those past 260 characters unless Git is told otherwise, and
   // the failure is per-file — a checkout that mostly worked, missing exactly
   // the files with the longest names.
-  return execFileSync("git", ["-c", "core.longpaths=true", "-C", directory, ...args], {
+  return execFileSync("git", [...CHECKPOINT_GIT_CONFIG, "-C", directory, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...(env ? { env } : {}),
@@ -78,9 +89,11 @@ export async function checkpointWorkspaceSource(input: {
   const target = path.resolve(input.target);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  // Transfer objects through Git's snapshot protocol instead of copying a
+  // live object directory (which can inherit borrowed alternates and race GC).
   execFileSync(
     "git",
-    ["clone", "--local", "--no-hardlinks", "--no-checkout", sourceCheckout, target],
+    [...CHECKPOINT_GIT_CONFIG, "clone", "--no-local", "--no-checkout", sourceCheckout, target],
     {
       stdio: ["ignore", "pipe", "pipe"],
     }

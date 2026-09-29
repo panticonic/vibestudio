@@ -16,6 +16,7 @@ export interface RuntimeEntityCleanupDeps {
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
   clearPresentationTitle?(entityId: string): Promise<void>;
+  releaseBlobRetentions(runtime: Pick<EntityRecord, "kind" | "id">): Promise<void>;
   resourceHandles?: {
     revokeReceiver(
       workspaceId: string,
@@ -100,6 +101,11 @@ export async function cleanupRuntimeEntity(
     }
   }
 
+  // No content owner may disappear while a producer can still recreate it.
+  // Failed teardown retains roots until this same cleanup is retried by the reaper.
+  if (failures.length === 0) {
+    await attempt(() => deps.releaseBlobRetentions({ kind: record.kind, id: record.id }));
+  }
   if (failures.length > 0) {
     throw new AggregateError(
       failures,

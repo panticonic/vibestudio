@@ -4,6 +4,12 @@ import fs from "node:fs";
 import { ensureAdb, resolveAdb } from "./lib/android-platform-tools.mjs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { bindProcessLifetimeToParent } from "../owned-process-tree.mjs";
+
+if (process.send) {
+  bindProcessLifetimeToParent();
+  process.channel?.unref();
+}
 import { fileURLToPath } from "node:url";
 import {
   INTERNAL_ANDROID_PACKAGE,

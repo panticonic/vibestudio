@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   CdpHostBridgeClient,
@@ -23,7 +24,7 @@ class FakeBridgeServer {
     this.wss = new WebSocketServer({
       port,
       path: undefined,
-      verifyClient: ({ req }) =>
+      verifyClient: ({ req }: { req: IncomingMessage }) =>
         parseWebSocketAuthProtocol(req.headers["sec-websocket-protocol"], "cdp-host") ===
         this.authToken,
     });

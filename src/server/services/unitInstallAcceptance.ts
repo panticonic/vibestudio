@@ -1,3 +1,4 @@
+import { serviceAuthorityDigest } from "./unitAdmissionStore.js";
 import {
   workspaceUserlandDefinitions,
   type ServiceBindingFact,
@@ -135,7 +136,12 @@ export function prepareUnitInstallReview(
         sourceOrigins.set(unit.identity.repoPath, unit.sourceOrigin);
       }
     }
-    const identities = input.units.map((unit) => unit.identity);
+    const identities = input.units.map((unit) => ({
+      ...unit.identity,
+      serviceAuthorityDigest:
+        unit.identity.serviceAuthorityDigest ??
+        serviceAuthorityDigest(unit.serviceBindings ?? [], unit.serviceReviews ?? []),
+    }));
     if (sourceOrigins.size > 0) {
       admission.admitMany(identities, input.origin, undefined, sourceOrigins);
     } else {

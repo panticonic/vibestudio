@@ -349,7 +349,7 @@ describe("CdpHostProvider", () => {
     });
   });
 
-  it("swallows rejected queue tails while still reporting command errors", async () => {
+  it("reports a command failure while leaving independent commands usable", async () => {
     const { provider, socket, debuggerApi } = createHarness();
     provider.registerTarget("panel-1", 42);
     provider.start();
@@ -386,6 +386,51 @@ describe("CdpHostProvider", () => {
       requestId: "r2",
       result: { ok: true },
     });
+  });
+
+  it("delivers independent command results while an evaluation is still awaiting its promise", async () => {
+    const { provider, socket, debuggerApi } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+    let finishEvaluation!: (value: unknown) => void;
+    debuggerApi.sendCommand.mockImplementation((method) =>
+      method === "Runtime.evaluate"
+        ? new Promise((resolve) => {
+            finishEvaluation = resolve;
+          })
+        : Promise.resolve({ ok: true })
+    );
+    const evaluation = provider.handleProviderMessageForTest({
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "waiting",
+      method: "Runtime.evaluate",
+      params: { expression: "new Promise(() => {})", awaitPromise: true },
+    });
+    const inspection = provider.handleProviderMessageForTest({
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "inspection",
+      method: "Runtime.getHeapUsage",
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      const messages = socket.sent.map((entry) => JSON.parse(entry));
+      expect(messages).toContainEqual({
+        type: "cdp:result",
+        targetId: "panel-1",
+        requestId: "inspection",
+        result: { ok: true },
+      });
+      expect(
+        messages.some((message) => message.type === "cdp:result" && message.requestId === "waiting")
+      ).toBe(false);
+    } finally {
+      finishEvaluation({ result: { value: "finished" } });
+      await Promise.all([evaluation, inspection]);
+      provider.stop();
+    }
   });
 
   it("supports host-side accessibility snapshots with debugger cleanup", async () => {
@@ -783,6 +828,53 @@ describe("CdpHostProvider", () => {
         }),
       }),
     ]);
+  });
+
+  it("forwards renderer failure through the CDP event stream immediately", () => {
+    const { provider, socket, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+
+    contents.emit("render-process-gone", {}, { reason: "crashed", exitCode: 9 });
+
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "cdp:event",
+      targetId: "panel-1",
+      method: "Inspector.targetCrashed",
+      params: {},
+    });
+    provider.stop();
+    expect(contents.listenerCount("render-process-gone")).toBe(0);
+  });
+
+  it("forwards debugger detach and releases the attachment for a fresh connection", async () => {
+    const { provider, socket, debuggerApi } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+    const command = {
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "1",
+      method: "Runtime.enable",
+    };
+    await provider.handleProviderMessageForTest(command);
+
+    debuggerApi.emit("detach", {}, "target_closed");
+
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "cdp:event",
+      targetId: "panel-1",
+      method: "Inspector.detached",
+      params: { reason: "target_closed" },
+    });
+    expect(debuggerApi.listenerCount("message")).toBe(0);
+    expect(debuggerApi.listenerCount("detach")).toBe(0);
+    await provider.handleProviderMessageForTest({ ...command, requestId: "2" });
+    expect(debuggerApi.attach).toHaveBeenCalledTimes(2);
+    provider.stop();
+    expect(debuggerApi.listenerCount("detach")).toBe(0);
   });
 
   it("runs broker navigation commands against the target webContents", async () => {

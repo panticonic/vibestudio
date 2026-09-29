@@ -1,3 +1,7 @@
+import { conditionsForLibraryTarget, conditionsForRuntimeUnit } from "./moduleConditions.js";
+import { serviceAuthorityDigest } from "../services/unitAdmissionStore.js";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 /**
  * Build System V2 — Public API + RPC service registration.
@@ -19,6 +23,8 @@ import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 import * as path from "path";
 import { performance } from "node:perf_hooks";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
+import { declaredExportSubpaths } from "./packageGraph.js";
+import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import {
   computeEffectiveVersions,
   loadPersistedEvState,
@@ -235,6 +241,8 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 
 export interface BuildSystemRootOptions {
   runNativeJob: RunNativeWorkspaceJob;
+  /** Demand the admitted native build provider before a target build starts. */
+  ensureBuildProvider?: (target: "react-native") => Promise<void>;
   /** Whether this workspace identity survives a process restart. Diagnostics only. */
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
@@ -1246,12 +1254,42 @@ export async function initBuildSystemV2(
   });
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
-  initBuilder(appNodeModuleRoots, rootOptions.appRoot, rootOptions.runNativeJob);
+  initBuilder(
+    appNodeModuleRoots,
+    rootOptions.appRoot,
+    rootOptions.runNativeJob,
+    rootOptions.ensureBuildProvider
+  );
   const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
     workspaceId: source.workspaceId,
     executionStateForContent: (stateHash) => source.executionStateForContent?.(stateHash) ?? null,
+    serviceAuthorityForSource: async (metadata) => {
+      if (!metadata.sourcePath || !metadata.sourceStateHash || !metadata.authority)
+        throw new Error("Cannot seal incomplete workspace authority");
+      const view = await viewAt(metadata.sourceStateHash);
+      const node = resolveUnit(view.graph, metadata.sourcePath, workspaceRoot);
+      if (
+        !node ||
+        view.evMap[node.name] !== metadata.ev ||
+        canonicalJson(
+          parseUnitAuthorityManifest(
+            node.manifest.authority ?? { requests: [], provides: [] },
+            "source authority"
+          )
+        ) !== canonicalJson(metadata.authority)
+      ) {
+        throw new Error(`Build authority does not match exact source for ${metadata.sourcePath}`);
+      }
+      const environment = rootOptions.workspaceAuthorityEnvironmentAt
+        ? await authorityEnvironmentAt(metadata.sourceStateHash, view.graph, view.evMap)
+        : null;
+      return serviceAuthorityDigest(
+        await serviceBindingsForNode(node, environment),
+        await serviceReviewsForNode(node, environment)
+      );
+    },
   });
 
   // Step 1: Snapshot the workspace + discover package graph from that state
@@ -1374,12 +1412,21 @@ export async function initBuildSystemV2(
     format: "cjs" | "async-cjs";
     execution?: ExecutionArtifactRefV1;
   } => {
+    const format =
+      build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs";
+    if (format === "stylesheet") {
+      throw new BuildRequestError(
+        "unsupported_module_format",
+        `Stylesheet export ${build.metadata.name} cannot be loaded as a JavaScript module`,
+        { unitName: build.metadata.name, buildKey: build.buildKey, format: "stylesheet" }
+      );
+    }
     const execution = build.metadata.execution
       ? executionArtifactRefFromBuild(source.workspaceId, build)
       : undefined;
     return {
       bundle: primaryTextArtifactContent(build),
-      format: build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs",
+      format,
       ...(execution ? { execution } : {}),
     };
   };
@@ -1656,19 +1703,21 @@ export async function initBuildSystemV2(
     };
   };
 
-  /** Validate a unit's source once, independently of its emitted export targets.
-   * Library targets change bundling, not the compiler inputs checked here.
+  /** Validate exact source under one execution environment's export conditions.
+   * Different library export paths share validation within that environment.
    * Executable authority still uses that executable's sealed module inventory. */
   const validateUnitSource = async (
     node: GraphNode,
     graphAtView: PackageGraph,
     viewStateHash: string,
+    moduleConditions: readonly string[],
     built: BuildResult | null,
     onProgress?: (progress: BuildReportProgress) => void
   ): Promise<{ diagnostics: BuildDiagnostic[]; reusable: boolean }> => {
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
     let reusable = true;
+    let diagnosticSourceRoot: string | null = null;
     // Fold typecheck diagnostics from the exact materialized source. This is
     // fail-closed: typecheck engine/materialization failures become errors in
     // the report and therefore cannot pass a protected-main build gate.
@@ -1681,6 +1730,7 @@ export async function initBuildSystemV2(
         viewStateHash,
         workspaceRoot
       );
+      diagnosticSourceRoot = sourceRoot;
       // Provision resolution exactly like the build: workspace deps from the
       // materialized subtrees, external deps from the app node_modules. Without
       // both, the bare source root resolves nothing → false "Cannot find module".
@@ -1731,6 +1781,7 @@ export async function initBuildSystemV2(
             serviceRequests: u.manifest.authority?.serviceRequests ?? [],
           })),
           nodeModulesPaths: dependencyEnvironment.nodePaths,
+          moduleConditions,
           // Packages are libraries, not authority principals. Their effects
           // are folded into each executable consumer through executableModules
           // and checked against that consumer's manifest.
@@ -1753,6 +1804,16 @@ export async function initBuildSystemV2(
         dependencyEnvironment.release();
       }
     } catch (err) {
+      if (err instanceof BuildDiagnosticsError) {
+        diagnostics.push(
+          ...diagnosticsFromError(err, {
+            workspaceRoot,
+            sourceRoot: diagnosticSourceRoot,
+            unitRelativePath: node.relativePath,
+          })
+        );
+        return { diagnostics, reusable };
+      }
       reusable = false;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[BuildV2] typecheck materialize failed for ${node.name}:`, message);
@@ -1807,9 +1868,7 @@ export async function initBuildSystemV2(
 
   /** All export subpaths to validate for a package (root + declared exports). */
   const packageExportPaths = (node: GraphNode): string[] => {
-    const set = new Set<string>(["."]);
-    for (const e of node.exports ?? []) set.add(e);
-    return [...set];
+    return Object.hasOwn(node, "exports") ? declaredExportSubpaths(node.exports) : ["."];
   };
 
   /**
@@ -1854,6 +1913,18 @@ export async function initBuildSystemV2(
       const exports = packageExportPaths(node);
       for (const target of targets) {
         for (const exportPath of exports) {
+          // A conditional export declares its execution environments. Absence
+          // in another environment is not broken code; importing it there is
+          // rejected by the same resolver in the consumer's actual build.
+          if (
+            Object.hasOwn(node, "exports") &&
+            !resolveExportSubpath(
+              node.exports,
+              exportPath,
+              conditionsForLibraryTarget(target === "library:panel" ? "panel" : "worker")
+            )
+          )
+            continue;
           outcomes.push(
             await buildOneTarget(
               node,
@@ -1866,6 +1937,23 @@ export async function initBuildSystemV2(
             )
           );
         }
+      }
+      if (outcomes.length === 0) {
+        return {
+          report: {
+            ...base,
+            status: "failed",
+            builds: [],
+            diagnostics: diagnosticsFromError(
+              new BuildRequestError(
+                "package_export_not_found",
+                `No public export of ${node.name} resolves for its required library targets`,
+                { packageName: node.name, targets: [...targets], subpaths: exports }
+              )
+            ),
+          },
+          reusable: true,
+        };
       }
     } else {
       outcomes.push(
@@ -1881,14 +1969,27 @@ export async function initBuildSystemV2(
       );
     }
 
-    const validation = await validateUnitSource(
-      node,
-      view.graph,
-      viewStateHash,
-      outcomes[0]?.built ?? null,
-      onProgress
-    );
+    const validations = new Map<string, Awaited<ReturnType<typeof validateUnitSource>>>();
     for (const outcome of outcomes) {
+      const conditions =
+        outcome.target.target === "runtime"
+          ? conditionsForRuntimeUnit(node)
+          : conditionsForLibraryTarget(
+              outcome.target.target === "library:panel" ? "panel" : "worker"
+            );
+      const key = JSON.stringify(conditions);
+      let validation = validations.get(key);
+      if (!validation) {
+        validation = await validateUnitSource(
+          node,
+          view.graph,
+          viewStateHash,
+          conditions,
+          outcome.built,
+          onProgress
+        );
+        validations.set(key, validation);
+      }
       outcome.target.diagnostics.push(...validation.diagnostics);
       outcome.reusable &&= validation.reusable;
       if (outcome.target.buildKey) {
@@ -2852,14 +2953,10 @@ export async function initBuildSystemV2(
       let view: GraphView;
       let viewStateHash: string;
       if (!ref || ref === MAIN_HEAD) {
-        try {
-          const fresh = await source.ensureFresh();
-          await trigger.whenSettled();
-          if (currentState().stateHash !== fresh.stateHash) {
-            await rediscoverAt(fresh.stateHash);
-          }
-        } catch {
-          // best effort — fall back to current snapshot
+        const fresh = await source.ensureFresh();
+        await trigger.whenSettled();
+        if (currentState().stateHash !== fresh.stateHash) {
+          await rediscoverAt(fresh.stateHash);
         }
         const snapshot = currentState();
         view = { graph: snapshot.graph, evMap: snapshot.evMap };
@@ -2878,6 +2975,14 @@ export async function initBuildSystemV2(
       }
       const node = resolveUnit(view.graph, unitName, workspaceRoot);
       if (!node) {
+        const hashes = await source.unitHashes(viewStateHash, [unitName]);
+        if (!hashes[unitName]) {
+          throw new BuildRequestError(
+            "package_not_found",
+            `Unknown build unit at ${ref ?? MAIN_HEAD}: ${unitName}`,
+            { specifier: unitName, ref: ref ?? MAIN_HEAD, stateHash: viewStateHash }
+          );
+        }
         return {
           stateHash: viewStateHash,
           repoPath: unitName,

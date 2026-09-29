@@ -737,6 +737,20 @@ export const developmentNativeMethods = defineServiceMethods({
           ),
         })
         .strict(),
+      z
+        .object({
+          state: z.literal("stopped"),
+          artifact: developmentRunSchema.shape.artifact,
+          instance: developmentRunSchema.shape.instance,
+          hostReadiness: developmentRunSchema.shape.hostReadiness,
+          client: developmentRunSchema.shape.client,
+          attachedHost: developmentRunSchema.shape.attachedHost,
+          phases: z.array(z.enum(["installing", "building"])),
+          logs: z.array(
+            z.object({ stream: z.enum(["stdout", "stderr"]), line: z.string() }).strict()
+          ),
+        })
+        .strict(),
     ]),
     authority: nativePrincipals,
     access: { sensitivity: "read" },
@@ -756,7 +770,7 @@ export const developmentNativeMethods = defineServiceMethods({
       rationale: "Stops only the process group owned by one exact build handle",
     },
     args: z.tuple([z.object({ runId: nonEmpty, snapshotDigest: sha256 }).strict()]),
-    returns: z.void(),
+    returns: developmentRunSchema.pick({ artifact: true, instance: true, hostReadiness: true, client: true, attachedHost: true }),
     authority: nativePrincipals,
     access: { sensitivity: "write" },
   },
@@ -766,7 +780,6 @@ export const developmentNativeMethods = defineServiceMethods({
       reason:
         "The developmentNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
-    capability: "development.native.build.retire",
     description: "Retire the private execution root owned by one exact native build handle.",
     presentation: {
       title: "Retire a development build",
@@ -776,15 +789,16 @@ export const developmentNativeMethods = defineServiceMethods({
       authorityCategory: { domain: "computer", verb: "manage" },
     },
     tier: {
-      tier: "critical",
+      tier: "open",
       session: "codeOnly",
       residency: "untrusted-execution",
       family: "development-native.build",
-      rationale: "Removes only the execution root proven by one exact retained run record",
+      rationale:
+        "Releases only the private temporary root proven by its exact run owner marker; session cleanup must settle without acquiring new authority",
     },
     args: z.tuple([z.object({ run: developmentRunSchema }).strict()]),
     returns: z.void(),
     authority: nativePrincipals,
-    access: { sensitivity: "destructive" },
+    access: { sensitivity: "write" },
   },
 });

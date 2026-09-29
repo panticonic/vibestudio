@@ -14,6 +14,8 @@ files:
   - "!dist/source-server-prerequisites.lock"
   - "!dist/host-build.lock"
   - "scripts/cli/**/*"
+  - "scripts/owned-process-tree.mjs"
+  - "scripts/owned-process-identity.mjs"
   - "scripts/historical-host-snapshot.mjs"
   - "packages/**/*"
   - "node_modules/**/*"
@@ -23,6 +25,8 @@ asar: true
 asarUnpack:
   # Desktop phone provisioning executes the canonical CLI primitives locally.
   - "scripts/cli/**/*"
+  - "scripts/owned-process-tree.mjs"
+  - "scripts/owned-process-identity.mjs"
   - "scripts/historical-host-snapshot.mjs"
   - "package.json"
   # MXC enforcement payloads must be executable outside ASAR.

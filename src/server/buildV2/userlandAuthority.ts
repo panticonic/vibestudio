@@ -10,6 +10,7 @@ import {
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 import {
   buildWorkspaceDeclarations,
+  indexWorkspaceServices,
   type WorkspaceDeclarations,
 } from "@vibestudio/workspace/singletonRegistry";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
@@ -18,7 +19,7 @@ import { collectTransitiveInternalDeps } from "./buildSource.js";
 import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
 import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 
-export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v3";
+export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v4";
 
 export interface ExactWorkspaceServiceBinding {
   name: string;
@@ -477,13 +478,7 @@ export function createExactWorkspaceAuthorityEnvironment(input: {
   resolveCatalog(binding: ExactWorkspaceServiceBinding): Promise<UserlandServiceAuthorityCatalog>;
 }): ExactWorkspaceAuthorityEnvironment {
   const allServices = [...input.services];
-  const byKey = new Map<string, ExactWorkspaceServiceBinding>();
-  for (const service of allServices) {
-    for (const key of [service.name, ...service.protocols]) {
-      if (byKey.has(key)) throw new Error(`Duplicate workspace service key ${JSON.stringify(key)}`);
-      byKey.set(key, service);
-    }
-  }
+  const byKey = indexWorkspaceServices(allServices);
   const services = Object.freeze(allServices.map((service) => Object.freeze({ ...service })));
   return {
     stateHash: input.stateHash,

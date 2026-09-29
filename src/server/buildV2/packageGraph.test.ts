@@ -345,7 +345,11 @@ describe("discoverPackageGraph package exports", () => {
       );
 
       const node = discoverPackageGraph(root).get("@workspace-skills/system-testing");
-      expect(node.exports).toEqual([".", "./stages"]);
+      expect(node.exports).toEqual({
+        ".": "./index.ts",
+        "./stages": "./stages.ts",
+        "./tests/*": "./tests/*.ts",
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

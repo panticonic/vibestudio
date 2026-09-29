@@ -7,10 +7,12 @@ describe("validateBuildRef", () => {
       expect.objectContaining({
         code: "invalid_build_ref",
         errorKind: "application",
-        errorData: {
+        errorData: expect.objectContaining({
           code: "invalid_build_ref",
           ref: "./packages/example/src/index.ts",
-        },
+          failureKind: "invalid-input",
+          retry: { policy: "correct-input", commandIdPolicy: "not-applicable" },
+        }),
       })
     );
   });
@@ -21,10 +23,12 @@ describe("validateBuildRef", () => {
       expect.objectContaining({
         code: "invalid_build_ref",
         errorKind: "application",
-        errorData: {
+        errorData: expect.objectContaining({
           code: "invalid_build_ref",
           ref,
-        },
+          failureKind: "invalid-input",
+          retry: { policy: "correct-input", commandIdPolicy: "not-applicable" },
+        }),
       })
     );
   });

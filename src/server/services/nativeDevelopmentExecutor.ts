@@ -701,6 +701,21 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     });
   }
 
+  async close(): Promise<void> {
+    await Promise.allSettled([...this.locks.values()]);
+    const outcomes = await Promise.allSettled(
+      [...this.activeTools.keys()].map(async (sessionId) => {
+        const receipt = await this.stop(sessionId);
+        if (receipt.state !== "stopped")
+          throw new Error(`Native tool ${sessionId} did not acknowledge shutdown`);
+      })
+    );
+    const failures = outcomes
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Native tool shutdown failed");
+  }
+
   async stop(sessionId: string): Promise<NativeDevelopmentSessionReceipt> {
     return this.locked(sessionId, async () => {
       let marker = await this.requireMarker(sessionId);

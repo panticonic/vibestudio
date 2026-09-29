@@ -1,5 +1,7 @@
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createNativePanelHost } from "./nativePanelHost.js";
+import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
+if (process.send) bindProcessLifetimeToParent();
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
 import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 import {
@@ -2465,6 +2467,22 @@ app.on("ready", async () => {
     }
     workspaceId = serverSession.workspaceId;
 
+    // Phone provisioning belongs to the authenticated desktop connection. It
+    // must be available even when this client has no presentation runtime.
+    const { createPhoneProvisioningService } =
+      await import("./services/phoneProvisioningService.js");
+    const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
+    const desktopPhoneProvider = createPhoneProvisioningService({
+      appRoot: getAppUnpackedRoot(),
+      appVersion: app.getVersion(),
+      resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
+      hubControlClient: serverSession.hubControlClient,
+      workspaceName: serverSession.workspaceName,
+    });
+    dispatcher.registerService(desktopPhoneProvider);
+    const { publishHostService } = await import("./hostServicePublisher.js");
+    publishHostService(serverClientRef, dispatcher, desktopPhoneProvider);
+
     if (IS_DEVELOPMENT_CLIENT_EXECUTOR) {
       bootstrapWorkspaceRpcReady = true;
       log.info(
@@ -2547,17 +2565,6 @@ app.on("ready", async () => {
         getViewManager,
       })
     );
-    const { createPhoneProvisioningService } =
-      await import("./services/phoneProvisioningService.js");
-    const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
-    const desktopPhoneProvider = createPhoneProvisioningService({
-      appRoot: getAppUnpackedRoot(),
-      appVersion: app.getVersion(),
-      resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
-      hubControlClient: conn.hubControlClient,
-      workspaceName: conn.workspaceName,
-    });
-    electronContainer.registerRpc(desktopPhoneProvider);
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));
     const systemRuntimePublication = prepareDesktopWorkspaceRuntime(
       desktopWorkspaceRuntimes,
@@ -2860,9 +2867,6 @@ app.on("ready", async () => {
     }
     void approvalAttention?.refresh({ quiet: true });
     if (pendingReadyElectronLaunch) await drainPendingReadyElectronLaunch();
-
-    const { publishHostService } = await import("./hostServicePublisher.js");
-    publishHostService(sc, dispatcher, desktopPhoneProvider);
 
     // =========================================================================
     // Register ipcMain.handle handlers for __vibestudioShell (panel preload)

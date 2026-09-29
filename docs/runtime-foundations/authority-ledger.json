@@ -15028,11 +15028,11 @@
       "rpcPlane": "host-service",
       "owner": "developmentNative",
       "method": "retireBuild",
-      "tier": "critical",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "untrusted-execution",
       "mechanismFamily": "development-native.build",
-      "reviewRationale": "Removes only the execution root proven by one exact retained run record",
+      "reviewRationale": "Releases only the private temporary root proven by its exact run owner marker; session cleanup must settle without acquiring new authority",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:developmentNative.retireBuild"
@@ -15041,7 +15041,7 @@
         "host",
         "code"
       ],
-      "sensitivity": "destructive",
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -15062,8 +15062,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:developmentNative.retireBuild),allOf(capability(code,service:developmentNative.retireBuild),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "exact-owned-build-reclamation",
+        "change": "Releases only the private temporary root retained by the exact authenticated preparing runtime and verified run owner marker. This is open write cleanup, not acquisition of authority to delete workspace content. Native materialization, launch, stop and process retirement settle before root removal. Foreign handles, mismatched snapshots and invalid containment remain rejected."
       },
       "capability": "service:developmentNative.retireBuild",
       "parityAssertion": "generated-census:host-authority"
@@ -26416,11 +26416,11 @@
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "supervision.restart",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "runtime.supervision",
-      "reviewRationale": "Restarts one exact driver-owned execution without changing its durable product state.",
+      "reviewRationale": "Restarts one exact execution; host-prepared ownership gates management of foreign runtimes without changing durable state.",
       "resourceDerivation": {
         "kind": "argument-fields",
         "index": 0,
@@ -26462,10 +26462,55 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "compound-runtime-restart-authority-target",
-        "change": "Binds restart authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. A grant for one runtime unit cannot authorize another unit or lifecycle verb."
+        "review": "host-prepared-runtime-owner-management",
+        "change": "The receiver permits management of the caller-owned execution without acquiring a new grant during cleanup or recovery. It derives ownership from the authenticated runtime, verifies the exact entity identity, and emits the gated runtime.supervision.manage leaf for a foreign execution. Resource identity remains operation, runtime kind and exact entity; retire retains destructive sensitivity."
       },
       "capability": "service:runtime.supervision.restart",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.supervision.restart#capability:runtime.supervision.manage",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "supervision.restart",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "runtime.supervision",
+      "reviewRationale": "Restarts one exact execution; host-prepared ownership gates management of foreign runtimes without changing durable state.",
+      "capability": "runtime.supervision.manage",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "runtime.supervision.restart.ownership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
+      "r3b": {
+        "review": "gated-foreign-runtime-management",
+        "change": "Host-prepared ownership emits this leaf only when the authenticated caller is not the execution owner. It retains ordinary code/session/user workspace membership and host capability checks, gated acquisition and the exact operation/entity resource. Guest claims cannot omit the foreign-ownership gate."
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -26473,11 +26518,11 @@
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "supervision.retire",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "runtime.supervision",
-      "reviewRationale": "Retires one exact driver-owned execution and its owned native resources.",
+      "reviewRationale": "Retires one exact execution; host-prepared ownership gates management of foreign runtimes and their native resources.",
       "resourceDerivation": {
         "kind": "argument-fields",
         "index": 0,
@@ -26519,10 +26564,55 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "compound-runtime-retirement-authority-target",
-        "change": "Binds destructive retirement authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. Existing critical confirmation semantics remain unchanged."
+        "review": "host-prepared-runtime-owner-management",
+        "change": "The receiver permits management of the caller-owned execution without acquiring a new grant during cleanup or recovery. It derives ownership from the authenticated runtime, verifies the exact entity identity, and emits the gated runtime.supervision.manage leaf for a foreign execution. Resource identity remains operation, runtime kind and exact entity; retire retains destructive sensitivity."
       },
       "capability": "service:runtime.supervision.retire",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.supervision.retire#capability:runtime.supervision.manage",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "supervision.retire",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "runtime.supervision",
+      "reviewRationale": "Retires one exact execution; host-prepared ownership gates management of foreign runtimes and their native resources.",
+      "capability": "runtime.supervision.manage",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "runtime.supervision.retire.ownership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
+      "r3b": {
+        "review": "gated-foreign-runtime-management",
+        "change": "Host-prepared ownership emits this leaf only when the authenticated caller is not the execution owner. It retains ordinary code/session/user workspace membership and host capability checks, gated acquisition and the exact operation/entity resource. Guest claims cannot omit the foreign-ownership gate."
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {

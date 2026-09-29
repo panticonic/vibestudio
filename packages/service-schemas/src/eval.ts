@@ -17,6 +17,34 @@ import { CapabilityScopeSchema } from "./build.js";
  * after worst-case JSON escaping.
  */
 export const EVAL_RESULT_RETURN_PREVIEW_CHARS = 12_000;
+export const EVAL_OPERATION_JOURNAL_MAX_ENTRIES = 100;
+export const EVAL_OPERATION_JOURNAL_PREVIEW_CHARS = 24_000;
+export const evalOperationJournalSchema = z
+  .object({
+    protocol: z.literal("workspace-operations.v1"),
+    entries: z.array(z.record(z.unknown())).max(EVAL_OPERATION_JOURNAL_MAX_ENTRIES),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type EvalOperationJournal = z.infer<typeof evalOperationJournalSchema>;
+
+/** Binary eval results have artifact ownership and do not consume JSON preview space. */
+export const evalImagePayloadSchema = z
+  .object({
+    data: z.string().min(1),
+    mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional(),
+  })
+  .strict();
+export const evalImageArtifactSchema = evalImagePayloadSchema
+  .omit({ data: true })
+  .extend({
+    protocol: z.literal("eval-image-artifact.v1"),
+    digest: z.string().regex(/^[0-9a-f]{64}$/u),
+    size: z.number().int().positive(),
+  })
+  .strict();
 
 /**
  * Host-emitted eval lifecycle failure codes (the EvalDO's `RunResult.failureCode`
@@ -244,6 +272,8 @@ export const evalRunResultSchema = z
     errorData: z.unknown().optional(),
     /** Keys currently held in the live notebook scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
+    /** Runtime-emitted completed operations, independent of the guest return value. */
+    operationJournal: evalOperationJournalSchema.optional(),
     /** Panels opened by this eval kernel and not yet archived through its runtime surface. */
     panelResources: z
       .object({

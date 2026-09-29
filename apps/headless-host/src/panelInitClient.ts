@@ -8,6 +8,7 @@ import { PanelManager } from "@vibestudio/shell-core/panelManager";
 import {
   createRuntimeClient,
   createWorkspaceStateClient,
+  createPanelMetadataClient,
 } from "@vibestudio/shell-core/createShellCore";
 import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shell-core/panelManager";
 import {
@@ -54,10 +55,7 @@ export class PanelInitClient {
       workspaceState,
       runtime,
       viewState: { load: () => ({ collapsedIds: [] }), save: () => undefined },
-      metadataResolver: {
-        getPanelMetadata: (source) =>
-          call<{ title?: string } | null>("build.getPanelMetadata", [source]),
-      },
+      panelMetadata: createPanelMetadataClient(callService),
       workspacePath: "",
       allowMissingManifests: true,
       serverInfo: { gatewayConfig: { serverUrl } },

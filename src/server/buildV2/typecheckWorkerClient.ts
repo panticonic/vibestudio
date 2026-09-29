@@ -41,6 +41,7 @@ export class TypecheckWorkerClient {
     sourceRoot: string;
     internalDeps: TypecheckUnitDep[];
     nodeModulesPaths: string[];
+    moduleConditions: readonly string[];
     authority?: TypecheckAuthorityInput;
   }): Promise<BuildDiagnostic[]> {
     const authority = input.authority ? await this.authorityWire(input.authority) : undefined;

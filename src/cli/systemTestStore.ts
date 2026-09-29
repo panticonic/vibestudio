@@ -11,9 +11,8 @@ export interface StoredSystemTestRun {
   sessionName: string;
   ownerId: string;
   contextId: string;
-  subKey: string;
   /** Durable test-record owner. Inspection calls this target directly and
-   * never re-enters the completed coordinator execution. */
+   * never re-enters the completed test execution. */
   runnerEntityId: string;
   runnerTargetId: string;
   /** Absolute run-specific artifact directory. */
@@ -66,7 +65,6 @@ export function loadSystemTestRun(runId: string): StoredSystemTestRun | null {
       typeof value.sessionName !== "string" ||
       typeof value.ownerId !== "string" ||
       typeof value.contextId !== "string" ||
-      typeof value.subKey !== "string" ||
       typeof value.runnerEntityId !== "string" ||
       typeof value.runnerTargetId !== "string" ||
       typeof value.artifactDir !== "string" ||

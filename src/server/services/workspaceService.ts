@@ -21,6 +21,7 @@ import {
   WORKSPACE_PREPARED_CONFIG_CAPABILITY,
 } from "@vibestudio/service-schemas/workspace";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import { buildWorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { parseSkillFrontmatter } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
@@ -266,7 +267,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       getConfig: () => deps.getConfig(),
 
       validateConfig: async (_ctx, [content]) => {
-        parseWorkspaceConfigContentWithId(content, deps.getConfig().id);
+        buildWorkspaceDeclarations(parseWorkspaceConfigContentWithId(content, deps.getConfig().id));
         return { valid: true as const };
       },
 

@@ -1,3 +1,4 @@
+import { DOM_SNAPSHOT_EXPRESSION } from "@vibestudio/shared/panel/domSnapshot";
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
 import { webContents } from "electron";
@@ -150,11 +151,13 @@ export class CdpHostProvider {
   private readonly sentRegistrations = new Map<string, number>();
   private readonly debuggerAttached = new Map<string, boolean>();
   private readonly debuggerAttaching = new Map<string, Promise<void>>();
-  private readonly debuggerCommandQueues = new Map<string, Promise<unknown>>();
   private readonly activeCdpTargets = new Set<string>();
   private readonly debuggerEventHandlers = new Map<
     string,
-    (event: unknown, method: string, params?: unknown, sessionId?: string) => void
+    {
+      message: (event: unknown, method: string, params?: unknown, sessionId?: string) => void;
+      detach: (event: unknown, reason: string) => void;
+    }
   >();
   private readonly consoleHistories = new Map<
     string,
@@ -304,29 +307,7 @@ export class CdpHostProvider {
   /** Bounded readable snapshot for automation; independent of the full AX domain. */
   async getDomSnapshot(targetId: string): Promise<unknown> {
     const contents = this.requireTargetContents(targetId);
-    return contents.executeJavaScript(
-      `(() => {
-      const describe = (element, depth = 0) => {
-        if (!element || depth > 8) return null;
-        const children = Array.from(element.children || []).slice(0, 50)
-          .map((child) => describe(child, depth + 1)).filter(Boolean);
-        return {
-          tag: String(element.tagName || "").toLowerCase(),
-          role: element.getAttribute?.("role") || undefined,
-          label: element.getAttribute?.("aria-label") || undefined,
-          text: children.length === 0 ? String(element.textContent || "").trim().slice(0, 160) : undefined,
-          children,
-          depth,
-        };
-      };
-      return {
-        kind: "synth",
-        text: String(document.body?.innerText || "").replace(/\\n{3,}/g, "\\n\\n").trim(),
-        structure: document.body ? describe(document.body) : null,
-      };
-    })()`,
-      true
-    );
+    return contents.executeJavaScript(DOM_SNAPSHOT_EXPRESSION, true);
   }
 
   /**
@@ -640,6 +621,7 @@ export class CdpHostProvider {
     };
     const renderProcessGone = (_event: unknown, details: unknown) => {
       this.recordLifecycleDiagnostic(targetId, contents, "error", "render-process-gone", details);
+      this.send({ type: "cdp:event", targetId, method: "Inspector.targetCrashed", params: {} });
     };
     const didFailLoad = (
       _event: unknown,
@@ -912,9 +894,14 @@ export class CdpHostProvider {
         ...(sessionId ? { sessionId } : {}),
       });
     };
-    this.debuggerEventHandlers.set(targetId, handler);
+    const detach = (_event: unknown, reason: string) => {
+      this.send({ type: "cdp:event", targetId, method: "Inspector.detached", params: { reason } });
+      this.detachDebuggerIfIdle(targetId, contents, { force: true });
+    };
+    this.debuggerEventHandlers.set(targetId, { message: handler, detach });
     const debuggerEmitter = contents.debugger as unknown as EventEmitter;
     debuggerEmitter.on("message", handler);
+    debuggerEmitter.on("detach", detach);
   }
 
   private sendDebuggerCommand(
@@ -924,24 +911,13 @@ export class CdpHostProvider {
     params?: Record<string, unknown>,
     sessionId?: string
   ): Promise<unknown> {
-    const previous = this.debuggerCommandQueues.get(targetId) ?? Promise.resolve();
-    const run = previous
-      .catch(() => undefined)
-      .then(() => {
-        if (contents.isDestroyed()) {
-          throw new Error(`Panel webContents destroyed: ${targetId}`);
-        }
-        return contents.debugger.sendCommand(method, params, sessionId);
-      });
-    const tail = run
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.debuggerCommandQueues.get(targetId) === tail) {
-          this.debuggerCommandQueues.delete(targetId);
-        }
-      });
-    this.debuggerCommandQueues.set(targetId, tail);
-    return run;
+    if (contents.isDestroyed()) {
+      return Promise.reject(new Error(`Panel webContents destroyed: ${targetId}`));
+    }
+    // CDP correlates each response with its own request. Waiting for another
+    // command's completion here would let awaitPromise evaluations block
+    // unrelated inspection, input, and recovery commands indefinitely.
+    return contents.debugger.sendCommand(method, params, sessionId);
   }
 
   private detachDebuggerIfIdle(
@@ -951,6 +927,13 @@ export class CdpHostProvider {
   ): void {
     if (!this.debuggerAttached.get(targetId)) return;
     if (!opts.force && this.activeCdpTargets.has(targetId)) return;
+    // Retire listeners before an intentional detach emits its lifecycle event.
+    const handlers = this.debuggerEventHandlers.get(targetId);
+    if (handlers && contents && !contents.isDestroyed()) {
+      const emitter = contents.debugger as unknown as EventEmitter;
+      emitter.off("message", handlers.message);
+      emitter.off("detach", handlers.detach);
+    }
     try {
       if (contents && !contents.isDestroyed() && opts.force) {
         contents.debugger.detach();
@@ -960,14 +943,9 @@ export class CdpHostProvider {
     } catch {
       // Already detached.
     } finally {
-      const handler = this.debuggerEventHandlers.get(targetId);
-      if (handler && contents && !contents.isDestroyed()) {
-        (contents.debugger as unknown as EventEmitter).off("message", handler);
-      }
       this.debuggerEventHandlers.delete(targetId);
       this.debuggerAttached.delete(targetId);
       this.debuggerAttaching.delete(targetId);
-      this.debuggerCommandQueues.delete(targetId);
       if (opts.force) this.activeCdpTargets.delete(targetId);
     }
   }

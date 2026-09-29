@@ -6,6 +6,9 @@
  */
 import { resolveConfig, type ConfigOverrides } from "./config.js";
 import { HeadlessHost } from "./headlessHost.js";
+import { bindProcessLifetimeToParent } from "../../../scripts/owned-process-tree.mjs";
+
+if (process.send) bindProcessLifetimeToParent();
 
 const IPC_INIT_TIMEOUT_MS = 10_000;
 
@@ -96,11 +99,15 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 
-  await host.start();
-  await host.done;
+  try {
+    await host.start();
+    await host.done;
+  } finally {
+    await host.stop("host lifetime ended");
+  }
 }
 
 main().catch((error) => {
   console.error(`[headless-host] fatal: ${error instanceof Error ? error.stack : String(error)}`);
-  process.exit(1);
+  process.exitCode = 1;
 });

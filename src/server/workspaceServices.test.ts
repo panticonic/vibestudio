@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   SingletonRegistry,
+  buildWorkspaceDeclarations,
   type WorkspaceDeclarations,
 } from "@vibestudio/workspace/singletonRegistry";
 import { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 import { resolveWorkspaceService } from "./workspaceServices.js";
+import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const TEST_WORKSPACE_SERVICE_PRESENTATION = {
   action: "use the test service",
@@ -32,6 +35,33 @@ function makeDecls(opts: { withSingleton?: boolean; context?: "creator" }): Work
     routes: [],
   };
 }
+
+describe("workspace service lookup ownership", () => {
+  const service = makeDecls({}).services[0]!;
+  const build = (services: WorkspaceServiceDecl[]) =>
+    buildWorkspaceDeclarations({
+      id: "service-ownership-test",
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      services,
+    });
+
+  it("resolves a declaration whose name also identifies its protocol", () => {
+    const declarations = build([{ ...service, name: "example.store.v1" }]);
+    expect(resolveWorkspaceService(declarations, "example.store.v1", "tasks")).toMatchObject({
+      source: service.source,
+      protocol: "example.store.v1",
+      objectKey: "tasks",
+    });
+  });
+
+  it.each([
+    ["same service name", { ...service, source: "workers/other", protocols: [] }],
+    ["shared protocol", { ...service, name: "other" }],
+    ["name claimed as protocol", { ...service, name: "other", protocols: [service.name] }],
+  ])("rejects different declarations claiming the %s", (_label, other) => {
+    expect(() => build([service, other])).toThrow(/declared by both/);
+  });
+});
 
 describe("resolveWorkspaceService — factory vs singleton DO services", () => {
   it("returns the singleton key when a singletonObjects row matches and no objectKey is given", () => {

@@ -2120,6 +2120,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
       "@workspace/runtime";
+    setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
@@ -2286,6 +2287,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
       "@workspace/runtime";
+    setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
@@ -2517,12 +2519,16 @@ describe("EvalDO cancellation + forced recovery", () => {
     env["EVAL_CDP_CLIENT_SOURCE"] = "@workspace/cdp-client";
     const rpcA = { call: vi.fn(async () => "cell-a") };
     const rpcB = { call: vi.fn(async () => "cell-b") };
-    const executionA = { contextId: "ctx", marker: "cell-a", rpc: rpcA };
-    const executionB = { contextId: "ctx", marker: "cell-b", rpc: rpcB };
     let retainedLoadModule!: (id: string) => Promise<unknown>;
+    let recordOperation!: (entry: Record<string, unknown>) => void;
+    const journalA = { append: vi.fn() };
+    const journalB = { append: vi.fn() };
+    const executionA = { contextId: "ctx", marker: "cell-a", rpc: rpcA, operationJournal: journalA };
+    const executionB = { contextId: "ctx", marker: "cell-b", rpc: rpcB, operationJournal: journalB };
     const support = {
       createPanelRuntime: (options: Record<string, unknown>) => {
         retainedLoadModule = options["loadModule"] as (id: string) => Promise<unknown>;
+        recordOperation = options["recordOperation"] as typeof recordOperation;
         const retainedRpc = options["rpc"] as {
           call(targetId: string, method: string, args: unknown[]): Promise<unknown>;
         };
@@ -2570,12 +2576,20 @@ describe("EvalDO cancellation + forced recovery", () => {
       null
     );
     const retainedHandle = runtime.getPanelHandle("panel:tree/retained");
-
+    const receipt = {
+      type: "interaction",
+      id: "panel:tree/retained",
+      receipt: { delivery: "dispatched" },
+    };
+    expect(() => recordOperation(receipt)).toThrow(/actively executing/);
     await expect(retainedHandle.cdp.page()).rejects.toThrow(/actively executing/);
     expect(() => retainedHandle.rebuild()).toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
+    activeExecution.run(executionB, () => recordOperation(receipt));
+    expect(journalA.append).not.toHaveBeenCalled();
+    expect(journalB.append).toHaveBeenCalledExactlyOnceWith(receipt);
     await expect(activeExecution.run(executionB, () => retainedHandle.cdp.page())).resolves.toBe(
       loaded
     );
@@ -2603,6 +2617,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       rpc: rpcB,
       externalOpen: { openExternal: openB },
     };
+    setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     const support = {
       createPanelRuntime: () => ({}),
       createHostedRuntime: (host: Record<string, unknown>) => ({
@@ -2693,6 +2708,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     // `rpc` is the host's option-threading proxy, which is what this test pins.
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
       "@workspace/runtime";
+    setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({

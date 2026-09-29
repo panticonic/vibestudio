@@ -2992,13 +2992,14 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "developmentNative.retireBuild": {
     tier: {
-      tier: "critical",
+      tier: "open",
       session: "codeOnly",
       residency: "untrusted-execution",
       family: "development-native.build",
-      rationale: "Removes only the execution root proven by one exact retained run record",
+      rationale:
+        "Releases only the private temporary root proven by its exact run owner marker; session cleanup must settle without acquiring new authority",
     },
-    capability: "development.native.build.retire",
+    capability: null,
     presentation: {
       title: "Retire a development build",
       action: "retire a development build",
@@ -6284,12 +6285,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "runtime.supervision.restart": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
       rationale:
-        "Restarts one exact driver-owned execution without changing its durable product state.",
+        "Restarts one exact execution; host-prepared ownership gates management of foreign runtimes without changing durable state.",
     },
     capability: "runtime.supervision.manage",
     presentation: {
@@ -6305,11 +6306,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "runtime.supervision.retire": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
-      rationale: "Retires one exact driver-owned execution and its owned native resources.",
+      rationale:
+        "Retires one exact execution; host-prepared ownership gates management of foreign runtimes and their native resources.",
     },
     capability: "runtime.supervision.manage",
     presentation: {
@@ -8809,6 +8811,8 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "runtime.destroyContext": ["context.boundary"],
   "runtime.reserveEntity": ["context.boundary"],
   "runtime.retireEntity": ["context.boundary"],
+  "runtime.supervision.restart": ["runtime.supervision.manage"],
+  "runtime.supervision.retire": ["runtime.supervision.manage"],
   "shellApproval.getWorkspaceCreationReviewState": ["approvals.read"],
   "shellApproval.listPending": ["approvals.read"],
   "shellApproval.resolve": ["approvals.decide"],
@@ -8916,10 +8920,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "credentials.audit.read": {
     domain: "safety",
     verb: "see",
-  },
-  "development.native.build.retire": {
-    domain: "computer",
-    verb: "manage",
   },
   "development.native.execute": {
     domain: "automation",
@@ -9440,16 +9440,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "safety",
       verb: "see",
-    },
-  },
-  "development.native.build.retire": {
-    title: "Retire a development build",
-    action: "retire a development build",
-    description: "Clean up a development build's private files after the build is finished.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "computer",
-      verb: "manage",
     },
   },
   "development.native.execute": {

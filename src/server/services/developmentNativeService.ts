@@ -57,6 +57,7 @@ export interface ExactNativeDevelopmentController {
     options?: { assessPendingChanges?: boolean }
   ): Promise<NativeDevelopmentSessionReceipt>;
   stop(sessionId: string): Promise<NativeDevelopmentSessionReceipt>;
+  close(): Promise<void>;
   recover(sessionId: string): Promise<NativeDevelopmentSessionReceipt>;
   keep(sessionId: string): Promise<NativeDevelopmentSessionReceipt>;
   forceRetire(sessionId: string): Promise<{ retired: boolean; cleanupErrors: string[] }>;
@@ -77,10 +78,13 @@ type NativeTargetFields = Pick<
 type NativeBuildState = {
   snapshotDigest: string;
   run: DevelopmentRun;
+  lifetime: AbortController;
+  settled: Promise<void>;
+  stop: Promise<NativeTargetFields> | null;
   phases: Array<"installing" | "building">;
   result:
     | { state: "running" }
-    | ({ state: "succeeded" | "ready" } & NativeTargetFields)
+    | ({ state: "succeeded" | "ready" | "stopped" } & NativeTargetFields)
     | ({ state: "failed"; error: string } & NativeTargetFields);
 };
 
@@ -133,14 +137,26 @@ export function createDevelopmentNativeService(deps: {
     contextId: string;
     repositoryId: string;
   }) => Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null>;
-}): ServiceDefinition {
-  const plans = new Map<string, PreparedDevelopmentBuild>();
+}): { definition: ServiceDefinition; close(): Promise<void> } {
+  const plans = new Map<string, { plan: PreparedDevelopmentBuild; ownerRuntimeId: string }>();
   const builds = new Map<string, NativeBuildState>();
+  const admissions = new Set<Promise<unknown>>();
+  let closed = false;
+  let closing: Promise<void> | null = null;
 
-  const requirePlan = (run: DevelopmentRun): PreparedDevelopmentBuild => {
-    const plan = plans.get(run.runId);
+  const ownedPlan = (ctx: ServiceContext, runId: string): PreparedDevelopmentBuild => {
+    const handle = plans.get(runId);
+    if (!handle || handle.ownerRuntimeId !== ctx.caller.runtime.id) {
+      throw Object.assign(new Error("The caller does not own this native build handle"), {
+        code: "EOWNERSHIP",
+      });
+    }
+    return handle.plan;
+  };
+
+  const requirePlan = (ctx: ServiceContext, run: DevelopmentRun): PreparedDevelopmentBuild => {
+    const plan = ownedPlan(ctx, run.runId);
     if (
-      !plan ||
       plan.snapshot.snapshotDigest !== run.snapshot.snapshotDigest ||
       plan.recipe.reviewDigest !== run.recipe.reviewDigest
     ) {
@@ -151,6 +167,55 @@ export function createDevelopmentNativeService(deps: {
     }
     return plan;
   };
+
+  const stopNativeBuild = (build: NativeBuildState): Promise<NativeTargetFields> =>
+    (build.stop ??= (async () => {
+      build.lifetime.abort(new Error(`Development run ${build.run.runId} was stopped`));
+      const stopTargets = async () => {
+        if (needsClientExecutor(build.run.target)) {
+          await deps.clientExecutors?.stop(build.run.runId);
+          if (build.run.client)
+            build.run = {
+              ...build.run,
+              client: { ...build.run.client, state: "stopped", stoppedAt: Date.now() },
+            };
+        }
+        if (build.run.attachedHost && build.run.attachedHost.state !== "closed") {
+          if (!deps.attachedHostPublisher)
+            throw new Error("Owned attached route has no lifecycle publisher");
+          await deps.attachedHostPublisher.close(
+            build.run.attachedHost.sessionId,
+            "development-run-stopped"
+          );
+          build.run = {
+            ...build.run,
+            attachedHost: { ...build.run.attachedHost, state: "closed" },
+          };
+        }
+        if (build.run.instance && build.run.instance.state !== "stopped") {
+          const instance = await deps.isolatedExecutor?.stop(build.run);
+          if (instance) build.run = { ...build.run, instance };
+        }
+      };
+      await deps.executor.stop(build.run.runId);
+      await stopTargets();
+      // Materialization and launch own writers too. Their cancellation must
+      // settle before retirement can remove the root or forget its handles.
+      await build.settled;
+      await stopTargets();
+      const receipt: NativeTargetFields = {
+        artifact: build.run.artifact,
+        instance: build.run.instance,
+        hostReadiness: build.run.target.kind === "isolated-host" ? "stopped" : null,
+        client: build.run.client,
+        attachedHost: build.run.attachedHost,
+      };
+      build.result = { state: "stopped", ...receipt };
+      return receipt;
+    })().catch((error: unknown) => {
+      build.stop = null;
+      throw error;
+    }));
 
   const launchTarget = async (
     run: DevelopmentRun & { artifact: NonNullable<DevelopmentRun["artifact"]> },
@@ -169,10 +234,12 @@ export function createDevelopmentNativeService(deps: {
         });
       }
       const artifactSource = await deps.executor.resolveClientArtifactSource(run, plan);
+      build.lifetime.signal.throwIfAborted();
       const invite = await deps.mintCurrentHostInvite({
         userId: run.ownerUserId,
         ttlMs: 5 * 60_000,
       });
+      build.lifetime.signal.throwIfAborted();
       let client: DevelopmentRun["client"] = null;
       const launch = deps.clientExecutors.launch({
         runId: run.runId,
@@ -197,6 +264,7 @@ export function createDevelopmentNativeService(deps: {
             stoppedAt: null,
             failure: null,
           };
+          build.run = { ...build.run, client };
         },
         onProviderLaunched(receipt) {
           if (client) {
@@ -206,6 +274,7 @@ export function createDevelopmentNativeService(deps: {
               childPid: receipt.childPid,
               launchedAt: receipt.launchedAt,
             };
+            build.run = { ...build.run, client };
           }
         },
         onChildAttested(receipt) {
@@ -216,10 +285,12 @@ export function createDevelopmentNativeService(deps: {
               childRuntimeId: receipt.childRuntimeId,
               attestedAt: receipt.attestedAt,
             };
+            build.run = { ...build.run, client };
           }
         },
       });
       const ready = await launch.ready;
+      build.lifetime.signal.throwIfAborted();
       const launchedClient = client as NonNullable<DevelopmentRun["client"]> | null;
       if (!launchedClient) throw new Error("Development client launch state was lost");
       build.result = {
@@ -237,6 +308,7 @@ export function createDevelopmentNativeService(deps: {
         },
         attachedHost: null,
       };
+      build.run = { ...build.run, ...build.result };
       return;
     }
     if (!deps.isolatedExecutor) {
@@ -249,10 +321,14 @@ export function createDevelopmentNativeService(deps: {
     let attachedHost: DevelopmentRun["attachedHost"] = null;
     await deps.isolatedExecutor.start(run, plan, {
       onRegistered(receipt) {
+        build.lifetime.signal.throwIfAborted();
         instance = receipt;
+        build.run = { ...build.run, instance: receipt };
       },
       async onReady(receipt) {
+        build.lifetime.signal.throwIfAborted();
         instance = receipt;
+        build.run = { ...build.run, instance: receipt };
         if (run.target.kind === "isolated-host" && run.target.includeClient) {
           if (!deps.clientExecutors || !plan.clientExecutor || !run.ownerUserId) {
             throw Object.assign(new Error("The selected client-device executor is unavailable"), {
@@ -261,6 +337,7 @@ export function createDevelopmentNativeService(deps: {
           }
           const artifactSource = await deps.executor.resolveClientArtifactSource(run, plan);
           const pairingDeepLink = await deps.isolatedExecutor!.mintClientInvite(run);
+          build.lifetime.signal.throwIfAborted();
           const launch = deps.clientExecutors.launch({
             runId: run.runId,
             binding: plan.clientExecutor,
@@ -284,14 +361,17 @@ export function createDevelopmentNativeService(deps: {
                 stoppedAt: null,
                 failure: null,
               };
+              build.run = { ...build.run, client };
             },
           });
           const child = await deps.isolatedExecutor!.waitForClientAttestation(
             run,
-            launch.requestId
+            launch.requestId,
+            build.lifetime.signal
           );
           deps.clientExecutors.acceptManagedChildAttestation(child);
           const ready = await launch.ready;
+          build.lifetime.signal.throwIfAborted();
           if (!client) throw new Error("Isolated client launch state was lost");
           client = {
             ...client,
@@ -301,6 +381,7 @@ export function createDevelopmentNativeService(deps: {
             launchedAt: ready.launchedAt,
             attestedAt: ready.attestedAt,
           };
+          build.run = { ...build.run, client };
         }
         if (deps.attachedHostPublisher && deps.attachedHostParentId) {
           const ports = deps.isolatedExecutor!.takeAttachmentPorts(run);
@@ -324,7 +405,9 @@ export function createDevelopmentNativeService(deps: {
             attachedAt: Date.now(),
             routeLostAt: null,
           };
+          build.run = { ...build.run, attachedHost };
         }
+        build.lifetime.signal.throwIfAborted();
         build.result = {
           state: "ready",
           artifact: run.artifact,
@@ -333,14 +416,16 @@ export function createDevelopmentNativeService(deps: {
           client,
           attachedHost,
         };
+        build.run = { ...build.run, ...build.result };
       },
-      onExit(code) {
+      onExit(code, stoppedInstance) {
+        build.run = { ...build.run, instance: stoppedInstance };
         if (build.result.state === "ready" && code !== 0) {
           build.result = {
             state: "failed",
             error: `Isolated host exited with code ${code}`,
             artifact: run.artifact,
-            instance,
+            instance: stoppedInstance,
             hostReadiness: "failed",
             client,
             attachedHost,
@@ -350,7 +435,7 @@ export function createDevelopmentNativeService(deps: {
     });
   };
 
-  return {
+  const definition: ServiceDefinition = {
     name: "developmentNative",
     description: "Exact local build, process, and terminal effects for the development builtin",
     authority: { principals: ["host", "code"] },
@@ -407,6 +492,7 @@ export function createDevelopmentNativeService(deps: {
         await deps.native.resizeTerminal(input);
       },
       prepareBuild: async (ctx, [{ session, runId, recipe, pair, target }]) => {
+        if (plans.has(runId)) ownedPlan(ctx, runId);
         const plan = await deps.executor.prepareExact({
           session,
           runId,
@@ -434,7 +520,9 @@ export function createDevelopmentNativeService(deps: {
           }
           plan.clientExecutor = selected;
         }
-        plans.set(runId, plan);
+        // Another preparation may have settled while source planning awaited.
+        if (plans.has(runId)) ownedPlan(ctx, runId);
+        plans.set(runId, { plan, ownerRuntimeId: ctx.caller.runtime.id });
         return { runId, snapshot: plan.snapshot, recipe: plan.recipe };
       },
       prepareTemplateExchange: async (_ctx, [input]) => {
@@ -453,8 +541,8 @@ export function createDevelopmentNativeService(deps: {
         }
         return deps.templateExchange.apply({ ...input, ingress: semanticIngress(ctx) });
       },
-      beginBuild: async (_ctx, [{ run }]) => {
-        const plan = requirePlan(run);
+      beginBuild: async (ctx, [{ run }]) => {
+        const plan = requirePlan(ctx, run);
         const existing = builds.get(run.runId);
         if (existing) {
           if (existing.snapshotDigest !== run.snapshot.snapshotDigest) {
@@ -468,17 +556,23 @@ export function createDevelopmentNativeService(deps: {
         const build: NativeBuildState = {
           snapshotDigest: run.snapshot.snapshotDigest,
           run,
+          lifetime: new AbortController(),
+          settled: Promise.resolve(),
+          stop: null,
           phases: [] as Array<"installing" | "building">,
           result: { state: "running" },
         };
         builds.set(run.runId, build);
-        void (async () => {
+        build.settled = (async () => {
           try {
             await deps.executor.materialize(plan);
+            build.lifetime.signal.throwIfAborted();
             const artifact = await deps.executor.execute(run, plan, (phase) => {
               if (build.phases.at(-1) !== phase) build.phases.push(phase);
             });
+            build.lifetime.signal.throwIfAborted();
             const retainedArtifact = artifact as unknown as NonNullable<DevelopmentRun["artifact"]>;
+            build.run = { ...run, artifact: retainedArtifact };
             if (run.target.kind === "build-only") {
               build.result = {
                 state: "succeeded",
@@ -489,7 +583,6 @@ export function createDevelopmentNativeService(deps: {
                 attachedHost: null,
               };
             } else {
-              build.run = { ...run, artifact: retainedArtifact };
               await launchTarget(
                 build.run as DevelopmentRun & {
                   artifact: NonNullable<DevelopmentRun["artifact"]>;
@@ -499,20 +592,28 @@ export function createDevelopmentNativeService(deps: {
               );
             }
           } catch (error) {
+            // Lifecycle receipts retain ownership and acknowledged teardown
+            // even when startup or cancellation prevents a ready result.
             build.result = {
               state: "failed",
               error: error instanceof Error ? error.message : String(error),
-              artifact: null,
-              instance: null,
-              hostReadiness: run.target.kind === "isolated-host" ? "failed" : null,
-              client: null,
-              attachedHost: null,
+              artifact: build.run.artifact,
+              instance: build.run.instance,
+              hostReadiness:
+                run.target.kind === "isolated-host"
+                  ? build.run.instance?.state === "stopped"
+                    ? "stopped"
+                    : "failed"
+                  : null,
+              client: build.run.client,
+              attachedHost: build.run.attachedHost,
             };
           }
         })();
         return { started: true as const };
       },
-      inspectBuild: (_ctx, [{ runId, snapshotDigest }]) => {
+      inspectBuild: (ctx, [{ runId, snapshotDigest }]) => {
+        ownedPlan(ctx, runId);
         const build = builds.get(runId);
         if (!build || build.snapshotDigest !== snapshotDigest) {
           throw Object.assign(new Error("Unknown exact native build handle"), {
@@ -526,15 +627,20 @@ export function createDevelopmentNativeService(deps: {
         if (build.result.state === "running") {
           return {
             state: "running" as const,
-            artifact: null,
-            instance: null,
-            hostReadiness: null,
-            client: null,
-            attachedHost: null,
+            artifact: build.run.artifact,
+            instance: build.run.instance,
+            hostReadiness:
+              build.run.instance?.state === "ready"
+                ? "ready"
+                : build.run.instance
+                  ? "starting"
+                  : null,
+            client: build.run.client,
+            attachedHost: build.run.attachedHost,
             ...common,
           };
         }
-        if (build.result.state === "failed") {
+        if (build.result.state === "failed" || build.result.state === "stopped") {
           return { ...build.result, ...common };
         }
         if (!build.result.artifact) {
@@ -545,28 +651,73 @@ export function createDevelopmentNativeService(deps: {
           ...common,
         };
       },
-      stopBuild: async (_ctx, [{ runId, snapshotDigest }]) => {
-        const plan = plans.get(runId);
-        if (!plan || plan.snapshot.snapshotDigest !== snapshotDigest) {
+      stopBuild: async (ctx, [{ runId, snapshotDigest }]) => {
+        const plan = ownedPlan(ctx, runId);
+        if (plan.snapshot.snapshotDigest !== snapshotDigest) {
           throw Object.assign(new Error("Unknown exact native build handle"), {
             code: "EEXECUTION_HANDLE",
           });
         }
         const build = builds.get(runId);
-        if (build?.run.target.kind === "client-device") {
-          await deps.clientExecutors?.stop(runId);
-        } else if (build?.run.target.kind === "isolated-host" && build.result.state !== "running") {
-          await deps.isolatedExecutor?.stop(build.run);
-        }
+        if (build) return stopNativeBuild(build);
         await deps.executor.stop(runId);
+        return {
+          artifact: null,
+          instance: null,
+          hostReadiness: null,
+          client: null,
+          attachedHost: null,
+        };
       },
-      retireBuild: async (_ctx, [{ run }]) => {
-        requirePlan(run);
+      retireBuild: async (ctx, [{ run }]) => {
+        requirePlan(ctx, run);
+        const build = builds.get(run.runId);
+        if (build) await stopNativeBuild(build);
         await deps.executor.retire(run);
         plans.delete(run.runId);
         builds.delete(run.runId);
       },
     }),
+  };
+  const handler = definition.handler;
+  definition.handler = async (ctx, method, args) => {
+    if (closed)
+      throw Object.assign(new Error("Native development is shutting down"), { code: "ECLOSED" });
+    const operation = handler(ctx, method, args);
+    admissions.add(operation);
+    try {
+      return await operation;
+    } finally {
+      admissions.delete(operation);
+    }
+  };
+  return {
+    definition,
+    close() {
+      closed = true;
+      return (closing ??= (async () => {
+        // Cancel running effects before joining admitted calls. Their startup
+        // writers must settle before their registered children can be forgotten.
+        const initialStops = [...builds.values()].map(stopNativeBuild);
+        const outcomes = await Promise.allSettled([...initialStops, ...admissions]);
+        const finalStops = await Promise.allSettled([
+          ...[...builds.values()].map(stopNativeBuild),
+          deps.native.close(),
+        ]);
+        // Admitted RPC failures belong to those callers; teardown failures
+        // belong to this owner and must prevent a successful shutdown receipt.
+        const failures = [...outcomes.slice(0, initialStops.length), ...finalStops]
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason);
+        if (failures.length)
+          throw new AggregateError(failures, "Native development shutdown failed");
+        plans.clear();
+        builds.clear();
+      })().catch((error: unknown) => {
+        closing = null;
+        throw error;
+      }));
+    },
   };
 }
 

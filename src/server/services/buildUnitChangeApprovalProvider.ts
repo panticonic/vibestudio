@@ -14,6 +14,7 @@ import {
   prepareUnitInstallReview,
   type UnitInstallAcceptanceTransaction,
 } from "./unitInstallAcceptance.js";
+import { serviceAuthorityDigest } from "./unitAdmissionStore.js";
 import type {
   UnitAdmissionIdentity,
   UnitAdmissionOrigin,
@@ -135,10 +136,7 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         serviceRequests: authority.serviceRequests,
         provides: authority.provides,
       },
-      serviceAuthorityDigest: sha256Canonical({
-        serviceBindingDigest: sha256Canonical(serviceBindings),
-        serviceReviews,
-      }),
+      serviceAuthorityDigest: serviceAuthorityDigest(serviceBindings, serviceReviews),
     };
     // A prepared publication may have completed admission before its ref write
     // failed. Exact identity is the durable deduplication key in every case;

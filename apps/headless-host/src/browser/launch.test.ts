@@ -1,13 +1,13 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveChromiumProfileDir } from "./launch.js";
+import { resolveChromiumProfileRoot } from "./launch.js";
 
-describe("resolveChromiumProfileDir", () => {
+describe("resolveChromiumProfileRoot", () => {
   it("keeps the configured profile dir for non-snap chromium", () => {
     expect(
-      resolveChromiumProfileDir({
+      resolveChromiumProfileRoot({
         executablePath: "/usr/bin/chromium",
-        profileDir: "/home/alice/.local/state/vibestudio/headless-host",
+        profileRoot: "/home/alice/.local/state/vibestudio/headless-host",
         homeDir: "/home/alice",
       })
     ).toBe("/home/alice/.local/state/vibestudio/headless-host");
@@ -15,9 +15,9 @@ describe("resolveChromiumProfileDir", () => {
 
   it("keeps a visible profile dir for snap chromium", () => {
     expect(
-      resolveChromiumProfileDir({
+      resolveChromiumProfileRoot({
         executablePath: "/snap/bin/chromium",
-        profileDir: "/home/alice/Vibestudio/headless-host",
+        profileRoot: "/home/alice/Vibestudio/headless-host",
         homeDir: "/home/alice",
       })
     ).toBe("/home/alice/Vibestudio/headless-host");
@@ -25,9 +25,9 @@ describe("resolveChromiumProfileDir", () => {
 
   it("moves hidden home profile dirs under snap common storage", () => {
     expect(
-      resolveChromiumProfileDir({
+      resolveChromiumProfileRoot({
         executablePath: "/snap/bin/chromium",
-        profileDir: "/home/alice/.local/state/vibestudio/headless-host",
+        profileRoot: "/home/alice/.local/state/vibestudio/headless-host",
         homeDir: "/home/alice",
       })
     ).toBe(path.join("/home/alice", "snap", "chromium", "common", "vibestudio", "headless-host"));
@@ -35,9 +35,9 @@ describe("resolveChromiumProfileDir", () => {
 
   it("preserves the host instance beneath the snap-accessible profile root", () => {
     expect(
-      resolveChromiumProfileDir({
+      resolveChromiumProfileRoot({
         executablePath: "/snap/bin/chromium",
-        profileDir: "/home/alice/.local/state/vibestudio/headless-host/instance-headless-one",
+        profileRoot: "/home/alice/.local/state/vibestudio/headless-host/instance-headless-one",
         homeDir: "/home/alice",
       })
     ).toBe(

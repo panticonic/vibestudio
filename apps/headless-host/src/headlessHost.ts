@@ -44,6 +44,7 @@ export class HeadlessHost implements PanelHost {
   private connection: HeadlessHostServerConnection | null = null;
   private events: EventsClient | null = null;
   private stopLeaseEvents: (() => void) | null = null;
+  private stopContextEvents: (() => void) | null = null;
   private panelInit: PanelInitClient | null = null;
   private tracker: LeaseTracker;
   private browser: LaunchedChromium | null = null;
@@ -58,9 +59,11 @@ export class HeadlessHost implements PanelHost {
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private idleExitSince: number | null = null;
   private stopped = false;
+  private stopping: Promise<void> | null = null;
   private browserRelaunches = 0;
   private browserGeneration = 0;
   private browserRecovery: Promise<void> | null = null;
+  private browserStart: Promise<void> | null = null;
   readonly registration: PanelHostRegistration;
   private readonly bootstrapRegistration: PanelHostRegistration;
   /** Resolves when stop() completes; main.ts awaits this. */
@@ -88,8 +91,10 @@ export class HeadlessHost implements PanelHost {
   async start(): Promise<void> {
     const connection = await (this.config.connectionFactory?.() ?? connectToServer(this.config));
     this.connection = connection;
-    const workspace = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
-      connection.rpc.call("main", `${service}.${method}`, args)
+    const workspace = createTypedServiceClient(
+      "workspace",
+      workspaceMethods,
+      (service, method, args) => connection.rpc.call("main", `${service}.${method}`, args)
     );
     const workspaceInfo = await workspace.getInfo();
     this.panelInit = new PanelInitClient(
@@ -106,7 +111,12 @@ export class HeadlessHost implements PanelHost {
     this.stopLeaseEvents = this.events.on("panel:runtimeLeaseChanged", (payload) => {
       this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
     });
-    await this.events.subscribe("panel:runtimeLeaseChanged");
+    this.stopContextEvents = this.events.on("runtime:contextRemoved", ({ contextId }) => {
+      this.intentQueue = this.intentQueue
+        .then(() => this.pages?.retireContext(contextId))
+        .catch((error) => log.warn(`context ${contextId} retirement failed: ${String(error)}`));
+    });
+    await this.events.subscribeAll(["panel:runtimeLeaseChanged", "runtime:contextRemoved"]);
     connection.onResubscribe(async () => {
       try {
         await this.registerClient(
@@ -120,6 +130,7 @@ export class HeadlessHost implements PanelHost {
     });
 
     await this.startBrowser();
+    if (this.stopped) return;
     await this.startBridge();
     await this.registerClient(this.registration);
     await this.reconcile();
@@ -132,10 +143,23 @@ export class HeadlessHost implements PanelHost {
     this.config.lifecycle?.onReady?.();
   }
 
-  async stop(reason: string): Promise<void> {
-    if (this.stopped) return;
+  stop(reason: string): Promise<void> {
+    if (this.stopping) return this.stopping;
     this.stopped = true;
+    this.stopping = Promise.resolve().then(() => this.releaseResources(reason));
+    return this.stopping;
+  }
+
+  private async releaseResources(reason: string): Promise<void> {
     log.info(`stopping: ${reason}`);
+    const failures: unknown[] = [];
+    const release = async (operation: () => unknown) => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     if (this.idleTimer) clearInterval(this.idleTimer);
     try {
       await this.connection?.rpc.call("main", "panelRuntime.unregisterClient", [
@@ -144,20 +168,27 @@ export class HeadlessHost implements PanelHost {
     } catch {
       // Server may be gone — leases expire via the reconnect grace anyway.
     }
-    this.bridge?.stop();
+    await release(() => this.bridge?.stop());
+    await this.browserStart?.catch(() => {});
     try {
       await this.cdp?.send("Browser.close");
     } catch {
-      // Fall through to SIGKILL.
+      // Fall through to confirmed process retirement.
     }
-    this.cdp?.close();
-    this.browser?.kill();
-    this.stopLeaseEvents?.();
+    await release(() => this.retireBrowser());
+    await release(() => this.stopLeaseEvents?.());
     this.stopLeaseEvents = null;
+    await release(() => this.stopContextEvents?.());
+    this.stopContextEvents = null;
+    // Remote subscriptions can disappear with the server; closing the native
+    // connection below remains mandatory even when unsubscribe fails.
     await this.events?.unsubscribeAll().catch(() => {});
     this.events = null;
-    await this.connection?.close();
+    await release(() => this.connection?.close());
     this.resolveDone();
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Headless host resource retirement failed");
+    }
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -178,7 +209,18 @@ export class HeadlessHost implements PanelHost {
     await this.reconcile();
   }
 
-  private async startBrowser(): Promise<void> {
+  private startBrowser(): Promise<void> {
+    if (this.browserStart) return this.browserStart;
+    const starting = this.replaceBrowser().finally(() => {
+      if (this.browserStart === starting) this.browserStart = null;
+    });
+    this.browserStart = starting;
+    return starting;
+  }
+
+  private async replaceBrowser(): Promise<void> {
+    await this.retireBrowser();
+    if (this.stopped) return;
     const generation = ++this.browserGeneration;
     const resolved = await resolveChromium({
       chromiumPath: this.config.chromiumPath,
@@ -188,8 +230,12 @@ export class HeadlessHost implements PanelHost {
     log.info(`using chromium (${resolved.source}): ${resolved.executablePath}`);
     this.browser = await launchChromium({
       executablePath: resolved.executablePath,
-      profileDir: this.config.profileDir,
+      profileRoot: this.config.profileRoot,
     });
+    if (this.stopped) {
+      await this.retireBrowser();
+      return;
+    }
     this.cdp = await CdpConnection.connect(this.browser.wsEndpoint);
     const cookieProjector = new BrowserCookieProjector(this.cdp, this.connection!.rpc);
     this.fetchHost = new ChromiumFetchHost(this.cdp, cookieProjector);
@@ -248,10 +294,21 @@ export class HeadlessHost implements PanelHost {
     if (this.stopped) return;
     if (generation !== this.browserGeneration) return;
     if (this.browserRecovery) return this.browserRecovery;
-    this.browserRecovery = this.recoverBrowser(generation).finally(() => {
-      if (this.browserGeneration === generation) this.browserRecovery = null;
+    const recovery = this.recoverBrowser(generation).finally(() => {
+      if (this.browserRecovery === recovery) this.browserRecovery = null;
     });
-    return this.browserRecovery;
+    this.browserRecovery = recovery;
+    return recovery;
+  }
+
+  private async retireBrowser(): Promise<void> {
+    const browser = this.browser;
+    this.browser = null;
+    this.cdp?.close();
+    this.cdp = null;
+    this.pages = null;
+    this.fetchHost = null;
+    await browser?.stop();
   }
 
   private async recoverBrowser(generation: number): Promise<void> {
@@ -447,7 +504,7 @@ export class HeadlessHost implements PanelHost {
     }
   }
 
-  private handleHostOperation(action: string, args: unknown[]): Promise<unknown> | unknown {
+  private async handleHostOperation(action: string, args: unknown[]): Promise<unknown> {
     switch (action) {
       case "chromiumFetch.open": {
         const input = (args[0] ?? {}) as { url?: unknown; session?: unknown };
@@ -481,12 +538,18 @@ export class HeadlessHost implements PanelHost {
   }
 
   private async reconcile(opts?: { forceReload?: boolean }): Promise<void> {
+    const observedContexts = this.pages?.contextIds() ?? [];
     const snapshot = await this.connection!.rpc.call<RuntimeLeaseSnapshot>(
       "main",
       "panelRuntime.getSnapshot",
       []
     );
     const intents = this.tracker.reconcile(snapshot);
+    const owners = await this.connection!.rpc.call<{ contexts: string[] }>(
+      "main",
+      "runtime.listContexts",
+      []
+    );
     if (opts?.forceReload) {
       // After a browser relaunch every held lease needs a fresh page even
       // though the tracker considers it converged.
@@ -503,6 +566,9 @@ export class HeadlessHost implements PanelHost {
       }
     }
     this.enqueueIntents(intents);
+    this.intentQueue = this.intentQueue.then(() =>
+      this.pages?.reconcileContextOwners(owners.contexts, observedContexts)
+    );
     await this.intentQueue;
   }
 

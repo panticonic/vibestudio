@@ -27,9 +27,15 @@ export function phoneSetupStream(
             controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
         };
         operation = run(emit, abort.signal)
-          .catch((error) =>
-            emit({ type: "error", message: error instanceof Error ? error.message : String(error) })
-          )
+          .catch((error) => {
+            if (abort.signal.aborted) {
+              // Expected cancellation is settled only after the operation's
+              // finally path. A retirement failure must reach the canceller.
+              if (error !== abort.signal.reason) throw error;
+              return;
+            }
+            emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
+          })
           .finally(() => {
             if (!abort.signal.aborted) controller.close();
           });

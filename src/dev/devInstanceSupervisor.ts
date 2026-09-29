@@ -164,10 +164,19 @@ export class DevInstanceSupervisor {
   async start(): Promise<void> {
     if (this.child) throw new Error("DevInstanceSupervisor has already started");
     const sourceRoot = fs.realpathSync(this.options.sourceRoot);
+    const configuredStdio = this.options.stdio ?? "inherit";
+    const stdio: Exclude<StdioOptions, string> =
+      typeof configuredStdio === "string"
+        ? [configuredStdio, configuredStdio, configuredStdio]
+        : [...configuredStdio];
+    while (stdio.length < 3) stdio.push("ignore");
+    if (!stdio.includes("ipc")) stdio.push("ipc");
     const child = spawn(this.options.command, [...this.options.args], {
       cwd: sourceRoot,
       env: this.options.env,
-      stdio: this.options.stdio ?? "inherit",
+      // The child owns a detached group, but its lifetime still belongs to
+      // this supervisor. Native IPC revokes it even if this owner is killed.
+      stdio,
       // The owner is the terminal/server process. Keeping the child out of the
       // terminal process group prevents one Ctrl-C from reaching it twice.
       detached: process.platform !== "win32",

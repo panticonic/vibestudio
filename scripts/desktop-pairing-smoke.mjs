@@ -23,6 +23,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { tsImport } from "tsx/esm/api";
+import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
+import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+const { createOwnedProcessLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
+const { OwnedProcessGroup } = await tsImport("@vibestudio/shared/ownedProcessGroup", import.meta.url);
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
@@ -59,6 +64,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 let desktopGeneration = null;
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = "@workspace-apps/shell";
+const desktopProcessOwners = new WeakMap();
 const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
 // Capture the profile cache before the smoke replaces HOME/XDG_CONFIG_HOME.
 // Mutable server/app state remains isolated; only receipt-validated,
@@ -441,6 +447,7 @@ function spawnManaged(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
+    detached: process.platform !== "win32",
     stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk) =>
@@ -457,128 +464,6 @@ function spawnManaged(command, args, options = {}) {
     );
   });
   return child;
-}
-
-async function startEphemeralLinuxSecretService(tempRoot, children) {
-  if (process.platform !== "linux") return { env: {}, electronArgs: [] };
-
-  const home = path.join(tempRoot, "home");
-  const configHome = path.join(tempRoot, "xdg");
-  const dataHome = path.join(tempRoot, "xdg-data");
-  const runtimeDir = path.join(tempRoot, "runtime");
-  const controlDir = path.join(tempRoot, "keyring-control");
-  const busConfig = path.join(tempRoot, "session-bus.conf");
-  const busSocket = path.join(runtimeDir, "session-bus");
-  await Promise.all([
-    fsp.mkdir(home, { recursive: true }),
-    fsp.mkdir(configHome, { recursive: true }),
-    fsp.mkdir(dataHome, { recursive: true }),
-    fsp.mkdir(runtimeDir, { recursive: true, mode: 0o700 }),
-    fsp.mkdir(controlDir, { recursive: true, mode: 0o700 }),
-  ]);
-  await Promise.all([fsp.chmod(runtimeDir, 0o700), fsp.chmod(controlDir, 0o700)]);
-  await fsp.writeFile(
-    busConfig,
-    `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
- "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <type>session</type>
-  <keep_umask/>
-  <listen>unix:path=${busSocket}</listen>
-  <auth>EXTERNAL</auth>
-  <policy context="default">
-    <allow send_destination="*" eavesdrop="true"/>
-    <allow eavesdrop="true"/>
-    <allow own="*"/>
-  </policy>
-</busconfig>
-`,
-    { mode: 0o600 }
-  );
-
-  const serviceEnv = {
-    ...process.env,
-    HOME: home,
-    XDG_CONFIG_HOME: configHome,
-    XDG_DATA_HOME: dataHome,
-    XDG_RUNTIME_DIR: runtimeDir,
-  };
-  const bus = spawn(
-    "dbus-daemon",
-    [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
-    {
-      cwd: repoRoot,
-      env: serviceEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  );
-  children.push(bus);
-  bus.stderr?.on("data", (chunk) =>
-    prefixAndWrite("desktop-secret-bus", chunk.toString(), process.stderr)
-  );
-  const busAddress = await new Promise((resolve, reject) => {
-    let buffered = "";
-    const timer = setTimeout(
-      () => reject(new Error("Timed out starting the isolated desktop secret-service bus")),
-      5_000
-    );
-    const finish = (error, address) => {
-      clearTimeout(timer);
-      bus.stdout?.off("data", onData);
-      bus.off("error", onError);
-      bus.off("exit", onExit);
-      if (error) reject(error);
-      else resolve(address);
-    };
-    const onData = (chunk) => {
-      buffered += chunk.toString();
-      const newline = buffered.indexOf("\n");
-      if (newline < 0) return;
-      const address = buffered.slice(0, newline).trim();
-      if (!address) {
-        finish(new Error("The isolated desktop secret-service bus emitted an empty address"));
-        return;
-      }
-      finish(null, address);
-    };
-    const onError = (error) => finish(error);
-    const onExit = (code) =>
-      finish(new Error(`The isolated desktop secret-service bus exited early (code ${code})`));
-    bus.stdout?.on("data", onData);
-    bus.once("error", onError);
-    bus.once("exit", onExit);
-  });
-
-  const keyringEnv = { ...serviceEnv, DBUS_SESSION_BUS_ADDRESS: busAddress };
-  const keyring = spawnManaged(
-    "gnome-keyring-daemon",
-    ["--foreground", "--unlock", "--components=secrets", `--control-directory=${controlDir}`],
-    {
-      cwd: repoRoot,
-      env: keyringEnv,
-      label: "desktop-secret-service",
-      pipeStdin: true,
-    }
-  );
-  children.push(keyring);
-  keyring.stdin?.end(randomUUID());
-  await waitForSpawn(keyring, "gnome-keyring-daemon", ["--foreground", "--unlock"]);
-  await sleep(250);
-  if (keyring.exitCode != null) {
-    throw new Error(`The isolated desktop secret service exited early (code ${keyring.exitCode})`);
-  }
-  console.log("[desktop-smoke] Started an isolated Linux secret service for device credentials");
-  return {
-    env: {
-      HOME: home,
-      XDG_CONFIG_HOME: configHome,
-      XDG_DATA_HOME: dataHome,
-      XDG_RUNTIME_DIR: runtimeDir,
-      DBUS_SESSION_BUS_ADDRESS: busAddress,
-      XDG_CURRENT_DESKTOP: "GNOME",
-    },
-    electronArgs: ["--password-store=gnome-libsecret"],
-  };
 }
 
 function waitForSpawn(child, command, args, timeoutMs = 1_000) {
@@ -718,8 +603,9 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
     env,
     timeout: launchTimeoutMs,
   });
-  register(app);
   const child = app.process();
+  desktopProcessOwners.set(app, OwnedProcessGroup.create(child));
+  register(app);
   child.stdout?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stdout));
   child.stderr?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stderr));
   await installDesktopDiagnostics(app);
@@ -2017,26 +1903,32 @@ async function closeElectron(app) {
   } catch {
     // app.close() threw or timed out — fall through to the pid kill below.
   }
-  // Final safety net: SIGKILL the Electron process by pid so no orphan window
-  // survives a pass OR a failure. ESRCH (already exited) is fine.
-  if (typeof pid === "number") {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already exited.
-    }
-  }
+  const owner = desktopProcessOwners.get(app);
+  if (!owner) throw new Error("Electron launch lost its owned process-group receipt");
+  await owner.retire();
 }
 
-async function main() {
+async function main(ownerSignal) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
     return;
   }
 
-  const children = [];
+  const processLifetime = createOwnedProcessLifetime();
+  ownerSignal.throwIfAborted();
+  const acquireProcess = (start) => {
+    if (cleanupPromise || ownerSignal.aborted) throw new Error("Desktop smoke lifetime is stopping");
+    return processLifetime.acquire(start);
+  };
   const desktopApps = [];
+  const registerDesktopApp = (app) => {
+    desktopApps.push(app);
+    if (ownerSignal.aborted) {
+      void desktopProcessOwners.get(app).retire().catch(() => undefined);
+      ownerSignal.throwIfAborted();
+    }
+  };
   const desktopEnvironments = [];
   let electronApp = null;
   let cleanupPromise;
@@ -2100,25 +1992,19 @@ async function main() {
             cleanupErrors.push(error);
           }
         } finally {
-          await closeElectron(app);
+          try {
+            await closeElectron(app);
+          } catch (error) {
+            localTreesGone = false;
+            cleanupErrors.push(error);
+          }
         }
       }
-      // Processes are registered in dependency order (session bus, keyring,
-      // server). Stop and await them in reverse order so a dependent
-      // can finish its own shutdown before its backing service disappears.
-      for (const child of children.reverse()) {
-        try {
-          if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
-        } catch {
-          // Already gone.
-        }
-        await waitForChildExit(child);
-        try {
-          if (child.exitCode == null) child.kill("SIGKILL");
-        } catch {
-          // Already gone.
-        }
-        await waitForChildExit(child, 30_000);
+      try {
+        await processLifetime.retire();
+      } catch (error) {
+        localTreesGone = false;
+        cleanupErrors.push(error);
       }
       if (options.readyFile) {
         try {
@@ -2149,12 +2035,16 @@ async function main() {
     return cleanupPromise;
   };
 
-  process.on("SIGINT", () => {
-    void cleanup().then(() => process.exit(130));
-  });
-  process.on("SIGTERM", () => {
-    void cleanup().then(() => process.exit(143));
-  });
+  const ownerLost = () => {
+    processLifetime.requestStop();
+    for (const app of desktopApps) {
+      void desktopProcessOwners.get(app).retire().catch(() => undefined);
+    }
+  };
+  process.once("SIGINT", ownerLost);
+  process.once("SIGTERM", ownerLost);
+  ownerSignal.addEventListener("abort", ownerLost, { once: true });
+  if (ownerSignal.aborted) ownerLost();
 
   try {
     if (options.readyFile) {
@@ -2163,6 +2053,7 @@ async function main() {
       } catch {}
     }
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+    ownerSignal.throwIfAborted();
     // The implicit ready record belongs to this exact smoke root. Keeping it
     // inside that root makes process-tree cleanup sufficient even when an
     // outer test runner terminates the harness before its signal handler runs.
@@ -2171,7 +2062,7 @@ async function main() {
     desktopEnvironment =
       process.platform === "darwin"
         ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
-        : await startEphemeralLinuxSecretService(tempRoot, children);
+        : await startEphemeralLinuxSecretService(tempRoot, acquireProcess);
     desktopEnvironments.push(desktopEnvironment);
 
     // 1. Start the same remote-serve launcher users run. No relay override is
@@ -2242,7 +2133,7 @@ async function main() {
           ...desktopEnvironment,
           env: { ...desktopEnvironment.env, ...sourceEnvironment },
         },
-        (app) => desktopApps.push(app)
+        registerDesktopApp
       );
       await waitForDesktopShell(electronApp, Math.max(1000, deadlineMs - Date.now()));
       await waitForShellOverlayCleared(electronApp, Math.max(1000, deadlineMs - Date.now()));
@@ -2331,13 +2222,12 @@ async function main() {
       await cleanup();
       return;
     }
-    const serverChild = spawnManaged(process.execPath, serverArgs, {
+    const serverChild = acquireProcess(() => spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server",
-    });
+    }));
     await waitForSpawn(serverChild, process.execPath, serverArgs);
-    children.push(serverChild);
 
     await waitForServerReady(
       options.readyFile,
@@ -2372,7 +2262,7 @@ async function main() {
       tempRoot,
       options.launchTimeoutMs,
       desktopEnvironment,
-      (app) => desktopApps.push(app)
+      registerDesktopApp
     );
     const result = await waitForDesktopShell(electronApp, options.launchTimeoutMs);
     const panels = await getPanelTree(electronApp).catch(() => []);
@@ -2514,12 +2404,11 @@ async function main() {
       process.platform === "win32" ? 90_000 : 30_000
     );
     await fsp.rm(options.readyFile, { force: true });
-    const restoredServer = spawnManaged(process.execPath, serverArgs, {
+    const restoredServer = acquireProcess(() => spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server-restored",
-    });
-    children.push(restoredServer);
+    }));
     await waitForSpawn(restoredServer, process.execPath, serverArgs);
     await waitForServerReady(
       options.readyFile,
@@ -2610,14 +2499,14 @@ async function main() {
           const environment =
             process.platform === "darwin"
               ? createMacosTestKeychain({ home: path.join(memberRoot, "home"), electronBinary })
-              : await startEphemeralLinuxSecretService(memberRoot, children);
+              : await startEphemeralLinuxSecretService(memberRoot, acquireProcess);
           desktopEnvironments.push(environment);
           const member = await launchDesktopApp(
             memberDeepLink,
             memberRoot,
             Math.min(options.launchTimeoutMs, Math.max(1000, deadlineMs - Date.now())),
             environment,
-            (app) => desktopApps.push(app)
+            registerDesktopApp
           );
           await waitForDesktopShell(member, Math.max(1000, deadlineMs - Date.now()));
           await dismissConnectionDialog(member);
@@ -2682,10 +2571,14 @@ async function main() {
     );
     await cleanup();
   } catch (error) {
-    console.error(`[desktop-smoke] ${error instanceof Error ? error.message : String(error)}`);
+    if (!ownerSignal.aborted) console.error(`[desktop-smoke] ${error instanceof Error ? error.message : String(error)}`);
     await cleanup();
-    process.exit(1);
+    if (!ownerSignal.aborted) process.exitCode = 1;
+  } finally {
+    ownerSignal.removeEventListener("abort", ownerLost);
+    process.off("SIGINT", ownerLost);
+    process.off("SIGTERM", ownerLost);
   }
 }
 
-await main();
+await runParentOwnedMain(main);

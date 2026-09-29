@@ -1,22 +1,12 @@
-import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 const LOCAL_MODEL_USE_CAPABILITY = "internal-model-runtime.use";
 const LOCAL_MODEL_RESOURCE = "local-models";
-const OWNER_SCHEMA_VERSION = 1;
-
-interface LocalModelOwner {
-  schemaVersion: typeof OWNER_SCHEMA_VERSION;
-  pid: number;
-  bootId: string;
-  ports: { utility: number; main: number };
-  adminPort?: number;
-  workspaceId: string;
-  since: number;
-  serverPids: { utility?: number; main?: number };
+export interface LocalModelRuntimeAuth {
+  apiKey: string;
+  origins: string[];
 }
 
 export interface InternalRequestAuthorizationInput {
@@ -27,8 +17,14 @@ export interface InternalRequestAuthorizationInput {
 }
 
 export interface LocalModelLoopbackAuthorityDeps {
-  rootDir?: string;
-  pidAlive?: (pid: number) => boolean;
+  readRuntimeAuth(caller: VerifiedCaller): Promise<unknown>;
+}
+
+export class LocalModelRuntimeAuthorityError extends RpcBoundaryError {
+  constructor(cause: unknown) {
+    super("Local model runtime authority is unavailable", "service", "ELOCALMODEL_RUNTIME", cause);
+    this.name = "LocalModelRuntimeAuthorityError";
+  }
 }
 
 /**
@@ -37,51 +33,85 @@ export interface LocalModelLoopbackAuthorityDeps {
  * live endpoint, and in-flight destination credential must all agree.
  */
 export class LocalModelLoopbackAuthority {
-  private readonly rootDir: string;
-  private readonly pidAlive: (pid: number) => boolean;
-
-  constructor(deps: LocalModelLoopbackAuthorityDeps = {}) {
-    this.rootDir =
-      deps.rootDir ??
-      process.env["VIBESTUDIO_LOCAL_MODELS_DIR"] ??
-      join(homedir(), ".vibestudio", "local-models");
-    this.pidAlive = deps.pidAlive ?? isPidAlive;
-  }
+  constructor(private readonly deps: LocalModelLoopbackAuthorityDeps) {}
 
   async authorize(input: InternalRequestAuthorizationInput): Promise<boolean> {
-    if (!isApprovedAgentModelRuntime(input.caller)) return false;
     if (input.targetUrl.protocol !== "http:" || !isLoopback(input.targetUrl.hostname)) return false;
     if (!input.targetUrl.pathname.startsWith("/v1/")) return false;
+    if (!isApprovedAgentModelRuntime(input.caller)) {
+      const code = input.caller.code;
+      console.warn("[local-model-authority] denied", {
+        callerId: input.caller.runtime.id,
+        reason: "caller-not-authorized",
+        codeApproved: input.caller.codeApproved === true,
+        codeIdentityMatches:
+          code?.callerId === input.caller.runtime.id &&
+          code?.callerKind === input.caller.runtime.kind,
+        executionDigestPresent: Boolean(code?.executionDigest),
+        modelRuntimeRequested: hasModelRuntimeRequest(input.caller),
+      });
+      return false;
+    }
 
     const authorization = readHeader(input.headers, "authorization");
-    if (!authorization?.startsWith("Bearer ")) return false;
+    if (!authorization?.startsWith("Bearer ")) {
+      console.warn("[local-model-authority] denied", {
+        callerId: input.caller.runtime.id,
+        reason: "bearer-missing",
+      });
+      return false;
+    }
     const presentedKey = authorization.slice("Bearer ".length);
     if (!presentedKey) return false;
 
     try {
-      const [ownerText, keyText, ownerStat, keyStat] = await Promise.all([
-        readFile(join(this.rootDir, "owner.json"), "utf8"),
-        readFile(join(this.rootDir, "auth.key"), "utf8"),
-        stat(join(this.rootDir, "owner.json")),
-        stat(join(this.rootDir, "auth.key")),
-      ]);
-      if (!ownerStat.isFile() || !keyStat.isFile()) return false;
-      const owner = parseOwner(ownerText);
-      if (!owner || !this.pidAlive(owner.pid)) return false;
-
-      const port = Number(input.targetUrl.port || "80");
-      const serverKind =
-        owner.ports.utility === port ? "utility" : owner.ports.main === port ? "main" : null;
-      if (!serverKind) return false;
-      const serverPid = owner.serverPids[serverKind];
-      if (!serverPid || !this.pidAlive(serverPid)) return false;
-
-      const expectedKey = keyText.trim();
-      return expectedKey.length > 0 && constantTimeStringEqual(presentedKey, expectedKey);
-    } catch {
-      return false;
+      // The owning extension attests its live endpoints in its own process
+      // namespace. Host paths and PIDs cannot describe an isolated runtime.
+      const auth = parseRuntimeAuth(await this.deps.readRuntimeAuth(input.caller));
+      if (!auth || !auth.apiKey) {
+        throw new Error("Local model provider returned an invalid runtime authority attestation");
+      }
+      if (!auth.origins.includes(input.targetUrl.origin)) {
+        console.warn("[local-model-authority] denied", {
+          callerId: input.caller.runtime.id,
+          reason: "endpoint-not-live",
+          origin: input.targetUrl.origin,
+        });
+        return false;
+      }
+      if (!constantTimeStringEqual(presentedKey, auth.apiKey)) {
+        console.warn("[local-model-authority] denied", {
+          callerId: input.caller.runtime.id,
+          reason: "bearer-mismatch",
+          origin: input.targetUrl.origin,
+        });
+        return false;
+      }
+      return true;
+    } catch (cause) {
+      // Provider failure is an execution error, not a request for broader
+      // network permission. Preserve its cause and keep credentials private.
+      console.warn("[local-model-authority] provider unavailable", {
+        callerId: input.caller.runtime.id,
+        callerKind: input.caller.runtime.kind,
+        errorName: cause instanceof Error ? cause.name : "unknown",
+        errorCode: cause && typeof cause === "object" && "code" in cause ? cause.code : undefined,
+      });
+      throw new LocalModelRuntimeAuthorityError(cause);
     }
   }
+}
+
+function parseRuntimeAuth(value: unknown): LocalModelRuntimeAuth | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record["apiKey"] !== "string" ||
+    !Array.isArray(record["origins"]) ||
+    !record["origins"].every((origin) => typeof origin === "string")
+  )
+    return null;
+  return { apiKey: record["apiKey"], origins: record["origins"] as string[] };
 }
 
 function isApprovedAgentModelRuntime(caller: VerifiedCaller): boolean {
@@ -95,8 +125,12 @@ function isApprovedAgentModelRuntime(caller: VerifiedCaller): boolean {
   ) {
     return false;
   }
+  return hasModelRuntimeRequest(caller);
+}
+
+function hasModelRuntimeRequest(caller: VerifiedCaller): boolean {
   return Boolean(
-    code.requested?.some(
+    caller.code?.requested?.some(
       (request) =>
         request.capability === LOCAL_MODEL_USE_CAPABILITY &&
         ((request.resource.kind === "exact" && request.resource.key === LOCAL_MODEL_RESOURCE) ||
@@ -104,68 +138,6 @@ function isApprovedAgentModelRuntime(caller: VerifiedCaller): boolean {
             LOCAL_MODEL_RESOURCE.startsWith(request.resource.prefix)))
     )
   );
-}
-
-function parseOwner(text: string): LocalModelOwner | null {
-  const value: unknown = JSON.parse(text);
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const allowed = new Set([
-    "schemaVersion",
-    "pid",
-    "bootId",
-    "ports",
-    "adminPort",
-    "workspaceId",
-    "since",
-    "serverPids",
-  ]);
-  if (Object.keys(record).some((key) => !allowed.has(key))) return null;
-  if (record["schemaVersion"] !== OWNER_SCHEMA_VERSION) return null;
-  if (!isPositiveInteger(record["pid"]) || typeof record["bootId"] !== "string") return null;
-  if (typeof record["workspaceId"] !== "string" || typeof record["since"] !== "number") return null;
-  const ports = parsePorts(record["ports"]);
-  const serverPids = parseServerPids(record["serverPids"]);
-  const adminPort = record["adminPort"];
-  if (!ports || !serverPids || (adminPort !== undefined && !isPort(adminPort))) return null;
-  return {
-    schemaVersion: OWNER_SCHEMA_VERSION,
-    pid: record["pid"],
-    bootId: record["bootId"],
-    ports,
-    ...(typeof adminPort === "number" ? { adminPort } : {}),
-    workspaceId: record["workspaceId"],
-    since: record["since"],
-    serverPids,
-  };
-}
-
-function parsePorts(value: unknown): LocalModelOwner["ports"] | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== "utility" && key !== "main")) return null;
-  if (!isPort(record["utility"]) || !isPort(record["main"])) return null;
-  return { utility: record["utility"], main: record["main"] };
-}
-
-function parseServerPids(value: unknown): LocalModelOwner["serverPids"] | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== "utility" && key !== "main")) return null;
-  if (record["utility"] !== undefined && !isPositiveInteger(record["utility"])) return null;
-  if (record["main"] !== undefined && !isPositiveInteger(record["main"])) return null;
-  return {
-    ...(typeof record["utility"] === "number" ? { utility: record["utility"] } : {}),
-    ...(typeof record["main"] === "number" ? { main: record["main"] } : {}),
-  };
-}
-
-function isPort(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= 65_535;
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) > 0;
 }
 
 function isLoopback(hostname: string): boolean {
@@ -183,13 +155,4 @@ function readHeader(
   if (typeof value === "string") return value.trim() || null;
   if (Array.isArray(value)) return value.find((item) => item.trim())?.trim() ?? null;
   return null;
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }

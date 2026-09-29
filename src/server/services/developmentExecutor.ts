@@ -25,6 +25,7 @@ import {
 } from "../buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
 import { DevelopmentRunRoots } from "./developmentRunRoots.js";
+import { sealDevelopmentWorkspaceSources } from "./developmentWorkspaceSources.js";
 
 const execFileAsync = promisify(execFile);
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
@@ -48,6 +49,8 @@ export interface PreparedDevelopmentBuild {
   sourcePlans: {
     host: ExactRepositorySnapshotPlan;
     base: ExactRepositorySnapshotPlan;
+    personal: ExactRepositorySnapshotPlan;
+    system: ExactRepositorySnapshotPlan;
   };
   snapshot: DevelopmentExecutionSnapshot;
   recipe: DevelopmentRecipe;
@@ -73,6 +76,10 @@ export interface OwnedDevelopmentLaunch {
   nodePath: string;
   serverEntryPath: string;
   serverBuildId: string;
+  workspaceTemplates: Awaited<
+    ReturnType<typeof sealDevelopmentWorkspaceSources>
+  >["workspaceTemplates"];
+  workspaceSources: Awaited<ReturnType<typeof sealDevelopmentWorkspaceSources>>["workspaceSources"];
 }
 
 export interface DevelopmentClientArtifactSource {
@@ -144,26 +151,39 @@ export class DevelopmentExecutor {
         { code: "EEXECUTOR_UNAVAILABLE" }
       );
     }
-    const [hostSourcePlan, baseSourcePlan, toolchain] = await Promise.all([
-      this.deps.planSource({
-        contextId: input.session.contextId,
-        repositoryId: input.pair.hostRepositoryId,
-        requiredFiles: recipe.install.lockfiles,
-      }),
-      this.deps.planSource({
-        contextId: input.session.contextId,
-        repositoryId: input.pair.baseRepositoryId,
-        // The workspace template declares its units in the manifest
-        // and carries no root lockfile: its dependencies are resolved by the
-        // host's semantic projection, not by a pnpm install at its root.
-        // Requiring one here refused every build of an adopted Base.
-        requiredFiles: ["meta/vibestudio.yml"],
-      }),
-      this.toolchain(),
-    ]);
+    const [hostSourcePlan, baseSourcePlan, personalSourcePlan, systemSourcePlan, toolchain] =
+      await Promise.all([
+        this.deps.planSource({
+          contextId: input.session.contextId,
+          repositoryId: input.pair.hostRepositoryId,
+          requiredFiles: recipe.install.lockfiles,
+        }),
+        this.deps.planSource({
+          contextId: input.session.contextId,
+          repositoryId: input.pair.baseRepositoryId,
+          // The workspace template declares its units in the manifest
+          // and carries no root lockfile: its dependencies are resolved by the
+          // host's semantic projection, not by a pnpm install at its root.
+          // Requiring one here refused every build of an adopted Base.
+          requiredFiles: ["meta/vibestudio.yml"],
+        }),
+        this.deps.planSource({
+          contextId: input.session.contextId,
+          repositoryId: input.pair.personalRepositoryId,
+          requiredFiles: ["meta/vibestudio.yml"],
+        }),
+        this.deps.planSource({
+          contextId: input.session.contextId,
+          repositoryId: input.pair.systemRepositoryId,
+          requiredFiles: ["meta/vibestudio.yml"],
+        }),
+        this.toolchain(),
+      ]);
     if (
       hostSourcePlan.repositoryId !== input.pair.hostRepositoryId ||
-      baseSourcePlan.repositoryId !== input.pair.baseRepositoryId
+      baseSourcePlan.repositoryId !== input.pair.baseRepositoryId ||
+      personalSourcePlan.repositoryId !== input.pair.personalRepositoryId ||
+      systemSourcePlan.repositoryId !== input.pair.systemRepositoryId
     ) {
       throw Object.assign(
         new Error("Development pair repository identity changed while preparing"),
@@ -224,7 +244,13 @@ export class DevelopmentExecutor {
     });
     const host = component(hostSourcePlan);
     const base = component(baseSourcePlan);
-    const pairBody = { kind: input.pair.kind, host, base };
+    const pairBody = {
+      kind: input.pair.kind,
+      host,
+      base,
+      personal: component(personalSourcePlan),
+      system: component(systemSourcePlan),
+    };
     const pair = {
       ...pairBody,
       pairDigest: domainHash("vibestudio/development-pair/v1", canonicalJson(pairBody)),
@@ -252,7 +278,12 @@ export class DevelopmentExecutor {
     return {
       version: 1,
       runId: input.runId,
-      sourcePlans: { host: hostSourcePlan, base: baseSourcePlan },
+      sourcePlans: {
+        host: hostSourcePlan,
+        base: baseSourcePlan,
+        personal: personalSourcePlan,
+        system: systemSourcePlan,
+      },
       snapshot,
       recipe,
       executables: {
@@ -409,7 +440,13 @@ export class DevelopmentExecutor {
     }
     await fs.chmod(serverEntryPath, 0o500);
     const { nodePath } = await this.verifyExecutableIdentity(plan, false);
-    return { runRoot, sourceRoot, nodePath, serverEntryPath, serverBuildId };
+    const composition = await sealDevelopmentWorkspaceSources({
+      sourceRoot,
+      runRoot,
+      plans: plan.sourcePlans,
+      materialize: (source, destination) => this.deps.materializeSource(source, destination),
+    });
+    return { runRoot, sourceRoot, nodePath, serverEntryPath, serverBuildId, ...composition };
   }
 
   async resolveClientArtifactSource(
@@ -511,11 +548,7 @@ export class DevelopmentExecutor {
     }
     const effectiveVersion = domainHash(
       "vibestudio/development-source-effective-version/v1",
-      canonicalJson({
-        pairDigest: run.snapshot.pair.pairDigest,
-        host: run.snapshot.pair.host,
-        base: run.snapshot.pair.base,
-      })
+      canonicalJson(run.snapshot.pair)
     );
     const build = await putBuild(
       run.snapshot.snapshotDigest,

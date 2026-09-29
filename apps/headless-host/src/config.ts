@@ -33,7 +33,7 @@ export interface HeadlessHostConfig {
   idleExitMs?: number;
   chromiumPath?: string;
   cacheDir: string;
-  profileDir: string;
+  profileRoot: string;
   /** Prefer chrome-headless-shell over full Chrome when downloading. */
   leanBrowser?: boolean;
   /** Inject a non-WS management-plane connection, e.g. CLI Iroh. */
@@ -58,7 +58,7 @@ export interface ConfigOverrides {
   idleExitMs?: number;
   chromiumPath?: string;
   cacheDir?: string;
-  profileDir?: string;
+  profileRoot?: string;
   leanBrowser?: boolean;
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
@@ -93,7 +93,7 @@ export function resolveConfig(
 
   const idleExitEnv = env["VIBESTUDIO_HEADLESS_IDLE_EXIT_MS"];
   const clientSessionId = overrides.clientSessionId ?? `headless-${randomUUID()}`;
-  const profileRoot = path.join(os.homedir(), ".local", "state", "vibestudio", "headless-host");
+  const profileRoot = path.join(env["VIBESTUDIO_INSTANCE_ROOT"] ?? os.tmpdir(), "vibestudio-headless");
   return {
     serverUrl: serverUrl.replace(/\/$/, ""),
     auth,
@@ -104,24 +104,12 @@ export function resolveConfig(
     idleExitMs: overrides.idleExitMs ?? parseOptionalNonNegativeInt(idleExitEnv),
     chromiumPath: overrides.chromiumPath ?? env["VIBESTUDIO_CHROMIUM_PATH"],
     cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibestudio", "chromium"),
-    // Chromium enforces a single process per user-data directory. A shared
-    // profile made concurrent servers — and a server restart after an orphaned
-    // browser — fail on SingletonLock. Each host session owns its own profile;
-    // an explicit override remains available to tests/embedders that manage
-    // their own isolation.
-    profileDir:
-      overrides.profileDir ?? path.join(profileRoot, profileInstanceName(clientSessionId)),
+    // This is a placement root, never a reusable browser profile. Each launch
+    // acquires its own directory and releases it only after Chromium exits.
+    profileRoot: overrides.profileRoot ?? profileRoot,
     leanBrowser: overrides.leanBrowser ?? false,
     connectionFactory: overrides.connectionFactory,
     bridgeSocketFactory: overrides.bridgeSocketFactory,
     lifecycle: overrides.lifecycle,
   };
-}
-
-function profileInstanceName(clientSessionId: string): string {
-  const safe = clientSessionId
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^\.+$/g, "")
-    .slice(0, 100);
-  return `instance-${safe || randomUUID()}`;
 }

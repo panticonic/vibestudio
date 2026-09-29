@@ -2,6 +2,8 @@ import { consumePhoneSetup } from "@vibestudio/service-schemas/clients/phoneSetu
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { processGroupAlive } from "../../../scripts/owned-process-tree.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { createPhoneProvisioningService } from "./phoneProvisioningService.js";
@@ -86,6 +88,71 @@ function hubControlClient() {
 }
 
 describe("desktop phone provisioning service", () => {
+  it.skipIf(process.platform === "win32")(
+    "joins detached native descendants when setup is cancelled",
+    async () => {
+      const root = sourceRoot();
+      const receipt = path.join(root, "owned-native.json");
+      const binding = pathToFileURL(path.resolve("scripts/owned-process-tree.mjs")).href;
+      fs.writeFileSync(
+        path.join(root, "mobile-device.mjs"),
+        `
+      import { bindProcessLifetimeToParent } from ${JSON.stringify(binding)};
+      bindProcessLifetimeToParent(); process.channel.unref();
+      if (process.argv[2] === 'devices') console.log(${JSON.stringify(discovery())});
+    `
+      );
+      fs.writeFileSync(
+        path.join(root, "mobile-install.mjs"),
+        `
+      import { spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      import { bindProcessLifetimeToParent } from ${JSON.stringify(binding)};
+      bindProcessLifetimeToParent(); process.channel.unref();
+      const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"], {detached:true,stdio:['ignore','pipe','ignore']});
+      child.stdout.once('data', () => writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({leader:process.pid,descendant:child.pid})));
+      setInterval(() => {}, 1000);
+    `
+      );
+      const definition = createPhoneProvisioningService({
+        appRoot: root,
+        appVersion: "0.1.5",
+        workspaceName: "current-workspace",
+        resolveScriptPath: (name) => path.join(root, name),
+        hubControlClient: hubControlClient(),
+      });
+      const response = (await definition.handler({} as never, "provision", [
+        { platform: "android", mode: "release" },
+      ])) as Response;
+      try {
+        await vi.waitFor(() => expect(fs.existsSync(receipt)).toBe(true));
+        const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {
+          leader: number;
+          descendant: number;
+        };
+        expect(processGroupAlive(owned.descendant)).toBe(true);
+        await response.body!.cancel();
+        expect(processGroupAlive(owned.leader)).toBe(false);
+        expect(processGroupAlive(owned.descendant)).toBe(false);
+      } finally {
+        await response.body!.cancel();
+        if (fs.existsSync(receipt)) {
+          const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {
+            leader: number;
+            descendant: number;
+          };
+          for (const pid of [owned.leader, owned.descendant]) {
+            try {
+              process.kill(-pid, "SIGKILL");
+            } catch {
+              /* Already retired. */
+            }
+          }
+        }
+      }
+    },
+    15_000
+  );
   it.each([
     { state: "unauthorized", kind: "physical", expected: "accept its USB debugging prompt" },
     { state: "offline", kind: "physical", expected: "reconnect its USB cable" },

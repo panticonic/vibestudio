@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import type { evalRunStatusSchema } from "@vibestudio/service-schemas/eval";
+import type { z } from "zod";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -29,7 +30,7 @@ import {
   type SessionScope,
 } from "./agent/sessionContext.js";
 import { ensureNamedAgentSession } from "./agent/index.js";
-import { RpcClient, RpcError } from "./rpcClient.js";
+import { RpcError } from "./rpcClient.js";
 import { loadAgentSession } from "./sessionStore.js";
 import { typedClient } from "./typedClients.js";
 import {
@@ -43,8 +44,7 @@ import {
   type StoredSystemTestRun,
 } from "./systemTestStore.js";
 
-type EvalClient = ReturnType<typeof evalClientFor>;
-type EvalStatus = Awaited<ReturnType<EvalClient["get"]>>;
+type EvalStatus = z.infer<typeof evalRunStatusSchema>;
 
 const DEFAULT_POLL_MS = 1_000;
 type SystemTestThinkingLevel = NonNullable<StoredSystemTestRun["config"]["thinkingLevel"]>;
@@ -93,10 +93,6 @@ export function systemTestDoctorRecovery(error: unknown): {
   };
 }
 
-function evalClientFor(scope: SessionScope) {
-  return typedClient("eval", evalMethods, scope.client);
-}
-
 /**
  * The dedicated CLI session system tests run under. Its context forks
  * protected main when it is created, so anything a run must see has to be
@@ -105,10 +101,6 @@ function evalClientFor(scope: SessionScope) {
 const SYSTEM_TEST_SESSION = "system-tests";
 const SYSTEM_TEST_RUNNER_SOURCE = "workers/system-test-runner";
 const SYSTEM_TEST_RUNNER_CLASS = "SystemTestRunnerDO";
-
-export function systemTestCoordinatorScopeKey(runId: string): string {
-  return `system-test-coordinator:${runId}`;
-}
 
 function systemTestRecordOwnerKey(ownerId: string): string {
   return `cli-runs-${createHash("sha256").update(ownerId).digest("hex")}`;
@@ -224,207 +216,44 @@ function requireRunId(inv: ParsedInvocation): string {
   return runId;
 }
 
-function routing(scope: SessionScope, stored?: StoredSystemTestRun | null) {
-  if (stored && stored.ownerId !== scope.session.entityId) {
+function assertRunOwner(scope: SessionScope, stored: StoredSystemTestRun): void {
+  if (stored.ownerId !== scope.session.entityId) {
     throw new CliError(
       `system-test run ${stored.runId} belongs to session ${stored.sessionName} ` +
         `(${stored.ownerId}); select that session with --session ${stored.sessionName}`
     );
   }
-  return {
-    // The server derives the current context from this live session entity.
-    // Stored context remains provenance only, so recovery survives rebinding.
-    target: {
-      kind: "owner-session" as const,
-      sessionId: stored?.ownerId ?? scope.session.entityId,
-    },
-    scopeKey: stored?.subKey ?? scope.session.scopeKey,
-  };
 }
 
-function startRouting(scope: SessionScope, stored?: StoredSystemTestRun | null) {
-  const route = routing(scope, stored);
-  return {
-    target: route.target,
-    scope: { key: route.scopeKey },
-  };
+/** The sealed runner owns the execution; a CLI connection only observes it. */
+export async function readSystemTestDriverState(
+  call: <T>(method: string, args: unknown[]) => Promise<T>,
+  runId: string
+): Promise<EvalStatus> {
+  const snapshot = await call<EvalStatus>("getSystemTestRunSnapshot", [runId]);
+  if (snapshot.status !== "done" || !snapshot.result?.success) return snapshot;
+  const record = await call<{ summary: unknown }>("getSystemTestRunResult", [runId]);
+  // Collecting the terminal record precedes releasing its finite eval scope.
+  // The record owner remains available for inspection and another observer.
+  await call("releaseSystemTestRunExecution", [runId]);
+  return { ...snapshot, result: { ...snapshot.result, returnValue: record.summary } };
 }
 
-export function systemTestRunCode(
-  runId: string,
-  config: StoredSystemTestRun["config"],
-  runner: Pick<RuntimeEntityHandle, "id" | "targetId">
-): string {
-  const options = JSON.stringify({ runId, ...config });
-  return `
-    const progressKey = ${JSON.stringify(runId)};
-    // EvalDO durably stores each progress payload with a 64 KiB ceiling. Leave
-    // room for its event envelope and encoded strings instead of measuring
-    // against the larger transient RPC transport limit.
-    const durableHeartbeatLimit = 48 * 1024;
-    let lastProgress = null;
-    const publishProgress = (progress) => {
-      let durable = { ...progress, updatedAt: new Date().toISOString() };
-      if (JSON.stringify(durable).length > durableHeartbeatLimit && durable.liveInspection) {
-        durable = {
-          ...durable,
-          liveInspection: { inspect: durable.liveInspection.inspect, trajectories: {} },
-        };
-      }
-      if (JSON.stringify(durable).length > durableHeartbeatLimit) {
-        const { liveInspection: _omitted, ...withoutInspection } = durable;
-        durable = withoutInspection;
-      }
-      lastProgress = durable;
-      (ctx as any).reportProgress(durable);
-    };
-    const driver = ${JSON.stringify(runner)};
-    let driverExecutionReleased = false;
-    let cancellationCleanup = null;
-    let cancellationRequested = false;
-    const describeCleanupFailure = (error) => {
-      if (error instanceof AggregateError) {
-        const nested = [...error.errors].map(describeCleanupFailure).join("; ");
-        return nested ? error.message + ": " + nested : error.message;
-      }
-      return error instanceof Error ? error.name + ": " + error.message : String(error);
-    };
-    const isRuntimeRestartingFailure = (error) => {
-      if (!error || typeof error !== "object") return false;
-      if (error.code === "runtime_restarting" || error.errorCode === "runtime_restarting") {
-        return true;
-      }
-      if (error instanceof AggregateError) {
-        return [...error.errors].some(isRuntimeRestartingFailure);
-      }
-      return error.cause ? isRuntimeRestartingFailure(error.cause) : false;
-    };
-    const afterRuntimeReady = async (operation) => {
-      const deadline = Date.now() + 30_000;
-      for (;;) {
-        try {
-          return await operation();
-        } catch (error) {
-          if (!isRuntimeRestartingFailure(error) || Date.now() >= deadline) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-      }
-    };
-    const releaseDriverExecution = async () => {
-      if (driverExecutionReleased) return;
-      await afterRuntimeReady(() =>
-        rpc.call(driver.targetId, "releaseSystemTestRunExecution", [progressKey])
-      );
-      driverExecutionReleased = true;
-    };
-    try {
-      await rpc.call(driver.targetId, "startSystemTestRun", [{
-        ...${options},
-        contextId: ctx.contextId,
-      }]);
-      ctx.onCancel(async () => {
-        cancellationRequested = true;
-        const cleanup = (async () => {
-          await rpc.call(
-            driver.targetId,
-            "cancelSystemTestRun",
-            [progressKey],
-          );
-          const prior = lastProgress && typeof lastProgress === "object"
-            ? lastProgress
-            : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
-          publishProgress({
-            ...prior,
-            status: "cancelled",
-            updatedAt: new Date().toISOString(),
-            running: [],
-          });
-        })();
-        cancellationCleanup = cleanup;
-        await cleanup;
-      });
-      for (;;) {
-        const snapshot = await rpc.call(
-          driver.targetId,
-          "getSystemTestRunSnapshot",
-          [progressKey],
-        );
-        if (snapshot?.progress) publishProgress(snapshot.progress);
-        if (
-          snapshot?.status === "pending" ||
-          snapshot?.status === "running" ||
-          snapshot?.status === "cancelling"
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, 1_000));
-          continue;
-        }
-        if (snapshot?.status === "done") {
-          if (!snapshot.result?.success) {
-            throw new Error(
-              snapshot.result?.error || "System-test driver reported a failed inner eval"
-            );
-          }
-          const record = await rpc.call(
-            driver.targetId,
-            "getSystemTestRunResult",
-            [progressKey],
-          );
-          if (!record) throw new Error("System-test driver returned no record for " + progressKey);
-          await releaseDriverExecution();
-          return record.summary;
-        }
-        throw new Error(
-          "System-test inner eval became " + (snapshot?.status || "unknown")
-        );
-      }
-    } catch (error) {
-      if (cancellationRequested) {
-        // The cancellation owner has already stopped the nested run and
-        // recorded its terminal result. Wait for that phase here so an
-        // in-flight parent relay cannot turn normal cancellation into an
-        // infrastructure error or race driver retirement.
-        await cancellationCleanup;
-      } else {
-        const prior = lastProgress && typeof lastProgress === "object"
-          ? lastProgress
-          : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
-        publishProgress({
-          ...prior,
-          status: "errored",
-          updatedAt: new Date().toISOString(),
-          running: [],
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    } finally {
-      // EvalDO starts registered cancellation cleanup before aborting ordinary
-      // execution. Let it settle first, then release only the finite inner
-      // execution. The shared runner remains the durable owner of test records.
-      let cancellationFailure = null;
-      if (cancellationCleanup) {
-        try {
-          await cancellationCleanup;
-        } catch (error) {
-          cancellationFailure = error;
-        }
-      }
-      let releaseFailure = null;
-      try {
-        await releaseDriverExecution();
-      } catch (error) {
-        releaseFailure = error;
-      }
-      if (cancellationFailure || releaseFailure) {
-        const failures = [cancellationFailure, releaseFailure].filter(Boolean);
-        throw new AggregateError(
-          failures,
-          "System-test terminal cleanup failed: " +
-            failures.map(describeCleanupFailure).join("; "),
-        );
-      }
-    }
-  `;
+function readRunState(scope: SessionScope, stored: StoredSystemTestRun): Promise<EvalStatus> {
+  assertRunOwner(scope, stored);
+  return readSystemTestDriverState(
+    <T>(method: string, args: unknown[]) =>
+      scope.client.callTarget<T>(stored.runnerTargetId, method, args),
+    stored.runId
+  );
+}
+
+async function cancelRun(scope: SessionScope, stored: StoredSystemTestRun): Promise<void> {
+  assertRunOwner(scope, stored);
+  await scope.client.callTarget(stored.runnerTargetId, "cancelSystemTestRun", [stored.runId]);
+  await scope.client.callTarget(stored.runnerTargetId, "releaseSystemTestRunExecution", [
+    stored.runId,
+  ]);
 }
 
 async function startRun(
@@ -447,54 +276,43 @@ async function startRun(
     sessionName: scope.session.name,
     ownerId: scope.session.entityId,
     contextId: scope.contextId,
-    // The durable CLI coordinator and the blessed runner are different
-    // notebook trust units even when a direct invocation resolves both to the
-    // same owner session. Give the coordinator its own address; the runner
-    // deliberately keeps runId for its finite test notebook.
-    subKey: systemTestCoordinatorScopeKey(runId),
     runnerEntityId: runner.id,
     runnerTargetId: runner.targetId,
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
     config,
   };
-  const client = evalClientFor(scope);
-  // Persist the address before transport admission. If the CLI receives a
-  // signal during start (or the acknowledgement is ambiguous), the signal
-  // handler still has the exact owner/scope/run route needed to cancel the
-  // durable EvalDO run instead of abandoning an unaddressable execution.
+  // Record the durable address before start so ambiguous acknowledgements and
+  // process signals still have the exact execution owner available.
   saveSystemTestRun(stored);
   onCreated?.(stored);
-  await client.start({
-    ...startRouting(scope, stored),
-    runId,
-    source: {
-      kind: "inline",
-      code: systemTestRunCode(runId, config, runner),
-      syntax: "typescript",
+  await scope.client.callTarget(runner.targetId, "startSystemTestRun", [
+    {
+      runId,
+      ...config,
+      contextId: scope.contextId,
     },
-  });
+  ]);
   return stored;
 }
 
 async function waitForRun(
-  client: EvalClient,
-  route: ReturnType<typeof routing>,
-  runId: string,
-  pollMs: number,
-  connection: RpcClient
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  pollMs: number
 ): Promise<EvalStatus> {
   // Hold one transport for the bounded wait. Re-negotiating the single-peer
   // Polling readiness every second races process teardown and can starve an
   // independent inspector. Local headless runs normally use doctor's verified
   // direct gateway, so status/inspect/cancel remain concurrently available;
   // remote users who need that concurrency can start the durable run detached.
+  const connection = scope.client;
   const release = connection.retainConnection();
   let consecutiveReadFailures = 0;
   try {
     for (;;) {
       let status: EvalStatus;
       try {
-        status = await client.get({ ...route, runId });
+        status = await readRunState(scope, stored);
         consecutiveReadFailures = 0;
       } catch (error) {
         const retryable = isRetryableSystemTestStatusReadFailure(error);
@@ -560,9 +378,7 @@ function installSystemTestRunCancellation(
     console.error(
       `[system-test] ${received} received; cancelling durable run ${stored.runId} before exit`
     );
-    cancellation = evalClientFor(scope)
-      .cancel({ ...routing(scope, stored), runId: stored.runId })
-      .then(() => undefined);
+    cancellation = cancelRun(scope, stored);
     // The eventual await in ensureCancellation owns error reporting; this
     // branch merely prevents an async signal handler rejection from becoming
     // an unhandled-rejection process failure.
@@ -651,11 +467,14 @@ function interruptedRunEvidence(status: EvalStatus, runId: string): string {
   );
 }
 
-function failedSummary(value: unknown): boolean {
+export function failedSummary(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const summary = value as Record<string, unknown>;
-  return ["failed", "errored", "toolFailureCount"].some(
-    (key) => typeof summary[key] === "number" && summary[key] > 0
+  return (
+    summary["status"] === "errored" ||
+    ["failed", "errored", "toolFailureCount"].some(
+      (key) => typeof summary[key] === "number" && summary[key] > 0
+    )
   );
 }
 
@@ -743,11 +562,9 @@ async function run(inv: ParsedInvocation): Promise<number> {
         return 0;
       }
       const status = await waitForRun(
-        evalClientFor(scope),
-        routing(scope, stored),
-        stored.runId,
-        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
-        scope.client
+        scope,
+        stored,
+        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS
       );
       if (await signalCancellation.ensureCancellation()) return 130;
       const value = resultValue(status, stored.runId);
@@ -768,17 +585,15 @@ async function status(inv: ParsedInvocation): Promise<number> {
     const runId = requireRunId(inv);
     const stored = loadSystemTestRun(runId);
     const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-    const client = evalClientFor(scope);
+    if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
     const state =
       inv.flags["wait"] === true
         ? await waitForRun(
-            client,
-            routing(scope, stored),
-            runId,
-            positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
-            scope.client
+            scope,
+            stored,
+            positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS
           )
-        : await client.get({ ...routing(scope, stored), runId });
+        : await readRunState(scope, stored);
     const progress = withElapsedProgress(state.progress);
     const value = {
       runId,
@@ -907,7 +722,7 @@ async function readPersisted(
     return { runId, stored, value };
   } catch (durableError) {
     if (!readLive) throw durableError;
-    const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
+    const outer = await readRunState(scope, stored);
     const progress =
       outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
         ? (outer.progress as Record<string, unknown>)
@@ -970,7 +785,7 @@ async function readPersistedTrajectory(
     return { runId, stored, value: JSON.parse(text) as unknown };
   } catch (durableError) {
     if (!readLive) throw durableError;
-    const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
+    const outer = await readRunState(scope, stored);
     const progress =
       outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
         ? (outer.progress as Record<string, unknown>)
@@ -984,19 +799,16 @@ async function readPersistedTrajectory(
 /**
  * Explain a trajectory that neither source can produce.
  *
- * Both routes can be empty at once, and for unrelated reasons: the durable
- * record is written when a run reaches a terminal state, while the live
- * heartbeat drops per-test trajectories to stay inside its durable size limit
- * once a run is large. That pairing is most likely exactly when the detail is
- * most wanted — a long run whose sandbox died under it — so the message has to
- * say what remains readable instead of only naming the missing record.
+ * Older runners can have neither a retained checkpoint nor a live trajectory.
+ * A large heartbeat may omit its entire inspection payload, so the bounded
+ * inspection is a possible diagnostic route rather than a promised record.
  */
 export function unavailableTrajectory(runId: string, testName: string, cause: unknown): CliError {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new CliError(
     `no trajectory for ${testName} in system-test run ${runId}: ${detail}. A run large ` +
-      "enough to overflow the durable progress heartbeat keeps only its bounded inspection " +
-      `there, so read that instead: vibestudio system-test inspect ${runId} --test ${testName}`
+      "enough to overflow the durable progress heartbeat may omit live inspection too. " +
+      `Check for retained bounded diagnostics with: vibestudio system-test inspect ${runId} --test ${testName}`
   );
 }
 
@@ -1148,11 +960,9 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
         return 0;
       }
       const state = await waitForRun(
-        evalClientFor(scope),
-        routing(scope, stored),
-        stored.runId,
-        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
-        scope.client
+        scope,
+        stored,
+        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS
       );
       if (await signalCancellation.ensureCancellation()) return 130;
       const result = resultValue(state, stored.runId);
@@ -1173,9 +983,10 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
     const runId = requireRunId(inv);
     const stored = loadSystemTestRun(runId);
     const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-    const value = await evalClientFor(scope).cancel({ ...routing(scope, stored), runId });
-    printResult({ runId, ...value }, { json });
-    return value.ok ? 0 : 1;
+    if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
+    await cancelRun(scope, stored);
+    printResult({ runId, ok: true }, { json });
+    return 0;
   } catch (error) {
     return printError(error, { json });
   }

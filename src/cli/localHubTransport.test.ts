@@ -35,6 +35,23 @@ function health(overrides: Record<string, unknown> = {}) {
 }
 
 describe("local hub control resolution", () => {
+  it("uses a local profile's paired gateway instead of the parent process lease", async () => {
+    const readLease = vi.fn(() => lease);
+    const fetchMock = vi.fn<typeof fetch>();
+    await expect(
+      resolveLocalHubControlTransport(
+        {
+          ...credentials,
+          transport: "local",
+          url: "http://127.0.0.1:48123/_workspace/system-child",
+        },
+        { readLease, fetch: fetchMock }
+      )
+    ).resolves.toEqual({ serverUrl: "http://127.0.0.1:48123" });
+    expect(readLease).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses the hub identity override for isolated local servers", () => {
     expect(
       localHubIdentityDatabasePath({

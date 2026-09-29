@@ -120,7 +120,7 @@ async function findTypeScriptFiles(source: FileSource, dir: string = "."): Promi
 
       const isTestFile = /\.(test|spec)\.(ts|tsx)$/.test(entry);
       if (isTestFile) continue;
-      if (!entry.endsWith(".ts") && !entry.endsWith(".tsx")) continue;
+      if (!entry.endsWith(".ts") && !entry.endsWith(".tsx") && !entry.endsWith(".svelte")) continue;
 
       let normalizedPath = entryPath;
       while (normalizedPath.startsWith("./")) normalizedPath = normalizedPath.slice(2);

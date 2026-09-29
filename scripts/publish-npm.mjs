@@ -7,6 +7,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { tsImport } from "tsx/esm/api";
+
+const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
@@ -302,11 +305,13 @@ async function runStagedInstallSmoke(entry) {
 }
 
 async function runInstallSmoke(entry, packageSpec, label) {
-  const prefix = `${entry.pkg.smokePrefix}-${entry.version}`;
-  const launchDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-launch-"));
+  const root = fs.mkdtempSync(`${entry.pkg.smokePrefix}-`);
+  const lifetime = createDevelopmentClientLifetime(root);
+  const prefix = path.join(root, "install");
+  const launchDirectory = path.join(root, "launch");
+  fs.mkdirSync(launchDirectory);
   console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
   try {
-    fs.rmSync(prefix, { recursive: true, force: true });
     run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
       cwd: launchDirectory,
     });
@@ -321,13 +326,13 @@ async function runInstallSmoke(entry, packageSpec, label) {
     run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
       cwd: launchDirectory,
     });
-    await runServerStartupSmoke(path.join(prefix, "bin", "vibestudio-server"), launchDirectory);
+    await runServerStartupSmoke(path.join(prefix, "bin", "vibestudio-server"), launchDirectory, lifetime.acquire);
   } finally {
-    fs.rmSync(launchDirectory, { recursive: true, force: true });
+    await lifetime.close();
   }
 }
 
-async function runServerStartupSmoke(serverBinary, launchDirectory) {
+async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
   const readyFile = path.join(launchDirectory, "hub-ready.json");
   const env = { ...process.env };
   for (const key of [
@@ -339,15 +344,18 @@ async function runServerStartupSmoke(serverBinary, launchDirectory) {
     delete env[key];
   }
   env.XDG_CONFIG_HOME = path.join(launchDirectory, "config");
-  const child = spawn(
+  const child = acquire(() => spawn(
     serverBinary,
     ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile],
     {
       cwd: launchDirectory,
       stdio: "inherit",
       env,
+      detached: process.platform !== "win32",
     }
-  );
+  ));
+  let startupError;
+  child.once("error", (error) => { startupError = error; });
   let exit = null;
   child.once("exit", (code, signal) => {
     exit = { code, signal };
@@ -355,27 +363,20 @@ async function runServerStartupSmoke(serverBinary, launchDirectory) {
 
   const deadline = Date.now() + 60_000;
   while (!fs.existsSync(readyFile)) {
+    if (startupError) throw startupError;
     if (exit) {
       throw new Error(
         `Installed server exited before readiness (code ${exit.code ?? "null"}, signal ${exit.signal ?? "none"})`
       );
     }
     if (Date.now() >= deadline) {
-      child.kill("SIGTERM");
       throw new Error("Installed server did not become ready within 60 seconds");
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  child.kill("SIGTERM");
-  const shutdownDeadline = Date.now() + 15_000;
-  while (!exit && Date.now() < shutdownDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  if (!exit) {
-    child.kill("SIGKILL");
-    throw new Error("Installed server did not stop after the startup smoke");
-  }
+  // The caller's finally joins retirement of the entire acquired group before
+  // deleting the installed package or its server state, on success or failure.
 }
 
 function run(command, args, options) {

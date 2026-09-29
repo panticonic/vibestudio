@@ -1,3 +1,11 @@
+import {
+  PANEL_CONDITIONS,
+  WEBSITE_CONDITIONS,
+  WORKER_CONDITIONS,
+  EXTENSION_CONDITIONS,
+  NODE_CONDITIONS,
+  conditionsForLibraryTarget,
+} from "./moduleConditions.js";
 import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 /**
  * Builder — esbuild orchestration for panels, about pages, workers, and extensions.
@@ -26,7 +34,7 @@ import { builtinModules, createRequire } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
-import { BuildRequestError } from "./diagnostics.js";
+import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
 import {
   appUnitManifestDescriptor,
@@ -102,6 +110,27 @@ import {
 } from "./hostWorkspacePackages.js";
 export { generatePanelEntry } from "./panelEntryProtocol.js";
 
+/** Retain physical source coordinates before the compiler's working directory is released. */
+async function buildWithEsbuild<T extends esbuild.BuildOptions>(
+  options: T & { [Key in Exclude<keyof T, keyof esbuild.BuildOptions>]: never }
+): Promise<esbuild.BuildResult<T>> {
+  try {
+    return await esbuild.build(options);
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      Array.isArray((error as esbuild.BuildFailure).errors)
+    ) {
+      throw new BuildDiagnosticsError(
+        error instanceof Error ? error.message : String(error),
+        diagnosticsFromError(error, { workingDirectory: options.absWorkingDir ?? process.cwd() })
+      );
+    }
+    throw error;
+  }
+}
+
 /**
  * Library artifacts execute inside the eval linker, not the host ESM loader.
  * Route every syntactic dynamic import through the linker's closure-held
@@ -121,6 +150,7 @@ export { generatePanelEntry } from "./panelEntryProtocol.js";
 let _appNodeModules: string[] = [];
 let _appRoot = "";
 let _runNativeJob: RunNativeWorkspaceJob;
+let _ensureBuildProvider: ((target: "react-native") => Promise<void>) | undefined;
 let _hostWorkspacePackageManifests = new Map<string, string>();
 let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
@@ -152,11 +182,13 @@ function resolveHostDependency(specifier: string): string {
 export function initBuilder(
   appNodeModules: string | string[],
   appRoot: string,
-  runNativeJob: RunNativeWorkspaceJob
+  runNativeJob: RunNativeWorkspaceJob,
+  ensureBuildProvider?: (target: "react-native") => Promise<void>
 ): void {
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
   _runNativeJob = runNativeJob;
+  _ensureBuildProvider = ensureBuildProvider;
   _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
   void _libraryLoweringWorker?.close();
   _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
@@ -419,8 +451,6 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
  * Since materialized source states do not include generated dist/, the plugin maps
  * exports-based dist/ paths to their TypeScript source equivalents.
  */
-const PANEL_CONDITIONS = ["vibestudio-panel", "import", "default"] as const;
-const WEBSITE_CONDITIONS = ["browser", "import", "default"] as const;
 
 function parseGraphImport(
   importPath: string,
@@ -486,13 +516,21 @@ function createWorkspaceResolvePlugin(
 
         const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
           main?: string;
-          exports?: Record<string, unknown>;
+          exports?: unknown;
         };
 
         // Try exports-based resolution, then main field
         let target: string | null = null;
-        if (pkgJson.exports) {
+        if (Object.hasOwn(pkgJson, "exports")) {
           target = resolveExportSubpath(pkgJson.exports, parsed.subpath, conditions);
+          if (!target)
+            return {
+              errors: [
+                {
+                  text: `Package ${args.path} is not exported for runtime conditions ${conditions.join(", ")}. Use its supported execution runtime or a public runtime export.`,
+                },
+              ],
+            };
         }
         if (!target && parsed.subpath === "." && pkgJson.main) {
           target = pkgJson.main;
@@ -510,6 +548,10 @@ function createWorkspaceResolvePlugin(
 
           // dist/ is generated output; map to TypeScript source.
           if (srcFallback) return { path: srcFallback };
+          if (Object.hasOwn(pkgJson, "exports"))
+            return {
+              errors: [{ text: `Export ${args.path} resolves to a missing file: ${target}.` }],
+            };
         }
 
         // Last resort: try common source entry patterns
@@ -1921,6 +1963,7 @@ export interface BuildUnitOptions {
 // Bump whenever the generated sandbox test entry or its execution metadata
 // changes. Test artifacts are immutable and must never reuse an older recipe.
 const TEST_ARTIFACT_FORMAT_VERSION = 2;
+const LIBRARY_ARTIFACT_FORMAT_VERSION = 2;
 
 export function effectiveBuildVersion(
   node: GraphNode,
@@ -1948,6 +1991,7 @@ export function effectiveBuildVersion(
     return `${ev}:lib:${createHash("sha256")
       .update(
         JSON.stringify({
+          artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
           externals: options.externals ?? [],
           entry: options.libraryEntrySubpath ?? ".",
           // Distinct conditions ⇒ distinct bundle: a panel-target and a
@@ -2280,7 +2324,7 @@ function selectTestFiles(
       normalizedFile
         ? `Test file ${normalizedFile} is not a member of the declared suite`
         : `Declared test suite selected no files`,
-      { file: normalizedFile ?? null }
+      { file: normalizedFile ?? null, include: [...include] }
     );
   }
   if (matches.length > 200) {
@@ -2549,22 +2593,29 @@ function manifestIconHref(
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
-function workerBundleArtifacts(
+function bundleOutputArtifacts(
   outdir: string,
-  outputFiles: readonly esbuild.OutputFile[]
+  outputFiles: readonly esbuild.OutputFile[],
+  primaryArtifactPath: string
 ): BuildArtifacts {
   const entries = outputFiles
     .map((file): BuildArtifactInput => {
       const artifactPath = path.relative(outdir, file.path).replaceAll(path.sep, "/");
-      const primary = artifactPath === "bundle.js";
+      const primary = artifactPath === primaryArtifactPath;
+      const extension = path.extname(artifactPath);
+      const text = TEXT_EXTENSIONS.has(extension);
       return {
         path: artifactPath,
-        role: primary ? "primary" : artifactPath.endsWith(".map") ? "map" : "asset",
-        contentType: artifactPath.endsWith(".map")
-          ? "application/json; charset=utf-8"
-          : "text/javascript; charset=utf-8",
-        encoding: "utf8",
-        content: file.text,
+        role: primary
+          ? "primary"
+          : extension === ".map"
+            ? "map"
+            : extension === ".css"
+              ? "css"
+              : "asset",
+        contentType: contentTypeForPath(artifactPath),
+        encoding: text ? "utf8" : "base64",
+        content: text ? file.text : Buffer.from(file.contents).toString("base64"),
       };
     })
     .sort((left, right) => {
@@ -2573,7 +2624,7 @@ function workerBundleArtifacts(
       return left.path.localeCompare(right.path);
     });
   if (!entries.some((entry) => entry.role === "primary")) {
-    throw new Error("Worker build did not emit bundle.js");
+    throw new Error(`Build did not emit ${primaryArtifactPath}`);
   }
   return { entries };
 }
@@ -2851,7 +2902,7 @@ async function buildWebsiteBundle(
     if (adapter.tsconfigJsx) {
       options.tsconfigRaw = { compilerOptions: { jsx: adapter.tsconfigJsx } };
     }
-    const built = await esbuild.build(options);
+    const built = await buildWithEsbuild(options);
     const outputs = Object.entries(built.metafile?.outputs ?? {});
     const entryOutput = outputs.find(
       ([outputPath, metadata]) => outputPath.endsWith(".js") && !!metadata.entryPoint
@@ -3003,7 +3054,7 @@ async function buildPanel(
   const plugins: esbuild.Plugin[] = [
     ...(sharedStyleEntryPath ? [createSharedStyleDedupePlugin(sharedStyles)] : []),
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
-    createWorkspaceResolvePlugin(graph, sourceRoot),
+    createWorkspaceResolvePlugin(graph, sourceRoot, PANEL_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
     createPathShimPlugin(resolveDir),
@@ -3067,7 +3118,7 @@ async function buildPanel(
 
   try {
     const compileStartedAt = Date.now();
-    const result = await esbuild.build(esbuildOptions);
+    const result = await buildWithEsbuild(esbuildOptions);
     const compileReadyAt = Date.now();
     const metafile = result.metafile;
 
@@ -3322,25 +3373,6 @@ async function buildPanel(
 // ---------------------------------------------------------------------------
 // Worker Build
 // ---------------------------------------------------------------------------
-
-const WORKER_CONDITIONS = ["worker", "workerd", "import", "default"] as const;
-const EXTENSION_CONDITIONS = ["import", "default"] as const;
-
-/**
- * Map a library bundle's execution target to esbuild/package-export resolution
- * conditions. This is what lets a workerd-hosted import (incl. the eval sandbox)
- * pick up a package's worker entry instead of its panel entry — the panel entry
- * of `@workspace/runtime` runs `initRuntime()` at module load, which throws
- * outside a panel. No default: the caller MUST state the host.
- */
-function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string[] {
-  switch (target) {
-    case "worker":
-      return WORKER_CONDITIONS;
-    case "panel":
-      return PANEL_CONDITIONS;
-  }
-}
 
 /**
  * Node built-ins that workerd does NOT provide via `nodejs_compat` and must
@@ -3804,7 +3836,7 @@ async function buildWorker(
   const configureReadyAt = Date.now();
 
   try {
-    const buildResult = await esbuild.build({
+    const buildResult = await buildWithEsbuild({
       entryPoints: [relativeModuleSpecifier(outdir, wrapperPath)],
       absWorkingDir: outdir,
       bundle: true,
@@ -3851,7 +3883,11 @@ async function buildWorker(
     );
     const executableModulesReadyAt = Date.now();
 
-    const workerArtifacts = workerBundleArtifacts(outdir, buildResult.outputFiles ?? []);
+    const workerArtifacts = bundleOutputArtifacts(
+      outdir,
+      buildResult.outputFiles ?? [],
+      "bundle.js"
+    );
     const bundle = workerArtifacts.entries.find((artifact) => artifact.role === "primary")!.content;
     const iconArtifact = manifestIconArtifact(extractedManifest, workerSourcePath);
     if (iconArtifact) workerArtifacts.entries.push(iconArtifact);
@@ -3990,6 +4026,7 @@ async function buildApp(
     );
   }
   if (appManifest["target"] === "react-native") {
+    await _ensureBuildProvider?.("react-native");
     const provider = resolveBuildProvider("react-native");
     const providerBuildKey = computeBuildKey(
       node.name,
@@ -4193,7 +4230,7 @@ async function buildTerminalApp(
     throw new Error(`Terminal app ${node.name} entry does not exist: ${entry}`);
   }
   try {
-    await esbuild.build({
+    await buildWithEsbuild({
       entryPoints: [entryFile],
       bundle: true,
       platform: "node",
@@ -4208,10 +4245,10 @@ async function buildTerminalApp(
       sourcemap: sourcemap ? "inline" : false,
       metafile: true,
       logLevel: "warning",
-      conditions: ["node", "import"],
+      conditions: [...NODE_CONDITIONS],
       external: [...WORKER_NODE_BUILTIN_EXTERNALS],
       plugins: [
-        createWorkspaceResolvePlugin(graph, sourceRoot),
+        createWorkspaceResolvePlugin(graph, sourceRoot, NODE_CONDITIONS),
         createTsExtensionPlugin(sourceRoot),
         createDependencyEnvironmentResolvePlugin(nodePaths, WORKER_NODE_BUILTIN_EXTERNALS),
       ],
@@ -4475,7 +4512,7 @@ async function buildExtension(
   );
 
   try {
-    await esbuild.build({
+    await buildWithEsbuild({
       entryPoints: [entryFile],
       bundle: true,
       platform: "node",
@@ -4853,12 +4890,11 @@ async function buildLibraryBundle(
     // module, instead of silently resolving to a private duplicate.
     const libraryExternals = [...new Set([...externals, ...Object.keys(env.providedPeers)])];
     const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
-    const outfile = path.join(env.outdir, "bundle.mjs");
     const entryFile = resolveEntryPoint(node, env.sourcePath, {
       conditions,
       subpath: entrySubpath,
     });
-    await esbuild.build({
+    const result = await buildWithEsbuild({
       entryPoints: [entryFile],
       bundle: true,
       // Preserve async-module semantics across the complete dependency graph.
@@ -4868,8 +4904,9 @@ async function buildLibraryBundle(
       format: "esm",
       platform: "browser",
       target: "es2022",
-      outfile,
-      write: true,
+      outdir: env.outdir,
+      entryNames: "bundle",
+      write: false,
       external:
         target === "worker"
           ? [...new Set([...libraryExternals, ...WORKER_NODE_BUILTIN_EXTERNALS])]
@@ -4908,13 +4945,33 @@ async function buildLibraryBundle(
       define: { "import.meta": JSON.stringify({ url: moduleUrl }) },
     });
 
-    const esmBundle = fs.readFileSync(outfile, "utf-8");
-    const loweringWorker = _libraryLoweringWorker;
-    if (!loweringWorker) throw new Error("builder is not initialized");
-    const bundleContent = await loweringWorker.lower(esmBundle);
-    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash, authority, {
-      details: { kind: "library", format: "async-cjs" },
-    });
+    const artifacts = bundleOutputArtifacts(
+      env.outdir,
+      result.outputFiles ?? [],
+      result.outputFiles?.some((file) => path.basename(file.path) === "bundle.js")
+        ? "bundle.js"
+        : "bundle.css"
+    );
+    const primary = artifacts.entries.find((entry) => entry.role === "primary")!;
+    const format = primary.path === "bundle.css" ? "stylesheet" : "async-cjs";
+    if (format === "async-cjs") {
+      const loweringWorker = _libraryLoweringWorker;
+      if (!loweringWorker) throw new Error("builder is not initialized");
+      primary.content = await loweringWorker.lower(primary.content);
+    }
+    return storeSimpleBuild(
+      buildKey,
+      primary.content,
+      node,
+      ev,
+      false,
+      sourceStateHash,
+      authority,
+      {
+        details: { kind: "library", format },
+      },
+      artifacts
+    );
   } finally {
     await env.cleanup();
   }
@@ -5087,7 +5144,7 @@ async function doNpmBuild(
     fs.writeFileSync(entryFile, `module.exports = require(${JSON.stringify(specifier)});\n`);
 
     try {
-      await esbuild.build({
+      await buildWithEsbuild({
         entryPoints: [entryFile],
         bundle: true,
         format: "cjs",
@@ -5191,7 +5248,7 @@ async function doPlatformBuild(
     fs.writeFileSync(entryFile, `module.exports = require(${JSON.stringify(specifier)});\n`);
 
     try {
-      await esbuild.build({
+      await buildWithEsbuild({
         entryPoints: [entryFile],
         bundle: true,
         format: "cjs",
@@ -5268,10 +5325,10 @@ export function resolveEntryPoint(
   if (fs.existsSync(pkgJsonPath)) {
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
       main?: string;
-      exports?: Record<string, unknown>;
+      exports?: unknown;
     };
     let target: string | null = null;
-    if (pkgJson.exports) {
+    if (Object.hasOwn(pkgJson, "exports")) {
       target = resolveExportSubpath(pkgJson.exports, ".", conditions);
       if (!target) {
         throw new BuildRequestError(
@@ -5289,6 +5346,12 @@ export function resolveEntryPoint(
       if (fs.existsSync(resolved)) return resolved;
       const srcFallback = resolveSourceFallback(sourcePath, target);
       if (srcFallback) return srcFallback;
+      if (Object.hasOwn(pkgJson, "exports"))
+        throw new BuildRequestError(
+          "package_export_target_missing",
+          `Export . for ${node.name} resolves to missing file: ${target}`,
+          { packageName: node.name, subpath: ".", conditions: [...conditions], target }
+        );
     }
   }
 
@@ -5327,7 +5390,7 @@ function resolvePackageExportEntryPoint(
   }
 
   const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
-    exports?: Record<string, unknown>;
+    exports?: unknown;
   };
   const target = pkgJson.exports
     ? resolveExportSubpath(pkgJson.exports, normalized, conditions)

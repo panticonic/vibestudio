@@ -11,7 +11,7 @@ const DEFAULT_KILL_TIMEOUT_MS = 5_000;
 
 export interface OwnedProcessGroupHandle {
   readonly identity: OwnedProcessIdentity | null;
-  /** Resolve only after the complete detached group is absent. Idempotent. */
+  /** Resolve only after the detached group has no live members. Idempotent. */
   retire(signal?: NodeJS.Signals): Promise<void>;
 }
 

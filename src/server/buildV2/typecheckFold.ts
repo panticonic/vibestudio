@@ -109,6 +109,7 @@ export async function typecheckUnit(
   sourceRoot: string,
   internalDeps: TypecheckUnitDep[],
   nodeModulesPaths: string[],
+  moduleConditions: readonly string[],
   authority?: TypecheckAuthorityInput
 ): Promise<BuildDiagnostic[]> {
   const startedAt = performance.now();
@@ -158,7 +159,7 @@ export async function typecheckUnit(
       // Protected publication enforces one platform safety floor. A unit's
       // tsconfig may describe its environment or add stricter checks, but it
       // cannot weaken the checks required for code admitted to main.
-      compilerOptions: USERLAND_TYPECHECK_BASELINE,
+      compilerOptions: { ...USERLAND_TYPECHECK_BASELINE, customConditions: [...moduleConditions] },
       requiredRootFiles,
       // Repository-view builds are hermetic at the unit/dependency closure.
       // A unit without its own config uses deterministic defaults; it must not

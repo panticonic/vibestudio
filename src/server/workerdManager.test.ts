@@ -264,6 +264,24 @@ afterEach(() => {
 });
 
 describe("WorkerdManager", () => {
+  it("keeps generated execution inputs isolated under each workspace's owned state", async () => {
+    const firstDeps = createMockDeps();
+    const secondDeps = createMockDeps();
+    const first = new WorkerdManager(firstDeps);
+    const second = new WorkerdManager(secondDeps);
+    await first.startWorker(startArgs());
+    await second.startWorker(startArgs());
+    const firstConfig = path.join(firstDeps.statePath, "workerd-config", "config.capnp");
+    const secondConfig = path.join(secondDeps.statePath, "workerd-config", "config.capnp");
+    expect(fs.existsSync(firstConfig)).toBe(true);
+    expect(fs.existsSync(secondConfig)).toBe(true);
+    // Even if the runtime never reaches stop(), reclaiming its owner's state
+    // also reclaims generated bundles and leaves another workspace intact.
+    fs.rmSync(firstDeps.statePath, { recursive: true });
+    expect(fs.existsSync(firstConfig)).toBe(false);
+    expect(fs.existsSync(secondConfig)).toBe(true);
+  });
+
   describe("current publication schema evidence", () => {
     const descriptor = (version: number, fingerprint: string) => ({
       className: "BoardDO",

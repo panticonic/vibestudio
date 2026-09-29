@@ -4,6 +4,12 @@
 // contributor variant locally.
 
 import { spawn } from "node:child_process";
+import { bindProcessLifetimeToParent } from "../owned-process-tree.mjs";
+
+if (process.send) {
+  bindProcessLifetimeToParent();
+  process.channel?.unref();
+}
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";

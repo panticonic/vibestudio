@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d65bd2fabcd731099e762bc2e747b79358032da0428ce3dc87994867fb7d36f5",
+  "censusDigest": "sha256:2dae2948031fc430fcc567bb1be224e1cf7e58fb760d1336909389ecdd927bff",
   "decisions": {
     "host:build.buildWebsite": {
       "review": "scoped-website-public-workspace-rpc",
@@ -543,12 +543,12 @@
       "change": "Binds release preparation authority to the exact operation, runtime kind, and release identity while presenting the human release name. The receiver still owns method semantics and validates every identity field."
     },
     "host:runtime.supervision.restart": {
-      "review": "compound-runtime-restart-authority-target",
-      "change": "Binds restart authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. A grant for one runtime unit cannot authorize another unit or lifecycle verb."
+      "review": "host-prepared-runtime-owner-management",
+      "change": "The receiver permits management of the caller-owned execution without acquiring a new grant during cleanup or recovery. It derives ownership from the authenticated runtime, verifies the exact entity identity, and emits the gated runtime.supervision.manage leaf for a foreign execution. Resource identity remains operation, runtime kind and exact entity; retire retains destructive sensitivity."
     },
     "host:runtime.supervision.retire": {
-      "review": "compound-runtime-retirement-authority-target",
-      "change": "Binds destructive retirement authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. Existing critical confirmation semantics remain unchanged."
+      "review": "host-prepared-runtime-owner-management",
+      "change": "The receiver permits management of the caller-owned execution without acquiring a new grant during cleanup or recovery. It derives ownership from the authenticated runtime, verifies the exact entity identity, and emits the gated runtime.supervision.manage leaf for a foreign execution. Resource identity remains operation, runtime kind and exact entity; retire retains destructive sensitivity."
     },
     "host:runtime.supervision.rollback": {
       "review": "compound-runtime-rollback-authority-target",
@@ -1373,6 +1373,18 @@
     "host:workspace-state.slot.updateCurrentStateArgs#capability:context.boundary": {
       "review": "receiver-owned-context-boundary-principals",
       "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:developmentNative.retireBuild": {
+      "review": "exact-owned-build-reclamation",
+      "change": "Releases only the private temporary root retained by the exact authenticated preparing runtime and verified run owner marker. This is open write cleanup, not acquisition of authority to delete workspace content. Native materialization, launch, stop and process retirement settle before root removal. Foreign handles, mismatched snapshots and invalid containment remain rejected."
+    },
+    "host:runtime.supervision.restart#capability:runtime.supervision.manage": {
+      "review": "gated-foreign-runtime-management",
+      "change": "Host-prepared ownership emits this leaf only when the authenticated caller is not the execution owner. It retains ordinary code/session/user workspace membership and host capability checks, gated acquisition and the exact operation/entity resource. Guest claims cannot omit the foreign-ownership gate."
+    },
+    "host:runtime.supervision.retire#capability:runtime.supervision.manage": {
+      "review": "gated-foreign-runtime-management",
+      "change": "Host-prepared ownership emits this leaf only when the authenticated caller is not the execution owner. It retains ordinary code/session/user workspace membership and host capability checks, gated acquisition and the exact operation/entity resource. Guest claims cannot omit the foreign-ownership gate."
     }
   }
 }

@@ -178,7 +178,7 @@ export type BuildMetadataDetails =
         contractVersion: string;
       } | null;
     }
-  | { kind: "library"; format: "cjs" | "async-cjs" }
+  | { kind: "library"; format: "cjs" | "async-cjs" | "stylesheet" }
   | {
       kind: "website-bundle";
       entryArtifact: string;
@@ -216,6 +216,8 @@ export interface BuildMetadata {
   }>;
   /** Authority sealed from the exact materialized source manifest. */
   authority?: UnitAuthorityManifest;
+  /** Exact service binding/review identity sealed at source materialization. */
+  serviceAuthorityDigest?: string;
   /** Exact implementation modules selected by the successful executable build. */
   executableModules?: ExecutableModuleInput[];
   /** Panel state-argument schema sealed from the exact materialized manifest. */
@@ -267,7 +269,8 @@ function executionMetadataPath(dir: string, executionDigest: string): string {
 }
 
 interface StoredExecutionVariant {
-  version: 1;
+  version: 2;
+  serviceAuthorityDigest: string;
   sourceStateHash: string;
   sourceState: ExecutionSourceStateRef;
   execution: BuildExecutionIdentity;
@@ -337,8 +340,14 @@ export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): 
 
 function executionVariant(metadata: BuildMetadata): StoredExecutionVariant | null {
   if (!metadata.execution || !metadata.sourceStateHash || !metadata.sourceState) return null;
+  if (!metadata.serviceAuthorityDigest)
+    throw new Error("Workspace execution has no sealed service authority");
   return {
-    version: 1,
+    version: 2,
+    serviceAuthorityDigest: parseSha256(
+      metadata.serviceAuthorityDigest,
+      "execution service authority digest"
+    ),
     sourceStateHash: metadata.sourceStateHash,
     sourceState: metadata.sourceState,
     execution: metadata.execution,
@@ -841,7 +850,13 @@ function readBuildDir(
           );
     // Every workspace-derived build must carry authority from the exact source
     // state. Only library builds with no workspace source coordinate may omit it.
-    if (rawMetadata.sourceStateHash !== null && authority === undefined) return null;
+    if (
+      rawMetadata.sourceStateHash !== null &&
+      (authority === undefined ||
+        typeof rawMetadata.serviceAuthorityDigest !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(rawMetadata.serviceAuthorityDigest))
+    )
+      return null;
     const metadata: BuildMetadata = { ...rawMetadata, ...(authority ? { authority } : {}) };
     const manifestPath = path.join(dir, "artifacts.json");
     if (!fs.existsSync(manifestPath)) return null;
@@ -968,6 +983,7 @@ export async function getOrHydrate(
           sourceStateHash: reboundStateHash,
           sourceState,
         };
+        reboundMetadata.serviceAuthorityDigest = await sealServiceAuthority(reboundMetadata);
         const execution = createBuildExecutionIdentity(reboundMetadata, shared.artifacts);
         if (!execution) return null;
         sharedMetadata = { ...reboundMetadata, execution };
@@ -1044,11 +1060,12 @@ export function getByExecution(key: string, executionDigest: string): BuildResul
   try {
     const stored = JSON.parse(
       fs.readFileSync(executionMetadataPath(current.dir, executionDigest), "utf8")
-    ) as StoredExecutionVariant | BuildMetadata;
+    ) as StoredExecutionVariant;
     const variant = retainedExecutionVariant(stored, key, executionDigest);
     if (!variant) return null;
     const metadata: BuildMetadata = {
       ...current.metadata,
+      serviceAuthorityDigest: variant.serviceAuthorityDigest,
       sourceStateHash: variant.sourceStateHash,
       sourceState: variant.sourceState,
       execution: variant.execution,
@@ -1072,27 +1089,18 @@ export function getByExecution(key: string, executionDigest: string): BuildResul
 }
 
 function retainedExecutionVariant(
-  stored: StoredExecutionVariant | BuildMetadata,
+  stored: StoredExecutionVariant,
   buildKey: string,
   executionDigest: string
 ): StoredExecutionVariant | null {
-  if ("version" in stored && stored.version === 1 && "execution" in stored) {
-    return stored as StoredExecutionVariant;
-  }
-  // One-time migration of the previous full-metadata record. The build store
-  // is authoritative for retained rollback executions, so upgrade it in place
-  // instead of discarding a live execution or retaining duplicate source text.
-  const legacy = stored as BuildMetadata;
-  if (legacy.buildKey !== buildKey || legacy.execution?.executionDigest !== executionDigest) {
+  if (
+    stored.version !== 2 ||
+    stored.execution?.buildKey !== buildKey ||
+    stored.execution.executionDigest !== executionDigest ||
+    !/^[0-9a-f]{64}$/u.test(stored.serviceAuthorityDigest)
+  )
     return null;
-  }
-  const variant = executionVariant(legacy);
-  if (!variant) return null;
-  const target = executionMetadataPath(getBuildDir(buildKey), executionDigest);
-  const tmp = `${target}.tmp.${crypto.randomBytes(12).toString("hex")}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(variant, null, 2)}\n`);
-  fs.renameSync(tmp, target);
-  return variant;
+  return stored;
 }
 
 /**
@@ -1117,6 +1125,8 @@ export async function rebindSourceState(
     sourceStateHash,
     sourceState,
   };
+  metadataWithoutExecution.serviceAuthorityDigest =
+    await sealServiceAuthority(metadataWithoutExecution);
   const execution = createBuildExecutionIdentity(metadataWithoutExecution, build.artifacts);
   if (!execution) {
     throw new Error(
@@ -1271,6 +1281,7 @@ export async function put(
           ...metadataWithSourceState,
           authority: parseUnitAuthorityManifest(metadata.authority, `build ${key} authority`),
         };
+  sealedMetadata.serviceAuthorityDigest = await sealServiceAuthority(sealedMetadata);
   const dir = getBuildDir(key);
   const metadataPath = path.join(dir, "metadata.json");
   const artifactPoolDir = getSharedArtifactPoolDir();
@@ -1364,7 +1375,20 @@ export async function put(
 let activeExecutionIdentityContext: {
   workspaceId: string;
   executionStateForContent: (stateHash: string) => ExecutionSourceStateRef | null;
+  serviceAuthorityForSource: (
+    metadata: Pick<BuildMetadata, "sourcePath" | "sourceStateHash" | "ev" | "authority">
+  ) => Promise<string>;
 } | null = null;
+
+async function sealServiceAuthority(metadata: BuildMetadata): Promise<string | undefined> {
+  if (metadata.sourceStateHash === null) return undefined;
+  if (!activeExecutionIdentityContext)
+    throw new Error("Workspace source authority has no sealing context");
+  return parseSha256(
+    await activeExecutionIdentityContext.serviceAuthorityForSource(metadata),
+    "build service authority digest"
+  );
+}
 
 export function setBuildExecutionIdentityContext(
   context: typeof activeExecutionIdentityContext

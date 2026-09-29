@@ -47,6 +47,8 @@ describe("buildUnit app builds", () => {
     });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
+      serviceAuthorityForSource: async () =>
+        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
       workspaceId: "workspace:test",
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
@@ -394,7 +396,7 @@ describe("buildUnit app builds", () => {
     expect(mod.main()).toMatchObject({ hasWs: true });
   });
 
-  it("routes React Native app builds through the registered build provider", async () => {
+  it("activates a dormant provider before building a React Native app", async () => {
     let providerInput: BuildProviderInput | null = null;
     let projectedPlatformSource = "";
     const testNodeModules = path.join(root, "node_modules");
@@ -441,44 +443,53 @@ describe("buildUnit app builds", () => {
       "initial app",
     ]);
 
-    registerBuildProvider({
-      name: "@workspace-extensions/react-native-provider",
-      target: "react-native",
-      contractVersion: "1",
-      activeEv: "ev-provider",
-      activeBuildKey: "provider-build",
-      build: async (input) => {
-        providerInput = input;
-        expect(fs.readFileSync(path.join(input.sourcePath, "index.tsx"), "utf8")).toContain(
-          "function App"
-        );
-        projectedPlatformSource = fs.readFileSync(
-          path.join(input.dependencyProjection.modules["@platform/fake"]!, "src", "index.ts"),
-          "utf8"
-        );
-        return {
-          artifacts: [
-            {
-              path: "ios/main.hbc",
-              role: "primary",
-              contentType: "application/octet-stream",
-              encoding: "base64",
-              platform: "ios",
-              stream: { method: "buildArtifact", args: ["ios-main"] },
-            },
-          ],
-          metadata: {
-            rnHostAbi: "rn-host-2",
-            platform: "ios",
+    let demandedTarget: string | undefined;
+    initBuilder(
+      testNodeModules,
+      path.resolve(__dirname, "../../.."),
+      runIsolatedBuildJob,
+      async (target) => {
+        demandedTarget = target;
+        registerBuildProvider({
+          name: "@workspace-extensions/react-native-provider",
+          target: "react-native",
+          contractVersion: "1",
+          activeEv: "ev-provider",
+          activeBuildKey: "provider-build",
+          build: async (input) => {
+            providerInput = input;
+            expect(fs.readFileSync(path.join(input.sourcePath, "index.tsx"), "utf8")).toContain(
+              "function App"
+            );
+            projectedPlatformSource = fs.readFileSync(
+              path.join(input.dependencyProjection.modules["@platform/fake"]!, "src", "index.ts"),
+              "utf8"
+            );
+            return {
+              artifacts: [
+                {
+                  path: "ios/main.hbc",
+                  role: "primary",
+                  contentType: "application/octet-stream",
+                  encoding: "base64",
+                  platform: "ios",
+                  stream: { method: "buildArtifact", args: ["ios-main"] },
+                },
+              ],
+              metadata: {
+                rnHostAbi: "rn-host-2",
+                platform: "ios",
+              },
+            };
           },
-        };
-      },
-      streamArtifact: async (_artifact, input) => {
-        // Provider inputs remain admitted until every lazy artifact is consumed.
-        expect(fs.existsSync(path.join(input.sourcePath, "index.tsx"))).toBe(true);
-        return new Response(`bundle:${input.unitName}:${input.effectiveVersion}`);
-      },
-    });
+          streamArtifact: async (_artifact, input) => {
+            // Provider inputs remain admitted until every lazy artifact is consumed.
+            expect(fs.existsSync(path.join(input.sourcePath, "index.tsx"))).toBe(true);
+            return new Response(`bundle:${input.unitName}:${input.effectiveVersion}`);
+          },
+        });
+      }
+    );
 
     const graph = discoverPackageGraph(workspaceRoot);
     let result: Awaited<ReturnType<typeof buildUnit>>;
@@ -497,6 +508,8 @@ describe("buildUnit app builds", () => {
         runIsolatedBuildJob
       );
     }
+
+    expect(demandedTarget).toBe("react-native");
 
     expect(result.metadata).toMatchObject({
       kind: "app",

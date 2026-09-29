@@ -1,5 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type {
+  ServiceBindingFact,
+  WorkspaceServiceReviewFact,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { UnitInstallSourceOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
@@ -483,8 +487,18 @@ function identityKey(
   return `${identity.repoPath}\0${identity.effectiveVersion}\0${digest}\0${serviceAuthorityDigest}`;
 }
 
+export function serviceAuthorityDigest(
+  serviceBindings: readonly ServiceBindingFact[],
+  serviceReviews: readonly WorkspaceServiceReviewFact[]
+): string {
+  return sha256Canonical({
+    serviceBindingDigest: sha256Canonical(serviceBindings),
+    serviceReviews,
+  });
+}
+
 function emptyServiceAuthorityDigest(): string {
-  return sha256Canonical({ serviceBindingDigest: sha256Canonical([]), serviceReviews: [] });
+  return serviceAuthorityDigest([], []);
 }
 
 function migrateV4Admission(record: Record<string, unknown>): Record<string, unknown> {

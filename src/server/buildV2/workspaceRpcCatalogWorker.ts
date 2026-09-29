@@ -2,6 +2,7 @@ import { parentPort } from "node:worker_threads";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { WorkspaceRpcSchemaMetadata } from "./workspaceRpcCatalog.js";
+import { BuildDiagnosticsError } from "./diagnostics.js";
 
 interface Request {
   id: number;
@@ -27,7 +28,14 @@ port.on("message", (request: Request) => {
         id: request.id,
         error:
           error instanceof Error
-            ? { name: error.name, message: error.message, stack: error.stack }
+            ? {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+                ...(error instanceof BuildDiagnosticsError
+                  ? { diagnostics: error.diagnostics }
+                  : {}),
+              }
             : { name: "Error", message: String(error) },
       });
     }

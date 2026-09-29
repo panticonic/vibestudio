@@ -57,4 +57,12 @@ describe("phone setup progress", () => {
     await response.body!.cancel();
     expect(signal.aborted).toBe(true);
   });
+  it("preserves retirement failures for a cancelling consumer", async () => {
+    const failure = new Error("Native descendants could not retire");
+    const response = phoneSetupStream(async (_emit, signal) => {
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      throw failure;
+    });
+    await expect(response.body!.cancel()).rejects.toBe(failure);
+  });
 });

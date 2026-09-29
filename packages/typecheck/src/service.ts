@@ -11,6 +11,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
+import { compileSvelteTypeSource, projectSvelteDeclarations, svelteTypeEnvironmentFiles } from "@vibestudio/svelte-type-source";
+import { TraceMap, AnyMap, originalPositionFor } from "@jridgewell/trace-mapping";
 import {
   API,
   CompletionItemKind,
@@ -133,10 +135,14 @@ export class TypeCheckService {
   private readonly hasNodeTypeDefinitions: boolean;
   private readonly files = new Map<string, OverlayFile>();
   private readonly presentedFilePaths = new Map<string, string>();
+  private readonly svelteSources = new Map<string, { content: string; generated: string; entry: string; map: TraceMap; original: string }>();
+  private readonly svelteGeneratedSources = new Map<string, string>();
+  private svelteEnvironmentLoaded = false;
   private readonly compilerOptionDependencies = new Set<string>();
   private readonly createdFiles = new Set<string>();
   private readonly changedFiles = new Set<string>();
   private readonly deletedFiles = new Set<string>();
+  private readonly removedFiles = new Set<string>();
   private readonly api: API;
   private snapshot: Snapshot | null = null;
   private project: Project | null = null;
@@ -184,9 +190,14 @@ export class TypeCheckService {
   updateFile(filePath: string, content: string): void {
     this.assertActive();
     const absolute = path.resolve(filePath);
+    if (absolute.endsWith(".svelte")) {
+      this.updateSvelteFile(absolute, content);
+      return;
+    }
     const existing = this.files.get(absolute);
     if (existing?.content === content) return;
     this.files.set(absolute, { content });
+    this.removedFiles.delete(absolute);
     this.presentedFilePaths.set(this.filePathKey(absolute), absolute);
     this.deletedFiles.delete(absolute);
     if (existing) this.changedFiles.add(absolute);
@@ -196,18 +207,67 @@ export class TypeCheckService {
   removeFile(filePath: string): void {
     this.assertActive();
     const absolute = path.resolve(filePath);
+    const svelte = this.svelteSources.get(absolute);
+    if (svelte) {
+      this.svelteSources.delete(absolute);
+      this.svelteGeneratedSources.delete(svelte.generated);
+      this.removeFile(svelte.generated);
+      this.removeFile(svelte.entry);
+      return;
+    }
     if (!this.files.delete(absolute)) return;
+    this.removedFiles.add(absolute);
     this.presentedFilePaths.delete(this.filePathKey(absolute));
     if (!this.createdFiles.delete(absolute)) this.deletedFiles.add(absolute);
     this.changedFiles.delete(absolute);
   }
 
   hasFile(filePath: string): boolean {
-    return this.files.has(path.resolve(filePath));
+    const absolute = path.resolve(filePath);
+    return this.files.has(absolute) || this.svelteSources.has(absolute);
   }
 
   getFileNames(): string[] {
     return [...this.files.keys()];
+  }
+
+  private updateSvelteFile(absolute: string, content: string, original = absolute): void {
+    const previous = this.svelteSources.get(absolute);
+    if (previous?.content === content) return;
+    const compiled = compileSvelteTypeSource(content, original);
+    const generated = path.join(path.dirname(absolute), `++${path.basename(absolute)}.${compiled.isTypeScript ? "ts" : "js"}`);
+    const entry = absolute.replace(/\.svelte$/u, ".d.svelte.ts");
+    for (const file of [generated, entry]) {
+      if (!this.files.has(file) && fs.existsSync(file)) throw new Error(`Svelte compiler output conflicts with authored source: ${file}`);
+    }
+    if (previous && previous.generated !== generated) {
+      this.svelteGeneratedSources.delete(previous.generated);
+      this.removeFile(previous.generated);
+    }
+    this.svelteSources.set(absolute, { content, generated, entry, map: new AnyMap({ version: 3, sections: [{ offset: { line: compiled.isTypeScript ? 0 : 1, column: 0 }, map: JSON.parse(compiled.map.toString()) }] }), original });
+    this.svelteGeneratedSources.set(generated, absolute);
+    this.updateFile(generated, compiled.isTypeScript ? compiled.code : `// @ts-check\n${compiled.code}`);
+    const importPath = `./++${path.basename(absolute)}.js`;
+    this.updateFile(entry, `export { default } from ${JSON.stringify(importPath)};\nexport * from ${JSON.stringify(importPath)};\n`);
+    if (!this.svelteEnvironmentLoaded) {
+      this.svelteEnvironmentLoaded = true;
+      for (const file of svelteTypeEnvironmentFiles) this.updateFile(file, fs.readFileSync(file, "utf8"));
+    }
+  }
+
+  private projectSvelteEntry(absolute: string): void {
+    if (!absolute.endsWith(".d.svelte.ts") || this.files.has(absolute)) return;
+    const source = absolute.replace(/\.d\.svelte\.ts$/u, ".svelte");
+    for (const candidate of [source, ...this.packageProjectionCandidates(source)]) {
+      try {
+        if (!fs.statSync(candidate).isFile()) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") continue;
+        throw error;
+      }
+      this.updateSvelteFile(source, fs.readFileSync(candidate, "utf8"), candidate);
+      return;
+    }
   }
 
   getEffectiveCompilerOptions(): Readonly<CompilerOptions> {
@@ -220,7 +280,8 @@ export class TypeCheckService {
 
   check(filePath?: string): TypeCheckResult {
     const project = this.ensureProject();
-    const document = filePath ? path.resolve(filePath) : undefined;
+    const source = filePath ? path.resolve(filePath) : undefined;
+    const document = source ? (this.svelteSources.get(source)?.generated ?? source) : undefined;
     const diagnostics: Diagnostic[] = [
       ...project.program.getConfigFileParsingDiagnostics(),
       ...project.program.getProgramDiagnostics(),
@@ -234,9 +295,9 @@ export class TypeCheckService {
 
     return {
       panelPath: this.panelPath,
-      diagnostics: diagnostics.map((diagnostic) => this.convertDiagnostic(diagnostic)),
+      diagnostics: diagnostics.filter(diagnostic => !this.isSvelteCompilerOnlyDiagnostic(diagnostic)).map((diagnostic) => this.convertDiagnostic(diagnostic)),
       timestamp: Date.now(),
-      checkedFiles: document ? [document] : this.getFileNames(),
+      checkedFiles: source ? [source] : this.getFileNames(),
     };
   }
 
@@ -403,24 +464,41 @@ export class TypeCheckService {
     }
 
     const previous = this.snapshot;
+    const configChanged = this.createdFiles.has(this.configFilePath) || this.changedFiles.has(this.configFilePath);
     const fileChanges = {
       ...(this.createdFiles.size > 0 ? { created: [...this.createdFiles] } : {}),
       ...(this.changedFiles.size > 0 ? { changed: [...this.changedFiles] } : {}),
       ...(this.deletedFiles.size > 0 ? { deleted: [...this.deletedFiles] } : {}),
     };
-    this.snapshot = this.api.updateSnapshot({
-      ...(!this.opened ? { openProjects: [this.configFilePath] } : {}),
-      ...(this.opened && Object.keys(fileChanges).length > 0 ? { fileChanges } : {}),
-    });
-    this.opened = true;
-    this.project =
-      this.snapshot.getProject(this.configFilePath) ?? this.snapshot.getProjects()[0] ?? null;
-    previous?.dispose();
+    // A filesystem projection can discover compiled component files while
+    // the native compiler resolves imports. Clear only the batch being sent;
+    // discoveries made during construction belong to its next snapshot.
     this.createdFiles.clear();
     this.changedFiles.clear();
     this.deletedFiles.clear();
+    if (this.opened && configChanged) {
+      // Project references are counted by the native server. Closing and opening
+      // in one update leaves no live project; retire the reference first.
+      const closed = this.api.updateSnapshot({
+        closeProjects: [this.configFilePath],
+        ...(Object.keys(fileChanges).length > 0 ? { fileChanges } : {}),
+      });
+      closed.dispose();
+      this.opened = false;
+    }
+    this.snapshot = this.api.updateSnapshot({
+      ...(!this.opened ? { openProjects: [this.configFilePath] } : {}),
+      ...(Object.keys(fileChanges).length > 0 ? { fileChanges } : {}),
+    });
+    this.opened = true;
+    this.project = this.snapshot.getProject(this.configFilePath) ?? null;
+    previous?.dispose();
     if (!this.project) {
       throw new Error(`TypeScript 7 did not create a project for ${this.configFilePath}`);
+    }
+    this.project.program.getProgramDiagnostics();
+    if (this.createdFiles.size || this.changedFiles.size || this.deletedFiles.size) {
+      return this.ensureProject();
     }
     return this.project;
   }
@@ -481,6 +559,7 @@ export class TypeCheckService {
           ...this.config.compilerOptions,
           noEmit: true,
         };
+    if (this.svelteSources.size > 0) compilerOptions["allowArbitraryExtensions"] = true;
     const content = `${JSON.stringify(
       {
         ...(this.sourceConfigPath ? { extends: this.sourceConfigPath } : {}),
@@ -504,11 +583,15 @@ export class TypeCheckService {
       : undefined;
     const start = sourceFile?.getLineAndCharacterOfPosition(diagnostic.pos);
     const end = sourceFile?.getLineAndCharacterOfPosition(diagnostic.end);
+    const svelteSource = this.svelteGeneratedSources.get(nativeFileName);
+    const svelte = svelteSource ? this.svelteSources.get(svelteSource) : undefined;
+    const originalStart = svelte && start ? originalPositionFor(svelte.map, { line: start.line + 1, column: start.character }) : undefined;
+    const originalEnd = svelte && end ? originalPositionFor(svelte.map, { line: end.line + 1, column: end.character }) : undefined;
     return {
-      file: nativeFileName ? this.presentFilePath(nativeFileName) : "",
-      line: (start?.line ?? 0) + 1,
-      column: (start?.character ?? 0) + 1,
-      ...(end ? { endLine: end.line + 1, endColumn: end.character + 1 } : {}),
+      file: svelte?.original ?? (nativeFileName ? this.presentFilePath(nativeFileName) : ""),
+      line: originalStart?.line ?? ((start?.line ?? 0) + 1),
+      column: (originalStart?.column ?? start?.character ?? 0) + 1,
+      ...(end ? { endLine: originalEnd?.line ?? end.line + 1, endColumn: (originalEnd?.column ?? end.character) + 1 } : {}),
       message: this.flattenDiagnosticMessage(diagnostic),
       code: diagnostic.code,
       category: diagnostic.category,
@@ -523,6 +606,15 @@ export class TypeCheckService {
           }
         : {}),
     };
+  }
+
+  private isSvelteCompilerOnlyDiagnostic(diagnostic: Diagnostic): boolean {
+    if (!diagnostic.fileName || !this.svelteGeneratedSources.has(path.resolve(diagnostic.fileName))) return false;
+    const content = this.files.get(path.resolve(diagnostic.fileName))?.content;
+    if (!content) return false;
+    // These spans belong to the official compiler's generated scaffolding,
+    // not to Svelte script or template expressions. Match its ignore contract.
+    return content.lastIndexOf("/*Ωignore_startΩ*/", diagnostic.pos) > content.lastIndexOf("/*Ωignore_endΩ*/", diagnostic.pos);
   }
 
   private flattenDiagnosticMessage(diagnostic: Diagnostic): string {
@@ -605,21 +697,33 @@ export class TypeCheckService {
 
   private readProjectedFile(fileName: string): string | null | undefined {
     const absolute = path.resolve(fileName);
+    if (this.removedFiles.has(absolute)) return null;
+    this.projectSvelteEntry(absolute);
     if (absolute === this.configFilePath) return this.configContent;
     const overlay = this.files.get(absolute);
     if (overlay) return overlay.content;
     for (const candidate of this.packageProjectionCandidates(absolute)) {
       try {
-        if (fs.statSync(candidate).isFile()) return fs.readFileSync(candidate, "utf8");
+        if (fs.statSync(candidate).isFile()) {
+          const content = fs.readFileSync(candidate, "utf8");
+          return absolute.endsWith(`${path.sep}node_modules${path.sep}svelte${path.sep}types${path.sep}index.d.ts`)
+            ? projectSvelteDeclarations(content, candidate)
+            : content;
+        }
       } catch {
         // Try the next projection, then the real filesystem fallback.
       }
+    }
+    if (absolute.endsWith(`${path.sep}node_modules${path.sep}svelte${path.sep}types${path.sep}index.d.ts`) && fs.existsSync(absolute)) {
+      return projectSvelteDeclarations(fs.readFileSync(absolute, "utf8"), absolute);
     }
     return undefined;
   }
 
   private projectedFileExists(fileName: string): boolean | undefined {
     const absolute = path.resolve(fileName);
+    if (this.removedFiles.has(absolute)) return false;
+    this.projectSvelteEntry(absolute);
     if (absolute === this.configFilePath || this.files.has(absolute)) return true;
     for (const candidate of this.packageProjectionCandidates(absolute)) {
       try {

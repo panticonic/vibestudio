@@ -63,11 +63,12 @@ function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
   let eventHandler:
     | ((event: { method: string; params: unknown; sessionId?: string }) => void)
     | null = null;
-  const send = vi.fn(async (method: string) => {
+  const send = vi.fn(async (method: string): Promise<unknown> => {
     if (method === "Target.createBrowserContext") return { browserContextId: "browser-context-1" };
     if (method === "Target.createTarget") return { targetId: "target-1" };
     if (method === "Target.attachToTarget") return { sessionId: "mgmt-1" };
     if (method === "Page.navigate") return navigateResult;
+    if (method === "Target.closeTarget") return { success: true };
     return {};
   });
   const cdp = {
@@ -188,7 +189,7 @@ describe("PageHost navigation readiness", () => {
     await expect(loading).rejects.toThrow("unloaded before document readiness");
   });
 
-  it("disposes the owned browser context when its final panel unloads", async () => {
+  it("closes the final renderer without deleting its live owner's storage", async () => {
     const { host, input, send, fireDocumentReady } = lifecycleHarness();
     const loading = host.loadPanel(input);
     await vi.waitFor(() =>
@@ -200,12 +201,20 @@ describe("PageHost navigation readiness", () => {
     await host.unloadPanel(input.slotId);
 
     expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
-    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", {
-      browserContextId: "browser-context-1",
-    });
+    expect(send).not.toHaveBeenCalledWith("Target.disposeBrowserContext", expect.anything());
+    expect(host.contextIds()).toEqual([input.contextId]);
+    const replacement = host.loadPanel({ ...input, tabId: 2 });
+    await vi.waitFor(() => expect(send.mock.calls.filter(([method]) => method === "Page.navigate")).toHaveLength(2));
+    fireDocumentReady();
+    await replacement;
+    expect(send.mock.calls.filter(([method]) => method === "Target.createBrowserContext")).toHaveLength(1);
+    await host.retireContext(input.contextId);
+    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", { browserContextId: "browser-context-1" });
+    expect(host.slots()).toEqual([]);
+    expect(host.contextIds()).toEqual([]);
   });
 
-  it("retains a browser context until every panel sharing it unloads", async () => {
+  it("reclaims every owned renderer and browser context when the context is retired", async () => {
     const { host, input, send, fireDocumentReady } = lifecycleHarness();
     const loading = host.loadPanel(input);
     await vi.waitFor(() =>
@@ -225,25 +234,52 @@ describe("PageHost navigation readiness", () => {
       lastUsedAt: 0,
     });
 
-    await host.unloadPanel(input.slotId);
-    expect(send).not.toHaveBeenCalledWith("Target.disposeBrowserContext", expect.anything());
-
-    await host.unloadPanel("panel-2");
+    await host.retireContext(input.contextId);
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-2" });
     expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", {
       browserContextId: "browser-context-1",
     });
+  });
+
+  it("retains a failed context disposal for a confirmed retry", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+    fireDocumentReady();
+    await loading;
+    await host.unloadPanel(input.slotId);
+    send.mockRejectedValueOnce(new Error("disposal failed"));
+    await expect(host.retireContext(input.contextId)).rejects.toThrow("disposal failed");
+    expect(host.contextIds()).toEqual([input.contextId]);
+    await host.reconcileContextOwners([], [input.contextId]);
+    expect(host.contextIds()).toEqual([]);
+  });
+
+  it("keeps ownership of a renderer whose close was not confirmed", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+    fireDocumentReady();
+    await loading;
+    send.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ targetInfos: [{ targetId: "target-1" }] });
+    await expect(host.unloadPanel(input.slotId)).rejects.toThrow("did not close owned target");
+    expect(host.slots()).toEqual([input.slotId]);
+    await host.retireContext(input.contextId);
+    expect(host.slots()).toEqual([]);
+    expect(host.contextIds()).toEqual([]);
   });
 });
 
 describe("PageHost.domSnapshot", () => {
   it("requires and returns explicit global observation bounds", async () => {
     const limits = {
-      textChars: 32768,
+      textCharacters: 32768,
       textNodes: 2000,
       structureNodes: 500,
       depth: 8,
       childrenPerNode: 50,
-      leafTextChars: 160,
+      leafTextCharacters: 160,
     };
     const send = vi.fn(async (_method: string, params: { expression?: string }) => ({
       result: {
@@ -324,5 +360,128 @@ describe("PageHost.panelPageObservation", () => {
       }),
       "mgmt-1"
     );
+  });
+});
+
+
+describe("PageHost relay ownership", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  }
+  function relayHarness() {
+    const attach = deferred<{ sessionId: string }>();
+    const detach = deferred<unknown>();
+    const send = vi.fn(async (method: string) => {
+      if (method === "Target.attachToTarget") return attach.promise;
+      if (method === "Target.detachFromTarget") return detach.promise;
+      if (method === "Target.closeTarget") return { success: true };
+      return {};
+    });
+    const cdp = {
+      send, onEvent: vi.fn(), ownerOf: vi.fn(), claimSession: vi.fn(), releaseSession: vi.fn(), releaseSlotSessions: vi.fn(),
+    };
+    const host = new PageHost(cdp as never, new ConsoleHistoryStore());
+    (host as unknown as { pages: Map<string, unknown> }).pages.set("panel-1", {
+      slotId: "panel-1", contextId: "context-1", targetId: "target-1",
+      mgmtSessionId: "mgmt-1", relaySessionId: null, panelUrl: "https://example.com", lastUsedAt: 0,
+    });
+    return { host, cdp, send, attach, detach };
+  }
+
+  it("initializes concurrent domains on one native session", async () => {
+    const { host, send, attach, cdp } = relayHarness();
+    const commands = ["Inspector.enable", "Page.enable", "Runtime.enable", "DOM.enable"];
+    const pending = commands.map((method) => host.relaySend("panel-1", method, undefined));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    attach.resolve({ sessionId: "relay-1" });
+    await Promise.all(pending);
+    expect(send.mock.calls.filter(([method]) => method === "Target.attachToTarget")).toHaveLength(1);
+    expect(cdp.claimSession).toHaveBeenCalledExactlyOnceWith("relay-1", "panel-1");
+    for (const method of commands) expect(send).toHaveBeenCalledWith(method, undefined, "relay-1");
+  });
+
+  it("joins attachment and native detachment before allowing a new relay", async () => {
+    const { host, send, attach, detach, cdp } = relayHarness();
+    const opening = host.relaySend("panel-1", "Page.enable", undefined);
+    const rejected = expect(opening).rejects.toThrow("relay is retiring");
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const closing = host.detachRelay("panel-1");
+    expect(host.detachRelay("panel-1")).toBe(closing);
+    const next = host.relaySend("panel-1", "Runtime.enable", undefined);
+    attach.resolve({ sessionId: "relay-1" });
+    await rejected;
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Target.detachFromTarget", { sessionId: "relay-1" }));
+    expect(send.mock.calls.filter(([method]) => method === "Target.attachToTarget")).toHaveLength(1);
+    detach.resolve({});
+    await closing;
+    await next;
+    expect(cdp.releaseSession).toHaveBeenCalledExactlyOnceWith("relay-1");
+    expect(send.mock.calls.filter(([method]) => method === "Target.attachToTarget")).toHaveLength(2);
+  });
+
+  it("retires an attachment in flight before closing the owned target", async () => {
+    const { host, send, attach, detach, cdp } = relayHarness();
+    const opening = host.relaySend("panel-1", "Page.enable", undefined);
+    const rejected = expect(opening).rejects.toThrow("relay is retiring");
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const closing = host.unloadPanel("panel-1");
+    await expect(host.relaySend("panel-1", "Runtime.enable", undefined)).rejects.toThrow("no active page");
+    attach.resolve({ sessionId: "relay-1" });
+    await rejected;
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Target.detachFromTarget", { sessionId: "relay-1" }));
+    expect(cdp.releaseSession).not.toHaveBeenCalled();
+    expect(send.mock.calls.some(([method]) => method === "Target.closeTarget")).toBe(false);
+    detach.resolve({});
+    await closing;
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
+    expect(cdp.releaseSlotSessions).toHaveBeenCalledExactlyOnceWith("panel-1");
+  });
+
+  it("retains failed native detachment for a confirmed retry", async () => {
+    const { host, send, attach, detach, cdp } = relayHarness();
+    attach.resolve({ sessionId: "relay-1" });
+    await host.relaySend("panel-1", "Page.enable", undefined);
+    const closing = host.detachRelay("panel-1");
+    const rejected = expect(closing).rejects.toThrow("native detach failed");
+    detach.reject(new Error("native detach failed"));
+    await rejected;
+    expect(cdp.releaseSession).not.toHaveBeenCalled();
+    await expect(host.relaySend("panel-1", "Page.enable", undefined)).rejects.toThrow("retirement is unconfirmed");
+    send.mockImplementation(async () => ({}));
+    await host.detachRelay("panel-1");
+    expect(send.mock.calls.filter(([method]) => method === "Target.attachToTarget")).toHaveLength(1);
+    expect(send.mock.calls.filter(([method]) => method === "Target.detachFromTarget")).toHaveLength(2);
+    expect(cdp.releaseSession).toHaveBeenCalledExactlyOnceWith("relay-1");
+  });
+
+  it("accepts a native detach event as confirmation when the target closes independently", async () => {
+    const { host, send, attach, detach, cdp } = relayHarness();
+    attach.resolve({ sessionId: "relay-1" });
+    await host.relaySend("panel-1", "Page.enable", undefined);
+    const closing = host.detachRelay("panel-1");
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Target.detachFromTarget", { sessionId: "relay-1" }));
+    const onEvent = cdp.onEvent.mock.calls[0]![0] as unknown as (event: unknown) => void;
+    onEvent({ method: "Target.detachedFromTarget", params: { sessionId: "relay-1" } });
+    detach.reject(new Error("session no longer exists"));
+    await closing;
+    expect(cdp.releaseSession).toHaveBeenCalledExactlyOnceWith("relay-1");
+    send.mockImplementation(async () => ({ sessionId: "relay-2" }));
+    await host.relaySend("panel-1", "Page.enable", undefined);
+    expect(send).toHaveBeenLastCalledWith("Page.enable", undefined, "relay-2");
+  });
+
+  it("releases a failed attachment so another attempt can acquire the session", async () => {
+    const { host, send, attach } = relayHarness();
+    const opening = host.relaySend("panel-1", "Page.enable", undefined);
+    const rejected = expect(opening).rejects.toThrow("native attach failed");
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    attach.reject(new Error("native attach failed"));
+    await rejected;
+    send.mockImplementation(async () => ({ sessionId: "relay-2" }));
+    await host.relaySend("panel-1", "Page.enable", undefined);
+    expect(send).toHaveBeenLastCalledWith("Page.enable", undefined, "relay-2");
   });
 });

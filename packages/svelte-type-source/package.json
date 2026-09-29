@@ -1,0 +1,17 @@
+{
+  "name": "@vibestudio/svelte-type-source",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Official Svelte source compilation for the native TypeScript checker",
+  "vibestudio": { "buildProfile": "tsc-build-incremental" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc --build tsconfig.build.json" },
+  "dependencies": {
+    "svelte": "^5.56.9",
+    "svelte2tsx": "^0.7.61",
+    "typescript": "6.0.3"
+  },
+  "files": ["dist"]
+}

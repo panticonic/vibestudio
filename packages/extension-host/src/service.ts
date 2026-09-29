@@ -52,6 +52,7 @@ import {
 } from "@vibestudio/shared/unitManifest";
 import {
   UnitHost,
+  authorityReviewFromManifest,
   UnitRegistry,
   UnitTrustResolver,
   FileUnitIdentityApprovalStore,
@@ -64,7 +65,6 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
-  readUnitAuthorityReview,
   authorityReviewFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -144,7 +144,7 @@ interface BuildSystemLike {
   } | null;
   getEffectiveVersion(unitName: string): string | null;
   listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
-  resolveBuildUnitIdentity?(
+  resolveBuildUnitIdentity(
     unitPath: string,
     ref?: string
   ): Promise<{
@@ -154,6 +154,9 @@ interface BuildSystemLike {
     effectiveVersion: string;
     dependencyEvs: Record<string, string>;
     externalDeps: Record<string, string>;
+    manifest: { authority?: UnitAuthorityManifest };
+    serviceBindings: readonly import("@vibestudio/shared/authority/unitInstallReview").ServiceBindingFact[];
+    serviceReviews: readonly import("@vibestudio/shared/authority/unitInstallReview").WorkspaceServiceReviewFact[];
   } | null>;
   getExternalDeps(unitName: string): Record<string, string>;
   getGraph(): {
@@ -191,6 +194,8 @@ interface BuildSystemLike {
 interface ExtensionBuildMetadataLike {
   ev: string;
   sourceStateHash?: string | null;
+  sourcePath?: string | null;
+  serviceAuthorityDigest?: string;
   execution?: { executionDigest: string };
   authority?: {
     requests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
@@ -622,13 +627,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * without building or activating it. Startup uses this planning phase to put
    * deferred extensions in the same review as apps, panels, and workers.
    */
-  reviewDeclared(declared: UnitDeclaration[]): { units: ReviewedUnit[]; identityKeys: string[] } {
-    const review = this.unitHost.approvalForDeclarations(declared);
+  async reviewDeclared(declared: UnitDeclaration[]): Promise<{ units: ReviewedUnit[]; identityKeys: string[] }> {
+    const review = await this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
   /** Declared extensions that ship in the host build, for the server to admit. */
-  seedTrustedDeclared(declared: UnitDeclaration[]): ReviewedUnit[] {
+  seedTrustedDeclared(declared: UnitDeclaration[]): Promise<ReviewedUnit[]> {
     return this.unitHost.seedTrustedDeclarations(declared);
   }
 
@@ -770,7 +775,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         ? new Set(await this.deps.buildSystem.listAffectedBuildUnits(commit, scope.changedPaths))
         : null;
     for (const declaration of await this.readDeclaredExtensionsFromCommit(commit)) {
-      const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+      const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity(
         declaration.source,
         commit
       );
@@ -817,7 +822,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         (entry) => normalizeRepoPath(entry.source) === normalizeRepoPath(declaration.source)
       );
       const current = currentDeclaration
-        ? await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+        ? await this.deps.buildSystem.resolveBuildUnitIdentity(
             currentDeclaration.source,
             currentDeclaration.ref
           )
@@ -886,7 +891,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         }),
         target: null,
         capabilities,
-        authority,
+        authority: { ...authority, serviceBindings: [...candidate.serviceBindings], serviceReviews: [...candidate.serviceReviews] },
       });
       if (current) previousRequests.set(candidate.unitPath, previousAuthority.requests);
     }
@@ -1394,6 +1399,22 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return entry?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata.authority ?? null)
       : null;
+  }
+
+  /** Admission facts sealed with this registry's exact currently active image. */
+  resolveActiveAdmissionImage(code: VerifiedCodeIdentity): {
+    sourcePath: string | null;
+    ev: string;
+    execution?: { executionDigest: string };
+    authority?: UnitAuthorityManifest;
+    serviceAuthorityDigest?: string;
+  } | null {
+    if (!this.resolveActiveAuthority(code)) return null;
+    const entry = this.registry.get(code.callerId);
+    const image = entry?.activeBundleKey
+      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata
+      : null;
+    return image ? { ...image, sourcePath: image.sourcePath ?? null } : null;
   }
 
   private assertAdmittedMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
@@ -2110,10 +2131,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
   }
 
-  private buildBatchEntry(
+  private async buildBatchEntry(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     ref: string
-  ): ReviewedUnit {
+  ): Promise<ReviewedUnit> {
+    const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity(node.relativePath, ref);
+    if (!candidate || candidate.unitName !== node.name || candidate.effectiveVersion !== this.deps.buildSystem.getEffectiveVersion(node.name))
+      throw new Error(`Exact review source changed for ${node.relativePath}`);
     const active = this.registry.get(node.name);
     const previousAuthority = active?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
@@ -2130,19 +2154,23 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         version: this.readNodeVersion(node.path),
         sourceRepo: node.relativePath,
         ref,
-        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-        dependencyEvs: this.currentDependencyEvs(node),
-        externalDeps: this.currentExternalDeps(node),
+        effectiveVersion: candidate.effectiveVersion,
+        dependencyEvs: candidate.dependencyEvs,
+        externalDeps: candidate.externalDeps,
       }),
       target: null,
       capabilities: extensionRuntimeCapabilities(),
-      authority: readUnitAuthorityReview(
-        node.path,
-        node.name,
-        previousAuthority,
-        this.deps.describeCapability,
-        "extension"
-      ),
+      authority: {
+        ...authorityReviewFromManifest(
+          candidate.manifest.authority,
+          node.name,
+          previousAuthority,
+          this.deps.describeCapability,
+          "extension"
+        ),
+        serviceBindings: [...candidate.serviceBindings],
+        serviceReviews: [...candidate.serviceReviews],
+      },
     };
   }
 

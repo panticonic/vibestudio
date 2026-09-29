@@ -26,6 +26,8 @@ import {
 
 beforeEach(() => {
   setBuildExecutionIdentityContext({
+    serviceAuthorityForSource: async () =>
+      "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
     workspaceId: "workspace:test",
     executionStateForContent: (stateHash) => ({
       kind: "event",
@@ -411,6 +413,8 @@ describe("build artifact helpers", () => {
     try {
       setUserDataPath(root);
       setBuildExecutionIdentityContext({
+        serviceAuthorityForSource: async (metadata) =>
+          metadata.sourceStateHash === firstState ? "a".repeat(64) : "b".repeat(64),
         workspaceId: "workspace:rebind",
         executionStateForContent: (stateHash) =>
           stateHash === firstState
@@ -436,18 +440,16 @@ describe("build artifact helpers", () => {
       const rebound = await rebindSourceState(first, secondState);
 
       expect(rebound.sourceStateHash).toBe(secondState);
+      expect(first.metadata.serviceAuthorityDigest).toBe("a".repeat(64));
+      expect(rebound.metadata.serviceAuthorityDigest).toBe("b".repeat(64));
+      expect(getByExecution(buildKey, firstExecutionDigest)?.metadata.serviceAuthorityDigest).toBe(
+        "a".repeat(64)
+      );
       expect(rebound.metadata.sourceState).toEqual({ kind: "event", eventId: "event:second" });
       expect(get(buildKey)?.metadata.execution?.sourceState.state).toEqual({
         kind: "event",
         eventId: "event:second",
       });
-      fs.writeFileSync(
-        path.join(root, "builds", buildKey, "executions", `${firstExecutionDigest}.json`),
-        JSON.stringify(first.metadata)
-      );
-      expect(getByExecution(buildKey, firstExecutionDigest)?.metadata.execution).toEqual(
-        first.metadata.execution
-      );
       expect(
         getByExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata.execution
       ).toEqual(rebound.metadata.execution);
@@ -459,6 +461,7 @@ describe("build artifact helpers", () => {
       ) as Record<string, unknown>;
       expect(Object.keys(retained).sort()).toEqual([
         "execution",
+        "serviceAuthorityDigest",
         "sourceState",
         "sourceStateHash",
         "version",
@@ -991,6 +994,7 @@ describe("build artifact helpers", () => {
       setUserDataPath(stateB);
       process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceB;
       setBuildExecutionIdentityContext({
+        serviceAuthorityForSource: async () => "c".repeat(64),
         workspaceId: "workspace:b",
         executionStateForContent: (stateHash) =>
           stateHash === `state:${"2".repeat(64)}`
@@ -1005,6 +1009,10 @@ describe("build artifact helpers", () => {
         dir: path.join(stateB, "builds", buildKey),
         sourceStateHash: `state:${"2".repeat(64)}`,
       });
+      expect(reused?.metadata.serviceAuthorityDigest).toBe("c".repeat(64));
+      expect(reused?.metadata.serviceAuthorityDigest).not.toBe(
+        original.metadata.serviceAuthorityDigest
+      );
       expect(reused?.metadata.sourceState).toEqual({
         kind: "event",
         eventId: "event:workspace-b",
@@ -1022,6 +1030,8 @@ describe("build artifact helpers", () => {
       setUserDataPath(stateA);
       process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceA;
       setBuildExecutionIdentityContext({
+        serviceAuthorityForSource: async () =>
+          "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
         workspaceId: "workspace:test",
         executionStateForContent: (stateHash) => ({
           kind: "event",

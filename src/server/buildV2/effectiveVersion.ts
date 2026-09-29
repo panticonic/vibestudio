@@ -239,7 +239,8 @@ export async function persistEvState(state: Omit<PersistedEvState, "version">): 
  * "30": worker exposed modules are emitted as lazy feature chunks.
  * "31": build identity includes the installed dependency realm and hermetic resolver.
  */
-const BUILD_CACHE_VERSION = "32";
+// "33": workspace execution metadata seals the complete service admission identity.
+const BUILD_CACHE_VERSION = "33";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the

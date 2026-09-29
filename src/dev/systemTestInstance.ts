@@ -152,7 +152,11 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
  * reclaim an instance merely to explain the command boundary.
  */
 export function isLocalSystemTestHelpCommand(command: readonly string[]): boolean {
-  return command.length === 1 && (command[0] === "--help" || command[0] === "-h");
+  for (const argument of command) {
+    if (argument === "--") return false;
+    if (argument === "--help" || argument === "-h") return true;
+  }
+  return false;
 }
 
 function canonicalRepoRoot(repoRoot: string): string {

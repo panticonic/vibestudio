@@ -11,10 +11,6 @@ import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs"
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(repoRoot, "base");
-const gadCatalogPath = path.join(
-  repoRoot,
-  "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json"
-);
 
 /**
  * Load a runtime-surface manifest by bundling it with esbuild (which resolves
@@ -108,12 +104,13 @@ function updateDoc(root, relativePath, replacements, checkOnly) {
   }
 }
 
-async function updateGadRuntimeCatalog(checkOnly) {
-  const schemaPath = path.join(repoRoot, "packages/service-schemas/src/workspaceSource.ts");
+async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOnly) {
+  const schemaPath = path.join(repoRoot, "packages/service-schemas/src", schemaFile);
+  const catalogPath = path.join(repoRoot, "packages/service-schemas/src/runtime/generated", catalogFile);
   const module = await tsImport(schemaPath, import.meta.url);
-  const methods = module.gadMethods;
+  const methods = module[exportName];
   if (!methods || typeof methods !== "object") {
-    throw new Error("Failed to load gadMethods for runtime catalog generation");
+    throw new Error(`Failed to load ${exportName} for runtime catalog generation`);
   }
   const catalog = Object.fromEntries(
     Object.entries(methods).map(([name, method]) => [
@@ -134,25 +131,26 @@ async function updateGadRuntimeCatalog(checkOnly) {
     ])
   );
   const next = `${JSON.stringify(catalog, null, 2)}\n`;
-  const current = fs.existsSync(gadCatalogPath) ? fs.readFileSync(gadCatalogPath, "utf8") : null;
+  const current = fs.existsSync(catalogPath) ? fs.readFileSync(catalogPath, "utf8") : null;
   if (checkOnly) {
     if (next !== current) {
       throw new Error(
-        "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json is out of date. " +
+        `packages/service-schemas/src/runtime/generated/${catalogFile} is out of date. ` +
           "Run: pnpm run generate:runtime-docs"
       );
     }
     return;
   }
   if (next !== current) {
-    fs.mkdirSync(path.dirname(gadCatalogPath), { recursive: true });
-    fs.writeFileSync(gadCatalogPath, next);
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(catalogPath, next);
   }
 }
 
 const checkOnly = process.argv.includes("--check");
 
-await updateGadRuntimeCatalog(checkOnly);
+await updateRuntimeCatalog("workspaceSource.ts", "gadMethods", "gadRuntimeCatalog.json", checkOnly);
+await updateRuntimeCatalog("templates.ts", "templatesMethods", "templatesRuntimeCatalog.json", checkOnly);
 
 // The authoritative schema-derived surfaces live in @vibestudio/service-schemas.
 const panelSurface = loadRuntimeSurface(

@@ -1,0 +1,3896 @@
+{
+  "updateAssistant": {
+    "description": "Read the current user's provisioned workspace update automation, including paused or retired state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "enum": [
+            3
+          ]
+        },
+        "missionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": true,
+          "minimum": 0
+        },
+        "charter": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "execution": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "method"
+                      ]
+                    },
+                    "image": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 512
+                        },
+                        "ref": {
+                          "type": "string",
+                          "pattern": "^state:[0-9a-f]{64}$"
+                        },
+                        "effectiveVersion": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "className": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "objectKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 512
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "ref",
+                        "effectiveVersion",
+                        "className",
+                        "objectKey"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "method": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "args": {
+                      "type": "array",
+                      "items": {},
+                      "maxItems": 64
+                    },
+                    "operations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "service": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "method": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "args": {
+                            "type": "array",
+                            "items": {},
+                            "maxItems": 64
+                          },
+                          "use": {
+                            "type": "string",
+                            "enum": [
+                              "action",
+                              "conditional"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "service",
+                          "method",
+                          "use"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "maxItems": 256
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "image",
+                    "method",
+                    "args",
+                    "operations"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent"
+                      ]
+                    },
+                    "image": {
+                      "$ref": "#/properties/charter/properties/execution/anyOf/0/properties/image"
+                    },
+                    "action": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "prompt"
+                              ]
+                            },
+                            "text": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 24000
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "text"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "eval"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 96000
+                            },
+                            "syntax": {
+                              "type": "string",
+                              "enum": [
+                                "javascript",
+                                "typescript",
+                                "jsx",
+                                "tsx"
+                              ]
+                            },
+                            "timeoutMs": {
+                              "type": "integer",
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "maximum": 86400000
+                            },
+                            "reset": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "code"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "watch"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 96000
+                            },
+                            "syntax": {
+                              "type": "string",
+                              "enum": [
+                                "javascript",
+                                "typescript",
+                                "jsx",
+                                "tsx"
+                              ]
+                            },
+                            "timeoutMs": {
+                              "type": "integer",
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "maximum": 86400000
+                            },
+                            "reset": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "code"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "conversation": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "continue"
+                              ]
+                            },
+                            "channelId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "contextId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "executorId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "channelId",
+                            "contextId",
+                            "executorId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "fresh"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "mode"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "operations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/properties/charter/properties/execution/anyOf/0/properties/operations/items"
+                      },
+                      "maxItems": 256
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "image",
+                    "action",
+                    "conversation",
+                    "operations"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "trigger": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "manual"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "schedule"
+                      ]
+                    },
+                    "everyMs": {
+                      "type": "integer",
+                      "minimum": 60000
+                    },
+                    "anchorAt": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "jitterMs": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "untilAt": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxRuns": {
+                      "type": "integer",
+                      "exclusiveMinimum": true,
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "everyMs"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "cron"
+                      ]
+                    },
+                    "expression": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "untilAt": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxRuns": {
+                      "type": "integer",
+                      "exclusiveMinimum": true,
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "expression",
+                    "timezone"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "summary",
+            "execution",
+            "trigger"
+          ],
+          "additionalProperties": false
+        },
+        "authorityPlan": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "enum": [
+                1
+              ]
+            },
+            "digest": {
+              "$ref": "#/properties/charter/properties/execution/anyOf/0/properties/image/properties/effectiveVersion"
+            },
+            "artifactRef": {
+              "type": "string",
+              "pattern": "^authority-plan:[0-9a-f]{64}$"
+            },
+            "compilerVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "catalogDigest": {
+              "$ref": "#/properties/charter/properties/execution/anyOf/0/properties/image/properties/effectiveVersion"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "digest",
+            "artifactRef",
+            "compilerVersion",
+            "catalogDigest"
+          ],
+          "additionalProperties": false
+        },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "userId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "userId"
+          ],
+          "additionalProperties": false
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "completed",
+            "retired"
+          ]
+        },
+        "revisionDigest": {
+          "$ref": "#/properties/charter/properties/execution/anyOf/0/properties/image/properties/effectiveVersion"
+        },
+        "authority": {
+          "type": "object",
+          "properties": {
+            "requestIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "grantIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "denialIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "requestIds",
+            "grantIds",
+            "denialIds"
+          ],
+          "additionalProperties": false
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activatedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completionReason": {
+          "type": "string",
+          "enum": [
+            "until",
+            "max-runs",
+            "response"
+          ]
+        },
+        "completionResponse": {
+          "type": "string"
+        },
+        "seeded": {
+          "type": "boolean"
+        },
+        "nextRunAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastRunAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "missionId",
+        "name",
+        "revision",
+        "charter",
+        "authorityPlan",
+        "owner",
+        "state",
+        "revisionDigest",
+        "authority",
+        "createdAt",
+        "updatedAt",
+        "activatedAt",
+        "runCount"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "updateSignal": {
+    "description": "Check upstream and return a model-free automation signal only for unannounced updates.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "automation-signal.v1"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "required": [
+        "protocol",
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "acknowledgeUpdates": {
+    "description": "Record exact updates after the agent has successfully notified the user; does not apply updates.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "credential": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                  }
+                },
+                "required": [
+                  "url",
+                  "ref",
+                  "commit"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {}
+  },
+  "updateStatus": {
+    "description": "Read cached upstream availability without preparing or applying an update.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "credential": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                  }
+                },
+                "required": [
+                  "url",
+                  "ref",
+                  "commit"
+                ],
+                "additionalProperties": false
+              },
+              "checkedAt": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "available",
+                  "different-epoch",
+                  "error"
+                ]
+              },
+              "target": {
+                "$ref": "#/properties/checks/items/properties/source"
+              },
+              "targetEpoch": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "checkedAt",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "workspaceEpoch",
+        "checks"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "checkUpdates": {
+    "description": "Check recorded template sources for upstream changes without modifying workspace content.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "credential": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                  }
+                },
+                "required": [
+                  "url",
+                  "ref",
+                  "commit"
+                ],
+                "additionalProperties": false
+              },
+              "checkedAt": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "available",
+                  "different-epoch",
+                  "error"
+                ]
+              },
+              "target": {
+                "$ref": "#/properties/checks/items/properties/source"
+              },
+              "targetEpoch": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "checkedAt",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "workspaceEpoch",
+        "checks"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "installed": {
+    "description": "List the exact template sources recorded in this workspace.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "presentation": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "credential": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "track": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pin": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "$ref": "#/items/properties/dependencies/items/properties/url"
+              },
+              "credential": {
+                "$ref": "#/items/properties/dependencies/items/properties/credential"
+              },
+              "ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "$ref": "#/items/properties/dependencies/items/properties/commit"
+              }
+            },
+            "required": [
+              "url",
+              "ref",
+              "commit"
+            ],
+            "additionalProperties": false
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "upstream",
+              "direct",
+              "transitive"
+            ]
+          }
+        },
+        "required": [
+          "repositories",
+          "dependencies",
+          "pin",
+          "relationship"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "inspectContribution": {
+    "description": "Review selected owned units to suggest back to one installed template.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "sourceUrl": {
+              "type": "string"
+            },
+            "parts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "sourceUrl",
+            "parts"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "mainEventId": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^v1-sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "source",
+        "parts",
+        "mainEventId",
+        "fingerprint"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "suggestContribution": {
+    "description": "Push the reviewed units on a contribution branch in their template repository.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "plan": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "credential": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "ref",
+                    "commit"
+                  ],
+                  "additionalProperties": false
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "mainEventId": {
+                  "type": "string"
+                },
+                "fingerprint": {
+                  "type": "string",
+                  "pattern": "^v1-sha256:[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "source",
+                "parts",
+                "mainEventId",
+                "fingerprint"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "commandId",
+            "plan"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "pushed",
+            "already-at-remote",
+            "nothing-to-suggest"
+          ]
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string",
+          "nullable": true
+        },
+        "url": {
+          "type": "string"
+        },
+        "headCommit": {
+          "type": "string",
+          "nullable": true
+        },
+        "commits": {
+          "type": "number"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "outcome",
+        "operationId",
+        "branch",
+        "headCommit",
+        "commits",
+        "parts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "prepareUpdate": {
+    "description": "Prepare an exact template update in a separate VCS context, preserving local changes for review.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceUrl": {
+              "type": "string"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "credential": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                }
+              },
+              "required": [
+                "url",
+                "ref",
+                "commit"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "commandId",
+            "sourceUrl"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        },
+        "mainEventId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "review",
+            "published"
+          ]
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoPath": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "changed",
+                  "removed"
+                ]
+              }
+            },
+            "required": [
+              "repoPath",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deltaId": {
+                "type": "string"
+              },
+              "repoPath": {
+                "type": "string"
+              },
+              "coordinate": {
+                "type": "object",
+                "properties": {
+                  "coordinate": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file",
+                          "repository"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable coordinate identity."
+                      },
+                      "paths": {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "string"
+                          },
+                          "ours": {
+                            "type": "string"
+                          },
+                          "theirs": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id",
+                      "paths"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "adopt",
+                      "convergent",
+                      "composed",
+                      "conflict",
+                      "resolved"
+                    ]
+                  },
+                  "aspects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "aspect": {
+                          "type": "string",
+                          "enum": [
+                            "content",
+                            "placement",
+                            "mode",
+                            "presence",
+                            "path"
+                          ]
+                        },
+                        "base": {},
+                        "ours": {},
+                        "theirs": {},
+                        "baseValues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "eventId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maximal base event."
+                              },
+                              "value": {}
+                            },
+                            "required": [
+                              "eventId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "minItems": 2,
+                          "maxItems": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "adopt",
+                            "convergent",
+                            "composed",
+                            "conflict",
+                            "ours"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "aspect",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "attribution": {
+                    "type": "object",
+                    "properties": {
+                      "ours": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "changeId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed change."
+                            },
+                            "workUnitId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed work unit."
+                            },
+                            "undone": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            }
+                          },
+                          "required": [
+                            "changeId",
+                            "workUnitId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxItems": 10000
+                      },
+                      "theirs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/properties/conflicts/items/properties/coordinate/properties/attribution/properties/ours/items"
+                        },
+                        "maxItems": 10000
+                      }
+                    },
+                    "required": [
+                      "ours",
+                      "theirs"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "group": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Coupled structural group."
+                  },
+                  "structuralConflicts": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable file identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "repository"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable repository identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "composed",
+                        "theirs",
+                        "ours",
+                        "current"
+                      ]
+                    },
+                    "maxItems": 4
+                  },
+                  "decisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reachable resolving decision."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "coordinate",
+                  "status",
+                  "aspects",
+                  "attribution",
+                  "resolutions",
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "deltaId",
+              "repoPath",
+              "coordinate"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operationId",
+        "contextId",
+        "sourceUrl",
+        "target",
+        "mainEventId",
+        "status",
+        "repositories",
+        "conflicts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "reviewUpdate": {
+    "description": "Inspect a prepared update and its remaining native VCS conflicts.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "operationId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        },
+        "mainEventId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "review",
+            "published"
+          ]
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoPath": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "changed",
+                  "removed"
+                ]
+              }
+            },
+            "required": [
+              "repoPath",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deltaId": {
+                "type": "string"
+              },
+              "repoPath": {
+                "type": "string"
+              },
+              "coordinate": {
+                "type": "object",
+                "properties": {
+                  "coordinate": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file",
+                          "repository"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable coordinate identity."
+                      },
+                      "paths": {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "string"
+                          },
+                          "ours": {
+                            "type": "string"
+                          },
+                          "theirs": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id",
+                      "paths"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "adopt",
+                      "convergent",
+                      "composed",
+                      "conflict",
+                      "resolved"
+                    ]
+                  },
+                  "aspects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "aspect": {
+                          "type": "string",
+                          "enum": [
+                            "content",
+                            "placement",
+                            "mode",
+                            "presence",
+                            "path"
+                          ]
+                        },
+                        "base": {},
+                        "ours": {},
+                        "theirs": {},
+                        "baseValues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "eventId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maximal base event."
+                              },
+                              "value": {}
+                            },
+                            "required": [
+                              "eventId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "minItems": 2,
+                          "maxItems": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "adopt",
+                            "convergent",
+                            "composed",
+                            "conflict",
+                            "ours"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "aspect",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "attribution": {
+                    "type": "object",
+                    "properties": {
+                      "ours": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "changeId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed change."
+                            },
+                            "workUnitId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed work unit."
+                            },
+                            "undone": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            }
+                          },
+                          "required": [
+                            "changeId",
+                            "workUnitId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxItems": 10000
+                      },
+                      "theirs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/properties/conflicts/items/properties/coordinate/properties/attribution/properties/ours/items"
+                        },
+                        "maxItems": 10000
+                      }
+                    },
+                    "required": [
+                      "ours",
+                      "theirs"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "group": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Coupled structural group."
+                  },
+                  "structuralConflicts": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable file identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "repository"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable repository identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "composed",
+                        "theirs",
+                        "ours",
+                        "current"
+                      ]
+                    },
+                    "maxItems": 4
+                  },
+                  "decisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reachable resolving decision."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "coordinate",
+                  "status",
+                  "aspects",
+                  "attribution",
+                  "resolutions",
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "deltaId",
+              "repoPath",
+              "coordinate"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operationId",
+        "contextId",
+        "sourceUrl",
+        "target",
+        "mainEventId",
+        "status",
+        "repositories",
+        "conflicts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "readUpdateFile": {
+    "description": "Read the base, local, and incoming versions of a file in a prepared update.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "repoPath": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operationId",
+            "repoPath",
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "nullable": true
+        },
+        "ours": {
+          "type": "string",
+          "nullable": true
+        },
+        "theirs": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "required": [
+        "base",
+        "ours",
+        "theirs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "resolveUpdate": {
+    "description": "Resolve one exact native VCS conflict in a template update.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deltaId": {
+              "type": "string"
+            },
+            "coordinate": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "file",
+                    "repository"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "resolution": {
+              "type": "string",
+              "enum": [
+                "ours",
+                "theirs"
+              ]
+            }
+          },
+          "required": [
+            "operationId",
+            "deltaId",
+            "coordinate",
+            "resolution"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        },
+        "mainEventId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "review",
+            "published"
+          ]
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoPath": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "changed",
+                  "removed"
+                ]
+              }
+            },
+            "required": [
+              "repoPath",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deltaId": {
+                "type": "string"
+              },
+              "repoPath": {
+                "type": "string"
+              },
+              "coordinate": {
+                "type": "object",
+                "properties": {
+                  "coordinate": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file",
+                          "repository"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable coordinate identity."
+                      },
+                      "paths": {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "string"
+                          },
+                          "ours": {
+                            "type": "string"
+                          },
+                          "theirs": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id",
+                      "paths"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "adopt",
+                      "convergent",
+                      "composed",
+                      "conflict",
+                      "resolved"
+                    ]
+                  },
+                  "aspects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "aspect": {
+                          "type": "string",
+                          "enum": [
+                            "content",
+                            "placement",
+                            "mode",
+                            "presence",
+                            "path"
+                          ]
+                        },
+                        "base": {},
+                        "ours": {},
+                        "theirs": {},
+                        "baseValues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "eventId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maximal base event."
+                              },
+                              "value": {}
+                            },
+                            "required": [
+                              "eventId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "minItems": 2,
+                          "maxItems": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "adopt",
+                            "convergent",
+                            "composed",
+                            "conflict",
+                            "ours"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "aspect",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "attribution": {
+                    "type": "object",
+                    "properties": {
+                      "ours": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "changeId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed change."
+                            },
+                            "workUnitId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed work unit."
+                            },
+                            "undone": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            }
+                          },
+                          "required": [
+                            "changeId",
+                            "workUnitId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxItems": 10000
+                      },
+                      "theirs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/properties/conflicts/items/properties/coordinate/properties/attribution/properties/ours/items"
+                        },
+                        "maxItems": 10000
+                      }
+                    },
+                    "required": [
+                      "ours",
+                      "theirs"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "group": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Coupled structural group."
+                  },
+                  "structuralConflicts": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable file identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "repository"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable repository identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "composed",
+                        "theirs",
+                        "ours",
+                        "current"
+                      ]
+                    },
+                    "maxItems": 4
+                  },
+                  "decisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reachable resolving decision."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "coordinate",
+                  "status",
+                  "aspects",
+                  "attribution",
+                  "resolutions",
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "deltaId",
+              "repoPath",
+              "coordinate"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operationId",
+        "contextId",
+        "sourceUrl",
+        "target",
+        "mainEventId",
+        "status",
+        "repositories",
+        "conflicts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "publishUpdate": {
+    "description": "Publish a fully reviewed template update through the ordinary workspace VCS gate.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "operationId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        },
+        "mainEventId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "review",
+            "published"
+          ]
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoPath": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "changed",
+                  "removed"
+                ]
+              }
+            },
+            "required": [
+              "repoPath",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deltaId": {
+                "type": "string"
+              },
+              "repoPath": {
+                "type": "string"
+              },
+              "coordinate": {
+                "type": "object",
+                "properties": {
+                  "coordinate": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file",
+                          "repository"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable coordinate identity."
+                      },
+                      "paths": {
+                        "type": "object",
+                        "properties": {
+                          "base": {
+                            "type": "string"
+                          },
+                          "ours": {
+                            "type": "string"
+                          },
+                          "theirs": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id",
+                      "paths"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "adopt",
+                      "convergent",
+                      "composed",
+                      "conflict",
+                      "resolved"
+                    ]
+                  },
+                  "aspects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "aspect": {
+                          "type": "string",
+                          "enum": [
+                            "content",
+                            "placement",
+                            "mode",
+                            "presence",
+                            "path"
+                          ]
+                        },
+                        "base": {},
+                        "ours": {},
+                        "theirs": {},
+                        "baseValues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "eventId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maximal base event."
+                              },
+                              "value": {}
+                            },
+                            "required": [
+                              "eventId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "minItems": 2,
+                          "maxItems": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "adopt",
+                            "convergent",
+                            "composed",
+                            "conflict",
+                            "ours"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "aspect",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "attribution": {
+                    "type": "object",
+                    "properties": {
+                      "ours": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "changeId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed change."
+                            },
+                            "workUnitId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Attributed work unit."
+                            },
+                            "undone": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            }
+                          },
+                          "required": [
+                            "changeId",
+                            "workUnitId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxItems": 10000
+                      },
+                      "theirs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/properties/conflicts/items/properties/coordinate/properties/attribution/properties/ours/items"
+                        },
+                        "maxItems": 10000
+                      }
+                    },
+                    "required": [
+                      "ours",
+                      "theirs"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "group": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Coupled structural group."
+                  },
+                  "structuralConflicts": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "file"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable file identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "repository"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Stable repository identity."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 10000
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "composed",
+                        "theirs",
+                        "ours",
+                        "current"
+                      ]
+                    },
+                    "maxItems": 4
+                  },
+                  "decisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reachable resolving decision."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "coordinate",
+                  "status",
+                  "aspects",
+                  "attribution",
+                  "resolutions",
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "deltaId",
+              "repoPath",
+              "coordinate"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operationId",
+        "contextId",
+        "sourceUrl",
+        "target",
+        "mainEventId",
+        "status",
+        "repositories",
+        "conflicts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "registry": {
+    "description": "Load the default template registry or a registry URL selected by the user.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "enum": [
+            1
+          ]
+        },
+        "templates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "base",
+                  "personal",
+                  "system",
+                  "development",
+                  "catalog"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "recommended": {
+                "type": "boolean"
+              },
+              "consumers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "base",
+                    "personal",
+                    "system"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "name",
+              "description",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "version",
+        "templates"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "resolveSource": {
+    "description": "Resolve one moving workspace source address into an immutable exact pin.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "url",
+        "ref",
+        "commit"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspect": {
+    "description": "Resolve, acquire, and verify one exact workspace template snapshot.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "credential": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "ref",
+                    "commit"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "pin"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "credential": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "presentation": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "credential": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "track": {
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pin": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "$ref": "#/properties/dependencies/items/properties/url"
+            },
+            "credential": {
+              "$ref": "#/properties/dependencies/items/properties/credential"
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "$ref": "#/properties/dependencies/items/properties/commit"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "repositories",
+        "dependencies",
+        "pin"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectAuthoring": {
+    "description": "Build a reviewed dependency-aware template plan from protected-main workspace source.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "parts"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "parts"
+          ],
+          "additionalProperties": false
+        },
+        "mainEventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selectableParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requestedParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "includedParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "requiredParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "manifest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^v1-sha256:[0-9a-f]{64}$"
+        },
+        "fingerprint": {
+          "$ref": "#/properties/manifestDigest"
+        }
+      },
+      "required": [
+        "request",
+        "mainEventId",
+        "selectableParts",
+        "requestedParts",
+        "includedParts",
+        "requiredParts",
+        "manifest",
+        "manifestDigest",
+        "fingerprint"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "publicationRepositories": {
+    "description": "List writable GitHub repositories for a selected connected account.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "credentialId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string"
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "private": {
+                "type": "boolean"
+              },
+              "webUrl": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "name",
+              "private",
+              "webUrl"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "nextPage": {
+          "type": "integer",
+          "nullable": true
+        }
+      },
+      "required": [
+        "owner",
+        "repositories",
+        "nextPage"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "authoringSetup": {
+    "description": "Read template identity, upstream, dependencies, and declared publication contents from one workspace state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "upstream": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "ref",
+            "commit"
+          ],
+          "additionalProperties": false,
+          "nullable": true
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "$ref": "#/properties/upstream/properties/url"
+              },
+              "credential": {
+                "$ref": "#/properties/upstream/properties/credential"
+              },
+              "track": {
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "$ref": "#/properties/upstream/properties/commit"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repoPath": {
+                "type": "string"
+              },
+              "ownership": {
+                "type": "string",
+                "enum": [
+                  "authored",
+                  "inherited",
+                  "unlisted"
+                ]
+              },
+              "inheritedFrom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "repoPath",
+              "ownership"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "upstream",
+        "dependencies",
+        "parts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "publicationVersion": {
+    "description": "Suggest the next stable patch version from all existing repository tags.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credentialId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "latest": {
+          "type": "string",
+          "nullable": true
+        },
+        "suggested": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "latest",
+        "suggested"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "authoringUpstream": {
+    "description": "Read the workspace's own template publishing repository, if configured.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "url",
+        "ref",
+        "commit"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "authoringParts": {
+    "description": "List protected-main repositories available for snapshot authoring.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "repoPath": {
+            "type": "string"
+          },
+          "packageName": {
+            "type": "string"
+          },
+          "inheritedFrom": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoPath"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "reviewPublication": {
+    "description": "Check publication access and compare the exact release with upstream without publishing.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "intent": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "parts"
+              ],
+              "additionalProperties": false
+            },
+            "expectedFingerprint": {
+              "type": "string",
+              "pattern": "^v1-sha256:[0-9a-f]{64}$"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^v?[0-9]+(?:\\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$"
+            },
+            "destination": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "owner": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "provider",
+                "owner",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "credentialId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "creation": {
+              "type": "object",
+              "properties": {
+                "private": {
+                  "type": "boolean"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "commandId",
+            "intent",
+            "expectedFingerprint",
+            "version",
+            "destination"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "remoteCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "nullable": true
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "removed",
+                  "changed"
+                ]
+              },
+              "oldHash": {
+                "type": "string"
+              },
+              "newHash": {
+                "type": "string"
+              },
+              "binary": {
+                "type": "boolean"
+              },
+              "tooLarge": {
+                "type": "boolean"
+              },
+              "oldMode": {
+                "type": "number",
+                "nullable": true
+              },
+              "newMode": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "binary",
+              "tooLarge",
+              "oldMode",
+              "newMode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "remoteCommit",
+        "changedFiles"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "publishAuthoring": {
+    "description": "Revalidate and publish a reviewed workspace template snapshot.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "intent": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "parts"
+              ],
+              "additionalProperties": false
+            },
+            "expectedFingerprint": {
+              "type": "string",
+              "pattern": "^v1-sha256:[0-9a-f]{64}$"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^v?[0-9]+(?:\\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$"
+            },
+            "destination": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "owner": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "provider",
+                "owner",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "credentialId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "creation": {
+              "type": "object",
+              "properties": {
+                "private": {
+                  "type": "boolean"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "expectedRemoteCommit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$",
+              "nullable": true
+            }
+          },
+          "required": [
+            "commandId",
+            "intent",
+            "expectedFingerprint",
+            "version",
+            "destination",
+            "expectedRemoteCommit"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "provider",
+            "owner",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "remoteUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "webUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "templateUrl": {
+          "type": "string"
+        },
+        "credential": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^refs\\/tags\\/"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "operationId",
+        "destination",
+        "created",
+        "remoteUrl",
+        "webUrl",
+        "templateUrl",
+        "ref",
+        "commit",
+        "parts"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -31,14 +31,14 @@ describe("headless-host config authentication", () => {
     ).toEqual({ kind: "injected" });
   });
 
-  it("uses a separate Chromium profile for every host session by default", () => {
+  it("places transient browser state under its instance owner", () => {
     const first = resolveConfig(
       {
         serverUrl: "http://127.0.0.1:3030",
         ipcToken: "secret",
         clientSessionId: "headless-one",
       },
-      {} as NodeJS.ProcessEnv
+      { VIBESTUDIO_INSTANCE_ROOT: "/owned/first" } as NodeJS.ProcessEnv
     );
     const second = resolveConfig(
       {
@@ -46,11 +46,12 @@ describe("headless-host config authentication", () => {
         ipcToken: "secret",
         clientSessionId: "headless-two",
       },
-      {} as NodeJS.ProcessEnv
+      { VIBESTUDIO_INSTANCE_ROOT: "/owned/second" } as NodeJS.ProcessEnv
     );
 
-    expect(first.profileDir).toMatch(/headless-host\/instance-headless-one$/);
-    expect(second.profileDir).toMatch(/headless-host\/instance-headless-two$/);
-    expect(first.profileDir).not.toBe(second.profileDir);
+    expect(first.profileRoot).toBe("/owned/first/vibestudio-headless");
+    expect(second.profileRoot).toBe("/owned/second/vibestudio-headless");
+    expect(first.profileRoot).not.toBe(second.profileRoot);
+    expect(first.cacheDir).toBe(second.cacheDir);
   });
 });

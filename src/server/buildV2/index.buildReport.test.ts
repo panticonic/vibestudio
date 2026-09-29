@@ -35,7 +35,11 @@ let typecheckDiagnostics: (unitRelativePath: string) => Array<{
   message: string;
 }> = () => [];
 let typecheckCalls = 0;
-let typecheckInputs: Array<{ unitRelativePath: string; authority?: unknown }> = [];
+let typecheckInputs: Array<{
+  unitRelativePath: string;
+  moduleConditions: readonly string[];
+  authority?: unknown;
+}> = [];
 // Records every non-cache-hit build the mock actually performs.
 let buildCalls: Array<{
   name: string;
@@ -80,6 +84,9 @@ function fakeSource(
     unitHashes: async (stateHash, relPaths) =>
       Object.fromEntries(
         relPaths.map((relPath) => {
+          if (relPath === "projects/notes") return [relPath, "h:projects/notes"];
+          if (!graph.allNodes().some((node) => node.relativePath === relPath))
+            return [relPath, null];
           if (relPath === "packages/lib" && stateHash === CANDIDATE_VIEW) {
             return [relPath, "h:packages/lib:candidate"];
           }
@@ -99,12 +106,15 @@ function fakeSource(
   };
 }
 
-async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = {}): Promise<{
+async function loadWithMocks(
+  options: { blockingAuthorityConsumer?: boolean; isolatedExports?: unknown } = {}
+): Promise<{
   buildSystem: BuildSystemV2;
   workspaceRoot: string;
   cleanup: () => Promise<void>;
   buildStore: typeof import("./buildStore.js");
   persistEvState: ReturnType<typeof vi.fn>;
+  source: WorkspaceStateSource;
 }> {
   vi.resetModules();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-validate-"));
@@ -116,7 +126,11 @@ async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = 
   writeUnit(workspaceRoot, "packages/isolated", "@workspace/isolated");
   const isolatedManifestPath = path.join(workspaceRoot, "packages/isolated/package.json");
   const isolatedManifest = JSON.parse(fs.readFileSync(isolatedManifestPath, "utf8"));
-  isolatedManifest.exports = { ".": "./index.ts", "./alpha": "./index.ts", "./beta": "./index.ts" };
+  isolatedManifest.exports = options.isolatedExports ?? {
+    ".": "./index.ts",
+    "./alpha": "./index.ts",
+    "./beta": "./index.ts",
+  };
   fs.writeFileSync(isolatedManifestPath, JSON.stringify(isolatedManifest));
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
     "@workspace/mid": "workspace:*",
@@ -150,7 +164,11 @@ async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = 
 
   vi.doMock("./typecheckWorkerClient.js", () => ({
     TypecheckWorkerClient: class {
-      async check(input: { unitRelativePath: string; authority?: unknown }) {
+      async check(input: {
+        unitRelativePath: string;
+        moduleConditions: readonly string[];
+        authority?: unknown;
+      }) {
         typecheckCalls += 1;
         typecheckInputs.push(input);
         return typecheckDiagnostics(input.unitRelativePath);
@@ -215,7 +233,8 @@ async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = 
   const { discoverPackageGraph } = await import("./packageGraph.js");
   const buildStore = await import("./buildStore.js");
   const graph = discoverPackageGraph(workspaceRoot);
-  const buildSystem = await initBuildSystemV2(workspaceRoot, fakeSource(workspaceRoot, graph), [], {
+  const source = fakeSource(workspaceRoot, graph);
+  const buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
     appRoot: process.cwd(),
     runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
@@ -232,6 +251,7 @@ async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = 
     workspaceRoot,
     buildStore,
     persistEvState,
+    source,
     cleanup: async () => {
       await buildSystem.shutdown();
       vi.doUnmock("./builder.js");
@@ -314,18 +334,60 @@ describe("BuildSystemV2 — explicit build reports", () => {
     ]);
   });
 
-  it("validates package source once across all six export targets", async () => {
+  it("validates package source once per execution environment across all six exports", async () => {
     env = await loadWithMocks();
     const node = env.buildSystem;
     const report = await node.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
     expect(report.builds).toHaveLength(6);
-    expect(typecheckCalls).toBe(1);
+    expect(typecheckCalls).toBe(2);
     expect(typecheckInputs[0]?.authority).toBeUndefined();
+    expect(typecheckInputs.map((input) => input.moduleConditions)).toEqual([
+      ["vibestudio-panel", "import", "default"],
+      ["worker", "workerd", "import", "default"],
+    ]);
     expect(buildCalls).toHaveLength(6);
 
     await node.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
-    expect(typecheckCalls).toBe(1);
+    expect(typecheckCalls).toBe(2);
     expect(buildCalls).toHaveLength(6);
+  });
+
+  it("builds browser-only exports without requiring a worker entry", async () => {
+    env = await loadWithMocks({ isolatedExports: { ".": { "vibestudio-panel": "./index.ts" } } });
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.status).toBe("ok");
+    expect(report.builds).toEqual([
+      expect.objectContaining({ target: "library:panel", exportPath: "." }),
+    ]);
+    expect(typecheckCalls).toBe(1);
+  });
+
+  it("resolves each conditional subpath in its declared environment", async () => {
+    env = await loadWithMocks({
+      isolatedExports: {
+        "./panel": { "vibestudio-panel": "./index.ts" },
+        "./worker": { worker: "./index.ts" },
+      },
+    });
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.status).toBe("ok");
+    expect(report.builds.map(({ target, exportPath }) => ({ target, exportPath }))).toEqual([
+      { target: "library:panel", exportPath: "./panel" },
+      { target: "library:worker", exportPath: "./worker" },
+    ]);
+  });
+
+  it("rejects a package with no resolvable public export", async () => {
+    env = await loadWithMocks({ isolatedExports: { ".": null } });
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.status).toBe("failed");
+    expect(report.builds).toEqual([]);
+    expect(report.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining("No public export"),
+      }),
+    ]);
   });
 
   it("coalesces concurrent reports for the same immutable unit view", async () => {
@@ -408,6 +470,34 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(buildCalls).toEqual([
       expect.objectContaining({ name: "@workspace-panels/app", stateRef: CANDIDATE_VIEW }),
     ]);
+  });
+
+  it("distinguishes absent units from existing content at the exact selected state", async () => {
+    env = await loadWithMocks();
+    for (const target of ["panels/missing", "@workspace/missing"]) {
+      await expect(env.buildSystem.getBuildReport(target, "ctx:review")).rejects.toMatchObject({
+        name: "BuildRequestError",
+        message: expect.stringContaining(target),
+      });
+    }
+    expect(await env.buildSystem.getBuildReport("projects/notes", "ctx:review")).toMatchObject({
+      stateHash: CANDIDATE_VIEW,
+      repoPath: "projects/notes",
+      kind: "content",
+      status: "skipped",
+      builds: [],
+      diagnostics: [],
+    });
+    expect(buildCalls).toEqual([]);
+    expect(typecheckCalls).toBe(0);
+  });
+
+  it("propagates source refresh failures instead of certifying a stale main snapshot", async () => {
+    env = await loadWithMocks();
+    const failure = new Error("protected publication unavailable");
+    vi.spyOn(env.source, "ensureFresh").mockRejectedValue(failure);
+    await expect(env.buildSystem.getBuildReport("panels/app")).rejects.toBe(failure);
+    expect(buildCalls).toEqual([]);
   });
 
   it("scopes publication validation to the complete reverse-dependency closure", async () => {
@@ -519,7 +609,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
 
     expect(report.diagnostics).toHaveLength(1);
-    expect(typecheckCalls).toBe(1);
+    expect(typecheckCalls).toBe(2);
     expect(report.builds.length).toBeGreaterThan(1);
     expect(report.builds.every((build) => build.diagnosticIndexes[0] === 0)).toBe(true);
   });

@@ -51,6 +51,7 @@ export type EventName =
   | "server-log:append"
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
+  | "runtime:contextRemoved"
   | "panel:executionActivated"
   | "panel:executionFailed"
   | "panel:stateArgsChanged"
@@ -263,6 +264,7 @@ export interface EventPayloads {
    */
   "workspace-presence-changed": WorkspacePresenceEntry[];
   "panel:runtimeLeaseChanged": PanelRuntimeLeaseChangedEvent;
+  "runtime:contextRemoved": { contextId: string };
   /**
    * The server sealed the immutable execution identity for a panel
    * incarnation. Addressed to the presenting host so it can converge an
@@ -552,6 +554,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-tree-invalidated",
   "workspace-presence-changed",
   "panel:runtimeLeaseChanged",
+  "runtime:contextRemoved",
   "panel:executionActivated",
   "panel:executionFailed",
   "panel:stateArgsChanged",

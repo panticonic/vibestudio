@@ -6,6 +6,7 @@ import {
   resolveWorkspaceRpcCatalogWorkerEntry,
   WorkspaceRpcCatalogWorkerClient,
 } from "./workspaceRpcCatalogWorkerClient.js";
+import { BuildDiagnosticsError } from "./diagnostics.js";
 
 const roots: string[] = [];
 const clients: WorkspaceRpcCatalogWorkerClient[] = [];
@@ -16,6 +17,40 @@ afterEach(async () => {
 });
 
 describe("WorkspaceRpcCatalogWorkerClient", () => {
+  it("retains source declaration diagnostics across the native worker boundary", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-worker-invalid-"));
+    roots.push(root);
+    const file = path.join(root, "provider.ts");
+    fs.writeFileSync(
+      file,
+      `class NotesDO {
+      @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+      async getNote(): Promise<void> {}
+    }`
+    );
+    const client = new WorkspaceRpcCatalogWorkerClient(process.cwd());
+    clients.push(client);
+    let caught: unknown;
+    try {
+      await client.collect(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    expect((caught as BuildDiagnosticsError).diagnostics).toEqual([
+      {
+        source: "schema",
+        severity: "error",
+        file,
+        line: 2,
+        column: 7,
+        message: "provider.ts:getNote requires a literal website exposure decision",
+      },
+    ]);
+  });
   it("resolves the source-mode worker bootstrap", () => {
     expect(resolveWorkspaceRpcCatalogWorkerEntry(process.cwd())).toBe(
       path.join(process.cwd(), "src/server/buildV2/workspaceRpcCatalogWorkerBootstrap.mjs")

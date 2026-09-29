@@ -167,7 +167,11 @@ describe("build service extension diagnostics", () => {
         },
       },
     } as never);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "buildWebsite", [
@@ -195,7 +199,11 @@ describe("build service extension diagnostics", () => {
   it("returns the portable { bundle } contract for library builds", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuild", [
@@ -212,7 +220,11 @@ describe("build service extension diagnostics", () => {
 
   it("returns compact build metadata by default", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     const metadata = await service.handler(
       { caller: createVerifiedCaller("shell", "shell") },
@@ -230,7 +242,11 @@ describe("build service extension diagnostics", () => {
 
   it("returns the executable source inventory only when explicitly requested", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuildMetadata", [
@@ -247,7 +263,11 @@ describe("build service extension diagnostics", () => {
 
   it("accepts an explicit compact metadata read", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     const metadata = await service.handler(
       { caller: createVerifiedCaller("shell", "shell") },
@@ -264,7 +284,11 @@ describe("build service extension diagnostics", () => {
 
   it("schedules ahead-of-use build reports in the background", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await service.handler(
       { caller: createVerifiedCaller("panel:chat", "panel") },
@@ -282,7 +306,11 @@ describe("build service extension diagnostics", () => {
 
   it("profiles exact builds without returning artifact or module contents", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     const profile = (await service.handler(
       { caller: createVerifiedCaller("shell", "shell") },
@@ -311,7 +339,11 @@ describe("build service extension diagnostics", () => {
 
   it("resolves panel metadata by its public workspace source path", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
@@ -326,6 +358,51 @@ describe("build service extension diagnostics", () => {
     expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("ctx:feature", ["panel"]);
   });
 
+  it("resolves unpublished panel metadata in the same inherited context as activation", async () => {
+    const buildSystem = makeBuildSystem();
+    const panels = await buildSystem.listBuildUnits(undefined, ["panel"]);
+    vi.mocked(buildSystem.listBuildUnits).mockImplementation(async (ref) =>
+      ref === "ctx:context:unpublished" || ref === "event:explicit" ? panels : []
+    );
+    const getCallerContextId = vi.fn(() => "context:unpublished");
+    const service = createBuildService({ buildSystem, listUnits: () => [], getCallerContextId });
+    const context = { caller: createVerifiedCaller("worker:eval", "worker") };
+    await expect(
+      service.handler(context, "getPanelMetadata", ["panels/hello-svelte"])
+    ).resolves.toMatchObject({ source: "panels/hello-svelte", title: "Hello Svelte" });
+    expect(getCallerContextId).toHaveBeenCalledWith("worker:eval");
+    expect(buildSystem.listBuildUnits).toHaveBeenLastCalledWith("ctx:context:unpublished", [
+      "panel",
+    ]);
+    await service.handler(context, "getPanelMetadata", ["panels/hello-svelte", "event:explicit"]);
+    expect(buildSystem.listBuildUnits).toHaveBeenLastCalledWith("event:explicit", ["panel"]);
+  });
+
+  it("uses a verified agent binding and keeps unbound root callers on main", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
+    await service.handler(
+      {
+        caller: createVerifiedCaller("agent:external", "agent", null, {
+          entityId: "entity:bound",
+          contextId: "context:bound",
+          channelId: "channel:bound",
+        }),
+      },
+      "getPanelMetadata",
+      ["panels/hello-svelte"]
+    );
+    expect(buildSystem.listBuildUnits).toHaveBeenLastCalledWith("ctx:context:bound", ["panel"]);
+    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
+      "panels/hello-svelte",
+    ]);
+    expect(buildSystem.listBuildUnits).toHaveBeenLastCalledWith(undefined, ["panel"]);
+  });
+
   it("returns file-backed icons as compact declarations bound to exact source state", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.listBuildUnits).mockResolvedValue([
@@ -338,7 +415,11 @@ describe("build service extension diagnostics", () => {
         manifest: { title: "Hello Svelte", icon: "./assets/icon.svg" },
       },
     ]);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
@@ -375,7 +456,11 @@ describe("build service extension diagnostics", () => {
       cleanupFailures: [],
       retainedSourceRoots: [],
     });
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "gc", [])
@@ -400,7 +485,11 @@ describe("build service extension diagnostics", () => {
         timestamp: "2026-01-01T00:00:01.000Z",
       },
     ]);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler(
@@ -453,7 +542,11 @@ describe("build service extension diagnostics", () => {
         timestamp: "2026-01-01T00:00:01.000Z",
       },
     ]);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "listRecentBuildEvents", [
@@ -499,7 +592,11 @@ describe("build service extension diagnostics", () => {
       ],
       tryGet: () => undefined,
     } as never);
-    const service = createBuildService({ buildSystem, listUnits: () => [] });
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
 
     await expect(
       service.handler(

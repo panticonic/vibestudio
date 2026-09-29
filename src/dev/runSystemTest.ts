@@ -160,7 +160,14 @@ async function main(): Promise<void> {
   const repoRoot = path.resolve(process.cwd());
   const parsed = parseSystemTestLauncherArgs(process.argv.slice(2));
   if (isLocalSystemTestHelpCommand(parsed.command)) {
-    process.stdout.write(HELP);
+    if (parsed.command.length === 1) {
+      process.stdout.write(HELP);
+    } else {
+      // Subcommand descriptions are also local metadata. Enter the CLI's
+      // parser directly so help never binds to or provisions a server.
+      const { main: runLocalCli } = await import("../cli/client.js");
+      process.exitCode = await runLocalCli(["system-test", ...parsed.command]);
+    }
     return;
   }
   if (parsed.command[0] === "stop") {

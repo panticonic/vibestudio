@@ -11,6 +11,8 @@
 import { WebSocket } from "ws";
 
 interface PendingCommand {
+  method: string;
+  sessionId?: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }
@@ -23,6 +25,7 @@ export interface CdpEventEnvelope {
 
 export class CdpConnection {
   private nextId = 1;
+  private closedError: Error | null = null;
   private readonly pending = new Map<number, PendingCommand>();
   private readonly eventListeners = new Set<(event: CdpEventEnvelope) => void>();
   private readonly closeListeners = new Set<() => void>();
@@ -32,11 +35,13 @@ export class CdpConnection {
   private constructor(private readonly ws: WebSocket) {
     ws.on("message", (data) => this.handleMessage(String(data)));
     ws.on("error", (error) => {
+      this.closedError = error;
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
     });
     ws.on("close", () => {
-      const error = new Error("CDP connection closed");
+      const error = Object.assign(new Error("CDP connection closed"), { code: "CDP_CONNECTION_CLOSED" });
+      this.closedError = error;
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
       for (const listener of this.closeListeners) listener();
@@ -45,20 +50,44 @@ export class CdpConnection {
 
   static async connect(wsEndpoint: string): Promise<CdpConnection> {
     const ws = new WebSocket(wsEndpoint, { maxPayload: 256 * 1024 * 1024 });
-    await new Promise<void>((resolve, reject) => {
-      ws.once("open", () => resolve());
-      ws.once("error", (error) => reject(error));
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          ws.off("open", onOpen);
+          ws.off("error", onError);
+          ws.off("close", onClose);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const onClose = () => {
+          cleanup();
+          reject(new Error("CDP connection closed before opening"));
+        };
+        ws.once("open", onOpen);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+      });
+    } catch (error) {
+      ws.terminate();
+      throw error;
+    }
     return new CdpConnection(ws);
   }
 
   send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<unknown> {
+    if (this.closedError) return Promise.reject(this.closedError);
     const id = this.nextId++;
     const message: Record<string, unknown> = { id, method };
     if (params !== undefined) message["params"] = params;
     if (sessionId) message["sessionId"] = sessionId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { method, sessionId, resolve, reject });
       this.ws.send(JSON.stringify(message), (error) => {
         if (error) {
           this.pending.delete(id);
@@ -84,14 +113,25 @@ export class CdpConnection {
   }
 
   releaseSession(sessionId: string): void {
+    this.rejectSessionCommands(sessionId, "CDP_SESSION_RELEASED", "CDP session ownership was released");
     this.sessionOwners.delete(sessionId);
+  }
+
+  private rejectSessionCommands(sessionId: string, code: string, message: string): void {
+    for (const [id, command] of this.pending) {
+      if (command.sessionId !== sessionId) continue;
+      this.pending.delete(id);
+      command.reject(Object.assign(new Error(`${message}: ${sessionId} (${command.method})`), {
+        code, sessionId, operation: command.method,
+      }));
+    }
   }
 
   releaseSlotSessions(slotId: string): string[] {
     const released: string[] = [];
     for (const [sessionId, owner] of this.sessionOwners) {
       if (owner === slotId) {
-        this.sessionOwners.delete(sessionId);
+        this.releaseSession(sessionId);
         released.push(sessionId);
       }
     }
@@ -103,6 +143,11 @@ export class CdpConnection {
   }
 
   close(): void {
+    if (!this.closedError) {
+      this.closedError = Object.assign(new Error("CDP connection closed by its owner"), { code: "CDP_CONNECTION_CLOSED" });
+      for (const command of this.pending.values()) command.reject(this.closedError);
+      this.pending.clear();
+    }
     this.ws.close();
   }
 
@@ -133,6 +178,11 @@ export class CdpConnection {
       return;
     }
     if (!parsed.method) return;
+    if (parsed.sessionId && (parsed.method === "Inspector.targetCrashed" || parsed.method === "Inspector.detached")) {
+      const crashed = parsed.method === "Inspector.targetCrashed";
+      this.rejectSessionCommands(parsed.sessionId, crashed ? "CDP_TARGET_CRASHED" : "CDP_TARGET_DETACHED",
+        crashed ? "CDP target crashed" : "CDP target detached");
+    }
 
     // Track nested sessions: an attach event arriving on a session we own
     // claims the child session for the same slot.
@@ -143,7 +193,10 @@ export class CdpConnection {
     }
     if (parsed.method === "Target.detachedFromTarget") {
       const childSessionId = (parsed.params as { sessionId?: string } | undefined)?.sessionId;
-      if (childSessionId) this.sessionOwners.delete(childSessionId);
+      if (childSessionId) {
+        this.rejectSessionCommands(childSessionId, "CDP_TARGET_DETACHED", "CDP target detached");
+        this.sessionOwners.delete(childSessionId);
+      }
     }
 
     for (const listener of this.eventListeners) {

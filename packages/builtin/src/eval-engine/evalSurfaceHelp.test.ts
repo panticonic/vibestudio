@@ -1,3 +1,4 @@
+import templatesRuntimeCatalog from "../../../service-schemas/src/runtime/generated/templatesRuntimeCatalog.json";
 import { describe, expect, it } from "vitest";
 import {
   describeEvalBindingSurface,
@@ -9,6 +10,15 @@ import {
 } from "./evalSurfaceHelp.js";
 
 describe("describeEvalBindingSurface (help('<binding>') reflects the injected surface)", () => {
+  it("describes template authoring arguments from its canonical receiver schema", () => {
+    const method = describeEvalMethod("templates.inspectAuthoring", templatesRuntimeCatalog.inspectAuthoring);
+    expect(method.call).toBe("await templates.inspectAuthoring(input)");
+    expect(method.parameters).toHaveLength(1);
+    expect(method.parameters[0]!.type).toContain("parts");
+    expect(method.parameters[0]!.type).toContain("string");
+    expect(method.returns).toContain("fingerprint");
+  });
+
   // The fs case: the injected client exposes open()/readFile()/mktemp() but NOT the low-level
   // handle* wire methods, which the raw service schema DOES advertise.
   const fsService = {

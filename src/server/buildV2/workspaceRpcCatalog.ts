@@ -12,6 +12,10 @@ import * as path from "path";
 import * as ts from "typescript/unstable/ast";
 import type { AuthorityRequirement } from "@vibestudio/rpc";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
+import { BuildDiagnosticsError } from "./diagnostics.js";
+
+/** A malformed authored declaration, distinct from parser/IO failures. */
+class WorkspaceRpcDeclarationError extends Error {}
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type {
   UnitAuthorityManifest,
@@ -98,7 +102,7 @@ function handleProductionOf(
   const property = object.properties.find((candidate) => propertyName(candidate) === "produces");
   if (!property) return undefined;
   if (!ts.isPropertyAssignment(property) || !ts.isObjectLiteralExpression(property.initializer)) {
-    throw new Error(`${label} handle production must be a literal object`);
+    throw new WorkspaceRpcDeclarationError(`${label} handle production must be a literal object`);
   }
   const source = property.initializer;
   const kindProperty = source.properties.find((candidate) => propertyName(candidate) === "kind");
@@ -119,7 +123,9 @@ function handleProductionOf(
     !capability ||
     capability.startsWith("rpc:")
   ) {
-    throw new Error(`${label} has an invalid opaque-handle producer declaration`);
+    throw new WorkspaceRpcDeclarationError(
+      `${label} has an invalid opaque-handle producer declaration`
+    );
   }
   return { capability };
 }
@@ -187,7 +193,9 @@ function effectResourceOf(
     !ts.isPropertyAssignment(property) ||
     !ts.isObjectLiteralExpression(property.initializer)
   ) {
-    throw new Error(`${label} protected effect must declare a literal resource selector`);
+    throw new WorkspaceRpcDeclarationError(
+      `${label} protected effect must declare a literal resource selector`
+    );
   }
   const resource = property.initializer;
   const kindProperty = resource.properties.find((candidate) => propertyName(candidate) === "kind");
@@ -210,7 +218,7 @@ function effectResourceOf(
       return { kind, argument };
     }
   }
-  throw new Error(`${label} has an invalid literal resource selector`);
+  throw new WorkspaceRpcDeclarationError(`${label} has an invalid literal resource selector`);
 }
 
 function websitePolicyOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["website"] {
@@ -224,7 +232,7 @@ function websitePolicyOf(call: ts.CallExpression, label: string): WorkspaceRpcMe
     !ts.isPropertyAssignment(property) ||
     !ts.isObjectLiteralExpression(property.initializer)
   )
-    throw new Error(`${label} requires a literal website exposure decision`);
+    throw new WorkspaceRpcDeclarationError(`${label} requires a literal website exposure decision`);
   const fields = new Map(
     property.initializer.properties.flatMap((field) =>
       ts.isPropertyAssignment(field)
@@ -237,7 +245,9 @@ function websitePolicyOf(call: ts.CallExpression, label: string): WorkspaceRpcMe
     return { kind, reason: fields.get("reason")! };
   if (kind === "eligible" && fields.get("rationale")?.trim())
     return { kind, rationale: fields.get("rationale")! };
-  throw new Error(`${label} requires an explained website exposure decision`);
+  throw new WorkspaceRpcDeclarationError(
+    `${label} requires an explained website exposure decision`
+  );
 }
 
 function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
@@ -264,7 +274,10 @@ function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
       if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.crossWorkspace = true;
       else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword)
         access.crossWorkspace = false;
-      else throw new Error("RPC crossWorkspace exposure must be a literal boolean");
+      else
+        throw new WorkspaceRpcDeclarationError(
+          "RPC crossWorkspace exposure must be a literal boolean"
+        );
     } else if (name === "codeOnly") {
       if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.codeOnly = true;
       if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) access.codeOnly = false;
@@ -276,7 +289,7 @@ function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
 function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["effect"] {
   const object = call.arguments[0];
   if (!object || !ts.isObjectLiteralExpression(object)) {
-    throw new Error(`${label} must declare a literal RPC effect`);
+    throw new WorkspaceRpcDeclarationError(`${label} must declare a literal RPC effect`);
   }
   const property = object.properties.find((candidate) => propertyName(candidate) === "effect");
   if (
@@ -284,7 +297,7 @@ function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc
     !ts.isPropertyAssignment(property) ||
     !ts.isObjectLiteralExpression(property.initializer)
   ) {
-    throw new Error(`${label} must declare a literal RPC effect`);
+    throw new WorkspaceRpcDeclarationError(`${label} must declare a literal RPC effect`);
   }
   const kindProperty = property.initializer.properties.find(
     (candidate) => propertyName(candidate) === "kind"
@@ -305,14 +318,16 @@ function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc
     if (capability && !capability.startsWith("rpc:")) {
       const resource = effectResourceOf(property.initializer, label);
       if (kind === "host-capability" && resource.kind !== "receiver-object") {
-        throw new Error(`${label} host capability must select the receiver object`);
+        throw new WorkspaceRpcDeclarationError(
+          `${label} host capability must select the receiver object`
+        );
       }
       return kind === "host-capability"
         ? { kind, capability, resource: { kind: "receiver-object" } }
         : { kind, capability, resource };
     }
   }
-  throw new Error(`${label} has an invalid literal RPC effect`);
+  throw new WorkspaceRpcDeclarationError(`${label} has an invalid literal RPC effect`);
 }
 
 function methodName(method: ts.MethodDeclaration): string | null {
@@ -367,52 +382,69 @@ export function collectWorkspaceRpcCatalog(
             let effect: WorkspaceRpcMethodDoc["effect"];
             let execution: WorkspaceRpcMethodDoc["execution"];
             let handleProduction: { capability: string } | undefined;
-            if (decorator.kind === "schemaRpc") {
-              const schema = input.rpcSchemas?.[node.name.text]?.[name];
-              if (!schema) {
-                throw new Error(
-                  `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
-                );
+            try {
+              if (decorator.kind === "schemaRpc") {
+                const schema = input.rpcSchemas?.[node.name.text]?.[name];
+                if (!schema) {
+                  throw new WorkspaceRpcDeclarationError(
+                    `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
+                  );
+                }
+                const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
+                if (
+                  principals.length === 0 ||
+                  !schema.tier ||
+                  !schema.access?.sensitivity ||
+                  !schema.directEffect
+                ) {
+                  throw new WorkspaceRpcDeclarationError(
+                    `${label} has an incomplete typed receiver authority declaration`
+                  );
+                }
+                access = {
+                  principals,
+                  tier: schema.tier.tier,
+                  sensitivity: schema.access.sensitivity,
+                  ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
+                  ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
+                };
+                website = schema.website;
+                effect = schema.directEffect;
+                execution = schema.execution;
+              } else {
+                website = websitePolicyOf(decorator.call, label);
+                access = accessOf(decorator.call);
+                effect = effectOf(decorator.call, label);
+                handleProduction = handleProductionOf(decorator.call, label);
               }
-              const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
-              if (
-                principals.length === 0 ||
-                !schema.tier ||
-                !schema.access?.sensitivity ||
-                !schema.directEffect
-              ) {
-                throw new Error(`${label} has an incomplete typed receiver authority declaration`);
-              }
-              access = {
-                principals,
-                tier: schema.tier.tier,
-                sensitivity: schema.access.sensitivity,
-                ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
-                ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
-              };
-              website = schema.website;
-              effect = schema.directEffect;
-              execution = schema.execution;
-            } else {
-              website = websitePolicyOf(decorator.call, label);
-              access = accessOf(decorator.call);
-              effect = effectOf(decorator.call, label);
-              handleProduction = handleProductionOf(decorator.call, label);
-            }
-            methods.push({
-              website,
-              className: node.name.text,
-              name,
-              signature: signatureOf(member, source),
-              inputContractDigest: sha256Canonical({
+              methods.push({
+                website,
+                className: node.name.text,
+                name,
                 signature: signatureOf(member, source),
-              }),
-              effect,
-              ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
-              ...(description ? { description } : {}),
-              ...(access ? { access } : {}),
-              ...(execution ? { execution } : {}),
-            });
+                inputContractDigest: sha256Canonical({
+                  signature: signatureOf(member, source),
+                }),
+                effect,
+                ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
+                ...(description ? { description } : {}),
+                ...(access ? { access } : {}),
+                ...(execution ? { execution } : {}),
+              });
+            } catch (error) {
+              if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
+              const position = source.getLineAndCharacterOfPosition(member.getStart(source));
+              throw new BuildDiagnosticsError(error.message, [
+                {
+                  source: "schema",
+                  severity: "error",
+                  file,
+                  line: position.line + 1,
+                  column: position.character + 1,
+                  message: error.message,
+                },
+              ]);
+            }
           }
         }
       };
@@ -438,7 +470,21 @@ export function collectWorkspaceRpcCatalog(
   const sorted = methods.sort(
     (a, b) => a.className.localeCompare(b.className) || a.name.localeCompare(b.name)
   );
-  sealUserlandCapabilities(sorted, input);
+  try {
+    sealUserlandCapabilities(sorted, input);
+  } catch (error) {
+    if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
+    throw new BuildDiagnosticsError(error.message, [
+      {
+        source: "authority",
+        severity: "error",
+        file: path.join(absoluteWorkerSourcePath, "package.json"),
+        line: 1,
+        column: 1,
+        message: error.message,
+      },
+    ]);
+  }
   return sorted;
 }
 
@@ -454,7 +500,7 @@ function sealUserlandCapabilities(
   for (const method of methods) {
     if (method._handleCapability) {
       if (!definitions.has(method._handleCapability)) {
-        throw new Error(
+        throw new WorkspaceRpcDeclarationError(
           `${input.provider}:${method.className}.${method.name} produces undeclared userland capability ${method._handleCapability}`
         );
       }
@@ -463,13 +509,13 @@ function sealUserlandCapabilities(
       producers.set(method._handleCapability, current);
     }
     if (method.effect.kind === "host-capability") {
-      throw new Error(
+      throw new WorkspaceRpcDeclarationError(
         `${input.provider}:${method.className}.${method.name} cannot declare a host-owned capability`
       );
     }
     if (method.effect.kind === "open") {
       if (method.access?.tier !== "open") {
-        throw new Error(
+        throw new WorkspaceRpcDeclarationError(
           `${input.provider}:${method.className}.${method.name} has an open effect but is not open-tier`
         );
       }
@@ -477,7 +523,7 @@ function sealUserlandCapabilities(
     }
     const definition = definitions.get(method.effect.capability);
     if (!definition) {
-      throw new Error(
+      throw new WorkspaceRpcDeclarationError(
         `${input.provider}:${method.className}.${method.name} references undeclared userland capability ${method.effect.capability}`
       );
     }
@@ -485,7 +531,7 @@ function sealUserlandCapabilities(
       method.access?.tier !== definition.tier ||
       method.access?.sensitivity !== definition.sensitivity
     ) {
-      throw new Error(
+      throw new WorkspaceRpcDeclarationError(
         `${input.provider}:${method.className}.${method.name} authority does not match ` +
           `the sealed ${definition.name} definition`
       );
@@ -497,7 +543,7 @@ function sealUserlandCapabilities(
   for (const definition of input.authority.provides) {
     const bound = bindings.get(definition.name);
     if (!bound || bound.length === 0) {
-      throw new Error(
+      throw new WorkspaceRpcDeclarationError(
         `${input.provider} provides ${definition.name}, but no production RPC method binds it`
       );
     }
@@ -510,7 +556,7 @@ function sealUserlandCapabilities(
           method.effect.resource.kind === "opaque-handle"
       )
     ) {
-      throw new Error(
+      throw new WorkspaceRpcDeclarationError(
         `${input.provider} produces handles for ${definition.name}, but no RPC method consumes them`
       );
     }

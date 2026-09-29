@@ -61,6 +61,7 @@ const SKILLS_PACKAGE_SCOPE = (() => {
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
   listUnits: () => BuildUnitCatalogEntry[];
+  getCallerContextId: (callerId: string) => string | null;
 }): ServiceDefinition {
   const artifactHandle = (build: NonNullable<ReturnType<BuildSystemV2["getBuildByKey"]>>) => ({
     buildKey: build.buildKey,
@@ -293,7 +294,15 @@ export function createBuildService(deps: {
         deps.buildSystem.inspectExecution(executionDigest),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
-      getPanelMetadata: (_ctx, [unit, ref]) => resolvePanelMetadata(deps.buildSystem, unit, ref),
+      getPanelMetadata: (ctx, [unit, ref]) => {
+        const contextId =
+          ctx.caller.agentBinding?.contextId ?? deps.getCallerContextId(ctx.caller.runtime.id);
+        return resolvePanelMetadata(
+          deps.buildSystem,
+          unit,
+          ref ?? (contextId ? `ctx:${contextId}` : undefined)
+        );
+      },
       listSkills: () =>
         deps.buildSystem
           .getGraph()

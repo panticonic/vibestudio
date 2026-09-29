@@ -85,6 +85,24 @@ export interface WorkspaceDeclarations {
   routes: ReadonlyArray<WorkspaceRouteDecl>;
 }
 
+/** One declaration owns each service name/protocol lookup key. */
+export function indexWorkspaceServices<T extends { name: string; protocols?: readonly string[] }>(
+  services: readonly T[],
+): Map<string, T> {
+  const byKey = new Map<string, T>();
+  for (const service of services) {
+    for (const key of new Set([service.name, ...(service.protocols ?? [])])) {
+      if (byKey.has(key)) {
+        throw new Error(
+          `Workspace service key ${JSON.stringify(key)} is declared by both ${JSON.stringify(byKey.get(key)!.name)} and ${JSON.stringify(service.name)}`,
+        );
+      }
+      byKey.set(key, service);
+    }
+  }
+  return byKey;
+}
+
 /**
  * Validate the joined view: every DO-backed route must reference a declared
  * singleton because a route has no factory key input. DO-backed services may
@@ -98,18 +116,7 @@ export function buildWorkspaceDeclarations(config: WorkspaceConfig): WorkspaceDe
   const singletons = new SingletonRegistry(config.singletonObjects ?? []);
   const services = config.services ?? [];
   const routes = config.routes ?? [];
-  const serviceKeys = new Map<string, string>();
-  for (const service of services) {
-    for (const key of [service.name, ...(service.protocols ?? [])]) {
-      const owner = serviceKeys.get(key);
-      if (owner) {
-        throw new Error(
-          `Workspace service key ${JSON.stringify(key)} is declared by both ${JSON.stringify(owner)} and ${JSON.stringify(service.name)}`
-        );
-      }
-      serviceKeys.set(key, service.name);
-    }
-  }
+  indexWorkspaceServices(services);
 
   // DO-backed services without a matching singletonObjects row are factories;
   // callers must supply `objectKey` at resolve time. No validation needed here.

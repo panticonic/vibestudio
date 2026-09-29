@@ -405,6 +405,31 @@ describe("NativeDevelopmentExecutor", () => {
     ).resolves.toBeDefined();
   });
 
+  it("keeps shutdown pending until the owned tool stops, preserving its source", async () => {
+    const fx = await fixture();
+    await open(fx);
+    let acknowledge!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    vi.mocked(fx.handle.stop).mockReturnValue(stopped);
+    const closing = fx.executor.close();
+    let finished = false;
+    void closing.then(() => {
+      finished = true;
+    });
+    await vi.waitFor(() => expect(fx.handle.stop).toHaveBeenCalledTimes(1));
+    expect(finished).toBe(false);
+    acknowledge();
+    await closing;
+    expect((await fx.executor.inspect("session-1")).state).toBe("stopped");
+    await expect(
+      fs.stat(path.join(fx.root, "sessions", "session-1", "repository"))
+    ).resolves.toBeDefined();
+    await fx.executor.close();
+    expect(fx.handle.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("stops the exact owned handle before deleting the owned tree", async () => {
     const fx = await fixture();
     await open(fx);

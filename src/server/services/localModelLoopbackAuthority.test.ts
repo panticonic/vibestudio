@@ -1,20 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { LocalModelLoopbackAuthority } from "./localModelLoopbackAuthority.js";
 
-const roots: string[] = [];
-
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-
 describe("LocalModelLoopbackAuthority", () => {
   it("admits only the exact reviewed agent vessel, live port, and bearer", async () => {
-    const root = fixtureRoot();
-    const authority = new LocalModelLoopbackAuthority({ rootDir: root, pidAlive: () => true });
+    const authority = new LocalModelLoopbackAuthority({ readRuntimeAuth: runtimeAuth });
     const caller = agentCaller();
 
     await expect(
@@ -53,14 +43,13 @@ describe("LocalModelLoopbackAuthority", () => {
   });
 
   it("authorizes by sealed capability facts rather than a product class name", async () => {
-    const root = fixtureRoot();
-    const authority = new LocalModelLoopbackAuthority({ rootDir: root, pidAlive: () => true });
-    const id = "do:workers/custom-agent:WorkspaceAgent:agent-1";
+    const authority = new LocalModelLoopbackAuthority({ readRuntimeAuth: runtimeAuth });
+    const id = "do:workers/custom:Processor:processor-1";
     const caller = {
       ...createVerifiedCaller(id, "do", {
         callerId: id,
         callerKind: "do",
-        repoPath: "workers/custom-agent",
+        repoPath: "workers/custom",
         effectiveVersion: "ev-custom",
         executionDigest: "b".repeat(64),
         requested: [
@@ -83,8 +72,7 @@ describe("LocalModelLoopbackAuthority", () => {
     ).resolves.toBe(true);
   });
 
-  it("fails closed for stale processes and unknown owner schemas", async () => {
-    const root = fixtureRoot();
+  it("fails closed when the provider is unavailable or no endpoint is live", async () => {
     const input = {
       caller: agentCaller(),
       targetUrl: new URL("http://127.0.0.1:43117/v1/chat/completions"),
@@ -92,41 +80,63 @@ describe("LocalModelLoopbackAuthority", () => {
       headers: { Authorization: "Bearer loopback-secret" },
     };
     await expect(
-      new LocalModelLoopbackAuthority({ rootDir: root, pidAlive: () => false }).authorize(input)
+      new LocalModelLoopbackAuthority({
+        readRuntimeAuth: async () => ({ apiKey: "loopback-secret", origins: [] }),
+      }).authorize(input)
     ).resolves.toBe(false);
-
-    const owner = JSON.parse(readOwner(root)) as Record<string, unknown>;
-    owner["unexpected"] = true;
-    writeFileSync(join(root, "owner.json"), JSON.stringify(owner), { mode: 0o600 });
     await expect(
-      new LocalModelLoopbackAuthority({ rootDir: root, pidAlive: () => true }).authorize(input)
-    ).resolves.toBe(false);
+      new LocalModelLoopbackAuthority({
+        readRuntimeAuth: async () => {
+          throw new Error("provider retired");
+        },
+      }).authorize(input)
+    ).rejects.toThrow("Local model runtime authority is unavailable");
+  });
+
+  it.each([
+    null,
+    {},
+    { apiKey: "loopback-secret", origins: "http://127.0.0.1:43117" },
+    { apiKey: "loopback-secret", origins: ["http://127.0.0.1:43117", 43118] },
+  ])("rejects malformed provider attestations: %j", async (auth) => {
+    const authority = new LocalModelLoopbackAuthority({ readRuntimeAuth: async () => auth });
+    await expect(
+      authority.authorize({
+        caller: agentCaller(),
+        targetUrl: new URL("http://127.0.0.1:43117/v1/chat/completions"),
+        method: "POST",
+        headers: { Authorization: "Bearer loopback-secret" },
+      })
+    ).rejects.toThrow("Local model runtime authority is unavailable");
+  });
+
+  it("revalidates the provider's incarnation on every request", async () => {
+    let auth = await runtimeAuth();
+    const authority = new LocalModelLoopbackAuthority({ readRuntimeAuth: async () => auth });
+    const input = {
+      caller: agentCaller(),
+      targetUrl: new URL("http://127.0.0.1:43117/v1/chat/completions"),
+      method: "POST",
+      headers: { Authorization: "Bearer loopback-secret" },
+    };
+    expect(await authority.authorize(input)).toBe(true);
+    auth = { apiKey: "replacement-key", origins: ["http://127.0.0.1:44117"] };
+    expect(await authority.authorize(input)).toBe(false);
+    expect(
+      await authority.authorize({
+        ...input,
+        targetUrl: new URL("http://127.0.0.1:44117/v1/chat/completions"),
+        headers: { Authorization: "Bearer replacement-key" },
+      })
+    ).toBe(true);
   });
 });
 
-function fixtureRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "vibestudio-local-model-authority-"));
-  roots.push(root);
-  writeFileSync(
-    join(root, "owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      pid: 100,
-      bootId: "boot",
-      ports: { utility: 43117, main: 43118 },
-      adminPort: 43119,
-      workspaceId: "ws-test",
-      since: 1,
-      serverPids: { utility: 101, main: 102 },
-    }),
-    { mode: 0o600 }
-  );
-  writeFileSync(join(root, "auth.key"), "loopback-secret\n", { mode: 0o600 });
-  return root;
-}
-
-function readOwner(root: string): string {
-  return readFileSync(join(root, "owner.json"), "utf8");
+async function runtimeAuth() {
+  return {
+    apiKey: "loopback-secret",
+    origins: ["http://127.0.0.1:43117", "http://127.0.0.1:43118"],
+  };
 }
 
 function agentCaller() {

@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { transformSync } from "esbuild";
 import {
   isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
   settleSystemTestStartup,
   systemTestDoctorRecovery,
-  systemTestCoordinatorScopeKey,
-  systemTestRunCode,
+  readSystemTestDriverState,
+  failedSummary,
   resultValue,
   unavailableTrajectory,
 } from "./systemTestCommands.js";
@@ -14,11 +13,14 @@ import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
 
 describe("system-test status polling", () => {
-  it("addresses the durable coordinator separately from the runner notebook", () => {
-    expect(systemTestCoordinatorScopeKey("st_one")).toBe("system-test-coordinator:st_one");
-    expect(systemTestCoordinatorScopeKey("st_one")).not.toBe("st_one");
+  it("reports orchestration failure even when every completed case passed", () => {
+    expect(
+      failedSummary({ status: "errored", passed: 1, failed: 0, errored: 0, toolFailureCount: 0 })
+    ).toBe(true);
+    expect(
+      failedSummary({ status: "completed", passed: 1, failed: 0, errored: 0, toolFailureCount: 0 })
+    ).toBe(false);
   });
-
   it("reopens after a stale one-invocation host attestation", () => {
     expect(
       isRetryableSystemTestStatusReadFailure(
@@ -324,210 +326,52 @@ describe("system-test startup preparation", () => {
 });
 
 describe("system-test durable driver lifecycle", () => {
-  const runner = { id: "do:runner", targetId: "do:runner" };
-
-  it("releases the finite execution while preserving its durable record owner", () => {
-    const code = systemTestRunCode(
-      "st_test",
-      { names: ["probe"], all: false, concurrency: 1 },
-      runner
-    );
-
-    expect(code).toContain('"startSystemTestRun"');
-    expect(code).toContain('"getSystemTestRunSnapshot"');
-    expect(code).toContain('"getSystemTestRunResult"');
-    expect(code).not.toContain('"runSystemTests"');
-    expect(code).toContain('const driver = {"id":"do:runner","targetId":"do:runner"}');
-    expect(code).toContain("let cancellationCleanup = null");
-    expect(code).toContain("const durableHeartbeatLimit = 48 * 1024");
-    expect(code).not.toContain("const durableHeartbeatLimit = 220 * 1024");
-    expect(code).toContain("const describeCleanupFailure = (error) =>");
-    expect(code).toContain("let cancellationRequested = false");
-    expect(code).toContain("cancellationCleanup = cleanup");
-    expect(code).toContain('status: "cancelled"');
-    expect(code).toContain("if (cancellationCleanup)");
-    expect(code).toContain('failures.map(describeCleanupFailure).join("; ")');
-    expect(code).toContain('"releaseSystemTestRunExecution"');
-    expect(code).toContain("let driverExecutionReleased = false");
-    expect(code).not.toContain("services.runtime.createContext");
-    expect(code).not.toContain("services.runtime.destroyContext");
-    expect(code).not.toContain("services.runtime.retireEntity");
-    expect(code).not.toContain("scope.systemTestRuns");
-    expect(code).toContain('snapshot?.status === "cancelling"');
-    const cancellationStart = code.indexOf("ctx.onCancel(async () => {");
-    const pollingStart = code.indexOf("for (;;) {", cancellationStart);
-    expect(cancellationStart).toBeGreaterThanOrEqual(0);
-    expect(pollingStart).toBeGreaterThan(cancellationStart);
-    expect(code.indexOf("cancellationCleanup = cleanup")).toBeLessThan(
-      code.lastIndexOf("if (cancellationCleanup)")
-    );
-    expect(code.indexOf("if (cancellationCleanup)")).toBeLessThan(
-      code.lastIndexOf("await releaseDriverExecution()")
-    );
+  it("observes the durable owner without consulting a separate coordinator", async () => {
+    const methods: string[] = [];
+    const snapshot = { status: "running", progress: { completed: [{ name: "one" }] } };
+    const call = async <T>(method: string): Promise<T> => {
+      methods.push(method);
+      return snapshot as T;
+    };
+    expect(await readSystemTestDriverState(call, "st_probe")).toBe(snapshot);
+    expect(methods).toEqual(["getSystemTestRunSnapshot"]);
   });
 
-  it("retries each ordered driver cleanup stage after a lost acknowledgement", async () => {
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-      ...args: string[]
-    ) => (...args: unknown[]) => Promise<unknown>;
-    const run = async (failure: "release" | "retire" | "destroy") => {
-      const generated = systemTestRunCode(
-        `st_retry_${failure}`,
-        { names: ["probe"], all: false, concurrency: 1 },
-        runner
-      );
-      const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
-        format: "esm",
-        target: "es2022",
-        loader: "ts",
-      }).code;
-      const execute = new AsyncFunction(
-        "services",
-        "rpc",
-        "ctx",
-        "scope",
-        `${source}\nreturn __generatedRun();`
-      );
-      let releaseAttempts = 0;
-      let retirementAttempts = 0;
-      let destructionAttempts = 0;
-      const driver = { id: "do:driver", targetId: "do:driver" };
-      const services = {
-        runtime: {
-          createContext: async () => ({ contextId: "ctx:driver" }),
-          createEntity: async () => driver,
-          retireEntity: async () => {
-            retirementAttempts += 1;
-            if (failure === "retire" && retirementAttempts === 1) {
-              throw new Error("lost retirement acknowledgement");
-            }
-          },
-          destroyContext: async () => {
-            destructionAttempts += 1;
-            if (failure === "destroy" && destructionAttempts === 1) {
-              throw new Error("lost context destruction acknowledgement");
-            }
-          },
-        },
-      };
-      const rpc = {
-        call: async (_target: string, method: string) => {
-          if (method === "startSystemTestRun") return undefined;
-          if (method === "getSystemTestRunSnapshot") {
-            return { status: "done", result: { success: true } };
-          }
-          if (method === "getSystemTestRunResult") {
-            return { summary: { runId: `st_retry_${failure}`, passed: 1 } };
-          }
-          if (method === "releaseSystemTestRunExecution") {
-            releaseAttempts += 1;
-            if (failure === "release" && releaseAttempts === 1) {
-              throw new Error("lost release acknowledgement");
-            }
-            return { released: false };
-          }
-          throw new Error(`unexpected RPC ${method}`);
-        },
-      };
-      const ctx = {
-        contextId: "ctx:test",
-        reportProgress: () => undefined,
-        onCancel: () => undefined,
-      };
-
-      if (failure === "release") {
-        await expect(execute(services, rpc, ctx, {})).rejects.toThrow(
-          /lost release acknowledgement/
-        );
-      } else {
-        await expect(execute(services, rpc, ctx, {})).resolves.toEqual({
-          runId: `st_retry_${failure}`,
-          passed: 1,
-        });
-      }
-      return { releaseAttempts, retirementAttempts, destructionAttempts };
+  it("stores a terminal result before releasing execution and remains observable afterward", async () => {
+    const methods: string[] = [];
+    const summary = { passed: 1 };
+    const call = async <T>(method: string): Promise<T> => {
+      methods.push(method);
+      if (method === "getSystemTestRunSnapshot")
+        return { status: "done", result: { success: true } } as T;
+      if (method === "getSystemTestRunResult") return { summary } as T;
+      if (method === "releaseSystemTestRunExecution") return { released: true } as T;
+      throw new Error(`unexpected ${method}`);
     };
-
-    await expect(run("release")).resolves.toEqual({
-      releaseAttempts: 2,
-      retirementAttempts: 0,
-      destructionAttempts: 0,
-    });
-    await expect(run("retire")).resolves.toEqual({
-      releaseAttempts: 1,
-      retirementAttempts: 0,
-      destructionAttempts: 0,
-    });
-    await expect(run("destroy")).resolves.toEqual({
-      releaseAttempts: 1,
-      retirementAttempts: 0,
-      destructionAttempts: 0,
-    });
+    for (let observation = 0; observation < 2; observation++) {
+      expect(await readSystemTestDriverState(call, "st_probe")).toMatchObject({
+        status: "done",
+        result: { success: true, returnValue: summary },
+      });
+    }
+    expect(methods).toEqual([
+      "getSystemTestRunSnapshot",
+      "getSystemTestRunResult",
+      "releaseSystemTestRunExecution",
+      "getSystemTestRunSnapshot",
+      "getSystemTestRunResult",
+      "releaseSystemTestRunExecution",
+    ]);
   });
 
-  it("waits through a typed runtime generation transition during cleanup", async () => {
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-      ...args: string[]
-    ) => (...args: unknown[]) => Promise<unknown>;
-    const generated = systemTestRunCode(
-      "st_runtime_transition",
-      { names: ["probe"], all: false, concurrency: 1 },
-      runner
-    );
-    const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
-      format: "esm",
-      target: "es2022",
-      loader: "ts",
-    }).code;
-    const execute = new AsyncFunction(
-      "services",
-      "rpc",
-      "ctx",
-      "scope",
-      `${source}\nreturn __generatedRun();`
-    );
-    let releaseAttempts = 0;
-    const driver = { id: "do:driver", targetId: "do:driver" };
-    const services = {
-      runtime: {
-        createContext: async () => ({ contextId: "ctx:driver" }),
-        createEntity: async () => driver,
-        retireEntity: async () => undefined,
-        destroyContext: async () => undefined,
-      },
+  it("never releases an execution whose status observation failed", async () => {
+    const methods: string[] = [];
+    const call = async <T>(method: string): Promise<T> => {
+      methods.push(method);
+      throw new Error("connection reset");
     };
-    const rpc = {
-      call: async (_target: string, method: string) => {
-        if (method === "startSystemTestRun") return undefined;
-        if (method === "getSystemTestRunSnapshot") {
-          return { status: "done", result: { success: true } };
-        }
-        if (method === "getSystemTestRunResult") {
-          return { summary: { runId: "st_runtime_transition", passed: 1 } };
-        }
-        if (method === "releaseSystemTestRunExecution") {
-          releaseAttempts += 1;
-          if (releaseAttempts < 3) {
-            throw Object.assign(new Error("runtime generation transition in flight"), {
-              code: "runtime_restarting",
-            });
-          }
-          return { released: true };
-        }
-        throw new Error(`unexpected RPC ${method}`);
-      },
-    };
-    const ctx = {
-      contextId: "ctx:test",
-      reportProgress: () => undefined,
-      onCancel: () => undefined,
-    };
-
-    await expect(execute(services, rpc, ctx, {})).resolves.toEqual({
-      runId: "st_runtime_transition",
-      passed: 1,
-    });
-    expect(releaseAttempts).toBe(3);
+    await expect(readSystemTestDriverState(call, "st_probe")).rejects.toThrow("connection reset");
+    expect(methods).toEqual(["getSystemTestRunSnapshot"]);
   });
 });
 
@@ -579,7 +423,7 @@ describe("system-test run interrupted mid-suite", () => {
 });
 
 describe("system-test trajectory with neither source", () => {
-  it("points at the bounded inspection a large run does keep", () => {
+  it("offers bounded inspection without promising that an oversized heartbeat retained it", () => {
     const error = unavailableTrajectory(
       "st_abc",
       "browser-panel",
@@ -587,7 +431,7 @@ describe("system-test trajectory with neither source", () => {
     );
 
     expect(error.message).toContain("No durable system-test record exists for st_abc");
-    // The operator needs the route that still works, not only what is missing.
+    expect(error.message).toContain("may omit live inspection too");
     expect(error.message).toContain("vibestudio system-test inspect st_abc --test browser-panel");
   });
 });

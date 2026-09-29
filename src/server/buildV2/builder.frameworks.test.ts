@@ -38,6 +38,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { BuildDiagnosticsError, diagnosticsFromError } from "./diagnostics.js";
 import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { setBuildExecutionIdentityContext } from "./buildStore.js";
@@ -80,6 +81,8 @@ describe("buildUnit framework-agnostic panel builds", () => {
     await setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
+      serviceAuthorityForSource: async () =>
+        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
       workspaceId: "workspace:test",
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
@@ -153,6 +156,101 @@ describe("buildUnit framework-agnostic panel builds", () => {
     );
     commit(tmplDir, "svelte template");
   }
+
+  it.each([
+    { subpath: ".", target: null, error: /not exported for runtime conditions/ },
+    { subpath: "./fixture", target: null, error: /not exported for runtime conditions/ },
+    { subpath: ".", target: "./missing.ts", error: /resolves to a missing file/ },
+  ])(
+    "enforces the declared export for $subpath without a main/source fallback",
+    async ({ subpath, target, error }) => {
+      scaffoldStubPackages();
+      const libraryDir = path.join(workspaceRoot, "packages", "restricted");
+      writeJson(path.join(libraryDir, "package.json"), {
+        name: "@workspace/restricted",
+        version: "0.1.0",
+        type: "module",
+        main: "./index.ts",
+        exports: { [subpath]: { "vibestudio-panel": target, default: "./index.ts" } },
+      });
+      fs.writeFileSync(path.join(libraryDir, "index.ts"), "export const value = 'forbidden';\n");
+      commit(libraryDir, "restricted runtime export");
+      const panelDir = path.join(workspaceRoot, "panels", "restricted-import");
+      writeJson(path.join(panelDir, "package.json"), {
+        name: "@workspace-panels/restricted-import",
+        version: "0.1.0",
+        type: "module",
+        vibestudio: { entry: "index.ts" },
+        dependencies: {
+          "@workspace/runtime": "workspace:*",
+          "@workspace/restricted": "workspace:*",
+        },
+      });
+      const specifier = subpath === "." ? "@workspace/restricted" : "@workspace/restricted/fixture";
+      fs.writeFileSync(
+        path.join(panelDir, "index.ts"),
+        `import { value } from "${specifier}"; document.body.textContent = value;\n`
+      );
+      fs.writeFileSync(
+        path.join(panelDir, "index.html"),
+        '<html><body><div id="root"></div></body></html>'
+      );
+      commit(panelDir, "restricted import");
+      const graph = discoverPackageGraph(workspaceRoot);
+      await expect(
+        buildUnit(
+          graph.get("@workspace-panels/restricted-import"),
+          "e".repeat(64),
+          graph,
+          workspaceRoot,
+          SOURCE_STATE_HASH
+        )
+      ).rejects.toThrow(error);
+    }
+  );
+
+  it("returns editable source coordinates after a native compiler failure", async () => {
+    scaffoldStubPackages();
+    const panelDir = path.join(workspaceRoot, "panels", "broken");
+    writeJson(path.join(panelDir, "package.json"), {
+      name: "@workspace-panels/broken",
+      version: "0.1.0",
+      type: "module",
+      vibestudio: { title: "Broken", entry: "index.ts" },
+      dependencies: { "@workspace/runtime": "workspace:*" },
+    });
+    fs.writeFileSync(
+      path.join(panelDir, "index.html"),
+      '<html><body><div id="root"></div></body></html>'
+    );
+    fs.writeFileSync(path.join(panelDir, "index.ts"), "const broken = );\n");
+    commit(panelDir, "broken source");
+    const graph = discoverPackageGraph(workspaceRoot);
+    const failure = await buildUnit(
+      graph.get("@workspace-panels/broken"),
+      "d".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    ).then(
+      () => {
+        throw new Error("Invalid source unexpectedly compiled");
+      },
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(BuildDiagnosticsError);
+    expect(
+      diagnosticsFromError(failure, {
+        workspaceRoot,
+        sourceRoot: workspaceRoot,
+        unitRelativePath: "panels/broken",
+      })
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "esbuild", file: "panels/broken/index.ts", line: 1 }),
+      ])
+    );
+  });
 
   it("builds a vanilla panel: framework=vanilla, no framework runtime, no mount helper", async () => {
     scaffoldStubPackages();

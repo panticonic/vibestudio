@@ -21,11 +21,14 @@ import {
   type BuildServiceClient,
   type EvalImportLoader,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
-import { executionArtifactRefSchema } from "@vibestudio/service-schemas/build";
+import { executionArtifactRefSchema, type BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
+import { ExecutionJournal } from "./executionJournal.js";
+import type { EvalOperationJournal } from "@vibestudio/service-schemas/eval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
   evalLifecycleFailureCodes,
+  evalImagePayloadSchema,
 } from "@vibestudio/service-schemas/eval";
 import {
   EVAL_ENGINE_HOST_CONTRACT_VERSION,
@@ -112,6 +115,7 @@ const EVAL_SCHEMA_TABLES = [
   "run_progress",
   "run_checkpoints",
   "run_events",
+  "run_result_artifacts",
   "eval_execution_roots",
   "eval_result_redeliveries",
   "resident_channel_memberships",
@@ -200,6 +204,7 @@ interface SandboxResult {
   failureKind?: "user-code" | "infrastructure" | "cancelled";
   failureCode?: string;
   errorData?: unknown;
+  operationJournal?: EvalOperationJournal;
 }
 
 interface ScopeManagerLike {
@@ -298,6 +303,7 @@ type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
 
 /** One run's immutable outbound authority/provenance boundary. */
 interface EvalExecutionContext {
+  readonly operationJournal: ExecutionJournal;
   readonly rpc: RpcClient;
   /** Owner-infrastructure RPC carries only this run's durable admission. It
    * deliberately excludes guest causality, read-only attenuation, and abort
@@ -424,6 +430,7 @@ interface RunResult {
   failureCode?: string;
   errorData?: unknown;
   scopeKeys?: string[];
+  operationJournal?: EvalOperationJournal;
   panelResources?: {
     open: Array<{ id: string; source: string; kind: "workspace" | "browser" }>;
   };
@@ -485,6 +492,7 @@ export class EvalDO extends DurableObjectBase {
    *  `executeRun` (e.g. a deferRedrive that races the first dispatch) SHARES this promise instead of
    *  starting a second sandbox run; it also lets `reset` abort live runs. */
   private readonly inFlightRuns = new Map<string, Promise<RunResult>>();
+  private readonly inFlightResultArtifacts = new Set<Promise<unknown>>();
   /** One cancellation phase per run. Concurrent cancel RPCs join this promise
    *  so no caller can publish a terminal status while another caller's cleanup
    *  is still running. */
@@ -651,6 +659,10 @@ export class EvalDO extends DurableObjectBase {
         FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
       )
     `);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS run_result_artifacts (
+      run_id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL
+    )`);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS run_checkpoints (
         run_id TEXT PRIMARY KEY,
@@ -743,6 +755,7 @@ export class EvalDO extends DurableObjectBase {
     const causalParent = input.causalParent ? Object.freeze({ ...input.causalParent }) : null;
     const readOnly = input.readOnly === true;
     const base = this.rpc;
+    const operationJournal = new ExecutionJournal();
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
       const options = {
         ...(value ?? {}),
@@ -781,6 +794,9 @@ export class EvalDO extends DurableObjectBase {
       }
       try {
         const result = await base.call<T>(targetId, method, args, mergeOptions(options));
+        if (targetId === "main" && method === "build.getPerformanceProfile") {
+          operationJournal.recordBuildProfile(result as BuildPerformanceProfileWire);
+        }
         if (input.runId) {
           this.completeRunCheckpoint(input.runId, {
             ...checkpoint,
@@ -856,6 +872,7 @@ export class EvalDO extends DurableObjectBase {
     };
     return Object.freeze({
       rpc,
+      operationJournal,
       callInfrastructure,
       signal,
       contextId: input.contextId ?? "",
@@ -1652,6 +1669,18 @@ export class EvalDO extends DurableObjectBase {
       this.releaseUnloadedExecutionRoots(runId);
     }
 
+    try {
+      result = await this.materializeResultArtifact(runId, result);
+    } catch (error) {
+      result = {
+        success: false,
+        console: result.console,
+        error: `eval image artifact storage failed: ${error instanceof Error ? error.message : String(error)}`,
+        failureKind: "infrastructure",
+        failureCode: "eval_artifact_storage_failed",
+        ...(result.kernel ? { kernel: result.kernel } : {}),
+      };
+    }
     const terminalResult = this.compactRunResult(result);
     // CAS persist: write `done` only if still `running`, so a concurrent `reset` → `cancelled` wins.
     const terminalStatus =
@@ -2245,6 +2274,15 @@ export class EvalDO extends DurableObjectBase {
       this.settleKernelLease(this.kernelLease, "released");
     }
     await this.forceReset();
+    // Join only host-owned artifact writes, never a potentially wedged guest.
+    // A late upload cannot recreate a retention after disposal releases it.
+    await Promise.allSettled([...this.inFlightResultArtifacts]);
+    for (const row of this.sql.exec(`SELECT owner FROM run_result_artifacts`).toArray()) {
+      await this.infrastructureExecution().blobstore.releaseRetention({
+        owner: String(row["owner"]),
+      });
+    }
+    this.sql.exec(`DELETE FROM run_result_artifacts`);
     this.sql.exec(`DELETE FROM run_progress`);
     this.sql.exec(`DELETE FROM eval_execution_roots`);
     this.sql.exec(`DELETE FROM runs`);
@@ -2969,6 +3007,7 @@ export class EvalDO extends DurableObjectBase {
     try {
       const result = await this.activeEvalExecution.run(execution, () =>
         engine.executeSandbox(entryCode, {
+          operationJournal: execution.operationJournal,
           syntax: args.syntax ?? "tsx",
           imports: args.imports,
           sourcePath,
@@ -3031,6 +3070,7 @@ export class EvalDO extends DurableObjectBase {
         failureKind: result.failureKind,
         failureCode: result.failureCode,
         errorData: result.errorData,
+        operationJournal: execution.operationJournal.close(),
         scopeKeys: Object.keys(scopeManager.current),
         ...(this.openPanelResources.size > 0
           ? {
@@ -3041,6 +3081,7 @@ export class EvalDO extends DurableObjectBase {
           : {}),
       };
     } finally {
+      execution.operationJournal.close();
       evalNodeCallbackOwnerOpen = false;
       flushLiveConsole();
       streamer?.close();
@@ -3059,6 +3100,43 @@ export class EvalDO extends DurableObjectBase {
     }
   }
 
+  private async materializeResultArtifact(runId: string, result: RunResult): Promise<RunResult> {
+    if (!result.success) return result;
+    const image = evalImagePayloadSchema.safeParse(result.returnValue);
+    if (!image.success) return result;
+    const row = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
+    if (row?.["status"] !== "running") return result;
+    const owner = `eval-result:${runId}`;
+    // Record the ownership intent before writing CAS bytes. Disposal can then
+    // recover and release an upload interrupted before the terminal receipt.
+    this.sql.exec(
+      `INSERT OR IGNORE INTO run_result_artifacts(run_id, owner) VALUES (?, ?)`,
+      runId,
+      owner
+    );
+    const work = (async () => {
+      const { data, ...metadata } = image.data;
+      const stored = await this.infrastructureExecution().blobstore.putRetained({
+        base64: data,
+        owner,
+      });
+      return {
+        ...result,
+        returnValue: {
+          protocol: "eval-image-artifact.v1",
+          ...stored,
+          ...metadata,
+        },
+      };
+    })();
+    this.inFlightResultArtifacts.add(work);
+    try {
+      return await work;
+    } finally {
+      this.inFlightResultArtifacts.delete(work);
+    }
+  }
+
   private compactRunResult(result: RunResult): RunResult {
     const compact: RunResult = {
       success: result.success,
@@ -3073,6 +3151,7 @@ export class EvalDO extends DurableObjectBase {
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
       ...(result.panelResources ? { panelResources: result.panelResources } : {}),
+      ...(result.operationJournal ? { operationJournal: result.operationJournal } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
     if (result.returnValue !== undefined) {
@@ -3094,6 +3173,7 @@ export class EvalDO extends DurableObjectBase {
       ...(compact.returnValue !== undefined ? { returnValue: compact.returnValue } : {}),
       ...(compact.scopeKeys ? { scopeKeys: compact.scopeKeys.slice(0, 200) } : {}),
       ...(compact.panelResources ? { panelResources: compact.panelResources } : {}),
+      ...(compact.operationJournal ? { operationJournal: compact.operationJournal } : {}),
       ...(compact.kernel ? { kernel: compact.kernel } : {}),
     };
     encoded = JSON.stringify(fallback);
@@ -3111,6 +3191,7 @@ export class EvalDO extends DurableObjectBase {
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
       ...(result.panelResources ? { panelResources: result.panelResources } : {}),
+      ...(result.operationJournal ? { operationJournal: result.operationJournal } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
   }
@@ -3720,8 +3801,11 @@ export class EvalDO extends DurableObjectBase {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
     };
+    // All native receipts use the invoking execution's private journal.
+    // Imported modules and retained page handles cannot own an earlier cell.
     const panelRuntime = support.createPanelRuntime({
       rpc: activeRpc,
+      recordOperation: (entry: Record<string, unknown>) => this.requireActiveEvalExecution().operationJournal.append(entry),
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
       onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {

@@ -38,6 +38,8 @@ describe("buildUnit extension builds", () => {
     });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
+      serviceAuthorityForSource: async () =>
+        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
       workspaceId: "workspace:test",
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });

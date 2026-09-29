@@ -8,7 +8,10 @@ import type {
   MethodAccessDescriptor,
   ServiceAuthorityPolicy,
 } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
@@ -29,6 +32,22 @@ const runtimeSupervisionAuthority = (
       displayField: identityField,
     },
   },
+  ...(identityField === "entityId"
+    ? {
+        prepared: {
+          resolver: `runtime.supervision.${operation}.ownership`,
+          leaves: [
+            {
+              capability: "runtime.supervision.manage",
+              requirement: fixedPreparedAuthorityRequirement(
+                requirementForPrincipals(["code", "user", "host"], "runtime.supervision.manage")
+              ),
+              tier: "gated" as const,
+            },
+          ],
+        },
+      }
+    : {}),
 });
 
 export const AgentExecutionTestPolicySpecSchema = z
@@ -157,7 +176,7 @@ export const RuntimeEntityHandleSchema = z
 const BuildRefSchema = z
   .string()
   .describe(
-    'Optional exact code build ref. Workers and Durable Objects default to their owning context; panels and apps default to protected main. Pass "main", "ctx:<contextId>", or "state:<stateHash>" only to select that frontier deliberately.'
+    'Optional exact code build ref. Direct creation defaults to the verified initiating caller\'s semantic workspace, or protected main for a host caller without a workspace. contextId selects runtime state separately. Reserved activation defaults to the reservation\'s retained semantic context. Pass "main", "ctx:<contextId>", or "state:<stateHash>" to select a frontier deliberately.'
   );
 
 const RuntimeAgentBindingSchema = z
@@ -1548,12 +1567,12 @@ export const runtimeMethods = defineServiceMethods({
     } as const,
     capability: "runtime.supervision.manage",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
       rationale:
-        "Restarts one exact driver-owned execution without changing its durable product state.",
+        "Restarts one exact execution; host-prepared ownership gates management of foreign runtimes without changing durable state.",
     },
     presentation: {
       title: "Restart a workspace app or service",
@@ -1632,11 +1651,12 @@ export const runtimeMethods = defineServiceMethods({
     } as const,
     capability: "runtime.supervision.manage",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
-      rationale: "Retires one exact driver-owned execution and its owned native resources.",
+      rationale:
+        "Retires one exact execution; host-prepared ownership gates management of foreign runtimes and their native resources.",
     },
     presentation: {
       title: "Stop a workspace app or service",

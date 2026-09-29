@@ -1,14 +1,64 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
+import { BuildDiagnosticsError } from "./diagnostics.js";
+
+const ownedRoots: string[] = [];
+function ownedTempRoot(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  ownedRoots.push(root);
+  return root;
+}
+afterEach(() => {
+  for (const root of ownedRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe("workspace RPC build catalog", () => {
+  it("reports unmatched authored capability definitions at their manifest", () => {
+    const root = ownedTempRoot("vibestudio-rpc-invalid-manifest-");
+    writeFileSync(join(root, "provider.ts"), "class NotesDO {}\n");
+    let caught: unknown;
+    try {
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: {
+          requests: [],
+          provides: [
+            {
+              name: "notes.delete",
+              title: "Delete notes",
+              action: "delete notes",
+              tier: "critical",
+              sensitivity: "destructive",
+              resourceType: "notes",
+              presentation: { domain: "files", verb: "manage" },
+              notability: "headline",
+              grantScopes: ["once"],
+            },
+          ],
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    expect((caught as BuildDiagnosticsError).diagnostics).toEqual([
+      {
+        source: "authority",
+        severity: "error",
+        file: join(root, "package.json"),
+        line: 1,
+        column: 1,
+        message: "workers/notes provides notes.delete, but no production RPC method binds it",
+      },
+    ]);
+  });
   it("walks deeply generated provider syntax without consuming the JavaScript call stack", async () => {
-    const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-deep-"));
+    const root = ownedTempRoot("vibestudio-rpc-catalog-deep-");
     const generatedExpression = `root${".value".repeat(12_000)}`;
     writeFileSync(
       join(root, "provider.ts"),
@@ -31,7 +81,7 @@ describe("workspace RPC build catalog", () => {
   });
 
   it("keeps local methods closed and derives explicit exports from their existing declaration", () => {
-    const root = mkdtempSync(join(tmpdir(), "workspace-rpc-exports-"));
+    const root = ownedTempRoot("workspace-rpc-exports-");
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
@@ -52,7 +102,7 @@ describe("workspace RPC build catalog", () => {
   });
 
   it("derives documented receiver methods from the exact worker source", async () => {
-    const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-"));
+    const root = ownedTempRoot("vibestudio-rpc-catalog-");
     mkdirSync(join(root, "nested"));
     writeFileSync(
       join(root, "nested", "provider.ts"),
@@ -98,7 +148,7 @@ describe("workspace RPC build catalog", () => {
   });
 
   it("resolves receiver capabilities against the sealed manifest and binds method contracts", async () => {
-    const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-capability-"));
+    const root = ownedTempRoot("vibestudio-rpc-capability-");
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
@@ -145,7 +195,7 @@ describe("workspace RPC build catalog", () => {
   });
 
   it("seals a schema-owned receiver from its runtime-checked build binding", async () => {
-    const root = mkdtempSync(join(tmpdir(), "vibestudio-schema-rpc-capability-"));
+    const root = ownedTempRoot("vibestudio-schema-rpc-capability-");
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
@@ -214,7 +264,7 @@ describe("workspace RPC build catalog", () => {
   });
 
   it("seals handle producers and consumers into one definition identity", async () => {
-    const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-handle-"));
+    const root = ownedTempRoot("vibestudio-rpc-handle-");
     writeFileSync(
       join(root, "index.ts"),
       `class Notes {

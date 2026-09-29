@@ -18,6 +18,7 @@ function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {
 
 function deps() {
   return {
+    releaseBlobRetentions: vi.fn(async () => {}),
     panelRuntimeCoordinator: {
       retireRuntimeEntity: vi.fn(),
     },
@@ -65,6 +66,7 @@ describe("cleanupRuntimeEntity", () => {
       credentialSessionGrantStore: d.credentialSessionGrantStore,
       tokenManager: d.tokenManager,
       connectionGrants: d.connectionGrants,
+      releaseBlobRetentions: d.releaseBlobRetentions,
       getFsService: () => d.fsService as never,
       getWebhookIngress: () => d.webhookIngress,
       getWorkerdManager: () => d.workerdManager as never,
@@ -79,6 +81,7 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
+    expect(d.releaseBlobRetentions).toHaveBeenCalledWith({ kind: "panel", id: "panel:one" });
     expect(d.workerdManager.stopWorker).not.toHaveBeenCalled();
     expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
   });
@@ -92,6 +95,7 @@ describe("cleanupRuntimeEntity", () => {
       credentialSessionGrantStore: workerDeps.credentialSessionGrantStore,
       tokenManager: workerDeps.tokenManager,
       connectionGrants: workerDeps.connectionGrants,
+      releaseBlobRetentions: workerDeps.releaseBlobRetentions,
       getFsService: () => workerDeps.fsService as never,
       getWebhookIngress: () => workerDeps.webhookIngress,
       getWorkerdManager: () => workerDeps.workerdManager as never,
@@ -106,6 +110,7 @@ describe("cleanupRuntimeEntity", () => {
       credentialSessionGrantStore: doDeps.credentialSessionGrantStore,
       tokenManager: doDeps.tokenManager,
       connectionGrants: doDeps.connectionGrants,
+      releaseBlobRetentions: doDeps.releaseBlobRetentions,
       resourceHandles: doDeps.resourceHandles,
       workspaceId: "workspace:test",
       getFsService: () => doDeps.fsService as never,
@@ -141,6 +146,7 @@ describe("cleanupRuntimeEntity", () => {
       credentialSessionGrantStore: d.credentialSessionGrantStore,
       tokenManager: d.tokenManager,
       connectionGrants: d.connectionGrants,
+      releaseBlobRetentions: d.releaseBlobRetentions,
       getFsService: () => d.fsService as never,
       getWebhookIngress: () => d.webhookIngress,
       getWorkerdManager: () => d.workerdManager as never,
@@ -150,11 +156,13 @@ describe("cleanupRuntimeEntity", () => {
     );
     expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:blocking");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:blocking");
+    expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
     release();
     await cleanup;
+    expect(d.releaseBlobRetentions).toHaveBeenCalledWith({ kind: "panel", id: "panel:blocking" });
   });
 
-  it("attempts every cleanup step and reports failures to the durable reaper", async () => {
+  it("attempts independent cleanup steps and retains content roots for a failed retirement retry", async () => {
     const d = deps();
     d.fsService.closeHandlesForCaller.mockImplementation(() => {
       throw new Error("fs cleanup failed");
@@ -169,6 +177,7 @@ describe("cleanupRuntimeEntity", () => {
         credentialSessionGrantStore: d.credentialSessionGrantStore,
         tokenManager: d.tokenManager,
         connectionGrants: d.connectionGrants,
+        releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
         getWorkerdManager: () => d.workerdManager as never,
@@ -184,6 +193,7 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
+    expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
   });
 
   it("reports a failed facet retirement instead of losing the live userland object", async () => {
@@ -198,6 +208,7 @@ describe("cleanupRuntimeEntity", () => {
         credentialSessionGrantStore: d.credentialSessionGrantStore,
         tokenManager: d.tokenManager,
         connectionGrants: d.connectionGrants,
+        releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
         getWorkerdManager: () => d.workerdManager as never,
@@ -205,6 +216,7 @@ describe("cleanupRuntimeEntity", () => {
     ).rejects.toThrow("Runtime entity cleanup failed for do:one");
 
     expect(d.workerdManager.retireDOEntity).toHaveBeenCalledOnce();
+    expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
   });
 
   it("reports an incomplete Durable Object identity instead of silently skipping retirement", async () => {
@@ -222,6 +234,7 @@ describe("cleanupRuntimeEntity", () => {
         credentialSessionGrantStore: d.credentialSessionGrantStore,
         tokenManager: d.tokenManager,
         connectionGrants: d.connectionGrants,
+        releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
         getWorkerdManager: () => d.workerdManager as never,

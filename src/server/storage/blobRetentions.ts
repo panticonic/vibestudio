@@ -21,6 +21,11 @@ const schema: CanonicalSqliteSchema = {
 
 const locks = new Map<string, Promise<void>>();
 
+/** Stable authenticated identity, independent of a process or build incarnation. */
+export function blobRetentionNamespace(runtime: { kind: string; id: string }): string {
+  return JSON.stringify([runtime.kind, runtime.id]);
+}
+
 /** One workspace's write-to-root interval and destructive GC share this lock. */
 export async function withBlobContentLock<T>(
   blobsDir: string,
@@ -89,6 +94,14 @@ export function releaseBlobRetention(blobsDir: string, namespace: string, owner:
       namespace,
       owner
     );
+  });
+}
+
+/** Trusted lifecycle cleanup, after this principal's producers have stopped. */
+export function releaseBlobRetentionNamespace(blobsDir: string, namespace: string): void {
+  if (!fs.existsSync(databasePath(blobsDir))) return;
+  withStore(blobsDir, (db) => {
+    db.prepare("DELETE FROM blob_retentions WHERE namespace = ?").run(namespace);
   });
 }
 

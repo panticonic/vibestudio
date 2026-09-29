@@ -123,7 +123,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "code-runner.reset", notability: "everyday" },
   { key: "workers.storage.reset", notability: "headline" },
   { key: "server-logs.read", notability: "everyday" },
-  { key: "development.native.build.retire", notability: "everyday" },
   { key: "development.native.execute", notability: "headline" },
   { key: "development.native.session.retire", notability: "everyday" },
   { key: "development.runs.force-retire", notability: "everyday" },

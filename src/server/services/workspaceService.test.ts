@@ -262,6 +262,30 @@ describe("workspace service handler", () => {
     ).resolves.toEqual({ valid: true });
   });
 
+  it("validates joined service ownership before accepting an authoring candidate", async () => {
+    const service = makeService();
+    const declaration = {
+      source: "workers/tasks",
+      name: "tasks.v1",
+      protocols: ["tasks.v1"],
+      action: "manage tasks",
+      presentation: { domain: "files", verb: "manage" },
+      authority: { principals: ["code"] },
+      durableObject: { className: "TasksDO" },
+    };
+    const candidate = (services: unknown[]) =>
+      JSON.stringify({ systemEpoch: WORKSPACE_SYSTEM_EPOCH, services });
+    await expect(
+      service.handler(panelCtx, "validateConfig", [candidate([declaration])])
+    ).resolves.toEqual({ valid: true });
+    await expect(
+      service.handler(panelCtx, "validateConfig", [
+        candidate([declaration, { ...declaration, name: "other" }]),
+      ])
+    ).rejects.toThrow(/declared by both/);
+    expect(await service.handler(panelCtx, "getConfig", [])).toEqual(makeConfig());
+  });
+
   it("setInitPanels delegates to setConfigField", async () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({

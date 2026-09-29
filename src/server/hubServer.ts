@@ -11,6 +11,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { processGroupAlive } from "../../scripts/owned-process-tree.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { z } from "zod";
@@ -224,6 +225,8 @@ export interface HubRuntimeState {
   /** Latest live-session projection reported by each workspace child (WP8 §4.4). */
   workspacePresence: Map<string, HubWorkspacePresenceSnapshot>;
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
+  /** Process ownership survives removal from the routable runtime registry. */
+  workspaceChildren: Set<ChildProcess>;
   /** Exact local acquisition sources admitted by this hub's trusted native host. */
   workspaceSources: WorkspaceSource[];
   /** Stable machine-level control/pairing ingress; never owned by a workspace child. */
@@ -2605,7 +2608,7 @@ async function startWorkspaceRuntime(
     {
       cwd: getPhysicalAppPath(launchSet.appRoot, ""),
       env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
       // The hub owns this complete runtime tree. A distinct POSIX process group
       // lets graceful shutdown reach the child first and lets an explicit
       // repeated signal stop workerd/extension-host descendants as one unit.
@@ -2613,6 +2616,7 @@ async function startWorkspaceRuntime(
     }
   );
   onSpawn(child);
+  state.workspaceChildren.add(child);
 
   // A supervising CLI/PTY may close stdout while several workspace children
   // are still draining final shutdown output. Node emits EPIPE both to the
@@ -2777,22 +2781,29 @@ function restartExitedWorkspaceRuntime(
 /**
  * Converge the runtime registry after an observed OS exit. A ready child with
  * durable demand is replaced immediately. Intentional stops remove the map
- * entry before signaling and are therefore ignored here.
+ * entry before signaling: their process trees are still retired here, but
+ * they never trigger an availability restart.
  */
 export async function handleWorkspaceChildExit(
   state: HubRuntimeState,
   input: WorkspaceChildExitInput,
   deps: WorkspaceChildExitDeps = {}
 ): Promise<void> {
-  state.workspaceChildTokens.delete(input.runtimeToken);
-  state.workspacePresence.delete(input.workspaceId);
   const current = state.runtimes.get(input.workspaceName);
-  if (!current || current.child !== input.child) return;
+  if (!state.workspaceChildren.has(input.child)) return;
+  state.workspaceChildTokens.delete(input.runtimeToken);
+  const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child).then(() => {
+    state.workspaceChildren.delete(input.child);
+  });
+  if (!current || current.child !== input.child) {
+    await reaped;
+    return;
+  }
+  state.workspacePresence.delete(input.workspaceId);
   const wasReady = !("promise" in current);
   const epochHandoff = input.code === WORKSPACE_EPOCH_HANDOFF_EXIT_CODE;
   state.runtimes.delete(input.workspaceName);
 
-  const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child);
   const exitDescription = `code=${input.code ?? "null"}, signal=${input.signal ?? "null"}, pid=${input.child.pid ?? "unknown"}`;
   if (state.shuttingDown) {
     console.log(
@@ -2833,16 +2844,10 @@ export async function handleWorkspaceChildExit(
   }
 }
 
-/** Best-effort cleanup of the detached process group after its owner exits.
- *
- * The child exit event proves that the workspace server stopped. Descendants
- * may create their own sessions, and macOS can return EPERM for a group with
- * only zombies. Neither group probing nor a successful signal proves tree
- * termination. Cleanup must not turn an orderly exit into a failed restart.
- */
+/** The exited group leader is not proof that its runtime was retired. */
 export async function reapWorkspaceChildProcessGroup(
   child: ChildProcess,
-  deps: ProcessSignalDeps & { warn?: (message: string) => void } = {}
+  deps: ProcessSignalDeps & { groupAlive?: (pid: number) => boolean } = {}
 ): Promise<void> {
   const platform = deps.platform ?? process.platform;
   const pid = child.pid;
@@ -2851,10 +2856,10 @@ export async function reapWorkspaceChildProcessGroup(
     (deps.killProcess ?? process.kill)(-(pid as number), "SIGKILL");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-    (deps.warn ?? console.warn)(
-      `[Hub] Workspace child ${pid} stopped; descendant cleanup is unverified: ${String(error)}`
-    );
+    throw new Error(`Workspace child ${pid} descendant retirement failed`, { cause: error });
   }
+  const alive = deps.groupAlive ?? processGroupAlive;
+  while (alive(pid as number)) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 /** Signal the workspace runtime and every process it owns. */
@@ -3184,6 +3189,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     workspaceChildTokens: new Map(),
     workspacePresence: new Map(),
     runtimes: new Map(),
+    workspaceChildren: new Set(),
     workspaceSources: readWorkspaceSources(),
     shuttingDown: false,
   };
@@ -3293,13 +3299,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     publishReady();
   }
 
-  const workspaceChildren = (): ChildProcess[] => [
-    ...new Set(
-      [...activeState.runtimes.values()]
-        .map((runtime) => runtime.child)
-        .filter((child): child is ChildProcess => child !== undefined)
-    ),
-  ];
+  const workspaceChildren = (): ChildProcess[] => [...activeState.workspaceChildren];
 
   async function shutdown(): Promise<void> {
     if (!state || state.shuttingDown) return;
@@ -3316,6 +3316,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     }
     const childProcesses = workspaceChildren();
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
+    for (const child of childProcesses) state.workspaceChildren.delete(child);
     console.log("[Hub] Shutdown: workspace children stopped");
     console.log("[Hub] Shutdown: gateway close started");
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -3336,7 +3337,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
         `[Hub] Received ${signal} during shutdown; force-stopping workspace process trees`
       );
       for (const child of workspaceChildren()) {
-        if (!workspaceChildExited(child)) signalWorkspaceChildTree(child, "SIGKILL");
+        signalWorkspaceChildTree(child, "SIGKILL");
       }
       return;
     }

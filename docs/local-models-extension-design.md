@@ -375,7 +375,7 @@ interface LocalModelsApi {
   status(): Promise<LocalModelsStatus>; // servers, engine, hardware, fallback readiness
   listModels(): Promise<LocalModelEntry[]>; // → catalog entries (§6.1)
   ensureLoaded(modelId: string): Promise<{ baseUrl: string }>; // request-path start/load (§6.3)
-  getLoopbackAuth(): Promise<{ apiKey: string }>; // do-kind callers only (§6.3); never in catalog/journal
+  getLoopbackAuth(): Promise<{ apiKey: string; origins: string[] }>; // do-kind callers only (§6.3); never in catalog/journal
   // library management (panel)
   searchCatalog(q): Promise<CatalogHit[]>;
   downloadModel(req): Response; // streaming progress
@@ -529,22 +529,25 @@ and therefore the journaled `modelSpec` — carries `auth: "url-bound" | "loopba
   requires a non-empty `options.apiKey` (its handler throws `No API key for
 provider` otherwise, `openai-completions.js:72-74`), so the executor resolves the
   loopback api-key **at call time** through a new executor dep backed by the
-  extension's `getLoopbackAuth()` (cached per DO boot) and passes it as `apiKey`.
-  There is no "executor" caller kind — the extensions service is reachable by
-  panel/app/worker/do/shell/server/extension callers
-  (`packages/extension-host/src/service.ts:493`) — so the extension enforces the
-  restriction itself via `ctx.invocation.current()`: `getLoopbackAuth()` refuses
-  panels, apps, and workers outright, and among `do`-kind callers it additionally
-  checks the caller id against an agent-vessel allowlist, because _every_ workspace
-  DO presents `callerKind: "do"` (`runtime/src/worker/durable-base.ts:389`) — kind
-  alone is too broad. The residual exposure is stated, not hidden: workspace DOs
-  are trusted first-party units (`docs/trusted-workspace-units.md`), and the key's
-  threat model is foreign local _processes_, not intra-workspace code — the
-  caller-id allowlist is defense in depth, not a security boundary. The key exists
-  in exactly two places: the
-  machine-global root (`auth.key`, 0600, §4.3) and the headers of in-flight
-  loopback requests — never in the catalog snapshot, never in the journal, never
-  in panel state.
+  extension's `getLoopbackAuth()` and passes it as `apiKey`. The owning
+  supervisor also returns its currently running endpoint origins. Credentials
+  stay in the trusted DO execution plane: the extension reads the canonical
+  invocation identity and refuses panel, app, worker, and user callers. Agent
+  class names do not grant authority. The host admits outbound inference only
+  when the exact sealed caller requests `internal-model-runtime.use` for
+  `local-models`, and the request's origin and bearer match the provider's live
+  attestation. The complete service binding and review identity is sealed from
+  the exact source state alongside each executable. Admission checks compare
+  that identity against the decision recorded at installation or publication.
+  Request-time authorization reads the sealed image and ledger synchronously;
+  it never calls the workspace-source service to authorize its own source RPC.
+  Cache hydration and source-state rebinding reseal the receiving workspace's
+  service environment, and retained executions preserve their original facts.
+  It asks the provider on each request, so a restart or key rotation
+  cannot leave stale authority behind. Host paths and host PIDs do not attest a
+  provider running in an isolated filesystem or process namespace.
+  The key stays in the provider's private root and in-flight request headers;
+  it never enters the model catalog, journal, or panel state.
 - Before streaming a `local:*` ref, the executor calls the extension's
   `ensureLoaded(modelId)`. This is what gives `startable` models a real invocation
   path: it starts the main-server process if the supervisor isn't running it,

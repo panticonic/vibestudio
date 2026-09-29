@@ -419,7 +419,7 @@ export interface UnitHostOptions<
   notifyUnresolved(sources: string[]): void;
   validateBeforeApproval?: (node: Node, decl: Decl) => void;
   onApprovalCandidateError?: (node: Node, decl: Decl, message: string) => void;
-  approvalEntry(node: Node, decl: Decl): ApprovalEntry;
+  approvalEntry(node: Node, decl: Decl): Promise<ApprovalEntry>;
   /** Resolve the server-owned origin facts before a centralized review opens. */
   approvalOrigins?(
     entries: readonly ApprovalEntry[]
@@ -768,7 +768,7 @@ export class UnitHost<
    * vouches for its declaration now, and the user decides about running it
    * separately.
    */
-  seedTrustedDeclarations(declared: Decl[]): ApprovalEntry[] {
+  async seedTrustedDeclarations(declared: Decl[]): Promise<ApprovalEntry[]> {
     if (!this.opts.isSeedTrusted) return [];
     const entries: ApprovalEntry[] = [];
     for (const decl of declared) {
@@ -779,12 +779,12 @@ export class UnitHost<
         continue;
       }
       if (!this.opts.isSeedTrusted(node, this.opts.candidateIdentity(node, decl))) continue;
-      entries.push(this.opts.approvalEntry(node, decl));
+      entries.push(await this.opts.approvalEntry(node, decl));
     }
     return entries;
   }
 
-  approvalForDeclarations(declared: Decl[]): { entries: ApprovalEntry[]; identityKeys: string[] } {
+  async approvalForDeclarations(declared: Decl[]): Promise<{ entries: ApprovalEntry[]; identityKeys: string[] }> {
     const entries: ApprovalEntry[] = [];
     const identityKeys: string[] = [];
     for (const decl of declared) {
@@ -797,7 +797,7 @@ export class UnitHost<
       const entry = this.opts.registry.get(node.name);
       const trust = this.trustForCandidate(node, decl, entry);
       if (trust.decision !== "needs-approval") continue;
-      entries.push(this.opts.approvalEntry(node, decl));
+      entries.push(await this.opts.approvalEntry(node, decl));
       identityKeys.push(trust.identityKey);
     }
     return { entries, identityKeys };
@@ -1046,7 +1046,7 @@ export class UnitHost<
     maxConcurrentApplies?: number
   ): Promise<void> {
     if (this.opts.approvalCoordinator) {
-      const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
+      const entries = await Promise.all(items.map(({ node, decl }) => this.opts.approvalEntry(node, decl)));
       const origins = await this.opts.approvalOrigins?.(entries);
       await this.opts.approvalCoordinator.enqueue({
         entries,
@@ -1063,7 +1063,7 @@ export class UnitHost<
       });
       return;
     }
-    const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
+    const entries = await Promise.all(items.map(({ node, decl }) => this.opts.approvalEntry(node, decl)));
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
       this.opts.onApprovalDenied(items);

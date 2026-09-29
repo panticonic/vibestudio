@@ -24,6 +24,11 @@ import {
   type DevInstanceRecord,
 } from "../../dev/instanceRegistry.js";
 import { writeFileAtomicSync } from "../../atomicFile.js";
+import { DEFAULT_WORKSPACE_TEMPLATES_ENV } from "@vibestudio/workspace/templateRelease";
+import {
+  WORKSPACE_SOURCES_ENV,
+  serializeWorkspaceSources,
+} from "@vibestudio/workspace/workspaceSources";
 import type {
   DevelopmentExecutor,
   OwnedDevelopmentLaunch,
@@ -56,14 +61,15 @@ export interface IsolatedDevelopmentManager {
   waitForClientAttestation(
     requestId: string,
     timeoutMs: number,
-    assertGeneration: () => void
+    assertGeneration: () => void,
+    signal: AbortSignal
   ): Promise<{ requestId: string; childRuntimeId: string; attestedAt: number }>;
 }
 
 export interface IsolatedHostLifecycle {
   onRegistered(instance: DevelopmentInstance): void;
   onReady(instance: DevelopmentInstance): void | Promise<void>;
-  onExit(code: number): void;
+  onExit(code: number, instance: DevelopmentInstance): void;
 }
 
 /**
@@ -281,22 +287,30 @@ export class IsolatedDevelopmentHostExecutor {
           this.active.delete(run.runId);
           unregister(this.deps.controlRepoRoot, instanceId);
           clearDevInstanceReady(instance);
-          lifecycle.onExit(code);
+          lifecycle.onExit(code, { ...publicInstance, state: "stopped", stoppedAt: now() });
         },
         () => {
           if (active.stopping) return;
           this.active.delete(run.runId);
           unregister(this.deps.controlRepoRoot, instanceId);
           clearDevInstanceReady(instance);
-          lifecycle.onExit(1);
+          lifecycle.onExit(1, { ...publicInstance, state: "stopped", stoppedAt: now() });
         }
       );
       return publicInstance;
     } catch (error) {
+      try {
+        await supervisor.stop();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Isolated launch and its owned cleanup failed"
+        );
+      }
       this.active.delete(run.runId);
-      await supervisor.stop().catch(() => undefined);
       unregister(this.deps.controlRepoRoot, instanceId);
       clearDevInstanceReady(instance);
+      lifecycle.onExit(1, { ...publicInstance, state: "stopped", stoppedAt: now() });
       throw error;
     }
   }
@@ -347,11 +361,16 @@ export class IsolatedDevelopmentHostExecutor {
   async waitForClientAttestation(
     run: DevelopmentRun,
     requestId: string,
+    signal: AbortSignal,
     timeoutMs = 5 * 60_000
   ): Promise<{ requestId: string; childRuntimeId: string; attestedAt: number }> {
     const active = this.requireManagedHost(run);
-    return active.manager.waitForClientAttestation(requestId, timeoutMs, () =>
-      this.assertExactActive(run, active)
+    signal.throwIfAborted();
+    return active.manager.waitForClientAttestation(
+      requestId,
+      timeoutMs,
+      () => this.assertExactActive(run, active),
+      signal
     );
   }
 
@@ -639,6 +658,8 @@ function isolatedEnvironment(
       .filter((entry): entry is string => Boolean(entry))
       .join(path.delimiter),
     VIBESTUDIO_APP_ROOT: launch.sourceRoot,
+    [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(launch.workspaceTemplates),
+    [WORKSPACE_SOURCES_ENV]: serializeWorkspaceSources(launch.workspaceSources),
     // A host refuses to start without the generation its compiled artifacts
     // come from, and a compiled server entry names its own directory.
     VIBESTUDIO_HOST_ARTIFACT_ROOT: path.dirname(launch.serverEntryPath),
@@ -678,17 +699,26 @@ async function createIsolatedDevelopmentManager(input: {
       });
       return invite.pairing.deepLink;
     },
-    async waitForClientAttestation(requestId, timeoutMs, assertGeneration) {
+    async waitForClientAttestation(requestId, timeoutMs, assertGeneration, signal) {
       const rpc = new RpcClient(credentials);
       const deadline = Date.now() + timeoutMs;
+      let cancelledClose: Promise<void> | undefined;
+      const abort = () => {
+        cancelledClose = rpc.close();
+        // The finally block joins this close and reports any teardown error.
+        void cancelledClose.catch(() => undefined);
+      };
+      signal.addEventListener("abort", abort, { once: true });
       try {
         while (Date.now() < deadline) {
+          signal.throwIfAborted();
           assertGeneration();
           const receipt = await rpc.call<{
             requestId: string;
             childRuntimeId: string;
             attestedAt: number;
           } | null>("developmentClientExecutor.consumeAttestation", [{ requestId }]);
+          signal.throwIfAborted();
           if (receipt) return receipt;
           await delay(100);
         }
@@ -696,7 +726,8 @@ async function createIsolatedDevelopmentManager(input: {
           code: "EEXECUTOR_TIMEOUT",
         });
       } finally {
-        await rpc.close();
+        signal.removeEventListener("abort", abort);
+        await (cancelledClose ?? rpc.close());
       }
     },
   };

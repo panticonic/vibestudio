@@ -4,6 +4,35 @@ import { observeOwnedProcess } from "./owned-process-identity.mjs";
 
 const POLL_MS = 100;
 
+/** A detached native service cannot outlive the IPC owner that launched it.
+ * Install before bootstrap. Owner loss revokes the whole execution tree,
+ * including descendants that started their own process groups. It is a
+ * lifecycle edge, not an idle timer or a graceful-drain deadline. */
+export function bindProcessLifetimeToParent() {
+  if (!process.send || !process.connected)
+    throw new Error("Parent-owned process requires a live inherited IPC channel");
+  process.once("disconnect", () => {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/T", "/F", "/PID", String(process.pid)], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      process.exit(1);
+    }
+    const table = readProcessTable(process.platform);
+    const self = table?.get(process.pid);
+    if (!self || self.pgid !== process.pid)
+      throw new Error("Parent-owned service must lead its own process group");
+    // Snapshot while this owner is alive: after its exit the kernel reparents
+    // children and ancestry no longer proves which detached groups it owned.
+    for (const group of ownedProcessGroups(process.pid, process.platform))
+      signalGroup(group, "SIGKILL");
+    // ownedProcessGroups deliberately excludes the caller's group. This
+    // service is that group's leader and owns it, so retire it last.
+    signalGroup(process.pid, "SIGKILL");
+  });
+}
+
 export function processTreeAlive(pid, platform = process.platform) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (platform === "win32") {
@@ -115,7 +144,14 @@ function pidAlive(pid) {
   }
 }
 
-function processGroupAlive(group) {
+export function processGroupAlive(group) {
+  const table = readProcessTable(process.platform);
+  if (table) {
+    // Zombies retain a PID/group until their new parent reaps them, but no
+    // longer own memory, sockets or executable work. kill(group, 0) alone
+    // mistakes them for a live runtime and can stall confirmed retirement.
+    return [...table.values()].some((entry) => entry.pgid === group && entry.state !== "Z");
+  }
   try {
     process.kill(-group, 0);
     return true;
@@ -174,7 +210,13 @@ function readProcessTable(platform) {
       const table = new Map();
       for (const entry of readdirSync("/proc")) {
         if (!/^\d+$/.test(entry)) continue;
-        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        let stat;
+        try {
+          stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        } catch (error) {
+          if (error?.code === "ENOENT" || error?.code === "ESRCH") continue;
+          throw error;
+        }
         const close = stat.lastIndexOf(")");
         if (close < 0) continue;
         const fields = stat
@@ -185,7 +227,7 @@ function readProcessTable(platform) {
         const ppid = Number(fields[1]);
         const pgid = Number(fields[2]);
         if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
-          table.set(pid, { pid, ppid, pgid });
+          table.set(pid, { pid, ppid, pgid, state: fields[0] });
         }
       }
       return table;
@@ -195,19 +237,19 @@ function readProcessTable(platform) {
     }
   }
 
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,pgid="], {
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,pgid=,stat="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
   const table = new Map();
   for (const line of result.stdout.split("\n")) {
-    const [pidText, ppidText, pgidText] = line.trim().split(/\s+/);
+    const [pidText, ppidText, pgidText, stateText] = line.trim().split(/\s+/);
     const pid = Number(pidText);
     const ppid = Number(ppidText);
     const pgid = Number(pgidText);
     if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
-      table.set(pid, { pid, ppid, pgid });
+      table.set(pid, { pid, ppid, pgid, state: stateText?.slice(0, 1) });
     }
   }
   return table;

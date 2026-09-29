@@ -1,3 +1,4 @@
+import { PANEL_CONDITIONS, WORKER_CONDITIONS } from "./moduleConditions.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fsp from "fs/promises";
 import * as os from "os";
@@ -95,8 +96,45 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     { name: "@workspace/greeter", relativePath: "packages/greeter" },
   ];
 
+  it("resolves conditional workspace exports under the actual execution target", async () => {
+    const unit = "panels/conditional";
+    const dep = "packages/conditional";
+    await fsp.mkdir(path.join(sourceRoot, unit), { recursive: true });
+    await fsp.mkdir(path.join(sourceRoot, dep), { recursive: true });
+    await fsp.writeFile(
+      path.join(sourceRoot, dep, "package.json"),
+      JSON.stringify({
+        name: "@workspace/conditional",
+        type: "module",
+        exports: { ".": { "vibestudio-panel": "./panel.ts", worker: "./worker.ts" } },
+      })
+    );
+    await fsp.writeFile(
+      path.join(sourceRoot, dep, "panel.ts"),
+      "export const value: string = 'panel';"
+    );
+    await fsp.writeFile(path.join(sourceRoot, dep, "worker.ts"), "export const value: number = 1;");
+    await fsp.writeFile(
+      path.join(sourceRoot, unit, "index.ts"),
+      "import {value} from '@workspace/conditional'; export const text: string = value;"
+    );
+    const deps = [{ name: "@workspace/conditional", relativePath: dep }];
+    try {
+      expect(await typecheckUnit(unit, sourceRoot, deps, [], PANEL_CONDITIONS)).toEqual([]);
+      expect(await typecheckUnit(unit, sourceRoot, deps, [], WORKER_CONDITIONS)).toEqual([
+        expect.objectContaining({
+          file: `${unit}/index.ts`,
+          message: expect.stringContaining("number"),
+        }),
+      ]);
+    } finally {
+      await fsp.rm(path.join(sourceRoot, unit), { recursive: true, force: true });
+      await fsp.rm(path.join(sourceRoot, dep), { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the requested unit source is absent", async () => {
-    const diagnostics = await typecheckUnit("panels/missing", sourceRoot, [], []);
+    const diagnostics = await typecheckUnit("panels/missing", sourceRoot, [], [], PANEL_CONDITIONS);
 
     expect(diagnostics).toEqual([
       expect.objectContaining({
@@ -109,14 +147,20 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
   });
 
   it("resolves @workspace/* (materialized subtree) and external deps (node_modules) — no false 'Cannot find module'", async () => {
-    const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+    const diags = await typecheckUnit(
+      "panels/hello",
+      sourceRoot,
+      deps,
+      [nodeModules],
+      PANEL_CONDITIONS
+    );
     const cannotFind = diags.filter((d) => /Cannot find module/.test(d.message));
     expect(cannotFind).toEqual([]);
   });
 
   it("WITHOUT provisioning (the bug), the same unit reports 'Cannot find module' for both", async () => {
     // No workspace context (empty deps) + no node_modules → nothing resolves.
-    const diags = await typecheckUnit("panels/hello", sourceRoot, [], []);
+    const diags = await typecheckUnit("panels/hello", sourceRoot, [], [], PANEL_CONDITIONS);
     const messages = diags.map((d) => d.message).join("\n");
     expect(messages).toMatch(/Cannot find module ['"]@workspace\/greeter['"]/);
     expect(messages).toMatch(/Cannot find module ['"]ext-pkg['"]/);
@@ -126,7 +170,13 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     const brokenPath = path.join(sourceRoot, "panels/hello/broken.ts");
     await fsp.writeFile(brokenPath, `export const count: number = "wrong";`);
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS
+      );
       expect(diags).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -178,7 +228,8 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         "panels/configured",
         sourceRoot,
         [{ name: "@workspace-panels/configured", relativePath: "panels/configured" }],
-        []
+        [],
+        PANEL_CONDITIONS
       );
       expect(diagnostics).toEqual(
         expect.arrayContaining([
@@ -218,7 +269,8 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         "apps/mobile-runtime",
         sourceRoot,
         [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
-        []
+        [],
+        PANEL_CONDITIONS
       );
       expect(configured.filter((diagnostic) => diagnostic.file.endsWith("index.ts"))).toEqual([]);
 
@@ -230,7 +282,8 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         "apps/mobile-runtime",
         sourceRoot,
         [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
-        []
+        [],
+        PANEL_CONDITIONS
       );
       expect(staleEnvironment.map((diagnostic) => diagnostic.message).join("\n")).toMatch(
         /Property 'at' does not exist|Expected 0-1 arguments/
@@ -262,6 +315,7 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         sourceRoot,
         [{ name: "@workspace-panels/executable-root", relativePath: "panels/executable-root" }],
         [],
+        PANEL_CONDITIONS,
         {
           manifest: { authority: { requests: [], provides: [] } },
           executableModules: [
@@ -286,7 +340,13 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
   });
 
   it("keeps ambient product-source defects out of an exact unit report", async () => {
-    const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+    const diags = await typecheckUnit(
+      "panels/hello",
+      sourceRoot,
+      deps,
+      [nodeModules],
+      PANEL_CONDITIONS
+    );
     expect(diags.some((diagnostic) => diagnostic.file.includes("leaky-host"))).toBe(false);
   });
 
@@ -306,7 +366,13 @@ export const assets: string = logo + photo;`
     await fsp.writeFile(path.join(sourceRoot, "panels/hello/logo.svg"), `<svg/>`);
     await fsp.writeFile(path.join(sourceRoot, "panels/hello/photo.png"), "");
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS
+      );
       expect(diags.filter((diagnostic) => diagnostic.file.endsWith("with-assets.ts"))).toEqual([]);
     } finally {
       await Promise.all(
@@ -324,7 +390,13 @@ export const assets: string = logo + photo;`
     await fsp.writeFile(sourcePath, `import "./styles.css"; export const styled = true;`);
     await fsp.writeFile(stylePath, `.root { color: red; }`);
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS
+      );
       expect(diags.filter((diagnostic) => diagnostic.file.endsWith("with-style.ts"))).toEqual([]);
     } finally {
       await Promise.all([fsp.rm(sourcePath, { force: true }), fsp.rm(stylePath, { force: true })]);
@@ -351,7 +423,13 @@ export const assets: string = logo + photo;`
       ].join("\n")
     );
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS
+      );
       expect(diags).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -377,7 +455,13 @@ export const assets: string = logo + photo;`
       ].join("\n")
     );
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS
+      );
       expect(diags.filter((diagnostic) => diagnostic.file.endsWith("css-module-shape.ts"))).toEqual(
         []
       );
@@ -399,45 +483,52 @@ export const assets: string = logo + photo;`
       ].join("\n")
     );
     try {
-      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules], {
-        manifest: {
-          authority: {
-            provides: [],
-            requests: [
+      const diags = await typecheckUnit(
+        "panels/hello",
+        sourceRoot,
+        deps,
+        [nodeModules],
+        PANEL_CONDITIONS,
+        {
+          manifest: {
+            authority: {
+              provides: [],
+              requests: [
+                {
+                  capability: "context.boundary",
+                  resource: { kind: "prefix", prefix: "" },
+                  tier: "critical",
+                  evidence: "intentional-broad",
+                },
+              ],
+            },
+          },
+          environment: createExactWorkspaceAuthorityEnvironment({
+            stateHash: "state:test",
+            services: [
               {
-                capability: "context.boundary",
-                resource: { kind: "prefix", prefix: "" },
-                tier: "critical",
-                evidence: "intentional-broad",
+                name: "local-notifications",
+                protocols: ["example.notifications.v1"],
+                source: "workers/notifications",
+                action: "read notifications",
+                presentation: { domain: "computer", verb: "see" },
+                principals: ["code"],
+                target: { kind: "worker", routePath: "/notifications" },
               },
             ],
-          },
-        },
-        environment: createExactWorkspaceAuthorityEnvironment({
-          stateHash: "state:test",
-          services: [
-            {
-              name: "local-notifications",
-              protocols: ["example.notifications.v1"],
-              source: "workers/notifications",
-              action: "read notifications",
-              presentation: { domain: "computer", verb: "see" },
-              principals: ["code"],
-              target: { kind: "worker", routePath: "/notifications" },
-            },
-          ],
-          resolveCatalog: async (binding) => ({
-            provider: {
-              unitName: binding.source,
-              source: binding.source,
-              effectiveVersion: "ev-notifications",
-              className: "worker",
-            },
-            methods: new Map(),
-            digest: "catalog-notifications",
+            resolveCatalog: async (binding) => ({
+              provider: {
+                unitName: binding.source,
+                source: binding.source,
+                effectiveVersion: "ev-notifications",
+                className: "worker",
+              },
+              methods: new Map(),
+              digest: "catalog-notifications",
+            }),
           }),
-        }),
-      });
+        }
+      );
       expect(diags).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

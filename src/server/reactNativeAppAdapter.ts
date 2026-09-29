@@ -87,10 +87,10 @@ export interface ReactNativeAppAdapterDeps {
     declaration: WorkspaceAppDeclaration,
     options: { waitForApproval?: boolean }
   ): Promise<void>;
-  approvalForDeclarations(declarations: WorkspaceAppDeclaration[]): {
+  approvalForDeclarations(declarations: WorkspaceAppDeclaration[]): Promise<{
     entries: ReviewedUnit[];
     identityKeys: string[];
-  };
+  }>;
   acceptPreapprovedTrust(keys: Iterable<string>): void;
   emitStatus(appId: string, status: AppRegistryEntry["status"], error: string | null): void;
 }
@@ -214,7 +214,7 @@ export class ReactNativeAppAdapter {
     }
 
     if (!provider) {
-      this.stageLaunchPreflightApproval(candidate, declared);
+      await this.stageLaunchPreflightApproval(candidate, declared);
       const missingProvider = this.readinessSnapshot(candidate.source);
       const requiredExtensions = this.deps.requiredExtensions();
       const orderingDetail =
@@ -235,7 +235,7 @@ export class ReactNativeAppAdapter {
       };
     }
 
-    this.acceptLaunchPreflight(candidate, declared);
+    await this.acceptLaunchPreflight(candidate, declared);
     if (nonBlocking) {
       const entry = this.deps.registry.get(candidate.name);
       if (entry && (entry.status === "building" || entry.status === "pending-approval")) {
@@ -353,10 +353,10 @@ export class ReactNativeAppAdapter {
     };
   }
 
-  private stageLaunchPreflightApproval(
+  private async stageLaunchPreflightApproval(
     candidate: HostTargetCandidate,
     declared: WorkspaceAppDeclaration
-  ): void {
+  ): Promise<void> {
     const coordinator = this.deps.approvalCoordinator;
     if (!coordinator) return;
     const sourceKey = normalizeRepoPath(candidate.source);
@@ -369,7 +369,7 @@ export class ReactNativeAppAdapter {
       return;
     }
 
-    const approval = this.deps.approvalForDeclarations([declared]);
+    const approval = await this.deps.approvalForDeclarations([declared]);
     if (approval.entries.length === 0 || approval.identityKeys.length === 0) return;
     const keys = approval.identityKeys.filter((key) => !this.pendingLaunchPreflightKeys.has(key));
     if (keys.length === 0) return;
@@ -397,10 +397,10 @@ export class ReactNativeAppAdapter {
       });
   }
 
-  private acceptLaunchPreflight(
+  private async acceptLaunchPreflight(
     candidate: HostTargetCandidate,
     declared: WorkspaceAppDeclaration
-  ): void {
+  ): Promise<void> {
     const sourceKey = normalizeRepoPath(candidate.source);
     const approved = this.approvedLaunchPreflights.get(sourceKey);
     if (
@@ -411,7 +411,7 @@ export class ReactNativeAppAdapter {
       return;
     }
 
-    const approval = this.deps.approvalForDeclarations([declared]);
+    const approval = await this.deps.approvalForDeclarations([declared]);
     if (approval.identityKeys.length > 0) this.deps.acceptPreapprovedTrust(approval.identityKeys);
     this.approvedLaunchPreflights.delete(sourceKey);
   }

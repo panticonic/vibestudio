@@ -20,6 +20,7 @@ describe("TypecheckWorkerClient", () => {
         sourceRoot: REPO_ROOT,
         internalDeps: [],
         nodeModulesPaths: [],
+        moduleConditions: ["vibestudio-panel", "import", "default"],
       });
       expect(diagnostics).toEqual([expect.objectContaining({ source: "tsc", severity: "error" })]);
     } finally {

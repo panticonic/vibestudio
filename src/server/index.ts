@@ -11,6 +11,9 @@
  * (which conflicts with bundled CJS __dirname references in Node ≥25).
  */
 
+import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
+if (process.send) bindProcessLifetimeToParent();
+
 import {
   createOpenUnitReviewLookup,
   unitReviewCodeKey as codeIdentityKey,
@@ -1216,24 +1219,27 @@ async function main() {
     );
     admission.committed();
   };
+  let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
+  const { isSealedCodeAdmitted } = await import("./services/codeAdmission.js");
   const isCodeApproved = (code: VerifiedCodeIdentity): boolean => {
     if (code.repoPath === "vibestudio/internal") return true;
-    // Client apps and extensions are admitted by the publication that
-    // introduced them and confirmed at the launch gate, exactly like every
-    // other unit — there is no kind that is trusted for being its own kind
-    // (docs/template-install-unit-approval-ux-plan.md §5.5).
-    const evalOwner = code.evalOrigin ? entityCache.resolveActive(code.evalOrigin.ownerId) : null;
-    const approvedEntity = evalOwner ?? entityCache.resolveActive(code.callerId);
-    const authority =
-      code.callerKind === "extension"
-        ? extensionHostForGateway?.resolveActiveAuthority(code)
-        : approvedEntity?.activeAuthority;
-    if (!authority) return false;
-    return unitAdmissionStore.has({
-      repoPath: code.repoPath,
-      effectiveVersion: code.effectiveVersion,
-      authority,
-    });
+    if (code.callerKind === "extension") {
+      const image = extensionHostForGateway?.resolveActiveAdmissionImage(code) ?? null;
+      return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
+    }
+    const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+    if (
+      !entity?.activeBuildKey ||
+      !code.executionDigest ||
+      entity.source.repoPath !== code.repoPath ||
+      entity.source.effectiveVersion !== code.effectiveVersion ||
+      entity.activeExecutionDigest !== code.executionDigest
+    )
+      return false;
+    const image =
+      buildSystemInstance?.getBuildByExecution(entity.activeBuildKey, code.executionDigest)
+        ?.metadata ?? null;
+    return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
   };
   const { UnitInstallReviewCoordinator } = await import("./unitInstallReviewCoordinator.js");
   const unitInstallReviewCoordinator = new UnitInstallReviewCoordinator({
@@ -1250,7 +1256,17 @@ async function main() {
     clientConfigStore,
   });
   const { LocalModelLoopbackAuthority } = await import("./services/localModelLoopbackAuthority.js");
-  const localModelLoopbackAuthority = new LocalModelLoopbackAuthority();
+  const localModelLoopbackAuthority = new LocalModelLoopbackAuthority({
+    readRuntimeAuth: async (caller) => {
+      const host = assertPresent(extensionHostForGateway);
+      return await host.invoke(
+        { caller },
+        "@workspace-extensions/local-models",
+        "getLoopbackAuth",
+        []
+      );
+    },
+  });
   const cdpGrants = new CdpGrantService();
 
   const egressProxy = createEgressProxy({
@@ -1330,6 +1346,13 @@ async function main() {
       credentialSessionGrantStore,
       tokenManager,
       connectionGrants,
+      releaseBlobRetentions: async (runtime) => {
+        const { blobRetentionNamespace, releaseBlobRetentionNamespace, withBlobContentLock } =
+          await import("./storage/blobRetentions.js");
+        await withBlobContentLock(layout.blobsDir, async () => {
+          releaseBlobRetentionNamespace(layout.blobsDir, blobRetentionNamespace(runtime));
+        });
+      },
       clearPresentationTitle: async (entityId: string) => {
         await dispatchWorkspacePresentation("setEntityTitle", [entityId, null]);
         entityTitleProjection.remove(entityId);
@@ -1818,8 +1841,8 @@ async function main() {
             // Host-build units first: they are never offered at the gate, so
             // this is the only thing that records their admission — and the
             // shell needs it before it can render any review at all.
-            admitSeedTrustedUnits(extensionHost.seedTrustedDeclared(reviewed));
-            const review = extensionHost.reviewDeclared(reviewed);
+            admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(reviewed));
+            const review = await extensionHost.reviewDeclared(reviewed);
             if (review.units.length > 0) {
               tasks.push(
                 enqueueLaunchGateReview({
@@ -1899,13 +1922,13 @@ async function main() {
             // that decides whether to run it — it would build and then never
             // activate, with nothing on screen to explain why.
             if (trigger === "startup") {
-              admitSeedTrustedUnits(appHost.seedTrustedDeclared(declared));
+              admitSeedTrustedUnits(await appHost.seedTrustedDeclared(declared));
             }
             await appliedAppDeclarations.apply(declarationFingerprint, () =>
               appHost.setDeclared(declared, { trigger })
             );
             if (trigger === "startup") {
-              const review = appHost.reviewDeclared(declared);
+              const review = await appHost.reviewDeclared(declared);
               if (review.units.length > 0) {
                 tasks.push(
                   enqueueLaunchGateReview({
@@ -2418,6 +2441,22 @@ async function main() {
               ),
             };
           },
+          ensureBuildProvider: async (target) => {
+            await ensureHostTargetExtensions(target);
+            const host = assertPresent(extensionHostForGateway);
+            await host.whenReconciled();
+            for (const declaration of resolveHostTargetRequiredExtensions(
+              workspaceConfig,
+              target
+            )) {
+              const unit = host
+                .listWorkspaceUnits()
+                .find((row) => row.source === declaration.source);
+              if (!unit)
+                throw new Error(`Required build extension is unavailable: ${declaration.source}`);
+              await host.ensureActivated(unit.name);
+            }
+          },
           executionRootProviders: [
             buildKeyRootProvider({
               id: "app-generation",
@@ -2638,7 +2677,6 @@ async function main() {
     await import("./services/presenceService.js");
   const { createWorkerService } = await import("./services/workerService.js");
 
-  let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
   {
     container.registerManaged({
       name: "build",
@@ -2652,6 +2690,7 @@ async function main() {
         const buildSystem = assertPresent(buildSystemInstance);
         return createBuildService({
           buildSystem,
+          getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,
@@ -3656,6 +3695,29 @@ async function main() {
           retireEntity: (id) => runtime.internal.retireEntity(id),
           tokenManager,
           workspaceId,
+          resolveExecutionArtifact: (code) => {
+            if (code.repoPath === "vibestudio/internal") {
+              return (
+                productSeedArtifacts.find(
+                  (artifact) => artifact.executionDigest === code.executionDigest
+                ) ?? null
+              );
+            }
+            const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+            if (
+              !entity?.activeBuildKey ||
+              !code.executionDigest ||
+              entity.activeExecutionDigest !== code.executionDigest ||
+              entity.source.repoPath !== code.repoPath ||
+              entity.source.effectiveVersion !== code.effectiveVersion
+            )
+              return null;
+            const build = buildSystemInstance?.getBuildByExecution(
+              entity.activeBuildKey,
+              code.executionDigest
+            );
+            return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+          },
           executionSessions: agentExecutionSessions,
           taskAuthorities,
           isSystemTestHarness: (_caller, runId) =>
@@ -3994,6 +4056,8 @@ async function main() {
         };
         runtimeResult = createRuntimeService({
           taskAuthorities,
+          testPolicyForContext: (contextId) =>
+            agentExecutionSessions.testPolicyForContext(contextId),
           unitSupervisor,
           entityStore: ensureEntityStore(doDispatch),
           prepareResourceBindings: async (input) => {
@@ -4077,6 +4141,7 @@ async function main() {
           },
           onContextRemoved: ({ contextId }) => {
             agentExecutionSessions.removeTestContext(contextId);
+            eventService.emit("runtime:contextRemoved", { contextId });
           },
           onPanelExecutionActivated: (activation) => {
             eventService.emit("panel:executionActivated", activation);
@@ -4677,7 +4742,7 @@ async function main() {
   });
   panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
-  await wireDevelopmentNative({
+  const closeDevelopmentNative = await wireDevelopmentNative({
     appRoot,
     container,
     workspaceId,
@@ -7528,6 +7593,7 @@ async function main() {
     const alarmDriver =
       container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver");
     const shutdownStartedAt = Date.now();
+    const shutdownErrors: unknown[] = [];
     const forceExit = setTimeout(() => {
       console.warn("[Server] Shutdown timeout — forcing exit");
       process.exit(1);
@@ -7542,20 +7608,6 @@ async function main() {
     await alarmDriver
       .quiesce()
       .catch((err) => console.warn("[Server] alarm scheduler quiesce failed:", err));
-
-    await relayBackhaul
-      .stop()
-      .catch((err) => console.warn("[Server] relay backhaul stop failed:", err));
-
-    // Stop admitting remote work before quiescing application services. The
-    // service-container stop is idempotent and remains the startup-failure
-    // cleanup owner.
-    if (irohIngress) {
-      await irohIngress
-        .stop()
-        .catch((err) => console.warn("[Server] Iroh ingress close failed:", err));
-      irohIngress = null;
-    }
 
     // Close the shared eval admission before tearing down its host-held
     // transports. Every EvalDO run is a durable trust unit with its own
@@ -7588,6 +7640,28 @@ async function main() {
         .catch((err) => console.warn("[Server] lifecycle shutdown prepare failed:", err));
     }
 
+    // Client stop receipts arrive over RPC. Release native child ownership
+    // while those transports are still available; the managed service stop
+    // joins the same close operation during startup-failure cleanup.
+    await closeDevelopmentNative().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Native development shutdown failed:", error);
+    });
+
+    await relayBackhaul
+      .stop()
+      .catch((err) => console.warn("[Server] relay backhaul stop failed:", err));
+
+    // Stop admitting remote work before quiescing application services. The
+    // service-container stop is idempotent and remains the startup-failure
+    // cleanup owner.
+    if (irohIngress) {
+      await irohIngress
+        .stop()
+        .catch((err) => console.warn("[Server] Iroh ingress close failed:", err));
+      irohIngress = null;
+    }
+
     // At this point the owned eval/lifecycle work has had its chance to
     // release normally. Abort any remaining inbound RPC/stream work before
     // stopping workerd so a DO callback cannot keep a workerd handler alive
@@ -7599,7 +7673,10 @@ async function main() {
     await container
       .stopAll()
       .then(() => console.log("[Server] All services stopped"))
-      .catch((e) => console.error("[Server] Service shutdown error:", e));
+      .catch((error) => {
+        shutdownErrors.push(error);
+        console.error("[Server] Service shutdown error:", error);
+      });
 
     // Gateway is deliberately outside the service container because it is the
     // socket owner for several services. It still needs an explicit terminal
@@ -7623,9 +7700,13 @@ async function main() {
       console.error("[Server] Identity DB shutdown error:", error);
     }
     clearTimeout(forceExit);
-    console.log("[Server] Shutdown complete");
+    console.log(
+      shutdownErrors.length
+        ? "[Server] Shutdown completed with errors"
+        : "[Server] Shutdown complete"
+    );
     await serverLogStore.flush();
-    process.exit(0);
+    process.exit(shutdownErrors.length ? 1 : 0);
   }
 
   requestShutdown = () => void shutdown();

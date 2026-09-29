@@ -1,3 +1,8 @@
+import {
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import type { VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { executionAuthorityForCaller, retainExecutionAuthority } from "./executionAuthority.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -248,6 +253,8 @@ export function createEvalService(deps: {
   retireEntity: (id: string) => Promise<void>;
   tokenManager: TokenManager;
   workspaceId: string;
+  /** Resolve the actual sealed artifact, including source provenance, for a live code identity. */
+  resolveExecutionArtifact: (code: VerifiedCodeIdentity) => ExecutionArtifactRefV1 | null;
   executionSessions: AgentExecutionSessionRegistry;
   taskAuthorities: TaskAuthorityRegistry;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
@@ -691,17 +698,49 @@ export function createEvalService(deps: {
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     const evalRuntimeId = evalDoEntityId(objectKey);
     const ownerHarness = resolveCodeIdentity(store.cache, ownerId);
-    const harness = ownerHarness
-      ? {
-          repoPath: ownerHarness.repoPath,
-          effectiveVersion: ownerHarness.effectiveVersion,
-          executionDigest: ownerHarness.executionDigest,
-        }
-      : {
-          repoPath: evalExecutionIdentity.source,
-          effectiveVersion: evalExecutionIdentity.effectiveVersion,
-          executionDigest: evalExecutionIdentity.executionDigest,
-        };
+    const harnessArtifact = verifyExecutionArtifactRef(
+      ownerHarness
+        ? (() => {
+            const artifact = deps.resolveExecutionArtifact(ownerHarness);
+            if (
+              !artifact ||
+              artifact.executionDigest !== ownerHarness.executionDigest ||
+              artifact.sourceState.effectiveVersion !== ownerHarness.effectiveVersion
+            ) {
+              throw new ServiceError(
+                "eval",
+                "start",
+                "The live harness has no matching sealed execution artifact",
+                "EEXECUTION_IDENTITY",
+                undefined,
+                "service"
+              );
+            }
+            return artifact;
+          })()
+        : evalExecutionIdentity.artifact
+    );
+    const harness = {
+      repoPath: ownerHarness?.repoPath ?? evalExecutionIdentity.source,
+      effectiveVersion: harnessArtifact.sourceState.effectiveVersion,
+      executionDigest: harnessArtifact.executionDigest,
+    };
+    const sourceRoot = harnessArtifact.sourceState.contentRoots.find(
+      (root) =>
+        root.repoPath === harness.repoPath ||
+        (harnessArtifact.sourceState.kind === "product-seed" && root.repoPath === null)
+    );
+    if (!sourceRoot) {
+      throw new ServiceError(
+        "eval",
+        "start",
+        "The sealed harness artifact has no source root for its unit",
+        "EEXECUTION_IDENTITY",
+        undefined,
+        "service"
+      );
+    }
+
     if (!ctx.caller.subject) {
       throw new ServiceError(
         "eval",
@@ -760,7 +799,7 @@ export function createEvalService(deps: {
         executionImage: {
           principal: codePrincipal(harness),
           repoPath: harness.repoPath,
-          ref: `state:${harness.executionDigest}`,
+          ref: sourceRoot.stateHash as `state:${string}`,
           effectiveVersion: harness.effectiveVersion,
           executionDigest: harness.executionDigest,
         },

@@ -40,7 +40,7 @@ describe("PanelInitClient", () => {
       entityId: runtimeEntityId,
       connectionId: "connection-2",
       clientLabel: "Headless Test",
-      gatewayConfig: { token: "grant-1" },
+      gatewayConfig: { serverUrl: "http://127.0.0.1:3030", token: "grant-1" },
     });
   });
 
@@ -65,12 +65,10 @@ describe("PanelInitClient", () => {
       sourceRepo: "panels/todo",
       contextId: "context-1",
       buildKey: "a".repeat(64),
-      gatewayConfig: { token: "grant-1" },
+      gatewayConfig: { serverUrl: "http://127.0.0.1:3030", token: "grant-1" },
     });
 
-    await expect(
-      client.getPanelLoadInfo(slotId, runtimeEntityId, "connection-2")
-    ).rejects.toThrow(
+    await expect(client.getPanelLoadInfo(slotId, runtimeEntityId, "connection-2")).rejects.toThrow(
       "panel panel:tree/todo bootstrap targets panel:nav-previous, but the lease targets panel:nav-current"
     );
   });

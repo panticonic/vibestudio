@@ -51,6 +51,7 @@ import {
 } from "../storage/blobCas.js";
 import { assertPresent } from "../../lintHelpers";
 import {
+  blobRetentionNamespace,
   retainBlob,
   releaseBlobRetention,
   retainedBlobDigests,
@@ -1902,8 +1903,7 @@ export async function materializeTree(
 export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithRoutes {
   // Durable Object identities survive process/build incarnations. Logical keys
   // are never allowed to choose a different authenticated caller namespace.
-  const retentionNamespace = (caller: VerifiedCaller) =>
-    JSON.stringify([caller.runtime.kind, caller.runtime.id]);
+  const retentionNamespace = (caller: VerifiedCaller) => blobRetentionNamespace(caller.runtime);
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",

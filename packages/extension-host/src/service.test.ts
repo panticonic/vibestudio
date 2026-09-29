@@ -244,6 +244,8 @@ function makeHost(
             metadata: {
               ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
               sourceStateHash: "state:test",
+              sourcePath: extensionNode.relativePath,
+              serviceAuthorityDigest: "d".repeat(64),
               ...(overrides.sealedBuildIdentity === false
                 ? {}
                 : {
@@ -296,6 +298,8 @@ function makeHost(
       unitPath: extensionNode.relativePath,
       unitName: extensionNode.name,
       stateHash: "state:current",
+      manifest: { authority: { requests: [], provides: [] } },
+      serviceBindings: [], serviceReviews: [],
       effectiveVersion: overrides.activeEv ?? "ev-current",
       dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
@@ -383,6 +387,23 @@ function makeHost(
 }
 
 describe("ExtensionHost invocation attribution", () => {
+  it("reviews the resolved service authority of the exact source used for execution", async () => {
+    const { host, buildSystem, extensionNode } = makeHost({ installed: false });
+    const candidate = await buildSystem.resolveBuildUnitIdentity();
+    const serviceBindings = [{ protocol: "vibestudio.missions.v1", availability: "required" as const, serviceName: "missions", providerUnit: "workers/missions", catalogDigest: "b".repeat(64) }];
+    const serviceReviews = [{ capability: "workspace-service:missions", providerUnit: "workers/missions", catalogDigest: "b".repeat(64), presentation: null }];
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({ ...candidate, serviceBindings, serviceReviews } as never);
+    const review = await host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }]);
+    expect(review.units[0]?.authority).toMatchObject({ serviceBindings, serviceReviews });
+    expect(buildSystem.resolveBuildUnitIdentity).toHaveBeenLastCalledWith(extensionNode.relativePath, "main");
+  });
+
+  it("rejects review facts whose source version no longer matches the candidate", async () => {
+    const { host, buildSystem, extensionNode } = makeHost({ installed: false });
+    const candidate = await buildSystem.resolveBuildUnitIdentity();
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({ ...candidate, effectiveVersion: "ev-replaced" });
+    await expect(host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }])).rejects.toThrow("Exact review source changed");
+  });
   it("attributes an extension to its exact active sealed build authority", () => {
     const { host, extensionNode } = makeHost();
 
@@ -407,6 +428,12 @@ describe("ExtensionHost invocation attribution", () => {
     const { host, extensionNode } = makeHost();
     const code = host.resolveCodeIdentity(extensionNode.name)!;
     expect(host.resolveActiveAuthority(code)?.requests).toEqual(code.requested);
+    expect(host.resolveActiveAdmissionImage(code)).toMatchObject({
+      sourcePath: extensionNode.relativePath,
+      ev: code.effectiveVersion,
+      execution: { executionDigest: code.executionDigest },
+      serviceAuthorityDigest: "d".repeat(64),
+    });
     for (const changed of [
       { callerId: "@workspace-extensions/other" },
       { repoPath: "extensions/other" },
@@ -415,6 +442,7 @@ describe("ExtensionHost invocation attribution", () => {
       { requested: [] },
     ]) {
       expect(host.resolveActiveAuthority({ ...code, ...changed })).toBeNull();
+      expect(host.resolveActiveAdmissionImage({ ...code, ...changed })).toBeNull();
     }
     host.registry.upsert({ ...host.registry.get(extensionNode.name)!, activeBundleKey: null });
     expect(host.resolveActiveAuthority(code)).toBeNull();

@@ -10,6 +10,11 @@
  *    and detached on cdp:detach, so automation clients get fresh CDP domain
  *    state per attach, mirroring Electron's webContents.debugger lifecycle.
  */
+import {
+  DOM_SNAPSHOT_EXPRESSION,
+  type PanelDomSnapshot,
+} from "@vibestudio/shared/panel/domSnapshot";
+export type { PanelDomSnapshot } from "@vibestudio/shared/panel/domSnapshot";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   PANEL_PAGE_OBSERVATION_EXPRESSION,
@@ -65,105 +70,6 @@ export interface PanelScreenshotResult {
   height: number;
 }
 
-export interface PanelDomSnapshot {
-  kind: "synth";
-  text: string;
-  structure: unknown;
-  truncated: boolean;
-  limits: {
-    textChars: number;
-    textNodes: number;
-    structureNodes: number;
-    depth: number;
-    childrenPerNode: number;
-    leafTextChars: number;
-  };
-  observed: { textNodes: number; structureNodes: number };
-}
-
-const DOM_SNAPSHOT_EXPRESSION = `(() => {
-  const limits = {
-    textChars: 32768,
-    textNodes: 2000,
-    structureNodes: 500,
-    depth: 8,
-    childrenPerNode: 50,
-    leafTextChars: 160,
-  };
-  let truncated = false;
-  let structureNodes = 0;
-  let textNodes = 0;
-
-  const boundedText = (root, maximum, maximumNodes) => {
-    if (!root) return "";
-    const chunks = [];
-    let length = 0;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      textNodes += 1;
-      if (textNodes > maximumNodes) {
-        truncated = true;
-        break;
-      }
-      const value = String(walker.currentNode.nodeValue || "").replace(/\\s+/g, " ").trim();
-      if (!value) continue;
-      const separator = chunks.length === 0 ? "" : "\\n";
-      const remaining = maximum - length - separator.length;
-      if (remaining <= 0) {
-        truncated = true;
-        break;
-      }
-      chunks.push(separator + value.slice(0, remaining));
-      length += separator.length + Math.min(value.length, remaining);
-      if (value.length > remaining) {
-        truncated = true;
-        break;
-      }
-    }
-    return chunks.join("");
-  };
-
-  const describe = (element, depth = 0) => {
-    if (!element) return null;
-    if (depth > limits.depth || structureNodes >= limits.structureNodes) {
-      truncated = true;
-      return null;
-    }
-    structureNodes += 1;
-    const childCount = Number(element.children?.length || 0);
-    if (childCount > limits.childrenPerNode || (depth === limits.depth && childCount > 0)) {
-      truncated = true;
-    }
-    const children = [];
-    if (depth < limits.depth) {
-      for (let index = 0; index < Math.min(childCount, limits.childrenPerNode); index += 1) {
-        const child = describe(element.children[index], depth + 1);
-        if (child) children.push(child);
-        if (structureNodes >= limits.structureNodes) break;
-      }
-    }
-    return {
-      tag: String(element.tagName || "").toLowerCase(),
-      role: element.getAttribute?.("role") || undefined,
-      label: element.getAttribute?.("aria-label") || undefined,
-      text: children.length === 0
-        ? boundedText(element, limits.leafTextChars, limits.textNodes)
-        : undefined,
-      children,
-      depth,
-    };
-  };
-  const text = boundedText(document.body, limits.textChars, limits.textNodes);
-  return {
-    kind: "synth",
-    text,
-    structure: document.body ? describe(document.body) : null,
-    truncated,
-    limits,
-    observed: { textNodes, structureNodes },
-  };
-})()`;
-
 interface DocumentReadyWaiter {
   resolve(): void;
   reject(error: Error): void;
@@ -171,6 +77,10 @@ interface DocumentReadyWaiter {
 
 export class PageHost {
   private readonly pages = new Map<string, PanelPage>();
+  private readonly relayAttachments = new WeakMap<PanelPage, Promise<string>>();
+  private readonly relayRetirements = new WeakMap<PanelPage, Promise<void>>();
+  private readonly retiringRelays = new WeakSet<PanelPage>();
+  private readonly retiringPages = new WeakSet<PanelPage>();
   private readonly contextsById = new Map<string, string>(); // contextId → browserContextId
   private readonly relayEventListeners = new Set<
     (slotId: string, method: string, params: unknown, sessionId?: string) => void
@@ -188,6 +98,10 @@ export class PageHost {
 
   slots(): string[] {
     return [...this.pages.keys()];
+  }
+
+  contextIds(): string[] {
+    return [...this.contextsById.keys()];
   }
 
   lastUsedAt(slotId: string): number | undefined {
@@ -227,7 +141,7 @@ export class PageHost {
   }
 
   async loadPanel(input: LoadPanelInput): Promise<void> {
-    await this.unloadPanel(input.slotId).catch(() => undefined);
+    await this.unloadPanel(input.slotId);
     const browserContextId = await this.ensureBrowserContext(input.contextId);
     const created = (await this.cdp.send("Target.createTarget", {
       url: "about:blank",
@@ -354,26 +268,42 @@ export class PageHost {
     this.rejectDocumentReady(slotId, `panel ${slotId} unloaded before document readiness`);
     const page = this.pages.get(slotId);
     if (!page) return;
+    this.retiringPages.add(page);
+    await this.detachRelay(slotId);
+    try {
+      const closed = await this.cdp.send("Target.closeTarget", { targetId: page.targetId }) as { success: boolean };
+      if (!closed.success) throw new Error(`Chromium did not close owned target ${page.targetId}`);
+    } catch (cause) {
+      // A target may already have closed independently. Observe the native
+      // target table instead of discarding ownership on an arbitrary error.
+      const current = await this.cdp.send("Target.getTargets") as { targetInfos: Array<{ targetId: string }> };
+      if (current.targetInfos.some((target) => target.targetId === page.targetId)) throw cause;
+    }
     this.pages.delete(slotId);
     this.cdp.releaseSession(page.mgmtSessionId);
     this.cdp.releaseSlotSessions(slotId);
     this.consoleHistory.clear(slotId);
-    await this.cdp.send("Target.closeTarget", { targetId: page.targetId }).catch(() => undefined);
-    await this.disposeBrowserContextIfUnused(page.contextId);
     log.info(`unloaded panel ${slotId}`);
   }
 
-  private async disposeBrowserContextIfUnused(contextId: string): Promise<void> {
-    if ([...this.pages.values()].some((page) => page.contextId === contextId)) return;
+  /** Browser storage belongs to the semantic context, not its resident pages.
+   * Rebuild, host eviction and lease transfer can remove every renderer while
+   * the storage owner remains alive. Only explicit owner removal reclaims it. */
+  async retireContext(contextId: string): Promise<void> {
+    for (const page of [...this.pages.values()]) {
+      if (page.contextId === contextId) await this.unloadPanel(page.slotId);
+    }
     const browserContextId = this.contextsById.get(contextId);
     if (!browserContextId) return;
+    await this.cdp.send("Target.disposeBrowserContext", { browserContextId });
     this.contextsById.delete(contextId);
-    // Closing a target does not dispose its incognito browser context. Leaving
-    // those contexts alive retains Chromium-owned targets and renderer
-    // processes after panel churn, even though PageHost no longer tracks them.
-    await this.cdp
-      .send("Target.disposeBrowserContext", { browserContextId })
-      .catch(() => undefined);
+  }
+
+  async reconcileContextOwners(liveContextIds: readonly string[], observedContextIds: readonly string[]): Promise<void> {
+    const live = new Set(liveContextIds);
+    for (const contextId of observedContextIds) {
+      if (!live.has(contextId)) await this.retireContext(contextId);
+    }
   }
 
   async navigate(
@@ -591,33 +521,82 @@ export class PageHost {
   }
 
   /** cdp:detach — drop the relay session so the next client starts fresh. */
-  async detachRelay(slotId: string): Promise<void> {
+  detachRelay(slotId: string): Promise<void> {
     const page = this.pages.get(slotId);
-    if (!page?.relaySessionId) return;
-    const sessionId = page.relaySessionId;
-    page.relaySessionId = null;
-    this.cdp.releaseSession(sessionId);
-    await this.cdp.send("Target.detachFromTarget", { sessionId }).catch(() => undefined);
+    if (!page) return Promise.resolve();
+    const retirement = this.relayRetirements.get(page);
+    if (retirement) return retirement;
+    const attachment = this.relayAttachments.get(page);
+    if (!attachment && !page.relaySessionId) return Promise.resolve();
+    this.retiringRelays.add(page);
+    const retiring = Promise.resolve().then(async () => {
+      const sessionId = attachment ? await attachment.catch(() => null) : page.relaySessionId;
+      if (sessionId) {
+        await this.cdp.send("Target.detachFromTarget", { sessionId }).catch((error) => {
+          // Native detachment can precede the command (for example when the
+          // target closes independently). Its event is equally authoritative.
+          if (page.relaySessionId === sessionId) throw error;
+        });
+        this.cdp.releaseSession(sessionId);
+        page.relaySessionId = null;
+      }
+      this.relayAttachments.delete(page);
+      this.retiringRelays.delete(page);
+    }).finally(() => {
+      this.relayRetirements.delete(page);
+    });
+    this.relayRetirements.set(page, retiring);
+    return retiring;
   }
 
   private async ensureRelaySession(page: PanelPage): Promise<string> {
+    await this.relayRetirements.get(page);
+    if (this.retiringPages.has(page) || this.pages.get(page.slotId) !== page) {
+      throw new Error(`panel ${page.slotId} is retiring`);
+    }
+    if (this.retiringRelays.has(page)) throw new Error(`panel ${page.slotId} relay retirement is unconfirmed`);
     if (page.relaySessionId) return page.relaySessionId;
-    const attached = (await this.cdp.send("Target.attachToTarget", {
-      targetId: page.targetId,
-      flatten: true,
-    })) as { sessionId: string };
-    page.relaySessionId = attached.sessionId;
-    this.cdp.claimSession(attached.sessionId, page.slotId);
-    return attached.sessionId;
+    let attachment = this.relayAttachments.get(page);
+    if (!attachment) {
+      // Domain initialization sends commands concurrently. They must all own
+      // the same native session: each attachment has independent domain and
+      // dialog state, even though it addresses the same target.
+      attachment = this.cdp.send("Target.attachToTarget", {
+        targetId: page.targetId,
+        flatten: true,
+      }).then((result) => {
+        const { sessionId } = result as { sessionId: string };
+        page.relaySessionId = sessionId;
+        this.cdp.claimSession(sessionId, page.slotId);
+        return sessionId;
+      }).catch((error) => {
+        this.relayAttachments.delete(page);
+        throw error;
+      });
+      this.relayAttachments.set(page, attachment);
+    }
+    const sessionId = await attachment;
+    if (this.retiringPages.has(page) || this.relayRetirements.has(page)) {
+      throw new Error(`panel ${page.slotId} relay is retiring`);
+    }
+    return sessionId;
   }
 
   private requirePage(slotId: string): PanelPage {
     const page = this.pages.get(slotId);
-    if (!page) throw new Error(`no page hosted for panel ${slotId}`);
+    if (!page || this.retiringPages.has(page)) throw new Error(`no active page hosted for panel ${slotId}`);
     return page;
   }
 
   private routeEvent(event: { method: string; params: unknown; sessionId?: string }): void {
+    if (event.method === "Target.detachedFromTarget") {
+      const detached = (event.params as { sessionId?: string } | undefined)?.sessionId;
+      for (const page of this.pages.values()) {
+        if (!detached || page.relaySessionId !== detached) continue;
+        page.relaySessionId = null;
+        this.relayAttachments.delete(page);
+      }
+    }
     const owner = this.cdp.ownerOf(event.sessionId);
     if (!owner) return;
 

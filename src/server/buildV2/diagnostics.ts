@@ -24,7 +24,17 @@ import type { AgentDiagnosticRepairWire } from "@vibestudio/service-schemas/buil
  */
 export class BuildRequestError extends RpcBoundaryError {
   constructor(code: string, message: string, details: Record<string, unknown>) {
-    super(message, "application", code, undefined, { code, ...details });
+    super(message, "application", code, undefined, {
+      ...details,
+      code,
+      failureKind: "invalid-input",
+      retry: { policy: "correct-input", commandIdPolicy: "not-applicable" },
+      recovery: {
+        action: "correct-request",
+        instruction:
+          "Inspect the structured request details and the unit's declarations, correct the request or source, then verify again.",
+      },
+    });
     this.name = "BuildRequestError";
   }
 }
@@ -55,6 +65,8 @@ export interface DiagnosticPathContext {
   workspaceRoot?: string;
   sourceRoot?: string | null;
   unitRelativePath?: string;
+  /** The compiler's declared base for relative physical file locations. */
+  workingDirectory?: string;
 }
 
 /**
@@ -161,6 +173,9 @@ export function workspaceDiagnosticPath(
 ): string {
   if (!file) return file;
   const context = normalizePathContext(contextOrWorkspaceRoot);
+  if (!path.isAbsolute(file) && context.workingDirectory) {
+    file = path.resolve(context.workingDirectory, file);
+  }
   if (path.isAbsolute(file)) {
     return (
       relUnderRoot(file, context.sourceRoot) ??

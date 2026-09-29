@@ -2,11 +2,25 @@ import { describe, expect, it } from "vitest";
 import * as path from "path";
 import {
   BuildGateFailedError,
+  BuildDiagnosticsError,
+  BuildRequestError,
   diagnosticsFromError,
   workspaceDiagnosticPath,
 } from "./diagnostics.js";
 
 describe("build diagnostics path normalization", () => {
+  it("preserves caller-correctable request failures across RPC without blaming infrastructure", () => {
+    const error = new BuildRequestError("no_test_files", "Declared test suite selected no files", {
+      include: ["**/*.test.ts"],
+    });
+    expect(error.errorData).toMatchObject({
+      code: "no_test_files",
+      failureKind: "invalid-input",
+      include: ["**/*.test.ts"],
+      retry: { policy: "correct-input", commandIdPolicy: "not-applicable" },
+      recovery: { action: "correct-request" },
+    });
+  });
   it("maps esbuild materialized source paths back to workspace-relative files", () => {
     const sourceRoot = path.join(path.sep, "tmp", "vibestudio-build", "abc123");
     const failure = {
@@ -44,6 +58,41 @@ describe("build diagnostics path normalization", () => {
         unitRelativePath: "panels/hello",
       })
     ).toBe("panels/hello/src/index.ts");
+  });
+
+  it("retains compiler-relative file coordinates through the later workspace report", () => {
+    const sourceRoot = "/tmp/owned-instance/workspace/state/build-sources/exact-state";
+    const workingDirectory = "/tmp/owned-compiler/output";
+    const sourceFile = path.join(sourceRoot, "panels/tasks/index.tsx");
+    const failure = {
+      errors: [
+        {
+          text: "Expected closing parenthesis",
+          location: {
+            file: path.relative(workingDirectory, sourceFile),
+            namespace: "file",
+            line: 14,
+            column: 477,
+          },
+          notes: [],
+        },
+      ],
+    };
+    const compilerFailure = new BuildDiagnosticsError(
+      "Compilation failed",
+      diagnosticsFromError(failure, { workingDirectory })
+    );
+    const [diagnostic] = diagnosticsFromError(compilerFailure, {
+      sourceRoot,
+      workspaceRoot: "/tmp/owned-instance/workspace/source",
+      unitRelativePath: "panels/tasks",
+    });
+    expect(diagnostic).toMatchObject({
+      file: "panels/tasks/index.tsx",
+      line: 14,
+      column: 477,
+      message: "Expected closing parenthesis",
+    });
   });
 
   it("preserves the build-report diagnostic contract for publication refusals", () => {

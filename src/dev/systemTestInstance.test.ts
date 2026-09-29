@@ -90,11 +90,12 @@ describe("self-provisioning system-test instance", () => {
     ).toThrow(/only be specified once/u);
   });
 
-  it("recognizes only top-level launcher help as side-effect-free", () => {
+  it("recognizes launcher and subcommand help as side-effect-free", () => {
     expect(isLocalSystemTestHelpCommand(["--help"])).toBe(true);
     expect(isLocalSystemTestHelpCommand(["-h"])).toBe(true);
-    expect(isLocalSystemTestHelpCommand(["run", "--help"])).toBe(false);
-    expect(isLocalSystemTestHelpCommand(["list", "--help"])).toBe(false);
+    expect(isLocalSystemTestHelpCommand(["run", "--help"])).toBe(true);
+    expect(isLocalSystemTestHelpCommand(["list", "--help"])).toBe(true);
+    expect(isLocalSystemTestHelpCommand(["run", "--", "--help"])).toBe(false);
     expect(isLocalSystemTestHelpCommand([])).toBe(false);
   });
 

@@ -7,6 +7,7 @@ import { gzip } from "node:zlib";
 import { promisify } from "node:util";
 import {
   UnitHost,
+  authorityReviewFromManifest,
   UnitRegistry,
   UnitTrustResolver,
   FileUnitIdentityApprovalStore,
@@ -20,7 +21,6 @@ import {
   requestUnitInstallReview,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
-  readUnitAuthorityReview,
   authorityReviewFromPackageJson,
   type UnitBuildIdentity,
   type UnitDescriptor,
@@ -45,7 +45,10 @@ import type {
   ReviewedUnit,
 } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
-import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type {
+  UnitAuthorityRequest,
+  UnitAuthorityManifest,
+} from "@vibestudio/shared/authorityManifest";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredApps } from "@vibestudio/workspace/configParser";
 import {
@@ -204,7 +207,7 @@ interface BuildSystemLike {
   getBuildByKey?(key: string): AppBuildResultLike | null;
   getEffectiveVersion(unitName: string): string | null;
   listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
-  resolveBuildUnitIdentity?(
+  resolveBuildUnitIdentity(
     unitPath: string,
     ref?: string
   ): Promise<{
@@ -214,6 +217,9 @@ interface BuildSystemLike {
     effectiveVersion: string;
     dependencyEvs: Record<string, string>;
     externalDeps: Record<string, string>;
+    manifest: { authority?: UnitAuthorityManifest };
+    serviceBindings: readonly import("@vibestudio/shared/authority/unitInstallReview").ServiceBindingFact[];
+    serviceReviews: readonly import("@vibestudio/shared/authority/unitInstallReview").WorkspaceServiceReviewFact[];
   } | null>;
   getExternalDeps(unitName: string): Record<string, string>;
   getBuildProviderDetails?(target: "react-native"): AppBuildProviderDetails | null;
@@ -587,16 +593,18 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   /** Plan exact-version trust without starting a target-specific app build. */
-  reviewDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): {
+  async reviewDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): Promise<{
     units: ReviewedUnit[];
     identityKeys: string[];
-  } {
-    const review = this.unitHost.approvalForDeclarations(this.hostedDeclarations(declared));
+  }> {
+    const review = await this.unitHost.approvalForDeclarations(this.hostedDeclarations(declared));
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
   /** Declared apps that ship in the host build, for the server to admit. */
-  seedTrustedDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): ReviewedUnit[] {
+  seedTrustedDeclared(
+    declared: WorkspaceAppDeclaration[] = this.lastDeclared
+  ): Promise<ReviewedUnit[]> {
     return this.unitHost.seedTrustedDeclarations(this.hostedDeclarations(declared));
   }
 
@@ -653,7 +661,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         ? new Set(await this.deps.buildSystem.listAffectedBuildUnits(commit, scope.changedPaths))
         : null;
     for (const declaration of await this.readDeclaredAppsFromState(commit)) {
-      const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+      const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity(
         declaration.source,
         commit
       );
@@ -730,7 +738,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         (entry) => normalizeRepoPath(entry.source) === normalizeRepoPath(declaration.source)
       );
       const current = currentDeclaration
-        ? await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+        ? await this.deps.buildSystem.resolveBuildUnitIdentity(
             currentDeclaration.source,
             currentDeclaration.ref
           )
@@ -806,7 +814,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         }),
         target,
         capabilities,
-        authority,
+        authority: {
+          ...authority,
+          serviceBindings: [...candidate.serviceBindings],
+          serviceReviews: [...candidate.serviceReviews],
+        },
         integrity: null,
         provider,
       });
@@ -2177,7 +2189,20 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     };
   }
 
-  private buildBatchEntry(node: AppGraphNode, decl: WorkspaceAppDeclaration): ReviewedUnit {
+  private async buildBatchEntry(
+    node: AppGraphNode,
+    decl: WorkspaceAppDeclaration
+  ): Promise<ReviewedUnit> {
+    const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity(
+      node.relativePath,
+      decl.ref
+    );
+    if (
+      !candidate ||
+      candidate.unitName !== node.name ||
+      candidate.effectiveVersion !== this.deps.buildSystem.getEffectiveVersion(node.name)
+    )
+      throw new Error(`Exact review source changed for ${node.relativePath}`);
     const details = this.appBuildDetails(node.name);
     const active = this.registry.get(node.name);
     const previousAuthority = active?.activeBundleKey
@@ -2195,19 +2220,23 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         version: readPackageVersion(node.path),
         sourceRepo: node.relativePath,
         ref: decl.ref,
-        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-        dependencyEvs: this.currentDependencyEvs(node),
-        externalDeps: this.currentExternalDeps(node, decl, this.registry.get(node.name) ?? null),
+        effectiveVersion: candidate.effectiveVersion,
+        dependencyEvs: candidate.dependencyEvs,
+        externalDeps: this.currentExternalDeps(node, decl, active),
       }),
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
-      authority: readUnitAuthorityReview(
-        node.path,
-        node.name,
-        previousAuthority,
-        this.deps.describeCapability,
-        "app"
-      ),
+      authority: {
+        ...authorityReviewFromManifest(
+          candidate.manifest.authority,
+          node.name,
+          previousAuthority,
+          this.deps.describeCapability,
+          "app"
+        ),
+        serviceBindings: [...candidate.serviceBindings],
+        serviceReviews: [...candidate.serviceReviews],
+      },
       integrity: details?.integrity ?? null,
       provider: this.currentBuildProviderDetails(node, decl) ?? details?.provider ?? null,
     };

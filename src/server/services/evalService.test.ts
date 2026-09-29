@@ -1,3 +1,9 @@
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
@@ -83,6 +89,8 @@ function inlineEvalStart(
 function createHarness(
   contexts: Record<string, string | null>,
   options: {
+    ownerRecord?: EntityRecord;
+    ownerArtifact?: ExecutionArtifactRefV1 | null;
     rejectFirstStartRun?: boolean;
     rejectStartRun?: Error;
     retryStartGate?: Promise<void>;
@@ -231,6 +239,7 @@ function createHarness(
     // Always a cache miss → ensureEvalDO takes the activate path, so the existing
     // entityActivate-dispatch assertions still hold.
     resolveActive(id: string) {
+      if (options.ownerRecord?.id === id) return options.ownerRecord;
       const contextId = contexts[id];
       if (contextId == null || !id.startsWith("do:")) return null;
       if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`)) {
@@ -301,6 +310,10 @@ function createHarness(
   const retireEntity = vi.fn(async () => {});
   let shutdown: ((deadlineMs?: number) => Promise<void>) | null = null;
   const service = createEvalService({
+    resolveExecutionArtifact: () =>
+      options.ownerArtifact === undefined
+        ? EVAL_EXECUTION_IDENTITY.artifact
+        : options.ownerArtifact,
     doDispatch,
     entityStore,
     retireEntity,
@@ -351,6 +364,86 @@ function createHarness(
 }
 
 describe("createEvalService", () => {
+  it("retains the harness source tree rather than disguising its execution digest as a source ref", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:sealed-harness";
+    const contentRoots = [
+      { repoPath: "workers/agent-worker", stateHash: `state:${"b".repeat(64)}` },
+    ];
+    const unsigned = {
+      version: 1 as const,
+      sourceState: {
+        kind: "workspace" as const,
+        workspaceId: "ws_1",
+        effectiveVersion: parseSha256("a".repeat(64), "test effective version"),
+        state: { kind: "event" as const, eventId: "event:source" },
+        contentRoots,
+        sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+      },
+      recipeDigest: parseSha256("c".repeat(64), "test recipe"),
+      buildKey: parseSha256("c".repeat(64), "test build key"),
+      artifactDigest: parseSha256("d".repeat(64), "test artifact"),
+    };
+    const ownerArtifact = { ...unsigned, executionDigest: executionArtifactDigest(unsigned) };
+    const ownerRecord: EntityRecord = {
+      id: ownerId,
+      kind: "do",
+      source: {
+        repoPath: "workers/agent-worker",
+        effectiveVersion: unsigned.sourceState.effectiveVersion,
+      },
+      contextId: "ctx_agent",
+      className: "AiChatWorker",
+      key: "sealed-harness",
+      activeBuildKey: ownerArtifact.buildKey,
+      activeExecutionDigest: ownerArtifact.executionDigest,
+      activeAuthority: { requests: [], provides: [] },
+      agentBinding: {
+        entityId: "session:sealed-harness",
+        contextId: "ctx_agent",
+        channelId: "chan_1",
+      },
+      createdAt: 0,
+      status: "active",
+      cleanupComplete: true,
+    };
+    const harness = createHarness(
+      { [ownerId]: "ctx_agent" },
+      { ownerRecord, ownerArtifact, executeRunPending: true }
+    );
+    await harness.service.handler(
+      activeInvocationContext(authenticatedCaller(ownerId, "do")),
+      "start",
+      [inlineEvalStart({ scopeKey: "chan_1", runId: "run:sealed-source", code: "return 1;" })]
+    );
+    const objectKey = (
+      harness.calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
+    const image = harness.executionSessions.resolve(
+      `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`
+    )?.executionImage;
+    expect(image).toMatchObject({
+      ref: contentRoots[0]!.stateHash,
+      executionDigest: ownerArtifact.executionDigest,
+      effectiveVersion: unsigned.sourceState.effectiveVersion,
+    });
+    expect(image?.ref).not.toBe(`state:${ownerArtifact.executionDigest}`);
+    await harness.shutdown();
+
+    const unsealed = createHarness(
+      { [ownerId]: "ctx_agent" },
+      { ownerRecord, ownerArtifact: null }
+    );
+    await expect(
+      unsealed.service.handler(
+        activeInvocationContext(authenticatedCaller(ownerId, "do")),
+        "start",
+        [inlineEvalStart({ scopeKey: "chan_1", runId: "run:missing-artifact", code: "return 1;" })]
+      )
+    ).rejects.toMatchObject({ code: "EEXECUTION_IDENTITY" });
+    expect(unsealed.calls.some((call) => call.method === "startRun")).toBe(false);
+    await unsealed.shutdown();
+  });
+
   it("cancels admitted eval runs and closes new admission during shared shutdown", async () => {
     const ownerId = "session:default";
     const harness = createHarness({ [ownerId]: "ctx_1" }, { executeRunPending: true });
@@ -578,6 +671,7 @@ describe("createEvalService", () => {
       materializeExecution: async () => undefined,
     });
     const service = createEvalService({
+      resolveExecutionArtifact: () => EVAL_EXECUTION_IDENTITY.artifact,
       doDispatch,
       entityStore,
       retireEntity: vi.fn(async () => {}),
@@ -662,6 +756,7 @@ describe("createEvalService", () => {
       materializeExecution: async () => undefined,
     });
     const service = createEvalService({
+      resolveExecutionArtifact: () => EVAL_EXECUTION_IDENTITY.artifact,
       doDispatch,
       entityStore,
       retireEntity: async () => undefined,
@@ -1328,6 +1423,7 @@ function createHeldFailHarness(opts: {
     if (opts.recoveryResult) getRunResponse = opts.recoveryResult;
   });
   const service = createEvalService({
+    resolveExecutionArtifact: () => EVAL_EXECUTION_IDENTITY.artifact,
     doDispatch,
     entityStore,
     retireEntity: vi.fn(async () => {}),

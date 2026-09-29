@@ -53,7 +53,9 @@ export interface DevelopmentNativeBootstrapDeps {
 }
 
 /** Wire the exact native effects consumed by the userland development builtin. */
-export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps): Promise<void> {
+export async function wireDevelopmentNative(
+  deps: DevelopmentNativeBootstrapDeps
+): Promise<() => Promise<void>> {
   const { DevelopmentExecutor } = await import("../services/developmentExecutor.js");
   const { DevelopmentRunRoots } = await import("../services/developmentRunRoots.js");
   const { IsolatedDevelopmentHostExecutor } =
@@ -65,7 +67,12 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
   const { createNativeDevelopmentSemanticAdapter } =
     await import("../services/nativeDevelopmentSemanticAdapter.js");
 
-  let developmentNativeDefinition: ServiceDefinition | null = null;
+  let developmentNativeService: ReturnType<
+    typeof import("../services/developmentNativeService.js").createDevelopmentNativeService
+  > | null = null;
+  const close = async () => {
+    await developmentNativeService?.close();
+  };
   let developmentExecutor: InstanceType<typeof DevelopmentExecutor> | null = null;
   let nativeDevelopmentController:
     | import("../services/developmentNativeService.js").ExactNativeDevelopmentController
@@ -167,7 +174,7 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
             parentEndpoint: deps.attachedHostParentEndpoint,
           }),
       });
-      developmentNativeDefinition = createDevelopmentNativeService({
+      developmentNativeService = createDevelopmentNativeService({
         native: nativeDevelopmentController,
         executor: developmentExecutor,
         isolatedExecutor,
@@ -206,11 +213,13 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
         },
       });
     },
+    stop: close,
     getServiceDefinition() {
-      if (!developmentNativeDefinition) {
+      if (!developmentNativeService) {
         throw new Error("development native service not initialized");
       }
-      return developmentNativeDefinition;
+      return developmentNativeService.definition;
     },
   });
+  return close;
 }

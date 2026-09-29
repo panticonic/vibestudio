@@ -150,5 +150,7 @@ function requireReviewedSourceConsumer(caller: {
   const isAuthenticatedShell =
     caller.runtime.kind === "shell" && caller.runtime.id.startsWith("shell:");
   if (!isReviewedExtension && !isAuthenticatedShell)
-    throw new Error("Exact source acquisition requires a reviewed source consumer");
+    throw new Error(
+      `Exact source acquisition requires a reviewed source consumer; runtime=${caller.runtime.kind}:${caller.runtime.id}, code=${caller.code?.callerId ?? "absent"}, repo=${caller.code?.repoPath ?? "absent"}, approved=${caller.codeApproved === true}`
+    );
 }

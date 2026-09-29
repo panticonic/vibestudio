@@ -4134,16 +4134,16 @@
           ]
         },
         "access": {
-          "sensitivity": "destructive"
+          "sensitivity": "write"
         },
         "tier": {
-          "tier": "critical",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "untrusted-execution",
           "family": "development-native.build",
-          "rationale": "Removes only the execution root proven by one exact retained run record"
+          "rationale": "Releases only the private temporary root proven by its exact run owner marker; session cleanup must settle without acquiring new authority"
         },
-        "capability": "development.native.build.retire",
+        "capability": null,
         "presentation": {
           "title": "Retire a development build",
           "action": "retire a development build",
@@ -14086,17 +14086,78 @@
               "label": "App or service",
               "displayField": "entityId"
             }
+          },
+          "prepared": {
+            "resolver": "runtime.supervision.restart.ownership",
+            "leaves": [
+              {
+                "capability": "runtime.supervision.manage",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "runtime.supervision.manage"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
           }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "family",
           "residency": "supervision",
           "family": "runtime.supervision",
-          "rationale": "Restarts one exact driver-owned execution without changing its durable product state."
+          "rationale": "Restarts one exact execution; host-prepared ownership gates management of foreign runtimes without changing durable state."
         },
         "capability": "runtime.supervision.manage",
         "presentation": {
@@ -14177,17 +14238,78 @@
               "label": "App or service",
               "displayField": "entityId"
             }
+          },
+          "prepared": {
+            "resolver": "runtime.supervision.retire.ownership",
+            "leaves": [
+              {
+                "capability": "runtime.supervision.manage",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "runtime.supervision.manage"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "runtime.supervision.manage"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
           }
         },
         "access": {
           "sensitivity": "destructive"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "family",
           "residency": "supervision",
           "family": "runtime.supervision",
-          "rationale": "Retires one exact driver-owned execution and its owned native resources."
+          "rationale": "Retires one exact execution; host-prepared ownership gates management of foreign runtimes and their native resources."
         },
         "capability": "runtime.supervision.manage",
         "presentation": {

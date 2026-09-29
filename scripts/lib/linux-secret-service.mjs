@@ -34,6 +34,7 @@ export function spawnManaged(command, args, options = {}) {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
     stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
   });
   child.stdout?.on("data", (chunk) =>
     prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
@@ -51,7 +52,7 @@ export function spawnManaged(command, args, options = {}) {
   return child;
 }
 
-export async function startEphemeralLinuxSecretService(tempRoot, children) {
+export async function startEphemeralLinuxSecretService(tempRoot, acquire) {
   if (process.platform !== "linux") return { env: {}, electronArgs: [] };
 
   const home = path.join(tempRoot, "home");
@@ -95,16 +96,16 @@ export async function startEphemeralLinuxSecretService(tempRoot, children) {
     XDG_DATA_HOME: dataHome,
     XDG_RUNTIME_DIR: runtimeDir,
   };
-  const bus = spawn(
+  const bus = acquire(() => spawn(
     "dbus-daemon",
     [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
     {
       cwd: repoRoot,
       env: serviceEnv,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     }
-  );
-  children.push(bus);
+  ));
   bus.stderr?.on("data", (chunk) =>
     prefixAndWrite("desktop-secret-bus", chunk.toString(), process.stderr)
   );
@@ -142,7 +143,7 @@ export async function startEphemeralLinuxSecretService(tempRoot, children) {
   });
 
   const keyringEnv = { ...serviceEnv, DBUS_SESSION_BUS_ADDRESS: busAddress };
-  const keyring = spawnManaged(
+  const keyring = acquire(() => spawnManaged(
     "gnome-keyring-daemon",
     ["--foreground", "--unlock", "--components=secrets", `--control-directory=${controlDir}`],
     {
@@ -151,8 +152,7 @@ export async function startEphemeralLinuxSecretService(tempRoot, children) {
       label: "desktop-secret-service",
       pipeStdin: true,
     }
-  );
-  children.push(keyring);
+  ));
   keyring.stdin?.end(randomUUID());
   await waitForSpawn(keyring, "gnome-keyring-daemon", ["--foreground", "--unlock"]);
   await sleep(250);

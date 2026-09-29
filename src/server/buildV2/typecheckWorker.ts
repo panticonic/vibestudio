@@ -28,6 +28,7 @@ export interface TypecheckWorkerRequest {
   sourceRoot: string;
   internalDeps: TypecheckUnitDep[];
   nodeModulesPaths: string[];
+  moduleConditions: readonly string[];
   authority?: TypecheckAuthorityWire;
 }
 
@@ -68,6 +69,7 @@ if (port) {
           request.sourceRoot,
           request.internalDeps,
           request.nodeModulesPaths,
+          request.moduleConditions,
           authorityFromWire(request.authority)
         );
         port.postMessage({ id: request.id, result });

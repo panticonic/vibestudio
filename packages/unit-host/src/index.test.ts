@@ -618,7 +618,7 @@ describe("UnitHost", () => {
       },
       emitRemoved: () => undefined,
       notifyUnresolved: () => undefined,
-      approvalEntry: (n, decl) => ({ name: n.name, ref: decl.ref }),
+      approvalEntry: async (n, decl) => ({ name: n.name, ref: decl.ref }),
       requestApproval: async (entries) => {
         prompted.push(entries);
         return "accepted";
@@ -691,7 +691,7 @@ describe("UnitHost", () => {
 
   it("applies preapproved declarations without prompting again", async () => {
     const { host, applied, prompted, node } = makeHarness();
-    const approval = host.approvalForDeclarations([{ source: "extensions/a", ref: "main" }]);
+    const approval = await host.approvalForDeclarations([{ source: "extensions/a", ref: "main" }]);
 
     host.acceptPreapprovedTrust(approval.identityKeys);
     await host.reconcileDeclared([{ source: "extensions/a", ref: "main" }]);
@@ -704,7 +704,7 @@ describe("UnitHost", () => {
   it("retracts prepared activation trust when the publication fails", async () => {
     const { host, applied, prompted } = makeHarness();
     const declarations = [{ source: "extensions/a", ref: "main" }];
-    const approval = host.approvalForDeclarations(declarations);
+    const approval = await host.approvalForDeclarations(declarations);
     const transaction = host.preparePreapprovedTrust(approval.identityKeys);
 
     transaction.failed(new Error("protected refs rejected the publication"));
@@ -719,7 +719,7 @@ describe("UnitHost", () => {
   // before admission was recorded has not had the review the authority model now
   // requires, and warm launches would otherwise never ask for it — the gate
   // stays quiet forever while the authority gate treats the unit as unreviewed.
-  it("re-offers a trusted declaration whose version holds no admission", () => {
+  it("re-offers a trusted declaration whose version holds no admission", async () => {
     // Durable activation trust from an earlier launch says this build may run.
     const trusted = new Set<string>();
     const approvalStore = {
@@ -744,16 +744,16 @@ describe("UnitHost", () => {
       isAdmitted: (repoPath, effectiveVersion) => admitted.has(`${repoPath}@${effectiveVersion}`),
     });
     const declarations = [{ source: "extensions/a", ref: "main" }];
-    host.acceptPreapprovedTrust(host.approvalForDeclarations(declarations).identityKeys);
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations(declarations)).identityKeys);
     expect(trusted.size).toBe(1);
 
     // Trusted but un-admitted: still offered, because trust alone is not the
     // review the authority model requires.
-    expect(host.approvalForDeclarations(declarations).identityKeys).toHaveLength(1);
+    expect((await host.approvalForDeclarations(declarations)).identityKeys).toHaveLength(1);
 
     // Once the version is admitted, trust stands and the gate goes quiet.
     admitted.add("extensions/a@ev");
-    expect(host.approvalForDeclarations(declarations).identityKeys).toEqual([]);
+    expect((await host.approvalForDeclarations(declarations)).identityKeys).toEqual([]);
   });
 
   it("retains exact preapproval for declarations not included in an earlier subset reconcile", async () => {
@@ -767,7 +767,7 @@ describe("UnitHost", () => {
       { source: node.relativePath, ref: "main" },
       { source: second.relativePath, ref: "main" },
     ];
-    const approval = host.approvalForDeclarations(declarations);
+    const approval = await host.approvalForDeclarations(declarations);
 
     host.acceptPreapprovedTrust(approval.identityKeys);
     await host.reconcileDeclared([declarations[0]!], { removeUndeclared: false });
@@ -800,7 +800,7 @@ describe("UnitHost", () => {
       { source: node.relativePath, ref: "main" },
       { source: second.relativePath, ref: "main" },
     ];
-    host.acceptPreapprovedTrust(host.approvalForDeclarations(declarations).identityKeys);
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations(declarations)).identityKeys);
 
     const reconcile = host.reconcileDeclared(declarations, { maxConcurrentApplies: 1 });
     await vi.waitFor(() => expect(applied).toEqual([node.name]));
@@ -830,11 +830,11 @@ describe("UnitHost", () => {
     expect(registry.get("@workspace-extensions/old")).toBeNull();
   });
 
-  it("collects approval entries for untrusted declarations", () => {
+  it("collects approval entries for untrusted declarations", async () => {
     const { host, node } = makeHarness();
 
     expect(
-      host.approvalForDeclarations([
+      await host.approvalForDeclarations([
         { source: node.relativePath, ref: "main" },
         { source: "extensions/missing", ref: "main" },
       ])
@@ -844,10 +844,10 @@ describe("UnitHost", () => {
     });
   });
 
-  it("does not collect approval entries for already approved declarations", () => {
+  it("does not collect approval entries for already approved declarations", async () => {
     const { host, node } = makeHarness({ active: true });
 
-    expect(host.approvalForDeclarations([{ source: node.relativePath, ref: "main" }])).toEqual({
+    expect(await host.approvalForDeclarations([{ source: node.relativePath, ref: "main" }])).toEqual({
       entries: [],
       identityKeys: [],
     });

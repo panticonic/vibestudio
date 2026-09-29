@@ -15,11 +15,37 @@ function config(): HeadlessHostConfig {
     maxPanels: 8,
     idleUnloadMs: 60_000,
     cacheDir: "/tmp/vibestudio-test-cache",
-    profileDir: "/tmp/vibestudio-test-profile",
+    profileRoot: "/tmp/vibestudio-test-profile",
   };
 }
 
 describe("HeadlessHost lifecycle guards", () => {
+  it("reconciles storage owners from native contexts without reclaiming a newly acquired context", async () => {
+    const host = new HeadlessHost(config());
+    const observed = ["context-retired"];
+    const pages = {
+      contextIds: vi.fn(() => [...observed]),
+      reconcileContextOwners: vi.fn(async () => {}),
+    };
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        if (method === "panelRuntime.getSnapshot")
+          return { version: { epoch: "test", counter: 1 }, leases: [] };
+        if (method === "runtime.listContexts") {
+          observed.push("context-new");
+          return { contexts: ["main"] };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    };
+    Object.assign(host, { pages, connection: { rpc } });
+    await (host as unknown as { reconcile(): Promise<void> }).reconcile();
+    expect(pages.reconcileContextOwners).toHaveBeenCalledExactlyOnceWith(
+      ["main"],
+      ["context-retired"]
+    );
+  });
+
   it("publishes a native headless-page transition for the exact current lease", async () => {
     const host = new HeadlessHost(config());
     const lease: PanelRuntimeLease = {
@@ -40,7 +66,10 @@ describe("HeadlessHost lifecycle guards", () => {
     const pages = {
       panelPageObservation: vi.fn(async () => ({
         view: { url: "http://127.0.0.1/panels/chat/", loading: false },
-        boot: { kind: "observed" as const, observation: { phase: "ready" as const, runtimeEntityId: lease.runtimeEntityId } },
+        boot: {
+          kind: "observed" as const,
+          observation: { phase: "ready" as const, runtimeEntityId: lease.runtimeEntityId },
+        },
       })),
     };
     Object.assign(
@@ -62,7 +91,10 @@ describe("HeadlessHost lifecycle guards", () => {
       {
         url: "http://127.0.0.1/panels/chat/",
         loading: false,
-        boot: { kind: "observed" as const, observation: { phase: "ready", runtimeEntityId: lease.runtimeEntityId } },
+        boot: {
+          kind: "observed" as const,
+          observation: { phase: "ready", runtimeEntityId: lease.runtimeEntityId },
+        },
       },
     ]);
   });
@@ -73,8 +105,11 @@ describe("HeadlessHost lifecycle guards", () => {
       call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
         if (method === "workspace.getInfo") {
           return {
-            id: "workspace-test", name: "Test", path: "/workspace",
-            statePath: "/state", contextProjectionsPath: "/contexts",
+            id: "workspace-test",
+            name: "Test",
+            path: "/workspace",
+            statePath: "/state",
+            contextProjectionsPath: "/contexts",
             config: { id: "workspace-test", systemEpoch: 0 },
           } as T;
         }
@@ -142,7 +177,7 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(rpc.stream).toHaveBeenCalledWith(
       "main",
       "events.watch",
-      [["panel:runtimeLeaseChanged"], expect.any(String)],
+      [["panel:runtimeLeaseChanged", "runtime:contextRemoved"], expect.any(String)],
       expect.objectContaining({
         signal: expect.any(AbortSignal),
         bodyIdleTimeoutMs: null,
@@ -195,6 +230,72 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(recoverBrowser).toHaveBeenCalledTimes(1);
     resolveRecovery();
     await Promise.all([first, second]);
+  });
+
+  it("releases the completed recovery owner after a replacement advances the browser generation", async () => {
+    const host = new HeadlessHost(config());
+    const internal = host as unknown as {
+      browserGeneration: number;
+      handleBrowserGone(generation: number): Promise<void>;
+      recoverBrowser(): Promise<void>;
+    };
+    internal.browserGeneration = 1;
+    const recover = vi.fn(async () => {
+      internal.browserGeneration += 1;
+    });
+    internal.recoverBrowser = recover;
+    await internal.handleBrowserGone(1);
+    await internal.handleBrowserGone(2);
+    expect(recover).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins the previous browser before replacement and does not launch after stop wins", async () => {
+    const host = new HeadlessHost(config());
+    let release!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stopBrowser = vi.fn(() => stopped);
+    const close = vi.fn();
+    Object.assign(host, { browser: { stop: stopBrowser }, cdp: { close } });
+    const replacing = (host as unknown as { startBrowser(): Promise<void> }).startBrowser();
+    expect(stopBrowser).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    let completed = false;
+    const stopping = host.stop("ownership test").then(() => {
+      completed = true;
+    });
+    const joinedStop = host.stop("duplicate stop");
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    release();
+    await Promise.all([replacing, stopping, joinedStop]);
+    expect(stopBrowser).toHaveBeenCalledOnce();
+    expect((host as unknown as { browser: unknown }).browser).toBeNull();
+  });
+
+  it("joins failed shutdowns and releases the remaining native owners", async () => {
+    const host = new HeadlessHost(config());
+    const failure = new Error("browser retirement failed");
+    const stopBrowser = vi.fn(async () => { throw failure; });
+    const closeConnection = vi.fn(async () => undefined);
+    const stopLeaseEvents = vi.fn();
+    const stopContextEvents = vi.fn();
+    Object.assign(host, {
+      browser: { stop: stopBrowser },
+      cdp: { close: vi.fn(), send: vi.fn(async () => undefined) },
+      connection: { rpc: { call: vi.fn(async () => undefined) }, close: closeConnection },
+      stopLeaseEvents, stopContextEvents,
+    });
+    const first = host.stop("failed shutdown");
+    expect(host.stop("duplicate shutdown")).toBe(first);
+    await expect(first).rejects.toMatchObject({ errors: [failure] });
+    await expect(host.done).resolves.toBeUndefined();
+    await expect(host.stop("final cleanup")).rejects.toMatchObject({ errors: [failure] });
+    expect(stopBrowser).toHaveBeenCalledOnce();
+    expect(stopLeaseEvents).toHaveBeenCalledOnce();
+    expect(stopContextEvents).toHaveBeenCalledOnce();
+    expect(closeConnection).toHaveBeenCalledOnce();
   });
 
   it("ignores stale browser-gone signals from an older generation", async () => {
@@ -296,6 +397,7 @@ describe("HeadlessHost lifecycle guards", () => {
     });
 
     host.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
       version: { epoch: "boot", counter: 2 },
       runtimeEntityId: next.runtimeEntityId,
       slotId,
