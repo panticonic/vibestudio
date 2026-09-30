@@ -9,6 +9,13 @@ on:
       - "apps/mobile/**"
       - "packages/rpc/**"
       - "packages/shared/**"
+      - "scripts/cli/mobile-*.mjs"
+      - "scripts/cli/lib/mobile-*.mjs"
+      - "scripts/cli/ios-entitlements.mjs"
+      - "scripts/generate-mobile-version.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/build-mobile.yml"
   workflow_dispatch:
 
 permissions: {}
@@ -220,8 +227,8 @@ jobs:
         working-directory: apps/mobile/ios
         run: pod install
 
-      - name: Generate entitlements
-        run: node scripts/cli/ios-entitlements.mjs --configuration Debug --output apps/mobile/ios/Generated/Vibestudio.entitlements
+      - name: Check iOS application version
+        run: pnpm check:mobile-version
 
       - name: Build iOS Debug simulator shell
         working-directory: apps/mobile/ios
@@ -231,7 +238,7 @@ jobs:
             -scheme Vibestudio \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS=Generated/Vibestudio.entitlements \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
             build
