@@ -23,6 +23,21 @@ describe("iOS install target", () => {
     ).toBe("phone-udid");
   });
 
+  it("selects an explicit booted simulator when multiple phones are running", () => {
+    expect(
+      bootedIosSimulator(inventory({ [ios]: [phone, { ...phone, udid: "second" }] }), "second")
+    ).toBe("second");
+  });
+
+  it("rejects an explicit simulator that is missing or shut down", () => {
+    expect(() => bootedIosSimulator(inventory({ [ios]: [phone] }), "missing")).toThrow(
+      "not available and booted"
+    );
+    expect(() =>
+      bootedIosSimulator(inventory({ [ios]: [{ ...phone, state: "Shutdown" }] }), phone.udid)
+    ).toThrow("not available and booted");
+  });
+
   it("requires a booted iOS simulator", () => {
     expect(() =>
       bootedIosSimulator(inventory({ [ios]: [{ ...phone, state: "Shutdown" }] }))

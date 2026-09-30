@@ -132,9 +132,6 @@ function parseArgs(argv) {
   if (options.platform !== "android" && options.platform !== "ios") {
     throw new Error("--platform must be android or ios");
   }
-  if (options.platform === "ios" && options.simulator && options.device) {
-    throw new Error("Choose either --simulator or --device <udid> for iOS installation.");
-  }
   options.packageName =
     options.packageName ??
     (options.fromSource || options.noBuild ? internalPackage : releasePackage);
@@ -254,7 +251,8 @@ async function installIos(options) {
   await runCapture("xcodebuild", ["-version"]);
   const simulatorId = options.simulator
     ? bootedIosSimulator(
-        (await runCapture("xcrun", ["simctl", "list", "devices", "available", "--json"])).stdout
+        (await runCapture("xcrun", ["simctl", "list", "devices", "available", "--json"])).stdout,
+        options.device
       )
     : null;
   await ensurePods();
