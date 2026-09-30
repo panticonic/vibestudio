@@ -59,7 +59,10 @@ function withGenerationLock(generations, action) {
           if (probeError?.code !== "ESRCH") alive = true;
         }
       }
-      if (!alive && Date.now() - fs.statSync(lock).mtimeMs > 1_000) {
+      let lockModified;
+      try { lockModified = fs.statSync(lock).mtimeMs; }
+      catch (statError) { if (statError?.code === "ENOENT") continue; throw statError; }
+      if (!alive && Date.now() - lockModified > 1_000) {
         fs.rmSync(lock, { recursive: true, force: true });
         continue;
       }
