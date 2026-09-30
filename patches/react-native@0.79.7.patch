@@ -385,3 +385,25 @@ index 2f38990e226c13f483aaf1b986302d4094243814..a40c5755e049974e98a4038c177661d2
    }
    spec.pod_target_xcconfig = {
      "CLANG_CXX_LANGUAGE_STANDARD" => rct_cxx_language_standard(),
+diff --git a/ReactCommon/react/renderer/componentregistry/ComponentDescriptorRegistry.cpp b/ReactCommon/react/renderer/componentregistry/ComponentDescriptorRegistry.cpp
+--- a/ReactCommon/react/renderer/componentregistry/ComponentDescriptorRegistry.cpp
++++ b/ReactCommon/react/renderer/componentregistry/ComponentDescriptorRegistry.cpp
+@@ -29,8 +29,6 @@
+ 
+ void ComponentDescriptorRegistry::add(
+     ComponentDescriptorProvider componentDescriptorProvider) const {
+-  std::unique_lock lock(mutex_);
+-
+   auto componentDescriptor = componentDescriptorProvider.constructor(
+       {parameters_.eventDispatcher,
+        parameters_.contextContainer,
+@@ -43,6 +41,9 @@
+ 
+   auto sharedComponentDescriptor = std::shared_ptr<const ComponentDescriptor>(
+       std::move(componentDescriptor));
++  // Construction may synchronously initialize a UIKit view manager. Readers
++  // on the UI thread must remain free to access already published descriptors.
++  std::unique_lock lock(mutex_);
+   _registryByHandle[componentDescriptorProvider.handle] =
+       sharedComponentDescriptor;
+   _registryByName[componentDescriptorProvider.name] = sharedComponentDescriptor;

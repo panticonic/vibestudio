@@ -2,6 +2,50 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <React/RCTBridgeModule.h>
 #import <react-native-webview/RNCWebViewImpl.h>
+#include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
+#include <react/renderer/components/view/ViewComponentDescriptor.h>
+#include <future>
+#include <thread>
+
+namespace {
+using namespace facebook::react;
+struct DescriptorConstructionProbe {
+  ComponentDescriptorRegistry::Shared registry;
+  mutable std::thread reader;
+  mutable bool readFinishedBeforePublication = false;
+  mutable bool foundBeforePublication = true;
+};
+ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const ComponentDescriptorParameters &parameters)
+{
+  auto probe = std::static_pointer_cast<const DescriptorConstructionProbe>(parameters.flavor);
+  auto completed = std::make_shared<std::promise<bool>>();
+  auto result = completed->get_future();
+  probe->reader = std::thread([probe, completed] {
+    completed->set_value(probe->registry->hasComponentDescriptorAt(ViewShadowNode::Handle()));
+  });
+  probe->readFinishedBeforePublication = result.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  if (probe->readFinishedBeforePublication) probe->foundBeforePublication = result.get();
+  return std::make_unique<const ViewComponentDescriptor>(parameters);
+}
+}
+
+@interface ComponentRegistryConcurrencyTests : XCTestCase
+@end
+@implementation ComponentRegistryConcurrencyTests
+- (void)testDescriptorConstructionDoesNotBlockReadersUntilPublication
+{
+  ComponentDescriptorProviderRegistry providers;
+  auto context = std::make_shared<const ContextContainer>();
+  auto probe = std::make_shared<DescriptorConstructionProbe>();
+  probe->registry = providers.createComponentDescriptorRegistry({{}, context, nullptr});
+  providers.add({ViewShadowNode::Handle(), ViewShadowNode::Name(), probe, constructDescriptorWithConcurrentReader});
+  probe->reader.join();
+  XCTAssertTrue(probe->readFinishedBeforePublication);
+  XCTAssertFalse(probe->foundBeforePublication);
+  XCTAssertTrue(probe->registry->hasComponentDescriptorAt(ViewShadowNode::Handle()));
+  probe->registry.reset();
+}
+@end
 
 @interface RoutingWebView : WKWebView
 @property (nonatomic, strong) NSURL *requestURL;
