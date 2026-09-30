@@ -2820,7 +2820,7 @@ async function main() {
           : "system";
         approvalQueue.beginPreparation?.({
           kind: "capability",
-          capability: "git.publish",
+          capability: "workspace.publish",
           dedupKey: `workspace-publication:${candidate.publicationId}`,
           callerId: candidate.caller.runtime.id,
           callerKind,

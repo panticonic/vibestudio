@@ -48,6 +48,7 @@ const AGENT_SCOPE_OFFERABLE = new Set<string>([
   "context.materialize",
   "workspace.configure",
   "git.publish",
+  "workspace.publish",
   "website.publish",
   "workspace-units.manage",
   "workspace-panels.manage",
@@ -91,10 +92,13 @@ export function receiverAuthorityPolicy(
     agentScope,
     irreversible,
     missionGrant: !irreversible,
-    requiresSubstance: irreversible || SHARING.has(capability),
+    requiresSubstance:
+      irreversible || SHARING.has(capability) || capability === "workspace.publish",
     substanceKind: irreversible
       ? "deletion"
-      : capability === "git.publish" || capability === "website.publish"
+      : capability === "git.publish" ||
+          capability === "website.publish" ||
+          capability === "workspace.publish"
         ? "change-set"
         : capability === "push.send"
           ? "send"

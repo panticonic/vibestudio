@@ -188,6 +188,15 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       const removeApprovalListener = events.on("shell-approval:pending-changed", ({ pending }) => {
         autoApprover.observePending(pending);
         for (const approval of pending) {
+          // Workspace broadcasts also include other agents' requests and
+          // publication preparation. Neither means this eval is awaiting consent.
+          if (
+            approval.callerId !== evalRuntimeId(session.entityId, scopeKey) &&
+            (approval.kind !== "capability" ||
+              approval.snapshot?.taskRef?.endsWith(`:${runArgs.runId}`) !== true)
+          )
+            continue;
+          if (approval.lifecycle?.state === "preparing") continue;
           const capability =
             approval.kind === "capability"
               ? ` ${approval.capability} (${approval.cardType ?? approval.severity ?? "unclassified"})`

@@ -65,6 +65,8 @@ for (const template of templates) {
   const result = spawnSync(
     process.execPath,
     [
+      "--import",
+      "tsx",
       vitest,
       "run",
       ...testFilters,

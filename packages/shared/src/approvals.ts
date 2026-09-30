@@ -355,7 +355,7 @@ export interface PendingApprovalBase {
   operation?: ApprovalOperationDescriptor;
   /**
    * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9). Attached by
-   * the main-advance approval gate to git.publish / repo
+   * the main-advance approval gate to workspace.publish / repo
    * deletion / restore prompts; absent on every other approval. Content hashes
    * only — the approval card fetches the trusted blobs lazily by hash.
    */

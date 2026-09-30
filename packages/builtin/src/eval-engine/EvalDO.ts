@@ -3278,6 +3278,12 @@ export class EvalDO extends DurableObjectBase {
       limitChars: EVAL_RESULT_RETURN_PREVIEW_CHARS,
       measuredAs: "json-indent-2",
       scopeKey,
+      scopeValueType: "string",
+      recoveryInstruction:
+        `scope.${scopeKey} contains bounded serialized text, not the original object. ` +
+        `Inspect it with .slice() or text searches. For a complete JSON-serializable value, ` +
+        `use JSON.parse(scope.${scopeKey}) before accessing properties. ` +
+        `If the saved text was cut off, retrieve a smaller result from the source instead of parsing it.`,
       preview: this.windowText(text, EVAL_RESULT_RETURN_PREVIEW_CHARS, scopeKey),
     };
   }

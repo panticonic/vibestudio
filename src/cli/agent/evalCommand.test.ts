@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearShellTokenCache } from "../rpcClient.js";
+import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 
 /**
  * `vibestudio eval` drives the server-side `eval` service (eval.start/get / eval.reset)
@@ -336,6 +337,49 @@ describe("vibestudio eval commands", () => {
     const output = jsonOutput();
     expect(output["success"]).toBe(false);
     expect(output["error"]).toBe("boom");
+  });
+
+  it("reports only actionable approvals belonging to this eval", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const callerId = evalRuntimeId("session:default", "default");
+    const approval = {
+      kind: "capability",
+      capability: "workspace.publish",
+      callerId,
+      callerKind: "do",
+      repoPath: "vibestudio/internal",
+      effectiveVersion: "ev-1",
+      requestedAt: 1,
+    };
+    stubServer((body) => {
+      if (body.method === "eval.start") {
+        transportMock.watchControllers[0]?.enqueue(
+          new TextEncoder().encode(
+            `${JSON.stringify({
+              kind: "event",
+              event: "shell-approval:pending-changed",
+              sequence: 1,
+              payload: {
+                pending: [
+                  { ...approval, approvalId: "unrelated", callerId: "another-agent" },
+                  { ...approval, approvalId: "preparing", lifecycle: { state: "preparing" } },
+                  { ...approval, approvalId: "actionable", lifecycle: { state: "ready" } },
+                ],
+              },
+            })}\n`
+          )
+        );
+      }
+      return terminalStart(OK_RESULT);
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { main } = await import("../client.js");
+    await expect(main(["eval", "run", "-e", "return 1", "--json"])).resolves.toBe(0);
+    const text = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(text).toContain("approval actionable");
+    expect(text).not.toContain("approval unrelated");
+    expect(text).not.toContain("approval preparing");
   });
 
   it("eval run streams matching console events in text mode without printing them twice", async () => {
