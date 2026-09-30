@@ -148,6 +148,8 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 @end
 
 @interface VibestudioMobileHost : NSObject
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller;
+- (void)assetStoreLookup:(NSDictionary *)assetNamespace key:(NSString *)key resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject;
 - (dispatch_queue_t)methodQueue;
 - (void)invalidate;
 @end
@@ -156,6 +158,49 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 @end
 
 @implementation MobileHostLifecycleTests
+
+- (void)testBrowserPickerCancellationResolvesExplicitNullOnce
+{
+  VibestudioMobileHost *module = [VibestudioMobileHost new];
+  XCTestExpectation *cancelled = [self expectationWithDescription:@"Picker cancellation is a bridge null"];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    __block NSUInteger resolutions = 0;
+    RCTPromiseResolveBlock resolve = ^(id result) {
+      resolutions += 1;
+      XCTAssertEqualObjects(result, NSNull.null);
+    };
+    [module setValue:[resolve copy] forKey:@"browserImportPickerResolve"];
+    [module documentPickerWasCancelled:nil];
+    [module documentPickerWasCancelled:nil];
+    XCTAssertEqual(resolutions, 1U);
+    XCTAssertNil([module valueForKey:@"browserImportPickerResolve"]);
+    XCTAssertNil([module valueForKey:@"browserImportPickerReject"]);
+    [module invalidate];
+    [cancelled fulfill];
+  });
+  [self waitForExpectations:@[cancelled] timeout:5];
+}
+
+- (void)testAssetCacheMissResolvesExplicitNull
+{
+  VibestudioMobileHost *module = [VibestudioMobileHost new];
+  NSDictionary *assetNamespace = @{
+    @"serverEndpointId": [@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0],
+    @"workspaceIdentity": NSUUID.UUID.UUIDString,
+  };
+  XCTestExpectation *resolved = [self expectationWithDescription:@"Cache miss is an explicit bridge null"];
+  dispatch_async([module methodQueue], ^{
+    [module assetStoreLookup:assetNamespace key:@"/missing-native-test-asset" resolver:^(id result) {
+      XCTAssertEqualObjects(result, NSNull.null);
+      [resolved fulfill];
+    } rejecter:^(NSString *code, NSString *message, NSError *error) {
+      XCTFail(@"Cache lookup rejected: %@ %@", code, message);
+      [resolved fulfill];
+    }];
+    [module invalidate];
+  });
+  [self waitForExpectations:@[resolved] timeout:5];
+}
 
 - (void)testRuntimeRetirementRemovesOnlyOwnedTransientFiles
 {

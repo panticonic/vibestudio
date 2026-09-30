@@ -96,8 +96,8 @@ xcodebuild -workspace Vibestudio.xcworkspace -scheme Vibestudio \
 ```
 
 Use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` if the Mac's global
-developer directory selects Command Line Tools. The nine native tests cover module lifetime, scene appearance, WebView URL
-routing, and concurrent descriptor construction. Interactive workspace acceptance
+developer directory selects Command Line Tools. The native tests cover module lifetime, explicit asset-cache misses, scene
+appearance, WebView URL routing, and concurrent descriptor construction. Interactive workspace acceptance
 uses the separate checklist below.
 
 `mobile smoke --platform ios` is currently unsupported. The Android runner
