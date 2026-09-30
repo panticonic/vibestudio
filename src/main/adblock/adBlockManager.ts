@@ -34,7 +34,7 @@ const DEFAULT_CONFIG: AdBlockConfig = {
   lists: {
     ads: true,
     privacy: true,
-    annoyances: false,
+    annoyances: true,
     social: false,
   },
   customLists: [],
