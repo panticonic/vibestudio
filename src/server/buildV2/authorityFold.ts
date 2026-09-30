@@ -210,7 +210,7 @@ export async function authorityDiagnosticsForProgram(input: {
     line: 1,
     column: 1,
     message: `Installed code uses capability '${capability}' but vibestudio.authority.requests does not declare it. Add the narrowest reviewed request, then rebuild this exact context.`,
-    suggestion: `Add an authority request for ${JSON.stringify(capability)}; use live capability docs to select its narrowest resource scope.`,
+    suggestion: `Search live docs for ${JSON.stringify(capability)} and inspect the receiver's access.authority (including prepared leaves), resource contract, and tier. Review reachable dependency code too: inherited lifecycle methods count even when your subclass has no external calls. Choose the narrowest intended request, or remove the effect; a request is not a grant.`,
   }));
   if (!input.environment) return hostDiagnostics;
 
@@ -580,7 +580,7 @@ export async function authorityDiagnosticsForProgram(input: {
           line: 1,
           column: 1,
           message: `Installed code uses capability '${capability}' but vibestudio.authority.requests does not declare it. Add the narrowest reviewed request, then rebuild this exact context.`,
-          suggestion: `Add an authority request for ${JSON.stringify(capability)}; use live capability docs to select its narrowest resource scope.`,
+          suggestion: `Search live docs for ${JSON.stringify(capability)} and inspect the receiver's access.authority (including prepared leaves), resource contract, and tier. Choose the narrowest intended request, or remove the effect; a request is not a grant.`,
         });
       }
     }

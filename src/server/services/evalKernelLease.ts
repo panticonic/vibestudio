@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DORef, HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 
-/** Interactive notebook state remains live for this long after the latest eval cell. */
+/** Interactive notebook state remains live for this long after admitted work settles. */
 export const EVAL_KERNEL_IDLE_LEASE_MS = 30 * 60 * 1_000;
 
 interface LiveLease {
@@ -13,7 +13,7 @@ interface LiveLease {
 
 interface KernelLeaseStatus {
   leaseId: string;
-  expiresAt: number;
+  expiresAt: number | null;
   holderAttached: boolean;
 }
 

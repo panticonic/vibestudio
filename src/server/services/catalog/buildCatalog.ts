@@ -85,6 +85,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       const principals = authorityPrincipals(method, def);
       const access = {
         ...(method.access ?? {}),
+        authority: method.authority ?? def.authority,
         website: method.website,
         principals,
         tier: reviewedTier.tier,
@@ -280,6 +281,7 @@ function runtimeMethodAccess(
   const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, method.tier, null);
   return {
     ...(method.access ?? {}),
+    authority: method.authority ?? definition.authority,
     website: method.website,
     principals: authorityPrincipals(method, definition),
     tier: reviewedTier.tier,

@@ -21,7 +21,10 @@ import {
   type BuildServiceClient,
   type EvalImportLoader,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
-import { executionArtifactRefSchema, type BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
+import {
+  executionArtifactRefSchema,
+  type BuildPerformanceProfileWire,
+} from "@vibestudio/service-schemas/build";
 import { ExecutionJournal } from "./executionJournal.js";
 import type { EvalOperationJournal } from "@vibestudio/service-schemas/eval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
@@ -63,6 +66,7 @@ import {
   EVAL_RUNTIME_METHOD_NOTES,
   evalRuntimeServiceName,
   invalidHelpArgumentResponse,
+  unknownHelpNameResponse,
 } from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
 import { freezeModuleNamespace } from "./moduleNamespace.js";
@@ -468,7 +472,8 @@ interface KernelRunStatus {
 
 interface KernelLeaseState {
   id: string;
-  expiresAt: number;
+  idleMs: number;
+  expiresAt: number | null;
   holderAttached: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   settled: Promise<{ reason: "expired" | "released" | "replaced" }>;
@@ -582,6 +587,7 @@ export class EvalDO extends DurableObjectBase {
    * (scope objects, module singletons, open client handles) alive between cells.
    */
   private kernelLease: KernelLeaseState | null = null;
+  private kernelLeaseTransitions: Promise<unknown> = Promise.resolve();
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.kernelIncarnationId = crypto.randomUUID();
@@ -954,9 +960,17 @@ export class EvalDO extends DurableObjectBase {
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
   @schemaRpc()
-  acquireKernelLease(input: { leaseId: string; idleMs: number }): {
+  async acquireKernelLease(input: { leaseId: string; idleMs: number }): Promise<{
     leaseId: string;
-    expiresAt: number;
+    expiresAt: number | null;
+    holderAttached: boolean;
+  }> {
+    return this.withKernelLeaseTransition(() => this.acquireKernelLeaseLocked(input));
+  }
+
+  private acquireKernelLeaseLocked(input: { leaseId: string; idleMs: number }): {
+    leaseId: string;
+    expiresAt: number | null;
     holderAttached: boolean;
   } {
     if (!input || typeof input.leaseId !== "string" || input.leaseId.length === 0) {
@@ -981,7 +995,8 @@ export class EvalDO extends DurableObjectBase {
       });
       lease = {
         id: input.leaseId,
-        expiresAt: 0,
+        idleMs: input.idleMs,
+        expiresAt: null,
         holderAttached: false,
         timer: null,
         settled,
@@ -992,9 +1007,9 @@ export class EvalDO extends DurableObjectBase {
       clearTimeout(lease.timer);
     }
 
-    lease.expiresAt = Date.now() + input.idleMs;
-    lease.timer = setTimeout(() => void this.expireKernelLease(lease), input.idleMs);
-    lease.timer.unref?.();
+    lease.idleMs = input.idleMs;
+    lease.timer = null;
+    this.refreshKernelIdleLease();
     return {
       leaseId: lease.id,
       expiresAt: lease.expiresAt,
@@ -1004,6 +1019,10 @@ export class EvalDO extends DurableObjectBase {
 
   @schemaRpc()
   async attachKernelLeaseHolder(leaseId: string): Promise<{ attached: true }> {
+    return this.withKernelLeaseTransition(() => this.attachKernelLeaseHolderLocked(leaseId));
+  }
+
+  private async attachKernelLeaseHolderLocked(leaseId: string): Promise<{ attached: true }> {
     const lease = this.kernelLease;
     if (!lease || lease.id !== leaseId) {
       throw new Error(`eval kernel lease ${leaseId} is not active`);
@@ -1253,6 +1272,7 @@ export class EvalDO extends DurableObjectBase {
     );
     this.appendRunEvent(runId, "state", { status: "accepted" });
     this.appendRunEvent(runId, "state", { status: "queued" });
+    this.refreshKernelIdleLease();
     if (schedule) this.scheduleRun(runId);
     return {
       runId,
@@ -1427,7 +1447,12 @@ export class EvalDO extends DurableObjectBase {
     if (inFlight) return inFlight;
     const promise = this.runEval(runId);
     this.inFlightRuns.set(runId, promise);
-    void promise.catch(() => undefined).finally(() => this.inFlightRuns.delete(runId));
+    void promise
+      .catch(() => undefined)
+      .finally(() => {
+        this.inFlightRuns.delete(runId);
+        this.refreshKernelIdleLease();
+      });
     return promise;
   }
 
@@ -1483,6 +1508,7 @@ export class EvalDO extends DurableObjectBase {
       };
     }
     this.appendRunEvent(runId, "state", { status: "running" });
+    this.refreshKernelIdleLease();
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
     const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
@@ -1987,6 +2013,7 @@ export class EvalDO extends DurableObjectBase {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
+    this.refreshKernelIdleLease();
     return row?.["status"] === "done" && row["result"] != null
       ? (JSON.parse(String(row["result"])) as RunResult)
       : null;
@@ -2428,6 +2455,7 @@ export class EvalDO extends DurableObjectBase {
       if (this.inFlightCancellations.get(runId) === cancellation) {
         this.inFlightCancellations.delete(runId);
       }
+      this.refreshKernelIdleLease();
     }
   }
 
@@ -2626,6 +2654,7 @@ export class EvalDO extends DurableObjectBase {
     // Orphan the (possibly wedged) chain — do NOT `.then()` off it, or we'd hang behind the stuck
     // run. A subsequently-enqueued run chains off this fresh resolved promise and proceeds at once.
     this.runChain = Promise.resolve();
+    this.refreshKernelIdleLease();
     let result: { ok: boolean };
     try {
       result = this.resetLocked();
@@ -2672,6 +2701,39 @@ export class EvalDO extends DurableObjectBase {
 
   // ── internals ─────────────────────────────────────────────────────────────────
 
+  private withKernelLeaseTransition<T>(operation: () => T | Promise<T>): Promise<T> {
+    const transition = this.kernelLeaseTransitions.catch(() => undefined).then(operation);
+    this.kernelLeaseTransitions = transition;
+    return transition;
+  }
+
+  /** Active durable work is not notebook inactivity. Use canonical run state,
+   * not lingering execution promises: a force-reset orphan no longer owns
+   * residency. The normal idle interval begins after the last owner settles. */
+  private refreshKernelIdleLease(): void {
+    const lease = this.kernelLease;
+    if (!lease) return;
+    const active =
+      this.sql
+        .exec(
+          `SELECT run_id FROM runs WHERE status IN ('pending', 'running', 'cancelling') LIMIT 1`
+        )
+        .toArray().length > 0;
+    if (active) {
+      if (lease.timer) clearTimeout(lease.timer);
+      lease.timer = null;
+      lease.expiresAt = null;
+      return;
+    }
+    if (lease.timer) return;
+    lease.expiresAt = Date.now() + lease.idleMs;
+    lease.timer = setTimeout(
+      () => void this.withKernelLeaseTransition(() => this.expireKernelLease(lease)),
+      lease.idleMs
+    );
+    lease.timer.unref?.();
+  }
+
   private settleKernelLease(lease: KernelLeaseState, reason: "released" | "replaced"): void {
     if (lease.timer) clearTimeout(lease.timer);
     if (this.kernelLease === lease) this.kernelLease = null;
@@ -2679,7 +2741,8 @@ export class EvalDO extends DurableObjectBase {
   }
 
   private async expireKernelLease(lease: KernelLeaseState): Promise<void> {
-    if (this.kernelLease !== lease) return;
+    if (this.kernelLease !== lease || lease.expiresAt === null || lease.expiresAt > Date.now())
+      return;
     // The held request keeps this activation resident while its durable
     // lifecycle declaration is cleared.
     await this.clearLifecycleRelease();
@@ -2707,7 +2770,7 @@ export class EvalDO extends DurableObjectBase {
     return {
       incarnationId: this.kernelIncarnationId,
       startedAt: this.kernelStartedAt,
-      ...(this.kernelLease ? { idleExpiresAt: this.kernelLease.expiresAt } : {}),
+      ...(this.kernelLease?.expiresAt != null ? { idleExpiresAt: this.kernelLease.expiresAt } : {}),
       ...(event ? { event } : {}),
     };
   }
@@ -2877,7 +2940,10 @@ export class EvalDO extends DurableObjectBase {
           // Not a rich runtime binding — a plain RPC service. It is reachable as
           // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
           // `rpc.call("main", "${serviceName}.<method>", [...])`.
-          return execution.docs.describeService(serviceName);
+          return (
+            (await execution.docs.describeService(serviceName)) ??
+            unknownHelpNameResponse(serviceName)
+          );
         }
         return describeHelpOverview();
       },
@@ -3805,7 +3871,8 @@ export class EvalDO extends DurableObjectBase {
     // Imported modules and retained page handles cannot own an earlier cell.
     const panelRuntime = support.createPanelRuntime({
       rpc: activeRpc,
-      recordOperation: (entry: Record<string, unknown>) => this.requireActiveEvalExecution().operationJournal.append(entry),
+      recordOperation: (entry: Record<string, unknown>) =>
+        this.requireActiveEvalExecution().operationJournal.append(entry),
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
       onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {

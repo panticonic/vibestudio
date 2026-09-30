@@ -7,11 +7,25 @@ import {
   EVAL_RUNTIME_METHOD_NOTES,
   evalRuntimeServiceName,
   invalidHelpArgumentResponse,
+  unknownHelpNameResponse,
 } from "./evalSurfaceHelp.js";
+
+describe("unknownHelpNameResponse", () => {
+  it("distinguishes package exports from unavailable runtime bindings", () => {
+    const response = unknownHelpNameResponse("some-skill");
+    expect(response.name).toBe("some-skill");
+    expect(response.error).toContain("runtime binding");
+    expect(response.guidance).toContain("not exports of other packages");
+    expect(response.guidance).toContain("read its SKILL.md/API reference");
+  });
+});
 
 describe("describeEvalBindingSurface (help('<binding>') reflects the injected surface)", () => {
   it("describes template authoring arguments from its canonical receiver schema", () => {
-    const method = describeEvalMethod("templates.inspectAuthoring", templatesRuntimeCatalog.inspectAuthoring);
+    const method = describeEvalMethod(
+      "templates.inspectAuthoring",
+      templatesRuntimeCatalog.inspectAuthoring
+    );
     expect(method.call).toBe("await templates.inspectAuthoring(input)");
     expect(method.parameters).toHaveLength(1);
     expect(method.parameters[0]!.type).toContain("parts");
