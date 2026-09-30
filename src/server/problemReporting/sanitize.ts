@@ -41,6 +41,13 @@ export function sanitizeReportText(
     }
   );
   result = result.replace(
+    /\b((?:authorization|password|api[_-]?key|access[_-]?token|secret)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+    (_, field: string) => {
+      redactions.add("sensitive-field");
+      return `${field}[removed]`;
+    }
+  );
+  result = result.replace(
     /^(\s*(?:authorization|password|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*)[^\r\n]+/gim,
     (_, field: string) => {
       redactions.add("sensitive-field");

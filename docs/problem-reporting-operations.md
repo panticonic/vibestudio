@@ -68,13 +68,24 @@ On 2026-09-30 the live checks returned 200 for apex, 401 for keyless admin,
 200 for authenticated admin, 204 for the startup ping, 201 for signed report
 acceptance, 200 for exact bundle retrieval, and 200 for deletion.
 
+The private developer template was also installed through ordinary workspace
+creation on 2026-09-30. Its service successfully read the live overview and
+queried `sqlite_schema` through the host-held credential after normal
+credential-use review. No bearer entered the workspace or evaluation code.
+
 ## Product release boundary
 
 Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
-Before distributing a packaged host with these reporting features, publish
-current Base/System through ordinary template author inspection, review, and
-publication, then adopt their actual publication receipts with
-`generate:workspace-template-release`. A main-branch push alone does not update
-the packaged template pins. Never substitute fabricated receipts or moving
+On 2026-09-30 ordinary template inspection, review, and publication produced
+Base `v0.3.58` at `9343aa2e4a88da9f50af9e1072a2eee6cafec283` and System
+`v0.3.68` at `740c6b00a747eb060565b825a39050feb1db46dd`. Their actual
+publication receipts supply the packaged host pins. A main-branch push alone
+does not update those pins. Never substitute fabricated receipts or moving
 branch refs for that release boundary.
+
+During this release, a template update from a moved `refs/heads/main` pin failed
+while reconstructing its prior exact snapshot. This is a template refresh
+limitation, not a reporting intake failure. The final releases came from fresh
+authoring workspaces and preserved concurrent upstream changes; rejected stale
+reviews were not published and no force push was used.

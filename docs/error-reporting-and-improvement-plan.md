@@ -2,7 +2,7 @@
 
 Status: implemented in host, Base, System, System Testing, and the developer
 template source; production intake provisioned and verified on 2026-09-30.
-Packaged template publication remains the normal release boundary described in
+Packaged templates were published and pinned through the normal release boundary described in
 [reporting operations](problem-reporting-operations.md).
 
 Detailed implementation contracts:
@@ -39,16 +39,16 @@ A composer that only saves drafts is an intermediate milestone.
 
 Use these existing mechanisms as evidence sources:
 
-| Foundation | Current source | Planned integration |
-| --- | --- | --- |
-| Typed service failures | `packages/shared/src/serviceDispatcher.ts`, `packages/rpc/src/errors.ts`, RPC reply contracts | Observe operation outcomes; preserve failure identity through forwarding. |
-| Unit diagnostics | `src/server/runtimeDiagnosticsStore.ts`, `src/server/bootstrap/runtimeObservability.ts`, runtime supervision | Attach exact unit health and bounded retained logs. |
-| Host logs | `src/server/services/serverLogStore.ts` | Attach bounded records with boot identity and sequence coordinates. |
-| Panel lifecycle | `src/main/cdpHostProvider.ts`, `src/main/workspaceRuntimeController.ts` | Observe crashes/load failures and retain their panel coordinates. |
-| Startup/main-process errors | `src/main/index.ts`, `src/main/startupDiagnostics.ts` | Persist incidents before workspace services are available. |
-| Agent failures | Base `packages/agentic-protocol/src/tool-failure.ts`, `gad.diagnoseInvocation()` | Keep the existing failure value and exact causal packet. |
-| UI-to-agent feedback | Base `packages/agentic-do/src/feedback-ingest.ts`, chat `CustomMessage.tsx` | Associate UI failure evidence; retain existing local agent recovery behavior. |
-| Panel investigation | Base `packages/runtime/src/panel/errorDebugChat.ts` | Open investigation from an incident using the existing diagnostic launcher. |
+| Foundation                  | Current source                                                                                               | Planned integration                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Typed service failures      | `packages/shared/src/serviceDispatcher.ts`, `packages/rpc/src/errors.ts`, RPC reply contracts                | Observe operation outcomes; preserve failure identity through forwarding.     |
+| Unit diagnostics            | `src/server/runtimeDiagnosticsStore.ts`, `src/server/bootstrap/runtimeObservability.ts`, runtime supervision | Attach exact unit health and bounded retained logs.                           |
+| Host logs                   | `src/server/services/serverLogStore.ts`                                                                      | Attach bounded records with boot identity and sequence coordinates.           |
+| Panel lifecycle             | `src/main/cdpHostProvider.ts`, `src/main/workspaceRuntimeController.ts`                                      | Observe crashes/load failures and retain their panel coordinates.             |
+| Startup/main-process errors | `src/main/index.ts`, `src/main/startupDiagnostics.ts`                                                        | Persist incidents before workspace services are available.                    |
+| Agent failures              | Base `packages/agentic-protocol/src/tool-failure.ts`, `gad.diagnoseInvocation()`                             | Keep the existing failure value and exact causal packet.                      |
+| UI-to-agent feedback        | Base `packages/agentic-do/src/feedback-ingest.ts`, chat `CustomMessage.tsx`                                  | Associate UI failure evidence; retain existing local agent recovery behavior. |
+| Panel investigation         | Base `packages/runtime/src/panel/errorDebugChat.ts`                                                          | Open investigation from an incident using the existing diagnostic launcher.   |
 
 Base and System paths below refer to the configured external template checkouts,
 not new copies inside the host repository.
@@ -83,15 +83,15 @@ a System worker or panel. Product UI remains ordinary workspace source.
 
 ### Valuable ideas incorporated from the drafts
 
-| Idea | Concrete adoption |
-| --- | --- |
-| Mechanical facts remain visible | Incident cards always show component, code, first/last occurrence, counts, and evidence completeness beside any generated summary. |
-| Small exemplars plus exact refs | Cards carry at most three 500-character exemplars; expanded log-excerpt cards show at most 20 records of 500 characters each. Full selected evidence stays in the report snapshot, not the card payload. |
-| Inspectable silence | History shows suppressed notifications and capture drops, with reason and counts. Muting alerts does not delete evidence or disable reporting. |
-| One live storm card | Repeated symptoms update one source-scoped card; a change in dominant failure shapes can update its explanation without producing one alert per log line. |
-| Explicit investigation | Forward an incident card as a human turn, with bounded exemplars and exact refs; no automatic tool-enabled repair agent. |
-| Derived summaries | Summaries, grouping views, and notification decisions are rebuildable projections. They never become the original failure or user report. |
-| User decisions survive evidence expiry | Keep notification preferences separately from expiring log exemplars; an expired incident does not undo a mute or follow preference. |
+| Idea                                   | Concrete adoption                                                                                                                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mechanical facts remain visible        | Incident cards always show component, code, first/last occurrence, counts, and evidence completeness beside any generated summary.                                                                       |
+| Small exemplars plus exact refs        | Cards carry at most three 500-character exemplars; expanded log-excerpt cards show at most 20 records of 500 characters each. Full selected evidence stays in the report snapshot, not the card payload. |
+| Inspectable silence                    | History shows suppressed notifications and capture drops, with reason and counts. Muting alerts does not delete evidence or disable reporting.                                                           |
+| One live storm card                    | Repeated symptoms update one source-scoped card; a change in dominant failure shapes can update its explanation without producing one alert per log line.                                                |
+| Explicit investigation                 | Forward an incident card as a human turn, with bounded exemplars and exact refs; no automatic tool-enabled repair agent.                                                                                 |
+| Derived summaries                      | Summaries, grouping views, and notification decisions are rebuildable projections. They never become the original failure or user report.                                                                |
+| User decisions survive evidence expiry | Keep notification preferences separately from expiring log exemplars; an expired incident does not undo a mute or follow preference.                                                                     |
 
 Two draft choices change deliberately. Notification suppression defaults to the
 acting user and affected component; shared suppression requires explicit
@@ -182,18 +182,18 @@ grants blanket access to other rows in the same physical store.
 
 Proposed `problemReport` RPC methods:
 
-| Method | Contract |
-| --- | --- |
-| `list`, `get` | Read owner-visible drafts, incidents, and delivery/receipt state with bounded pagination. |
-| `availability` | Read destination/policy, connection state, capture scope, and supported limits without credentials or hidden setup effects. |
-| `consent.get`, `consent.set` | Read/change the initiating human's installation preference with expected revision; agents cannot grant consent. |
-| `create`, `update`, `delete` | Manage a report; updates require the expected revision. Deletion distinguishes queued from already received content. |
-| `collect` | Read permitted evidence for explicit coordinates, snapshot it, and return per-section completeness. |
-| `prepareSubmission` | Freeze selected evidence and return the preview manifest and digest. No network transmission. |
-| `submit` | Queue the exact reviewed digest for the authenticated human and approved destination. |
-| `export` | Produce the same reviewed bundle as a local file. |
-| `cancelSubmission` | Stop further delivery attempts; explain that an already accepted upload cannot be recalled locally. |
-| `submissionStatus`, `deleteRemote` | Recover a receipt or delete received content with report-scoped authority; retain pending deletion status. |
+| Method                             | Contract                                                                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `list`, `get`                      | Read owner-visible drafts, incidents, and delivery/receipt state with bounded pagination.                                   |
+| `availability`                     | Read destination/policy, connection state, capture scope, and supported limits without credentials or hidden setup effects. |
+| `consent.get`, `consent.set`       | Read/change the initiating human's installation preference with expected revision; agents cannot grant consent.             |
+| `create`, `update`, `delete`       | Manage a report; updates require the expected revision. Deletion distinguishes queued from already received content.        |
+| `collect`                          | Read permitted evidence for explicit coordinates, snapshot it, and return per-section completeness.                         |
+| `prepareSubmission`                | Freeze selected evidence and return the preview manifest and digest. No network transmission.                               |
+| `submit`                           | Queue the exact reviewed digest for the authenticated human and approved destination.                                       |
+| `export`                           | Produce the same reviewed bundle as a local file.                                                                           |
+| `cancelSubmission`                 | Stop further delivery attempts; explain that an already accepted upload cannot be recalled locally.                         |
+| `submissionStatus`, `deleteRemote` | Recover a receipt or delete received content with report-scoped authority; retain pending deletion status.                  |
 
 Observation is an internal sink, with verified runtime ingress where necessary;
 it is not a general RPC allowing arbitrary callers to invent host incidents.
@@ -424,14 +424,14 @@ The private key never crosses a workspace boundary or enters RPC, reports, logs,
 
 Developer administration uses independently rotatable 256-bit bearer keys. Store only key IDs and SHA-256 digests in the Worker `REPORT_KEYS` secret. Enter developer keys once through the existing host credential UI; the sandbox-external secret store and URL-bound broker inject them only at the admin path. Workspace code receives an opaque credential ID, never the token. Keys grant reporting administration and direct SQL on this database, not Cloudflare account or relay/OAuth access. No login website, password database, or OAuth provider is required.
 
-| Route class | Initial limit | Enforcement key |
-| --- | --- | --- |
-| Report submissions | 20 requests/minute per boundary | Hash of Cloudflare-provided source IP before body read; verified machine public-key digest before storage |
-| Metadata mutations | 30 requests/minute | Verified developer key ID |
-| Developer SQL | No application rate limit | Verified developer key ID |
-| Dashboard/list/download requests | 120 requests/minute | Verified developer key ID |
-| Receipt status/deletion | 20 requests/minute | Verified receipt-secret digest |
-| Failed administrative/receipt authentication | 20 failures/minute | Hash of Cloudflare-provided source IP |
+| Route class                                  | Initial limit                   | Enforcement key                                                                                           |
+| -------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Report submissions                           | 20 requests/minute per boundary | Hash of Cloudflare-provided source IP before body read; verified machine public-key digest before storage |
+| Metadata mutations                           | 30 requests/minute              | Verified developer key ID                                                                                 |
+| Developer SQL                                | No application rate limit       | Verified developer key ID                                                                                 |
+| Dashboard/list/download requests             | 120 requests/minute             | Verified developer key ID                                                                                 |
+| Receipt status/deletion                      | 20 requests/minute              | Verified receipt-secret digest                                                                            |
+| Failed administrative/receipt authentication | 20 failures/minute              | Hash of Cloudflare-provided source IP                                                                     |
 
 Use distinct Workers limiter namespaces. Transient IP-derived limiter keys are not stored in submission rows or SQL audit. Only trust Cloudflare's injected source-IP metadata. Stream body limits reject oversized/compressed bodies before any storage. Return 429 with Retry-After; retry the same frozen UUID, bytes and signature. Duplicate attempts consume allowance but do not duplicate acceptance. Public intake works without `REPORT_KEYS`; missing developer configuration denies administration.
 
@@ -489,12 +489,12 @@ bootstrap flag is required.
 
 Proposed locally owned parts:
 
-| Part | Responsibility |
-| --- | --- |
-| `panels/error-dashboard/` | Overview, drill-down, selected evidence, investigation actions. |
-| `workers/error-reports/` | Ordinary workspace service that calls the Cloudflare API through mediated credentials; query/schema, dashboard, evidence, and investigation helpers. |
-| `skills/error-investigation/` | SQL-driven triage and the report-to-self-development workflow. |
-| `meta/vibestudio.yml` | Template dependencies, source declarations, and required unit/capability manifests; no concrete credentials. |
+| Part                          | Responsibility                                                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `panels/error-dashboard/`     | Overview, drill-down, selected evidence, investigation actions.                                                                                      |
+| `workers/error-reports/`      | Ordinary workspace service that calls the Cloudflare API through mediated credentials; query/schema, dashboard, evidence, and investigation helpers. |
+| `skills/error-investigation/` | SQL-driven triage and the report-to-self-development workflow.                                                                                       |
+| `meta/vibestudio.yml`         | Template dependencies, source declarations, and required unit/capability manifests; no concrete credentials.                                         |
 
 The service registers through existing workspace-service discovery. It owns
 neither a replicated error database nor Cloudflare credentials. Declare ordinary
@@ -598,17 +598,17 @@ solely because a report arrives.
 
 ## 8. Implementation sequence and acceptance gates
 
-| Change | Deliverable | Acceptance gate |
-| --- | --- | --- |
-| 1. Contracts and ownership | Strict wire/local schemas, scoped identities, draft-spec reconciliation, authority contract, canonical installation store, consent and retention. | Owner isolation, revision conflicts, restart durability, unsupported schema rejection, and retention roots verified. |
-| 2. Capture | Full dispatch outcome observation, RPC origin preservation, runtime/build/panel capture, recoverable trajectory projection. | One propagated failure deduplicates; similar unrelated failures remain separate; stream failures and early validation are observed; no altered operation outcome; coverage inventory matches actual owners. |
-| 3. Collection/export | Exact collectors, completeness metadata, sanitization, narrative/evidence budgets, canonical JSON encoder, immutable bundle preparation. | Unauthorized coordinates denied; source rotation does not erase snapshots; preview/export/submission bytes agree; automatic sentinel text absent; substantial manual narrative and partial results supported. |
-| 4. Consent, UI, and Base assistance | First-use choice, settings opt-in/out, System composer/history, typed shell entry points, Base client and problem-reporting skill. | No automatic report or detailed analytics upload before choice; equal on/off choices; opt-out/queue races verified; manual reporting works while off; agent draft preserves user edits and cannot grant sharing consent. |
-| 5. Device/startup capture | Early capture, startup recovery/export, main-process and supervisor exit observation. | Reporting works with workspace server unavailable; restart recovers evidence; recursive reporting failure stays bounded. |
-| 6. Delivery and intake | Durable outbox, Cloudflare intake module, D1/R2 bindings, scoped keys, rate-limit bindings, status/deletion protocol and fixture. | Lost acknowledgement/restarts produce one receipt; auth/429/payload rejection prevents writes; opt-out respected; deletion replay cannot restore data; partial cross-store writes recover safely. |
-| 7. Developer workspace/dashboard | Private `vibestudio-dev` template, mediated API service, SQL endpoint, D1 triage schema/views, overview and investigation entry points. | Live data is filterable/drillable; SQL queries canonical D1; dashboard carries no key; chart values match query evidence; group selection opens one retained agent task. |
-| 8. Developer skill/self-development proof | `error-investigation` skill, SQL recipes, adoption/setup instructions, evidence-to-isolated-fix workflow. | One reported failure is queried, reproduced, fixed in an isolated session, verified, and linked back; owned instances/clients cleaned; unavailable historical source and unverified fixes labelled honestly. |
-| 9. Launch | Actual keys and policy configuration, matching host/Base/System/vibestudio-dev publications, API-only hosted backend. | First-use and off behavior verified on a fresh installation; real reviewed and opted-in automatic reports reach private storage; dashboard/skill read actual receipts; expiry/deletion/rotation rehearsed. |
+| Change                                    | Deliverable                                                                                                                                       | Acceptance gate                                                                                                                                                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Contracts and ownership                | Strict wire/local schemas, scoped identities, draft-spec reconciliation, authority contract, canonical installation store, consent and retention. | Owner isolation, revision conflicts, restart durability, unsupported schema rejection, and retention roots verified.                                                                                                     |
+| 2. Capture                                | Full dispatch outcome observation, RPC origin preservation, runtime/build/panel capture, recoverable trajectory projection.                       | One propagated failure deduplicates; similar unrelated failures remain separate; stream failures and early validation are observed; no altered operation outcome; coverage inventory matches actual owners.              |
+| 3. Collection/export                      | Exact collectors, completeness metadata, sanitization, narrative/evidence budgets, canonical JSON encoder, immutable bundle preparation.          | Unauthorized coordinates denied; source rotation does not erase snapshots; preview/export/submission bytes agree; automatic sentinel text absent; substantial manual narrative and partial results supported.            |
+| 4. Consent, UI, and Base assistance       | First-use choice, settings opt-in/out, System composer/history, typed shell entry points, Base client and problem-reporting skill.                | No automatic report or detailed analytics upload before choice; equal on/off choices; opt-out/queue races verified; manual reporting works while off; agent draft preserves user edits and cannot grant sharing consent. |
+| 5. Device/startup capture                 | Early capture, startup recovery/export, main-process and supervisor exit observation.                                                             | Reporting works with workspace server unavailable; restart recovers evidence; recursive reporting failure stays bounded.                                                                                                 |
+| 6. Delivery and intake                    | Durable outbox, Cloudflare intake module, D1/R2 bindings, scoped keys, rate-limit bindings, status/deletion protocol and fixture.                 | Lost acknowledgement/restarts produce one receipt; auth/429/payload rejection prevents writes; opt-out respected; deletion replay cannot restore data; partial cross-store writes recover safely.                        |
+| 7. Developer workspace/dashboard          | Private `vibestudio-dev` template, mediated API service, SQL endpoint, D1 triage schema/views, overview and investigation entry points.           | Live data is filterable/drillable; SQL queries canonical D1; dashboard carries no key; chart values match query evidence; group selection opens one retained agent task.                                                 |
+| 8. Developer skill/self-development proof | `error-investigation` skill, SQL recipes, adoption/setup instructions, evidence-to-isolated-fix workflow.                                         | One reported failure is queried, reproduced, fixed in an isolated session, verified, and linked back; owned instances/clients cleaned; unavailable historical source and unverified fixes labelled honestly.             |
+| 9. Launch                                 | Actual keys and policy configuration, matching host/Base/System/vibestudio-dev publications, API-only hosted backend.                             | First-use and off behavior verified on a fresh installation; real reviewed and opted-in automatic reports reach private storage; dashboard/skill read actual receipts; expiry/deletion/rotation rehearsed.               |
 
 Changes 1-3 precede UI integration; changes 5 and 6 depend on the same canonical
 contracts/store. External delivery is never enabled before change 4's consent
@@ -618,17 +618,17 @@ Do not require the broader System Agent/log-watcher programme to complete first.
 
 ### Concrete implementation locations
 
-| Location | Implementation |
-| --- | --- |
-| Host `packages/service-schemas/src/problemReport.ts` and generated clients/catalogs | Strict methods, records, privacy/byte policy, authority preparation and shell target references. |
-| Host `src/server/services/problemReporting/` | `store`, `capture`, `consent`, `collection`, `exportPolicy`, `bundle`, `delivery` modules; one canonical writer per installation. |
-| Host `src/server/stateLayout.ts` and reporting bootstrap | Dedicated reporting state paths, owned lifecycle, database initialization, queue recovery and shutdown. |
-| Host service/RPC/runtime/build lifecycle owners | Outcome observations and preserved diagnostic origin identity; no console-only claim of coverage. |
-| Host `src/main/` startup and client observation paths | Early device capture, first-use/consent bridge, typed shell opening, crash recovery/export. |
-| Base `packages/runtime/src/shared/problemReports.ts` and `skills/problem-reporting/` | Public typed client and ordinary user-assistance skill with narrative/privacy/API references. |
-| System `about/problem-reports/`, shell first-use/settings/error components | Report composer/history, mandatory choice, settings and discoverable actions. |
-| Cloudflare `apps/webhook-relay/src/problemReports/` and deployment config | Auth, rate limits, intake/read/status/delete/SQL routes, D1 schema, R2 bindings and scheduled cleanup. |
-| New external `vibestudio-dev` template | Error dashboard, ordinary `errorReports` service, developer skill, SQL views/recipes, self-development setup. |
+| Location                                                                             | Implementation                                                                                                                    |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Host `packages/service-schemas/src/problemReport.ts` and generated clients/catalogs  | Strict methods, records, privacy/byte policy, authority preparation and shell target references.                                  |
+| Host `src/server/services/problemReporting/`                                         | `store`, `capture`, `consent`, `collection`, `exportPolicy`, `bundle`, `delivery` modules; one canonical writer per installation. |
+| Host `src/server/stateLayout.ts` and reporting bootstrap                             | Dedicated reporting state paths, owned lifecycle, database initialization, queue recovery and shutdown.                           |
+| Host service/RPC/runtime/build lifecycle owners                                      | Outcome observations and preserved diagnostic origin identity; no console-only claim of coverage.                                 |
+| Host `src/main/` startup and client observation paths                                | Early device capture, first-use/consent bridge, typed shell opening, crash recovery/export.                                       |
+| Base `packages/runtime/src/shared/problemReports.ts` and `skills/problem-reporting/` | Public typed client and ordinary user-assistance skill with narrative/privacy/API references.                                     |
+| System `about/problem-reports/`, shell first-use/settings/error components           | Report composer/history, mandatory choice, settings and discoverable actions.                                                     |
+| Cloudflare `apps/webhook-relay/src/problemReports/` and deployment config            | Auth, rate limits, intake/read/status/delete/SQL routes, D1 schema, R2 bindings and scheduled cleanup.                            |
+| New external `vibestudio-dev` template                                               | Error dashboard, ordinary `errorReports` service, developer skill, SQL views/recipes, self-development setup.                     |
 
 Tests live beside their owner. Do not introduce an independent telemetry SDK,
 duplicate template files in the host repository, or a second credential path.
@@ -757,7 +757,6 @@ records reproduction, candidate, tests, cleanup, and fix references end to end.
 ## Aggregate usage analytics
 
 Implement [the usage analytics contract](usage-analytics.md): one payload-free, unsigned startup ping is counted only as a daily total, including opted-out/undecided use. The product has no separate disclosure, preference, or approval flow for that ping, per the user's explicit direction. Detailed fixed usage counters and automatic error reports remain opt-in, and manual reports still require explicit review/Send. Counter data cannot join to report machine public keys. Developer analytics and SQL operate on the canonical `usage_daily` aggregates.
-
 
 ## Integration audit
 

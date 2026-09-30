@@ -31,4 +31,14 @@ describe("report text sanitization", () => {
       "url-credentials-and-query",
     ]);
   });
+
+  it("removes inline credential assignments while retaining surrounding failure evidence", () => {
+    const result = sanitizeReportText(
+      'Request failed with api_key=hidden-key, password="private value"; retry code=503'
+    );
+    expect(result.text).toBe(
+      "Request failed with api_key=[removed], password=[removed]; retry code=503"
+    );
+    expect(result.redactions).toEqual(["sensitive-field"]);
+  });
 });
