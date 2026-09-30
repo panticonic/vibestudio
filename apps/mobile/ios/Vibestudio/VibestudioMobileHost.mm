@@ -4,6 +4,7 @@
 extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
 #import <React/RCTReloadCommand.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <dlfcn.h>
@@ -11,7 +12,9 @@ extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 #import <objc/message.h>
 #import <zlib.h>
 
-@interface VibestudioMobileHost : NSObject <RCTBridgeModule, UIDocumentPickerDelegate>
+@interface VibestudioMobileHost : NSObject <RCTBridgeModule, RCTInvalidating, UIDocumentPickerDelegate>
+@property(nonatomic, strong) dispatch_queue_t resourceQueue;
+@property(atomic, assign) BOOL invalidated;
 @property(nonatomic, strong) NSFileHandle *bundleStream;
 @property(nonatomic, copy) NSString *bundleTransferPath;
 @property(nonatomic, copy) NSString *bundleFinalPath;
@@ -25,6 +28,29 @@ extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 @implementation VibestudioMobileHost
 
 RCT_EXPORT_MODULE();
+
+- (void)invalidate
+{
+  self.invalidated = YES;
+  dispatch_async(self.resourceQueue, ^{
+    [self closeBundleStream];
+    if (self.bundleTransferPath) [NSFileManager.defaultManager removeItemAtPath:self.bundleTransferPath error:nil];
+    self.bundleTransferPath = nil;
+    self.bundleFinalPath = nil;
+    [self abortAllAssetWrites];
+    // Remove only this module's staging files; a replacement may already exist.
+    for (NSDictionary *archive in self.browserImportArchives.allValues) {
+      [NSFileManager.defaultManager removeItemAtPath:archive[@"path"] error:nil];
+    }
+    [self.browserImportArchives removeAllObjects];
+  });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self rejectBrowserImportPicker:@"browser_import_invalidated" message:@"The browser-import runtime was invalidated"];
+    self.browserImportPicker.delegate = nil;
+    [self.browserImportPicker dismissViewControllerAnimated:NO completion:nil];
+    self.browserImportPicker = nil;
+  });
+}
 
 RCT_EXPORT_METHOD(clearWorkspaceCookies:(NSString *)scope resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -64,6 +90,7 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 {
   self = [super init];
   if (self) {
+    _resourceQueue = dispatch_queue_create("app.vibestudio.mobile.asset-store", DISPATCH_QUEUE_SERIAL);
     _assetWrites = [NSMutableDictionary dictionary];
     _browserImportArchives = [NSMutableDictionary dictionary];
     [NSFileManager.defaultManager removeItemAtURL:[self assetStagingURL] error:nil];
@@ -82,7 +109,7 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 
 - (dispatch_queue_t)methodQueue
 {
-  return dispatch_queue_create("app.vibestudio.mobile.asset-store", DISPATCH_QUEUE_SERIAL);
+  return self.resourceQueue;
 }
 
 - (NSDictionary *)constantsToExport
@@ -120,6 +147,10 @@ RCT_EXPORT_METHOD(pickBrowserImportArchive:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @synchronized(self) {
+    if (self.invalidated) {
+      reject(@"browser_import_invalidated", @"The browser-import runtime was invalidated", nil);
+      return;
+    }
     if (self.browserImportPickerResolve != nil) {
       reject(@"browser_import_pick_busy", @"A browser-import document picker is already active", nil);
       return;
@@ -128,6 +159,7 @@ RCT_EXPORT_METHOD(pickBrowserImportArchive:(RCTPromiseResolveBlock)resolve
     self.browserImportPickerReject = reject;
   }
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.invalidated) return;
     NSArray<UTType *> *types = @[
       UTTypeZIP,
       UTTypeHTML,
@@ -182,6 +214,7 @@ RCT_EXPORT_METHOD(releaseBrowserImportArchive:(NSString *)handle
     return;
   }
   dispatch_async([self methodQueue], ^{
+    if (self.invalidated) return;
     @try {
       NSDictionary *result = [self stageBrowserImportArchiveURL:url];
       [self resolveBrowserImportPicker:result];

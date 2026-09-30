@@ -1,8 +1,10 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
 #import <UIKit/UIKit.h>
 
-@interface VibestudioAuthSession : NSObject <RCTBridgeModule, ASWebAuthenticationPresentationContextProviding>
+@interface VibestudioAuthSession : NSObject <RCTBridgeModule, RCTInvalidating, ASWebAuthenticationPresentationContextProviding>
+@property(nonatomic, assign) BOOL invalidated;
 @property(nonatomic, strong) ASWebAuthenticationSession *session;
 @property(nonatomic, copy) RCTPromiseResolveBlock pendingResolve;
 @property(nonatomic, copy) RCTPromiseRejectBlock pendingReject;
@@ -12,6 +14,18 @@
 @implementation VibestudioAuthSession
 
 RCT_EXPORT_MODULE();
+
+- (void)invalidate
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self.invalidated = YES;
+    RCTPromiseRejectBlock reject = self.pendingReject;
+    ASWebAuthenticationSession *session = self.session;
+    [self clearPending];
+    [session cancel];
+    if (reject) reject(@"auth_session_invalidated", @"The OAuth runtime was invalidated", nil);
+  });
+}
 
 + (BOOL)requiresMainQueueSetup
 {
@@ -23,6 +37,10 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.invalidated) {
+      reject(@"auth_session_invalidated", @"The OAuth runtime was invalidated", nil);
+      return;
+    }
     if (self.session != nil) {
       reject(@"auth_session_busy", @"An OAuth auth session is already active", nil);
       return;
@@ -45,14 +63,13 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
     self.pendingReject = reject;
 
     __weak VibestudioAuthSession *weakSelf = self;
+    __block __weak ASWebAuthenticationSession *startedSession;
     self.session = [[ASWebAuthenticationSession alloc]
       initWithURL:authUrl
       callbackURLScheme:callbackScheme
       completionHandler:^(NSURL * _Nullable callbackURL, NSError * _Nullable error) {
         VibestudioAuthSession *strongSelf = weakSelf;
-        if (strongSelf == nil) return;
-        [strongSelf.timeoutTimer invalidate];
-        strongSelf.timeoutTimer = nil;
+        if (strongSelf == nil || strongSelf.session != startedSession) return;
         RCTPromiseResolveBlock pendingResolve = strongSelf.pendingResolve;
         RCTPromiseRejectBlock pendingReject = strongSelf.pendingReject;
         [strongSelf clearPending];
@@ -71,6 +88,7 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
         }
         pendingResolve(@{ @"url": callbackURL.absoluteString });
       }];
+    startedSession = self.session;
 
     self.session.presentationContextProvider = self;
     if ([options[@"prefersEphemeral"] respondsToSelector:@selector(boolValue)]) {
@@ -86,8 +104,6 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
     }
 
     if (![self.session start]) {
-      [self.timeoutTimer invalidate];
-      self.timeoutTimer = nil;
       [self clearPending];
       reject(@"auth_session_failed", @"ASWebAuthenticationSession refused to start", nil);
     }
@@ -97,8 +113,9 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
 - (void)authSessionTimedOut
 {
   RCTPromiseRejectBlock pendingReject = self.pendingReject;
-  [self.session cancel];
+  ASWebAuthenticationSession *session = self.session;
   [self clearPending];
+  [session cancel];
   if (pendingReject != nil) {
     pendingReject(@"auth_session_timeout", @"OAuth auth session timed out", nil);
   }
@@ -106,6 +123,8 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
 
 - (void)clearPending
 {
+  [self.timeoutTimer invalidate];
+  self.timeoutTimer = nil;
   self.session = nil;
   self.pendingResolve = nil;
   self.pendingReject = nil;

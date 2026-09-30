@@ -77,6 +77,26 @@ installed app and verifies compatibility again after an installation.
 
 ## Verification boundary
 
+The shared scheme includes app-hosted native XCTest coverage for Iroh runtime
+retirement. It verifies that a pending native accept ends on invalidation, the
+retired module is released, and a replacement runtime can reuse the persistent
+identity. The same target verifies OAuth cancellation and cleanup of interrupted
+bundle, asset, and browser-import transfers while preserving committed files.
+Run it on an available simulator:
+
+```bash
+cd apps/mobile/ios
+xcodebuild -workspace Vibestudio.xcworkspace -scheme Vibestudio \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -only-testing:VibestudioNativeTests \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES test
+```
+
+Use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` if the Mac's global
+developer directory selects Command Line Tools. These tests exercise native
+module lifetime, not the interactive workspace acceptance checklist.
+
 `mobile smoke --platform ios` is currently unsupported. The Android runner
 tests pairing, streamed workspace activation, rendered panels, and recovery;
 installing or launching an iOS shell does not establish that coverage on iOS.

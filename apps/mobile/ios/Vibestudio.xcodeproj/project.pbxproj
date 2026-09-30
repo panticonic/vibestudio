@@ -24,6 +24,8 @@
 		8842CEFC17EA131AAF5A80FF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 355339792E1742A792F94B57 /* Foundation.framework */; };
 		A6ECDDC64AFC15204A0494DE /* libPods-Vibestudio.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C4A2F31B2E8ADA33A2CE1F63 /* libPods-Vibestudio.a */; };
 		CB7F31E265E868666463563C /* IrohLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */; };
+		AF3026093000000000000001 /* RuntimeResourceTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = AF3026093000000000000002 /* RuntimeResourceTests.mm */; };
+		AF3026093000000000000003 /* AuthenticationServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E2D41202C00000000000020 /* AuthenticationServices.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -64,6 +66,7 @@
 		C4A2F31B2E8ADA33A2CE1F63 /* libPods-Vibestudio.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Vibestudio.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F030A21C8F7393D43D37E285 /* Pods-VibestudioNativeTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-VibestudioNativeTests.debug.xcconfig"; path = "Target Support Files/Pods-VibestudioNativeTests/Pods-VibestudioNativeTests.debug.xcconfig"; sourceTree = "<group>"; };
 		FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IrohLifecycleTests.swift; sourceTree = "<group>"; };
+		AF3026093000000000000002 /* RuntimeResourceTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RuntimeResourceTests.mm; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +85,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8842CEFC17EA131AAF5A80FF /* Foundation.framework in Frameworks */,
+				AF3026093000000000000003 /* AuthenticationServices.framework in Frameworks */,
 				2B4FB40812C923238E33C2D7 /* libPods-VibestudioNativeTests.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -125,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */,
+				AF3026093000000000000002 /* RuntimeResourceTests.mm */,
 			);
 			name = VibestudioNativeTests;
 			path = VibestudioNativeTests;
@@ -415,6 +420,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CB7F31E265E868666463563C /* IrohLifecycleTests.swift in Sources */,
+				AF3026093000000000000001 /* RuntimeResourceTests.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
