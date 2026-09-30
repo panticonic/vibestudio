@@ -5,9 +5,10 @@ System approval, streamed mobile activation, real workspace panel rendering,
 navigation, message submission, model output, and server restart recovery have
 been exercised on the isolated iPhone. Computer Use works with the screen awake.
 Native nullable-value and WebView script/message ownership repairs are published;
-11 native tests passed together and the two new WebKit regressions passed in a
-focused run. System modal orientation and native keyboard viewport fixes are
-pushed; live verification of their refreshed bundle is in progress. Physical
+Hosted CI now passes all 13 native tests together. Panel canvases remain edge to
+edge; safe spacing is panel-owned, with optional measured viewport insets and
+corner hints. Touch composer/settings repairs are pushed to Base and System;
+combined live keyboard/rotation acceptance is in progress. Physical
 hardware and distribution accounts remain unavailable. Read the latest checkpoint
 below; earlier sections are historical.
 
@@ -725,3 +726,132 @@ They contain account identifiers and pairing links; do not publish their content
 The older stopped reboot/accessibility instance roots were removed after ownership
 checks. Final cleanup of the current layout fixture, Metro, native log stream,
 caffeinate, simulator, publication worktrees, and visibility state remains required.
+
+## Panel geometry and touch layout checkpoint — 2026-09-30, 14:30 Berlin
+
+The rectangular native safe-area boundary was the wrong presentation design.
+It exposed the host background as a bottom strip and forced every panel into a
+smaller rectangle. The user explicitly rejected it. The replacement keeps the
+panel canvas edge to edge: the display clips content at its physical curves,
+and panels decide whether their controls need safe spacing. No global padding,
+artificial screen mask, or native safety bar is applied to panel documents.
+
+Published source:
+
+- System `f455217` removes the native panel safe-area frame and uses iOS keyboard
+  avoidance with padding against the current flex frame. Native headers retain
+  their own safe controls. Modal backdrops cover the window; sheet contents and
+  action rows own their spacing instead of duplicating a bottom safe frame.
+- System `f0b9871` measures each panel slot in window coordinates and intersects
+  it with the window's safe rectangle. Optional `--vibestudio-safe-area-inset-*`
+  CSS values and a best-effort corner hint are published on the document root.
+  Geometry is bounded by the actual panel frame, so a header or keyboard that
+  already excludes an edge does not receive another inset. Asynchronous
+  measurements are guarded by epoch and document ownership; equal geometry
+  and CSS properties do no work. Publication creates no React state updates or
+  DOM resize observers. The hint is approximate, not a private display-radius API.
+- Base `c399c9f` gives touch composers an eight-pixel gap, coordinates the outer
+  card and inner editor curves, and improves agent settings: remaining-space
+  scrolling, an accessible Advanced button, a full-width Reactiveness selector,
+  labeled checkbox rows, forgiving effort controls, and no-zoom touch input text.
+- Base `f19b28a` defines the canonical optional geometry properties with browser
+  `env()` defaults. Chat explicitly consumes them; other panels opt in as needed.
+
+For panel authors: keep the canvas/scroll viewport full size and paint its own
+background through the edges. Put any safe space into scroll content or fixed
+controls, not a wrapper around the whole viewport. A surface adjacent to an edge
+can derive its radius from the shared hint minus its own edge spacing; an inset
+editor subtracts the next gap again. These values hint appearance and placement;
+they do not impose a clipping or padding policy on panels.
+
+Evidence:
+
+- Hosted workflow [36706691764](https://github.com/panticonic/vibestudio/actions/runs/36706691764)
+  completed successfully: iOS Debug simulator build, **all 13 native tests in one
+  run**, and native evidence upload passed. Android also built successfully. This
+  supersedes the earlier pending dispatch and 11-plus-focused-case evidence.
+- Nine focused mobile suites passed all 106 cases after removing the strip.
+  Existing WebView lifecycle/bridge/retention cases passed; four new geometry
+  cases passed for header, keyboard, landscape, and optional/no-repeat CSS
+  publication. System composition and mobile typechecks passed.
+- Focused Base input, settings, setup, message-area, and layout tests passed,
+  along with the Base composition typecheck. Template checkout hygiene passed.
+- Before the replacement, cold portrait keyboard use stayed stable while a
+  landscape-to-portrait path produced a blank panel with repeated WebKit layout
+  and roughly 120% app CPU. RN's height-mode keyboard boundary retains its first
+  frame height; the final source uses padding. This is evidence for an obsolete
+  frame/resize problem, not proof that ordinary React rerenders caused the user's
+  flicker. Final rotated-keyboard acceptance must be recorded separately.
+- The edge-to-edge simulator snapshot showed the panel background continuing
+  through the physical bottom corners, without a host-colored strip. Its
+  embedded browser safe-area values were insufficient for the composer; the
+  optional measured geometry contract addresses that remaining placement gap.
+
+`iphone-20260930-layout`, `iphone-20260930-insets`, and `iphone-20260930-edges`
+were stopped and awaited. The current owned ephemeral fixture is
+`iphone-20260930-geometry`; its final native bundle is activating. Metro,
+native log streaming, caffeinate, the simulator, old visibility state, and
+publication worktrees still require final cleanup. Do not claim combined visual
+acceptance or cleanup complete until a later checkpoint records their results.
+
+## Directional screen-corner checkpoint — 2026-09-30, 14:55 Berlin
+
+The user clarified that only component corners facing physical display corners
+should inherit a large curve. The prior live scalar-hint snapshot still rounded
+all four composer corners; publishing source alone did not update that fixture.
+
+- System `d8475d1` publishes four independent corner hints. A corner is exposed
+  only when both adjoining panel edges coincide with the window edges. Native
+  headers exclude top corners; keyboard-shortened frames exclude bottom corners;
+  inset and split slots receive only their actually exposed corners. The radius
+  remains an approximate appearance hint, with no host padding or clipping.
+- Base `f49920d` uses only the bottom-left and bottom-right hints for the composer
+  and its inset editor. Top corners keep their usual small radius. Card paint
+  follows the same directional border shape. The agent setup card now owns its
+  internal padding rather than inheriting the zero-padding transcript surface.
+- Five directional geometry tests and 22 ChatInput/ChatLayout tests passed.
+  System/mobile and Base composition typechecks and checkout hygiene passed.
+
+The old `iphone-20260930-geometry` fixture was stopped and awaited. The fresh
+owned `iphone-20260930-corners` fixture is building the current published source
+through normal template bootstrap. No installed workspace files were patched.
+Final simulator acceptance and process cleanup are recorded below when complete.
+
+A separate Debug reload defect surfaced while reconnecting Metro at 14:52:
+`RCTMountingManager attachSurfaceToView:surfaceId:` aborted because the target
+view already contained subviews. The private crash report and native log identify
+this assertion; they do not establish its lifecycle root cause. Do not describe
+this as the earlier layout-flicker cause or as a fixed defect. The hosted native
+suite passes, but did not exercise this long-lived Debug/Metro reload sequence.
+
+### Native directional-corner acceptance — 2026-09-30, 15:03 Berlin
+
+The fresh `iphone-20260930-corners` workspace activated the current System and
+Base source. Computer Use verified the actual iPhone simulator UI:
+
+- The composer has small ordinary top corners and larger bottom corners,
+  rather than the earlier four-corner pill. Its panel background continues
+  through the physical bottom corners without a separate host safety strip.
+- Focusing the composer and entering the unsent draft `Corner layout check`
+  brought up the software keyboard. The input stayed fully visible in portrait,
+  with ordinary bottom curves at the flat keyboard boundary.
+- Rotating with the keyboard open and returning to portrait preserved that
+  draft and the visible input. The earlier blank-panel/high-CPU layout failure
+  did not reproduce on this path. Bounded idle observations showed roughly
+  4–8% app CPU, rather than the earlier approximately 120% loop; this is not a
+  broad performance certification or proof against every flicker report.
+- Touch scrolling reached Advanced and Save workspace defaults in the settings
+  form. Advanced expanded to a full-width Autonomy selector without horizontal
+  clipping. The settings card's labels and controls have internal padding.
+
+Landscape with the software keyboard still partly covers the composer with
+WKWebView's native input accessory toolbar. That compact-height layout gap is
+not fixed by the directional radius change. Do not claim landscape keyboard
+acceptance passed. The independent Debug reload assertion above also remains
+open. No new model prompt or account-access grant was accepted for these checks.
+
+Keyboard capture was restored to off. Metro was stopped and awaited; temporary
+publication worktrees were removed; the retired owned visibility instance state
+was removed with the sealed-tree cleanup helper after checking ownership and
+absence of running processes. The final ephemeral server, native log stream and
+caffeinate were stopped and awaited, and the owned simulator was shut down.
