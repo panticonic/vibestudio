@@ -8,6 +8,32 @@ So when you hit a wall -- a case that doesn't fit, a spec that breaks, an assump
 
 What you must NEVER do is patch around the wall to comply with my words: a flag, a special case, a conversion shim, a second channel, a parallel path, a test rewritten to dodge a broken rule. The patch IS the failure. Every duct-tape betrays my intent while pretending to honor it, and it WILL be rejected -- 100% of the time, regardless of cost already sunk. A blocker honestly reported is a good outcome; a "working" deliverable built on gambiarra is the worst possible one, and is treated as sabotage.
 
+## Timeouts and error propagation
+
+We normally do not want blanket timeouts, time-based watchdogs, TTLs, or
+expiries. Do not introduce or extend them if they could hide an underlying
+defect. Elapsed time alone does not establish failure, cancellation, or loss
+of ownership; slow work and a user away from the keyboard remain valid states.
+Approval prompts must remain visible and actionable until explicitly resolved
+or invalidated by the operation's actual lifecycle.
+
+When work stalls, find the root cause: inspect the owning operation, readiness
+contract, dependencies, and lifecycle events. Repair missing completion or
+error propagation, deadlocks, and incorrect readiness assumptions. Propagate
+the original failure through every boundary to the waiting caller. Settle
+pending work on explicit cancellation, target destruction, provider disconnect,
+or another authoritative terminal event, and release owned resources cleanly.
+Do not use a timeout race, polling watchdog, or retry loop to manufacture a
+terminal outcome while the underlying operation remains stranded or running.
+
+A deadline is appropriate when it is an explicit user requirement or a real
+external protocol constraint. Keep it scoped to that requirement, explain its
+source, and ensure expiry cancels and joins the owned work rather than merely
+abandoning its promise. Test-runner deadlines may bound an investigation, but
+must preserve diagnostic evidence and must not become production recovery
+policy. When removing an existing timeout, inspect why it was added and repair
+any lifecycle or propagation defect it was masking.
+
 ## Performance investigations
 
 For Vibestudio panel, app, worker, build, startup, and agent-workflow performance,
