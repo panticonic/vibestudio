@@ -1,5 +1,6 @@
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
+import { DisplayCapturePicker } from "./services/displayCapturePicker.js";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createNativePanelHost } from "./nativePanelHost.js";
 import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
@@ -1971,7 +1972,16 @@ app.on("ready", async () => {
     return nativeViewMayUsePermission(viewManager, contents.id, permission);
   };
 
+  const displayCapturePicker = new DisplayCapturePicker({
+    htmlPath: path.join(__dirname, "displayCapture.html"),
+    preloadPath: path.join(__dirname, "displayCapturePreload.cjs"),
+  });
   const installPermissionHandlers = (targetSession: Session): void => {
+    // On macOS 15+, the OS supplies source selection and its live sharing controls.
+    // Other systems use trusted native chrome, never an inventory exposed to pages.
+    targetSession.setDisplayMediaRequestHandler(displayCapturePicker.handle, {
+      useSystemPicker: true,
+    });
     targetSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       const nativeId = contents
         ? applicationWindow.viewManager?.findViewIdByWebContentsId(contents.id)
@@ -1984,6 +1994,7 @@ app.on("ready", async () => {
         if (
           permissions &&
           (permission === "media" ||
+            permission === "display-capture" ||
             permission === "geolocation" ||
             permission === "notifications" ||
             permission === "clipboard-read" ||
@@ -2028,6 +2039,7 @@ app.on("ready", async () => {
         if (
           permissions &&
           (permission === "media" ||
+            permission === "display-capture" ||
             permission === "geolocation" ||
             permission === "notifications" ||
             permission === "clipboard-read" ||

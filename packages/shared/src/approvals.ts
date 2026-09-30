@@ -466,12 +466,22 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
 export type BrowserSitePermissionCapability =
   | "camera"
   | "microphone"
+  | "screen-capture"
   | "geolocation"
   | "notifications"
   | "downloads"
   | "clipboard"
   | "autofill"
   | "popups";
+
+/** Screen capture is consent for one native request, never reusable authority. */
+export function browserPermissionDecisions(
+  capabilities: readonly BrowserSitePermissionCapability[]
+): readonly ApprovalDecision[] {
+  return capabilities.includes("screen-capture")
+    ? ["once", "block", "dismiss"]
+    : ["once", "session", "always", "block", "dismiss"];
+}
 
 export interface PendingBrowserPermissionApproval extends PendingApprovalBase {
   kind: "browser-permission";

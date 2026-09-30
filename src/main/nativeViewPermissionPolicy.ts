@@ -26,9 +26,7 @@ export function nativeViewMayUsePermission(
         ? "open-external"
         : permission === "clipboard-read" || permission === "clipboard-sanitized-write"
           ? "clipboard"
-          : permission === "fullscreen" ||
-              permission === "pointerLock" ||
-              permission === "display-capture"
+          : permission === "fullscreen" || permission === "pointerLock"
             ? "window-management"
             : null;
   return capability !== null && view?.type === "app" && view.capabilities.includes(capability);

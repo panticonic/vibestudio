@@ -18,6 +18,25 @@ function createProjection() {
 }
 
 describe("BrowserPermissionGrantProjection", () => {
+  it("remembers screen blocks but refuses reusable screen allows", () => {
+    const { canonical, projection } = createProjection();
+    const grant = {
+      origin: "https://example.com",
+      capability: "screen-capture" as const,
+      decision: "allow" as const,
+      scope: "always" as const,
+      updatedAt: 1,
+    };
+    expect(() => projection.remember("env", "alice", "epoch", [grant])).toThrow(
+      /cannot be remembered/
+    );
+    expect(canonical.listActiveAuthorityGrants()).toEqual([]);
+    projection.remember("env", "alice", "epoch", [{ ...grant, decision: "block", scope: "block" }]);
+    expect(projection.get("env", "alice", "epoch", grant.origin, "screen-capture")?.decision).toBe(
+      "block"
+    );
+    canonical.close();
+  });
   afterEach(() => {
     for (const statePath of statePaths.splice(0)) {
       fs.rmSync(statePath, { recursive: true, force: true });

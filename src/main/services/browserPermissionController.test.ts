@@ -1,5 +1,6 @@
 import { scopedNativePartition } from "../nativeStorageScope";
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import {
   BrowserPermissionController,
   browserSecurityOrigin,
@@ -8,6 +9,67 @@ import {
   deniedPeripheralCapability,
   viewMayRequestPeripheral,
 } from "./browserPermissionController.js";
+
+vi.mock("electron", () => ({ systemPreferences: { getMediaAccessStatus: () => "granted" } }));
+
+function mediaHarness(
+  options: {
+    capabilities?: string[];
+    browser?: boolean;
+    consent?: () => Promise<boolean>;
+    approve?: () => Promise<unknown>;
+  } = {}
+) {
+  const events = new EventEmitter();
+  const url = "https://media.example/test";
+  const contents = Object.assign(events, {
+    id: 1,
+    getURL: () => url,
+    isDestroyed: () => false,
+  }) as unknown as Electron.WebContents;
+  const request = vi.fn(async (_service: string, method: string) =>
+    method === "snapshot"
+      ? { environmentKey: "browser_media", grants: [] }
+      : options.approve
+        ? options.approve()
+        : { decision: "once", granted: true, grants: [] }
+  );
+  const consent = vi.fn(options.consent ?? (async () => true));
+  const controller = new BrowserPermissionController({
+    nativeStorageScope: "media-test",
+    serverClient: { call: request, onDirectEvent: () => () => {} } as never,
+    eventService: { emit: vi.fn() } as never,
+    getViewManager: () =>
+      ({
+        findViewIdByWebContentsId: () => "panel:media",
+        isContentOverlayWebContentsId: () => false,
+        getViewPartition: () =>
+          options.browser
+            ? scopedNativePartition("media-test", "persist:browser-environment:browser_media")
+            : undefined,
+        getViewInfo: () => ({ type: "app", capabilities: options.capabilities ?? [] }),
+      }) as never,
+    isTargetUnderAutomation: () => false,
+    requestDeviceMediaAccess: consent,
+  });
+  const decide = vi.fn();
+  return {
+    controller,
+    contents,
+    events,
+    request,
+    consent,
+    decide,
+    start(permission: "media" | "display-capture", isMainFrame = true) {
+      controller.requestPermission(contents, permission, decide, {
+        requestingUrl: url,
+        securityOrigin: "https://media.example",
+        mediaTypes: ["video"],
+        isMainFrame,
+      } as Electron.MediaAccessPermissionRequest);
+    },
+  };
+}
 
 function controllerHarness(options: { contentOverlay?: boolean } = {}) {
   const url = "https://workspace.test/panel";
@@ -72,6 +134,7 @@ function controllerHarness(options: { contentOverlay?: boolean } = {}) {
     eventService: { emit: () => undefined } as never,
     getViewManager: () => manager as never,
     isTargetUnderAutomation: () => false,
+    requestDeviceMediaAccess: async () => true,
   });
   return {
     controller,
@@ -83,6 +146,67 @@ function controllerHarness(options: { contentOverlay?: boolean } = {}) {
 }
 
 describe("browser permission capability mapping", () => {
+  it("cancels a native OS prompt when the document reloads", async () => {
+    let resolve!: (value: boolean) => void;
+    const harness = mediaHarness({
+      capabilities: ["camera"],
+      consent: () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    });
+    harness.start("media");
+    expect(harness.consent).toHaveBeenCalledOnce();
+    harness.events.emit("did-start-navigation", {}, harness.contents.getURL(), false, true);
+    expect(harness.decide.mock.calls).toEqual([[false]]);
+    resolve(true);
+    await vi.waitFor(() => expect(harness.events.listenerCount("did-start-navigation")).toBe(0));
+    expect(harness.decide.mock.calls).toEqual([[false]]);
+  });
+  it("gets site approval before requesting OS permission and honors OS denial", async () => {
+    let resolve!: (result: unknown) => void;
+    const harness = mediaHarness({
+      browser: true,
+      approve: () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+      consent: async () => false,
+    });
+    await harness.controller.attachBrowserEnvironment();
+    harness.start("media");
+    expect(harness.consent).not.toHaveBeenCalled();
+    resolve({ decision: "once", granted: true, grants: [] });
+    await vi.waitFor(() => expect(harness.decide.mock.calls).toEqual([[false]]));
+    expect(harness.consent).toHaveBeenCalledOnce();
+  });
+  it("requires screen consent even for a declared app and excludes child frames", async () => {
+    const harness = mediaHarness({ capabilities: ["screen-capture"] });
+    harness.start("display-capture", false);
+    expect(harness.decide.mock.calls).toEqual([[false]]);
+    expect(harness.request).not.toHaveBeenCalled();
+    harness.decide.mockClear();
+    harness.start("display-capture");
+    await vi.waitFor(() => expect(harness.decide.mock.calls).toEqual([[true]]));
+    expect(harness.request).toHaveBeenCalledOnce();
+    harness.decide.mockClear();
+    harness.start("display-capture");
+    await vi.waitFor(() => expect(harness.decide.mock.calls).toEqual([[true]]));
+    expect(harness.request).toHaveBeenCalledTimes(2);
+  });
+  it("maps native display capture separately from camera and microphone", () => {
+    expect(
+      capabilitiesForRequest("display-capture", {
+        mediaTypes: ["video", "audio"],
+      } as Electron.MediaAccessPermissionRequest)
+    ).toEqual(["screen-capture"]);
+    expect(
+      capabilitiesForCheck("display-capture", {
+        mediaType: "video",
+      } as Electron.PermissionCheckHandlerHandlerDetails)
+    ).toEqual(["screen-capture"]);
+  });
+
   it("allows local panel clipboard access before browser-data attaches", () => {
     const { controller, contents, url, listener } = controllerHarness();
     const decisions: boolean[] = [];

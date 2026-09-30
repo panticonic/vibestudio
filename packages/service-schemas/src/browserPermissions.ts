@@ -4,6 +4,7 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 export const BrowserPermissionCapabilitySchema = z.enum([
   "camera",
   "microphone",
+  "screen-capture",
   "geolocation",
   "notifications",
   "downloads",
@@ -28,7 +29,10 @@ export const BrowserPermissionGrantSchema = z.object({
 
 export const browserPermissionsMethods = defineServiceMethods({
   snapshot: {
-    website: {"kind":"closed","reason":"Native device permission grants belong to trusted browser chrome."} as const,
+    website: {
+      kind: "closed",
+      reason: "Native device permission grants belong to trusted browser chrome.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -47,7 +51,10 @@ export const browserPermissionsMethods = defineServiceMethods({
     authority: { principals: ["user"] },
   },
   request: {
-    website: {"kind":"closed","reason":"Native device permission grants belong to trusted browser chrome."} as const,
+    website: {
+      kind: "closed",
+      reason: "Native device permission grants belong to trusted browser chrome.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -76,7 +83,10 @@ export const browserPermissionsMethods = defineServiceMethods({
     authority: { principals: ["user"] },
   },
   revoke: {
-    website: {"kind":"closed","reason":"Native device permission grants belong to trusted browser chrome."} as const,
+    website: {
+      kind: "closed",
+      reason: "Native device permission grants belong to trusted browser chrome.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

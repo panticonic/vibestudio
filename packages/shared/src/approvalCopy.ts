@@ -881,10 +881,18 @@ export function getApprovalCopy(approval: PendingApproval): {
 }
 
 function getBrowserPermissionCopy(approval: PendingBrowserPermissionApproval) {
+  if (approval.capabilities.includes("screen-capture")) {
+    return {
+      title: `Allow screen capture on ${approval.origin}?`,
+      summary: "Allow one capture request. Standard screen sharing opens a source picker next.",
+      warning:
+        "This grants display-capture access, including the entire desktop and system audio if requested. Electron's older capture API can choose a source without the picker. Permission is never remembered. Close the page to end all capture.",
+    };
+  }
   const capabilities = approval.capabilities.join(" and ");
   return {
     title: `Allow ${capabilities} on ${approval.origin}?`,
-    summary: `${approval.origin} wants to use ${capabilities} on ${approval.deviceLabel}.`,
+    summary: `${approval.origin} wants to use your ${capabilities}.`,
   };
 }
 

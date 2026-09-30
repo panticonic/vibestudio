@@ -179,6 +179,7 @@ export const APP_CAPABILITY_CATALOG = {
   "window-management": { targets: ["electron"], nativeHosts: ["electron"] },
   camera: { targets: ["electron", "react-native"] },
   microphone: { targets: ["electron"] },
+  "screen-capture": { targets: ["electron"] },
   location: { targets: ["electron"] },
   "panel-hosting": {
     targets: ["electron", "react-native"],
