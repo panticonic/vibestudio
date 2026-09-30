@@ -407,3 +407,109 @@ diff --git a/ReactCommon/react/renderer/componentregistry/ComponentDescriptorReg
    _registryByHandle[componentDescriptorProvider.handle] =
        sharedComponentDescriptor;
    _registryByName[componentDescriptorProvider.name] = sharedComponentDescriptor;
+diff --git a/React/Fabric/Surface/RCTFabricSurface.mm b/React/Fabric/Surface/RCTFabricSurface.mm
+--- a/React/Fabric/Surface/RCTFabricSurface.mm
++++ b/React/Fabric/Surface/RCTFabricSurface.mm
+@@ -41,6 +41,12 @@
+   // To make the API easy to use, we check the status of the surface before calling `start` or `stop`,
+   // and we need this mutex to prevent races.
+   std::mutex _surfaceMutex;
++  // A queued start is an owned lifecycle transition, even while the C++
++  // handler is still Registered. Stop/reset cancel that transition.
++  uint64_t _startGeneration;
++  bool _startPending;
++  RCTSurfaceView *_Nullable _startingView;
++  RCTSurfacePresenter *_Nullable _startingPresenter;
+ 
+   // Can be accessed from the main thread only.
+   RCTSurfaceView *_Nullable _view;
+@@ -77,6 +83,8 @@
+ 
+ - (void)resetWithSurfacePresenter:(RCTSurfacePresenter *)surfacePresenter
+ {
++  [self stop];
++  std::lock_guard<std::mutex> lock(_surfaceMutex);
+   _view = nil;
+   _surfacePresenter = surfacePresenter;
+   [_surfacePresenter registerSurface:self];
+@@ -92,21 +100,31 @@
+ - (void)start
+ {
+   std::lock_guard<std::mutex> lock(_surfaceMutex);
+-
+-  if (_surfaceHandler->getStatus() != SurfaceHandler::Status::Registered) {
++  if (_startPending || _surfaceHandler->getStatus() != SurfaceHandler::Status::Registered) {
+     return;
+   }
+-
+-  // We need to register a root view component here synchronously because right after
+-  // we start a surface, it can initiate an update that can query the root component.
++  _startPending = true;
++  const auto generation = ++_startGeneration;
++  RCTSurfacePresenter *presenter = _surfacePresenter;
++
+   RCTExecuteOnMainQueue(^{
+-    [self->_surfacePresenter.mountingManager attachSurfaceToView:self.view
+-                                                       surfaceId:self->_surfaceHandler->getSurfaceId()];
++    {
++      std::lock_guard<std::mutex> lock(self->_surfaceMutex);
++      if (!self->_startPending || generation != self->_startGeneration) return;
++      self->_startingView = self.view;
++      self->_startingPresenter = presenter;
++      [presenter.mountingManager attachSurfaceToView:self->_startingView
++                                          surfaceId:self->_surfaceHandler->getSurfaceId()];
++    }
+     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
++      std::lock_guard<std::mutex> lock(self->_surfaceMutex);
++      if (!self->_startPending || generation != self->_startGeneration) return;
+       self->_surfaceHandler->start();
++      self->_startPending = false;
++      self->_startingView = nil;
++      self->_startingPresenter = nil;
+       [self _propagateStageChange];
+-
+-      [self->_surfacePresenter setupAnimationDriverWithSurfaceHandler:*self->_surfaceHandler];
++      [presenter setupAnimationDriverWithSurfaceHandler:*self->_surfaceHandler];
+     });
+   });
+ }
+@@ -114,18 +132,27 @@
+ - (void)stop
+ {
+   std::lock_guard<std::mutex> lock(_surfaceMutex);
+-
+-  if (_surfaceHandler->getStatus() != SurfaceHandler::Status::Running) {
+-    return;
+-  }
+-
+-  _surfaceHandler->stop();
+-  [self _propagateStageChange];
+-
+-  RCTExecuteOnMainQueue(^{
+-    [self->_surfacePresenter.mountingManager detachSurfaceFromView:self.view
+-                                                         surfaceId:self->_surfaceHandler->getSurfaceId()];
+-  });
++  ++_startGeneration;
++  RCTSurfaceView *view = _startingView;
++  RCTSurfacePresenter *presenter = _startingPresenter;
++  _startPending = false;
++  _startingView = nil;
++  _startingPresenter = nil;
++
++  if (_surfaceHandler->getStatus() == SurfaceHandler::Status::Running) {
++    _surfaceHandler->stop();
++    [self _propagateStageChange];
++    view = _view;
++    presenter = _surfacePresenter;
++  }
++  // Capture the attachment owner. A later reset must never detach the new
++  // presenter's view, and this queued detach precedes any subsequent start.
++  if (view) {
++    const auto surfaceId = _surfaceHandler->getSurfaceId();
++    RCTExecuteOnMainQueue(^{
++      [presenter.mountingManager detachSurfaceFromView:view surfaceId:surfaceId];
++    });
++  }
+ }
+ 
+ #pragma mark - Immutable Properties (no need to enforce synchronization)
