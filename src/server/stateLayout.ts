@@ -36,6 +36,7 @@ export function stateLayout(statePath: string) {
     refsDir: path.join(statePath, "refs"),
     blobsDir: path.join(statePath, "blobs"),
     buildSourcesDir: path.join(statePath, "build-sources"),
+    buildProviderInputsDir: path.join(statePath, "build-provider-inputs"),
     executionRetention: {
       root: path.join(statePath, "execution-retention"),
       publicationsDb: path.join(statePath, "execution-retention", "publications.db"),

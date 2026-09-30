@@ -13,6 +13,7 @@ import {
 } from "@vibestudio/process-adapter";
 import { createFsDiskPort } from "./services/fsDiskPort.js";
 import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import { stateLayout } from "./stateLayout.js";
 
 /** Installed owner of a workspace's single native domain. The containing state
  * directory is an ownership anchor, never itself a guest resource grant. */
@@ -42,6 +43,7 @@ export async function startNativeWorkspaceRuntime(input: {
   const scratchRoot = ownedPath(input.scratchRoot);
   const sourceRoot = ownedPath(input.sourceRoot);
   const buildsRoot = ownedPath(input.buildsRoot);
+  const providerInputsRoot = ownedPath(stateLayout(input.statePath).buildProviderInputsDir);
   const incarnation = randomUUID();
   const runtimeRoot = path.join(privateRoot, "native-runtime", incarnation);
   const home = path.join(privateRoot, "scratch", "home");
@@ -52,6 +54,7 @@ export async function startNativeWorkspaceRuntime(input: {
     sourceRoot,
     scratchRoot,
     buildsRoot,
+    providerInputsRoot,
     extensionStorage,
   ]) {
     await mkdir(directory, { recursive: true });
@@ -112,7 +115,7 @@ export async function startNativeWorkspaceRuntime(input: {
         LANG: "C.UTF-8",
         ...runtime.environment,
       },
-      read: [...runtime.readPaths, sourceRoot, buildsRoot],
+      read: [...runtime.readPaths, sourceRoot, buildsRoot, providerInputsRoot],
       // These are owner-selected anchors, never the destinations of guest links.
       // Unix MXC enforces these grants; Windows uses normal host permissions.
       write: [home, scratchRoot, extensionStorage],

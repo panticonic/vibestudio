@@ -87,6 +87,7 @@ import { resolveBuildProvider } from "./buildProviderRegistry.js";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
+import { stateLayout } from "../stateLayout.js";
 import { getUserDataPath } from "@vibestudio/env-paths";
 import type {
   BuildProvider,
@@ -4088,7 +4089,7 @@ async function buildApp(
       const worker = _immutableTreeWorker;
       if (!worker) throw new Error("builder is not initialized");
       resources = await prepareBuildProviderResources({
-        buildsRoot: path.join(getUserDataPath(), "builds"),
+        inputsRoot: stateLayout(getUserDataPath()).buildProviderInputsDir,
         sourceRoot,
         input,
         materialize: (source, destination) => worker.materialize(source, destination),
