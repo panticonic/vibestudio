@@ -377,7 +377,9 @@ RCT_EXPORT_METHOD(assetStoreLookup:(NSDictionary *)assetNamespace
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    resolve([self lookupStoredAsset:assetNamespace key:key]);
+    // A promise resolved with nil has no argument and becomes JS undefined.
+    // A cache miss is explicitly null in the shared native store contract.
+    resolve([self lookupStoredAsset:assetNamespace key:key] ?: NSNull.null);
   } @catch (NSException *exception) {
     reject(@"asset_store_lookup_failed", exception.reason, nil);
   }
@@ -815,7 +817,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
     self.browserImportPickerResolve = nil;
     self.browserImportPickerReject = nil;
   }
-  if (resolve != nil) resolve(value);
+  if (resolve != nil) resolve(value ?: NSNull.null);
 }
 
 - (void)rejectBrowserImportPicker:(NSString *)code message:(NSString *)message
