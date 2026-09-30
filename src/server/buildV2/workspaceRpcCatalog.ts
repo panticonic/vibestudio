@@ -12,7 +12,7 @@ import * as path from "path";
 import * as ts from "typescript/unstable/ast";
 import type { AuthorityRequirement } from "@vibestudio/rpc";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
-import { BuildDiagnosticsError } from "./diagnostics.js";
+import { BuildDiagnosticsError, type BuildDiagnostic } from "./diagnostics.js";
 
 /** A malformed authored declaration, distinct from parser/IO failures. */
 class WorkspaceRpcDeclarationError extends Error {}
@@ -362,6 +362,7 @@ export function collectWorkspaceRpcCatalog(
 ): WorkspaceRpcMethodDoc[] {
   const absoluteWorkerSourcePath = path.resolve(workerSourcePath);
   const methods: WorkspaceRpcMethodDoc[] = [];
+  const diagnostics: BuildDiagnostic[] = [];
   const files = sourceFiles(absoluteWorkerSourcePath);
   const sources = files.map((file) => ({ fileName: file, content: fs.readFileSync(file, "utf8") }));
   usingTypeScriptProject(sources, (project) => {
@@ -382,6 +383,27 @@ export function collectWorkspaceRpcCatalog(
             let effect: WorkspaceRpcMethodDoc["effect"];
             let execution: WorkspaceRpcMethodDoc["execution"];
             let handleProduction: { capability: string } | undefined;
+            const collectDeclaration = <T>(
+              read: () => T,
+              suggestion?: string
+            ): { value: T } | null => {
+              try {
+                return { value: read() };
+              } catch (error) {
+                if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
+                const position = source.getLineAndCharacterOfPosition(member.getStart(source));
+                diagnostics.push({
+                  source: "schema",
+                  severity: "error",
+                  file,
+                  line: position.line + 1,
+                  column: position.character + 1,
+                  message: error.message,
+                  ...(suggestion ? { suggestion } : {}),
+                });
+                return null;
+              }
+            };
             try {
               if (decorator.kind === "schemaRpc") {
                 const schema = input.rpcSchemas?.[node.name.text]?.[name];
@@ -412,10 +434,25 @@ export function collectWorkspaceRpcCatalog(
                 effect = schema.directEffect;
                 execution = schema.execution;
               } else {
-                website = websitePolicyOf(decorator.call, label);
-                access = accessOf(decorator.call);
-                effect = effectOf(decorator.call, label);
-                handleProduction = handleProductionOf(decorator.call, label);
+                // These fields are independent. Diagnose each, but never publish
+                // a partial method contract or infer an exposure/effect decision.
+                const websiteResult = collectDeclaration(
+                  () => websitePolicyOf(decorator.call, label),
+                  'Declare a literal website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.'
+                );
+                const accessResult = collectDeclaration(() => accessOf(decorator.call));
+                const effectResult = collectDeclaration(
+                  () => effectOf(decorator.call, label),
+                  'Declare a literal effect: { kind: "open" } for a method with no protected effect, or { kind: "userland-capability", capability: "...", resource: ... } matching authority.provides. This does not replace service-target authorization; see skills/workspace-dev/WORKERS.md.'
+                );
+                const handleResult = collectDeclaration(() =>
+                  handleProductionOf(decorator.call, label)
+                );
+                if (!websiteResult || !accessResult || !effectResult || !handleResult) continue;
+                website = websiteResult.value;
+                access = accessResult.value;
+                effect = effectResult.value;
+                handleProduction = handleResult.value;
               }
               methods.push({
                 website,
@@ -434,16 +471,14 @@ export function collectWorkspaceRpcCatalog(
             } catch (error) {
               if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
               const position = source.getLineAndCharacterOfPosition(member.getStart(source));
-              throw new BuildDiagnosticsError(error.message, [
-                {
-                  source: "schema",
-                  severity: "error",
-                  file,
-                  line: position.line + 1,
-                  column: position.character + 1,
-                  message: error.message,
-                },
-              ]);
+              diagnostics.push({
+                source: "schema",
+                severity: "error",
+                file,
+                line: position.line + 1,
+                column: position.character + 1,
+                message: error.message,
+              });
             }
           }
         }
@@ -467,6 +502,12 @@ export function collectWorkspaceRpcCatalog(
       }
     }
   });
+  if (diagnostics.length > 0) {
+    throw new BuildDiagnosticsError(
+      `${diagnostics[0]!.message}${diagnostics.length > 1 ? `; ${diagnostics.length - 1} additional declaration errors` : ""}`,
+      diagnostics
+    );
+  }
   const sorted = methods.sort(
     (a, b) => a.className.localeCompare(b.className) || a.name.localeCompare(b.name)
   );

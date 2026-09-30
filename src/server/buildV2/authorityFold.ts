@@ -367,7 +367,11 @@ export async function authorityDiagnosticsForProgram(input: {
       const result = await input.environment!.resolveService(query);
       if (result.kind === "missing") {
         if (declaration.availability === "required") {
-          addDiagnostic(fact, `Required workspace service protocol '${query}' is unavailable.`);
+          addDiagnostic(
+            fact,
+            `Required workspace service protocol '${query}' is unavailable.`,
+            "The exact candidate has no service exposing this protocol. Inspect workers.listServices() in this context and use an advertised protocol, or declare the intended provider and protocols through workspace_service in meta/vibestudio.yml. A consumer serviceRequests entry does not register a provider."
+          );
         }
       } else if (result.kind === "inaccessible") {
         addDiagnostic(

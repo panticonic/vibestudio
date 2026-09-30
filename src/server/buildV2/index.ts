@@ -2000,15 +2000,19 @@ export async function initBuildSystemV2(
     const diagnostics: BuildDiagnostic[] = [];
     const diagnosticIndex = new Map<string, number>();
     const builds: UnitBuildTarget[] = outcomes.map(({ target }) => {
-      const diagnosticIndexes = target.diagnostics.map((diagnostic) => {
-        const key = JSON.stringify(diagnostic);
-        const existing = diagnosticIndex.get(key);
-        if (existing !== undefined) return existing;
-        const index = diagnostics.length;
-        diagnostics.push(diagnostic);
-        diagnosticIndex.set(key, index);
-        return index;
-      });
+      const diagnosticIndexes = [
+        ...new Set(
+          target.diagnostics.map((diagnostic) => {
+            const key = JSON.stringify(diagnostic);
+            const existing = diagnosticIndex.get(key);
+            if (existing !== undefined) return existing;
+            const index = diagnostics.length;
+            diagnostics.push(diagnostic);
+            diagnosticIndex.set(key, index);
+            return index;
+          })
+        ),
+      ];
       return {
         target: target.target,
         ...(target.exportPath ? { exportPath: target.exportPath } : {}),

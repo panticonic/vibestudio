@@ -203,7 +203,9 @@ export function parseWorkspaceServiceProtocolRequests(
   const requests = value.map((entry, index) => {
     const entryLabel = `${label}.serviceRequests[${index}]`;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`${entryLabel} must be an object`);
+      throw new Error(
+        `${entryLabel} must be an object with protocol and availability, for example { "protocol": "example.notes.v1", "availability": "required" }; availability must be "required" or "optional"`
+      );
     }
     const candidate = entry as Record<string, unknown>;
     rejectUnknownFields(candidate, ["protocol", "availability"], entryLabel);

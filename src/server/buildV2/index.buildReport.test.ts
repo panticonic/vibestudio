@@ -647,6 +647,26 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(report.builds.every((build) => build.diagnosticIndexes[0] === 0)).toBe(true);
   });
 
+  it("references a repeated diagnostic only once within each build target", async () => {
+    typecheckDiagnostics = (unitRelativePath) => {
+      const diagnostic = {
+        source: "authority" as const,
+        severity: "error" as const,
+        file: `${unitRelativePath}/index.ts`,
+        line: 1,
+        column: 1,
+        message: "one source defect",
+      };
+      return [diagnostic, diagnostic];
+    };
+    env = await loadWithMocks();
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.diagnostics).toHaveLength(1);
+    expect(report.builds.every((build) => JSON.stringify(build.diagnosticIndexes) === "[0]")).toBe(
+      true
+    );
+  });
+
   it("includes authority errors in the same report consumed by protected-main validation", async () => {
     typecheckDiagnostics = (unitRelativePath) => [
       {

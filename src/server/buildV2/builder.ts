@@ -2106,9 +2106,27 @@ function authorityFromMaterializedSource(
     vibestudio?: { authority?: unknown };
   };
   const authority = packageJson.vibestudio?.authority;
-  return authority === undefined
-    ? EMPTY_UNIT_AUTHORITY
-    : parseUnitAuthorityManifest(authority, `${node.name} vibestudio.authority`);
+  if (authority === undefined) return EMPTY_UNIT_AUTHORITY;
+  try {
+    return parseUnitAuthorityManifest(
+      authority,
+      `${node.relativePath}/package.json vibestudio.authority`
+    );
+  } catch (error) {
+    // Bundling and source validation report the same authored defect under
+    // one canonical identity, not a second anonymous esbuild error.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new BuildDiagnosticsError(message, [
+      {
+        source: "authority",
+        severity: "error",
+        file: `${node.relativePath}/package.json`,
+        line: 1,
+        column: 1,
+        message,
+      },
+    ]);
+  }
 }
 
 async function doBuild(

@@ -252,6 +252,52 @@ describe("buildUnit framework-agnostic panel builds", () => {
     );
   });
 
+  it("reports malformed authority at the manifest rather than as an anonymous bundler failure", async () => {
+    scaffoldStubPackages();
+    const panelDir = path.join(workspaceRoot, "panels", "broken-authority");
+    writeJson(path.join(panelDir, "package.json"), {
+      name: "@workspace-panels/broken-authority",
+      version: "0.1.0",
+      type: "module",
+      vibestudio: {
+        entry: "index.ts",
+        authority: { requests: [], provides: [], serviceRequests: ["notes.v1"] },
+      },
+    });
+    fs.writeFileSync(path.join(panelDir, "index.ts"), "export {};\n");
+    commit(panelDir, "malformed authority");
+    const graph = discoverPackageGraph(workspaceRoot);
+    let caught: unknown;
+    try {
+      await buildUnit(
+        graph.get("@workspace-panels/broken-authority"),
+        "f".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    expect((caught as BuildDiagnosticsError).diagnostics).toEqual([
+      expect.objectContaining({
+        source: "authority",
+        file: "panels/broken-authority/package.json",
+        line: 1,
+        column: 1,
+        message: expect.stringContaining("protocol and availability"),
+      }),
+    ]);
+    expect(
+      diagnosticsFromError(caught, {
+        workspaceRoot,
+        sourceRoot: workspaceRoot,
+        unitRelativePath: "panels/broken-authority",
+      })
+    ).toEqual((caught as BuildDiagnosticsError).diagnostics);
+  });
+
   it("builds a vanilla panel: framework=vanilla, no framework runtime, no mount helper", async () => {
     scaffoldStubPackages();
 
