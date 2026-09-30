@@ -55,6 +55,15 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "44396DC49C14429511BA8E99"
+               BuildableName = "VibestudioNativeTests.xctest"
+               BlueprintName = "VibestudioNativeTests"
+               ReferencedContainer = "container:Vibestudio.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

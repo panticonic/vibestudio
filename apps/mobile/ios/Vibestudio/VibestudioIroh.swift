@@ -4,11 +4,12 @@ import React
 import Security
 
 @objc(VibestudioIroh)
-final class VibestudioIroh: NSObject, RCTBridgeModule {
+final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   static func moduleName() -> String! { "VibestudioIroh" }
   static func requiresMainQueueSetup() -> Bool { false }
 
   private let lock = NSLock()
+  private var active = true
   private var endpoints: [String: Endpoint] = [:]
   private var endpointIdentities: [String: String] = [:]
   private var connections: [String: Connection] = [:]
@@ -16,6 +17,39 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
   private var receives: [String: RecvStream] = [:]
   private var sendConnections: [String: String] = [:]
   private var receiveConnections: [String: String] = [:]
+
+  @objc func invalidate() {
+    lock.lock()
+    guard active else { lock.unlock(); return }
+    active = false
+    let ownedEndpoints = Array(endpoints.values)
+    let ownedConnections = Array(connections.values)
+    endpoints.removeAll()
+    endpointIdentities.removeAll()
+    connections.removeAll()
+    sends.removeAll()
+    receives.removeAll()
+    sendConnections.removeAll()
+    receiveConnections.removeAll()
+    lock.unlock()
+
+    for connection in ownedConnections {
+      do { try connection.close(errorCode: 0, reason: Data()) }
+      catch { NSLog("[VibestudioIroh] Runtime connection retirement failed: %@", error.localizedDescription) }
+    }
+    // React Native's invalidation hook is synchronous. Close the detached
+    // endpoints without retaining this module, waking its pending native reads.
+    Task {
+      for endpoint in ownedEndpoints {
+        do { try await endpoint.close() }
+        catch { NSLog("[VibestudioIroh] Runtime endpoint retirement failed: %@", error.localizedDescription) }
+      }
+    }
+  }
+
+  private var isActive: Bool {
+    lock.lock(); defer { lock.unlock() }; return active
+  }
 
   @objc func createIdentity(_ resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
@@ -53,7 +87,10 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
         relayMode: try RelayMode.customFromUrls(urls: relays),
         protocols: nil
       ))
-      let handle = self.putEndpoint(endpoint, identityId: identityId)
+      guard let handle = self.putEndpoint(endpoint, identityId: identityId) else {
+        try await endpoint.close()
+        throw BridgeError.runtimeInvalidated
+      }
       return ["endpointHandle": handle, "endpointId": endpoint.id().description]
     }
   }
@@ -104,7 +141,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
                     rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
       let connection = try self.requireConnection(handle)
-      return self.streamResult(try await connection.openBi(), connectionHandle: handle)
+      return try await self.streamResult(try await connection.openBi(), connectionHandle: handle)
     }
   }
 
@@ -113,7 +150,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
                       rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
       let connection = try self.requireConnection(handle)
-      return self.streamResult(try await connection.acceptBi(), connectionHandle: handle)
+      return try await self.streamResult(try await connection.acceptBi(), connectionHandle: handle)
     }
   }
 
@@ -222,19 +259,29 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
     // native clients aligned with the Node transport.
     try connection.setMaxConcurrentBiStreams(count: 32_768)
     try connection.setMaxConcurrentUniStreams(count: 0)
-    let handle = putConnection(connection)
+    guard let handle = putConnection(connection) else {
+      try connection.close(errorCode: 0, reason: Data())
+      throw BridgeError.runtimeInvalidated
+    }
     return ["connectionHandle": handle, "peerEndpointId": connection.remoteId().description]
   }
 
-  private func streamResult(_ stream: BiStream, connectionHandle: String) -> [String: String] {
+  private func streamResult(_ stream: BiStream, connectionHandle: String) async throws -> [String: String] {
+    if let result = putStreams(stream, connectionHandle: connectionHandle) { return result }
+    try await stream.send().reset(errorCode: 0)
+    try await stream.recv().stop(errorCode: 0)
+    throw BridgeError.runtimeInvalidated
+  }
+
+  private func putStreams(_ stream: BiStream, connectionHandle: String) -> [String: String]? {
+    lock.lock(); defer { lock.unlock() }
+    guard active && connections[connectionHandle] != nil else { return nil }
     let sendHandle = UUID().uuidString
     let receiveHandle = UUID().uuidString
-    lock.lock()
     sends[sendHandle] = stream.send()
     receives[receiveHandle] = stream.recv()
     sendConnections[sendHandle] = connectionHandle
     receiveConnections[receiveHandle] = connectionHandle
-    lock.unlock()
     return ["sendHandle": sendHandle, "receiveHandle": receiveHandle]
   }
 
@@ -242,18 +289,25 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
                        _ reject: @escaping RCTPromiseRejectBlock,
                        operation: @escaping () async throws -> Any?) {
     Task {
-      do { resolve(try await operation()) }
+      do {
+        guard self.isActive else { throw BridgeError.runtimeInvalidated }
+        let result = try await operation()
+        guard self.isActive else { throw BridgeError.runtimeInvalidated }
+        resolve(result)
+      }
       catch { reject("IROH_NATIVE", error.localizedDescription, error) }
     }
   }
 
-  private func putEndpoint(_ value: Endpoint, identityId: String) -> String {
+  private func putEndpoint(_ value: Endpoint, identityId: String) -> String? {
     lock.lock(); defer { lock.unlock() }
+    guard active else { return nil }
     let handle = UUID().uuidString
     endpoints[handle] = value; endpointIdentities[handle] = identityId; return handle
   }
-  private func putConnection(_ value: Connection) -> String {
+  private func putConnection(_ value: Connection) -> String? {
     lock.lock(); defer { lock.unlock() }
+    guard active else { return nil }
     let handle = UUID().uuidString; connections[handle] = value; return handle
   }
   private func removeEndpoint(_ handle: String) -> Endpoint? {
@@ -345,7 +399,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
   }
 
   private enum BridgeError: LocalizedError {
-    case unknownHandle(String), invalidBase64, invalidCode, invalidRead, boundIdentity, keychain(OSStatus)
+    case unknownHandle(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, keychain(OSStatus)
     var errorDescription: String? {
       switch self {
       case .unknownHandle(let kind): return "Unknown Iroh \(kind) handle"
@@ -353,6 +407,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
       case .invalidCode: return "Invalid Iroh application error code"
       case .invalidRead: return "Invalid bounded stream read size"
       case .boundIdentity: return "Cannot delete an identity while its endpoint is bound"
+      case .runtimeInvalidated: return "Iroh runtime has been invalidated"
       case .keychain(let status): return "Iroh Keychain operation failed (\(status))"
       }
     }

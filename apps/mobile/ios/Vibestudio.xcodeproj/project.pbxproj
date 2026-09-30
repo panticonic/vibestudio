@@ -10,6 +10,7 @@
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
+		2B4FB40812C923238E33C2D7 /* libPods-VibestudioNativeTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C2B267C53FA4641B11153FE0 /* libPods-VibestudioNativeTests.a */; };
 		49C3B00603EF2A7004D60F67 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 81DAF94820BF1298E1DB1679 /* PrivacyInfo.xcprivacy */; };
 		4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41002C00000000000001 /* VibestudioMobileHost.mm */; };
 		4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41042C00000000000004 /* VibestudioAuthSession.mm */; };
@@ -20,16 +21,31 @@
 		4E2D41312C00000000000031 /* SceneDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41302C00000000000030 /* SceneDelegate.mm */; };
 		4E2D41912C00000000000091 /* WorkspaceWebView.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41902C00000000000090 /* WorkspaceWebView.mm */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		8842CEFC17EA131AAF5A80FF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 355339792E1742A792F94B57 /* Foundation.framework */; };
 		A6ECDDC64AFC15204A0494DE /* libPods-Vibestudio.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C4A2F31B2E8ADA33A2CE1F63 /* libPods-Vibestudio.a */; };
+		CB7F31E265E868666463563C /* IrohLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		12B572F7FA516BF0C2169A09 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 13B07F861A680F5B00A75B9A;
+			remoteInfo = Vibestudio;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		018D02648088E91B104DE5D9 /* Pods-VibestudioNativeTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-VibestudioNativeTests.release.xcconfig"; path = "Target Support Files/Pods-VibestudioNativeTests/Pods-VibestudioNativeTests.release.xcconfig"; sourceTree = "<group>"; };
+		12441CA410A96485AAB3DD93 /* VibestudioNativeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VibestudioNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07F961A680F5B00A75B9A /* Vibestudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vibestudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FAF1A68108700A75B9A /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = Vibestudio/AppDelegate.h; sourceTree = "<group>"; };
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = Vibestudio/AppDelegate.mm; sourceTree = "<group>"; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Vibestudio/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Vibestudio/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = Vibestudio/main.m; sourceTree = "<group>"; };
+		355339792E1742A792F94B57 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		3B4392A12AC88292D0FDA485 /* Pods-Vibestudio.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Vibestudio.debug.xcconfig"; path = "Target Support Files/Pods-Vibestudio/Pods-Vibestudio.debug.xcconfig"; sourceTree = "<group>"; };
 		4E2D41002C00000000000001 /* VibestudioMobileHost.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioMobileHost.mm; path = Vibestudio/VibestudioMobileHost.mm; sourceTree = "<group>"; };
 		4E2D41042C00000000000004 /* VibestudioAuthSession.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioAuthSession.mm; path = Vibestudio/VibestudioAuthSession.mm; sourceTree = "<group>"; };
@@ -44,7 +60,10 @@
 		5709B34CF0A7D63546082F79 /* Pods-Vibestudio.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Vibestudio.release.xcconfig"; path = "Target Support Files/Pods-Vibestudio/Pods-Vibestudio.release.xcconfig"; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = Vibestudio/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		81DAF94820BF1298E1DB1679 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Vibestudio/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C2B267C53FA4641B11153FE0 /* libPods-VibestudioNativeTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-VibestudioNativeTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C4A2F31B2E8ADA33A2CE1F63 /* libPods-Vibestudio.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Vibestudio.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F030A21C8F7393D43D37E285 /* Pods-VibestudioNativeTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-VibestudioNativeTests.debug.xcconfig"; path = "Target Support Files/Pods-VibestudioNativeTests/Pods-VibestudioNativeTests.debug.xcconfig"; sourceTree = "<group>"; };
+		FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IrohLifecycleTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +74,15 @@
 				4E2D41212C00000000000021 /* AuthenticationServices.framework in Frameworks */,
 				4E2D41152C00000000000015 /* IrohLib in Frameworks */,
 				A6ECDDC64AFC15204A0494DE /* libPods-Vibestudio.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4D07DD90082F120EB1F11AD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8842CEFC17EA131AAF5A80FF /* Foundation.framework in Frameworks */,
+				2B4FB40812C923238E33C2D7 /* libPods-VibestudioNativeTests.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,8 +115,19 @@
 			children = (
 				4E2D41202C00000000000020 /* AuthenticationServices.framework */,
 				C4A2F31B2E8ADA33A2CE1F63 /* libPods-Vibestudio.a */,
+				A9F9BDAA29B23137E528F1EF /* iOS */,
+				C2B267C53FA4641B11153FE0 /* libPods-VibestudioNativeTests.a */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		559D66242E2602DBFE680ABB /* VibestudioNativeTests */ = {
+			isa = PBXGroup;
+			children = (
+				FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */,
+			);
+			name = VibestudioNativeTests;
+			path = VibestudioNativeTests;
 			sourceTree = "<group>";
 		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
@@ -108,6 +147,7 @@
 				4E2D41072C00000000000007 /* Vibestudio.Release.xcconfig */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
+				559D66242E2602DBFE680ABB /* VibestudioNativeTests */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -118,8 +158,17 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* Vibestudio.app */,
+				12441CA410A96485AAB3DD93 /* VibestudioNativeTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A9F9BDAA29B23137E528F1EF /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				355339792E1742A792F94B57 /* Foundation.framework */,
+			);
+			name = iOS;
 			sourceTree = "<group>";
 		};
 		BBD78D7AC51CEA395F1C20DB /* Pods */ = {
@@ -127,6 +176,8 @@
 			children = (
 				3B4392A12AC88292D0FDA485 /* Pods-Vibestudio.debug.xcconfig */,
 				5709B34CF0A7D63546082F79 /* Pods-Vibestudio.release.xcconfig */,
+				018D02648088E91B104DE5D9 /* Pods-VibestudioNativeTests.release.xcconfig */,
+				F030A21C8F7393D43D37E285 /* Pods-VibestudioNativeTests.debug.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -159,6 +210,25 @@
 			productReference = 13B07F961A680F5B00A75B9A /* Vibestudio.app */;
 			productType = "com.apple.product-type.application";
 		};
+		44396DC49C14429511BA8E99 /* VibestudioNativeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8C3C74B422C1FAF2E77CA6B5 /* Build configuration list for PBXNativeTarget "VibestudioNativeTests" */;
+			buildPhases = (
+				E962D5D42331BE73145D0158 /* [CP] Check Pods Manifest.lock */,
+				553CC42A0E048C4589960522 /* Sources */,
+				4D07DD90082F120EB1F11AD8 /* Frameworks */,
+				0455D32538CE786E0942CC0B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DDC8C90FE7B3C6E25D81546C /* PBXTargetDependency */,
+			);
+			name = VibestudioNativeTests;
+			productName = VibestudioNativeTests;
+			productReference = 12441CA410A96485AAB3DD93 /* VibestudioNativeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -189,11 +259,19 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* Vibestudio */,
+				44396DC49C14429511BA8E99 /* VibestudioNativeTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		0455D32538CE786E0942CC0B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		13B07F8E1A680F5B00A75B9A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -292,6 +370,28 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Vibestudio/Pods-Vibestudio-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		E962D5D42331BE73145D0158 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-VibestudioNativeTests-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -310,9 +410,43 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		553CC42A0E048C4589960522 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CB7F31E265E868666463563C /* IrohLifecycleTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		DDC8C90FE7B3C6E25D81546C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Vibestudio;
+			target = 13B07F861A680F5B00A75B9A /* Vibestudio */;
+			targetProxy = 12B572F7FA516BF0C2169A09 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		0C30935EA083B45B76546D4E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = F030A21C8F7393D43D37E285 /* Pods-VibestudioNativeTests.debug.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.vibestudio.mobile.native-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vibestudio.app/Vibestudio";
+			};
+			name = Debug;
+		};
 		13B07F941A680F5B00A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 4E2D41062C00000000000006 /* Vibestudio.Debug.xcconfig */;
@@ -370,6 +504,24 @@
 				PRODUCT_NAME = Vibestudio;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		15D77075177FE9CBF54949A9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 018D02648088E91B104DE5D9 /* Pods-VibestudioNativeTests.release.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.vibestudio.mobile.native-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vibestudio.app/Vibestudio";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -550,6 +702,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8C3C74B422C1FAF2E77CA6B5 /* Build configuration list for PBXNativeTarget "VibestudioNativeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				15D77075177FE9CBF54949A9 /* Release */,
+				0C30935EA083B45B76546D4E /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
