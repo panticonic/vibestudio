@@ -406,9 +406,9 @@ test.describe("Multi-column panel layout", () => {
       }
       const panel1 = readiness.panelId;
 
-      // Exercise the application's default desktop width. With the 232px tree,
-      // the remaining viewport fits two 460px columns and their divider.
-      await setWindowSize(testApp, 1200, 800);
+      // Exercise a desktop width where, with the 232px tree, two 575px columns
+      // and their divider fit in the remaining viewport.
+      await setWindowSize(testApp, 1400, 800);
 
       let wcId = 0;
       await expect
