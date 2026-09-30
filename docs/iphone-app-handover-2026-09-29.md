@@ -1,14 +1,15 @@
 # iPhone app handover — 2026-09-29
 
-**Current status (2026-09-30):** Signed Release/Debug simulator installation,
-bootstrap pairing, explicit System trust approval, streamed bundle activation,
-and saved-credential reconnection have run on the isolated iPhone. Computer Use
-works with the screen awake. Approval-row identity, simulator log selection,
-scene status-bar ownership, WebView URL routing, and provider-input storage fixes
-are committed and pushed. The registry lock inversion repair is published as
-`7ea12683d`; all nine native tests passed after recovering the simulator from
-the machine restart. Interactive workspace acceptance is still incomplete. Physical-device and distribution accounts remain unavailable. Read the
-latest checkpoint below; earlier sections are historical.
+**Current status (2026-09-30):** Release/Debug simulator installation, pairing,
+System approval, streamed mobile activation, real workspace panel rendering,
+navigation, message submission, model output, and server restart recovery have
+been exercised on the isolated iPhone. Computer Use works with the screen awake.
+Native nullable-value and WebView script/message ownership repairs are published;
+11 native tests passed together and the two new WebKit regressions passed in a
+focused run. System modal orientation and native keyboard viewport fixes are
+pushed; live verification of their refreshed bundle is in progress. Physical
+hardware and distribution accounts remain unavailable. Read the latest checkpoint
+below; earlier sections are historical.
 
 ## Original stopping point: 2026-09-29
 
@@ -506,7 +507,6 @@ rebind again returned `cgWindowNotFound`, and the inventory listed running apps
 without accessible windows. The cause is not established; do not claim that
 Accessibility permissions were absent or that source work was blocked by it.
 
-
 ### Expanded native resource coverage and CI verification
 
 Published in `5a65b5fca` (native resource ownership) and `707577a17` (CI).
@@ -551,7 +551,6 @@ associated-domain delivery, and TestFlight installation need the unavailable
 phone and accounts. The integration plan records the reviewed distribution
 architecture assessment; no beta URL or release approval exists.
 
-
 ### Interactive continuation and native rendering repairs: 2026-09-30
 
 The user disabled screen lock for four hours and explicitly approved Start for
@@ -566,7 +565,7 @@ Published changes:
 - `d462dd678`: review rows preserve canonical `InstallReviewPart.identityKey`,
   avoiding duplicate React keys for a worker and extension both named
   `local-models`. All 28 launch-gate tests passed. `mobile logs --platform ios
-  --device <simulator-udid>` now selects that exact booted simulator.
+--device <simulator-udid>` now selects that exact booted simulator.
 - `ffc909f99`: provider input leases live at the declared workspace
   `build-provider-inputs` anchor, admitted read-only to the native runtime.
   The previous `.provider-inputs` directory lived among immutable build records;
@@ -662,3 +661,67 @@ is `iphone-20260930-visibility`; Metro, simulator, native log stream, and awake
 helper remain owned for continuation. Private logs stay in the persistent
 verification folder above. No Personal onboarding grant was accepted during
 these checks. Dismiss its review and verify the already-approved System UI.
+
+## Live workspace and layout checkpoint — 2026-09-30, 13:10 Berlin
+
+Published native fixes after reboot:
+
+- Root `8edac9bdf`: cache misses and picker cancellation return JavaScript `null`
+  through the native bridge. Returning Objective-C `nil` produced `undefined`
+  and broke asset lookup with HTTP 502. Eleven app-hosted native tests passed.
+- Root `8ec386b28`: the custom WebView delegates React Native's message handler
+  to its superclass and installs workspace adapters before dependent startup
+  scripts. WebKit's user-script collection is live; even `copy` aliases it, so
+  script reordering now materializes an owned Foundation array before removal.
+  Actual native WebKit tests verify first-document callbacks and prop changes,
+  plus malformed/null/string notification arguments. Twelve tests passed in the
+  earlier full run; the remaining case and the second new case passed together
+  after the ownership fix. Do not call this one full green 13-test run.
+- System `bd6ad2c`: shared AppModal applies the host's portrait and two landscape
+  orientations to all native overlays. The original sideways approval sheet was
+  reproduced through Computer Use. Seventy-six sheet tests passed across the
+  initial run and a focused retry; two initial timeouts coincided with competing
+  host builds. Twenty-one additional privacy/create/transfer tests passed.
+- System `c4b7114`: MainScreen owns iOS keyboard avoidance, reducing the native
+  WebView viewport rather than adding a panel offset or hiding WebKit's form
+  accessory. The original accessory/composer overlap was reproduced. Both System
+  composition and mobile typechecks passed for both source changes.
+
+Actual native UI acceptance on `iphone-20260930-visibility`:
+
+- New Panel rendered, navigation opened Agentic Chat, the software keyboard
+  accepted a prompt, and Send submitted it after dismissing the keyboard.
+- The user specifically authorized a one-use ChatGPT credential grant. Credential
+  lookup and the subsequent fetch each required approval. Accepting both promptly
+  delivered the visible reply **iPhone verification complete.** Accepting only
+  the lookup left the model stream waiting for fetch authority; the 60-second
+  progress timeout retried and requested approval again. This is a remaining
+  admission-flow gap, not evidence of an unavailable provider.
+- Cold launch restored the saved device credential and System selection. A
+  persistent-server stop and restart recovered the same conversation and reply.
+  Debug mode showed a fatal error overlay for a recoverable RPC publication
+  failure during the outage. The client already republishes on connection/recovery;
+  its diagnostic is being changed to a warning and 54 RPC client tests passed.
+- Native approval dismissal was verified earlier; it is no longer an open UI gap.
+
+A fresh ephemeral `iphone-20260930-layout` instance now owns live verification
+of the new System snapshot. The previous persistent instance was stopped and
+awaited successfully. Direct template-update preparation on the previous fixture
+reported no recorded exact source, so no installed workspace files were edited
+behind the semantic import boundary. The fresh fixture uses normal bootstrap and
+System review. Its native bundle activation is still in progress at this checkpoint.
+
+Hosted CI run `36706691764` was manually dispatched on main to exercise the iOS
+job. Recent successful push runs skipped iOS; their overall green status is not
+native CI evidence. This dispatched run must still be inspected. Physical camera,
+APNs, associated-domain/OAuth redirects, signed distribution, and App Store policy
+acceptance remain external checks. Simulator keyboard/rotation, cookie isolation,
+and invalid/expired invite acceptance are still evidence gaps unless a later
+checkpoint records actual results.
+
+Private logs/results are under
+`~/.config/vibestudio/iphone-verification/20260930-reboot` with restrictive access.
+They contain account identifiers and pairing links; do not publish their contents.
+The older stopped reboot/accessibility instance roots were removed after ownership
+checks. Final cleanup of the current layout fixture, Metro, native log stream,
+caffeinate, simulator, publication worktrees, and visibility state remains required.
