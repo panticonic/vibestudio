@@ -22,6 +22,7 @@ class MachineKeyStore extends EncryptedJsonStore<SigningKey> {
     super({
       basePath,
       defaultBasePath: join(dirname(getDefaultCredentialStorePath()), "report-signing"),
+      processPortable: true,
     });
   }
   async key(): Promise<KeyObject> {

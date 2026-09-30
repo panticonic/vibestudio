@@ -79,8 +79,9 @@ function getKeyFilePath(): string {
   return path.join(getProfileDataPath(), "keys", "store.key");
 }
 
-function recordCipher() {
+function recordCipher(processPortable: boolean) {
   return createResilientStoreCipher({
+    usePrimary: () => !processPortable,
     primary: {
       isAvailable: () => tryGetSafeStorage() !== null,
       encrypt: (plaintext) => {
@@ -111,31 +112,40 @@ function recordCipher() {
   });
 }
 
-function encryptJson(plaintext: string): EncryptedEnvelope {
-  return JSON.parse(recordCipher().encrypt(plaintext).toString("utf8")) as EncryptedEnvelope;
+function encryptJson(plaintext: string, processPortable: boolean): EncryptedEnvelope {
+  return JSON.parse(
+    recordCipher(processPortable).encrypt(plaintext).toString("utf8")
+  ) as EncryptedEnvelope;
 }
 
-function decryptJson(envelope: EncryptedEnvelope): string {
-  return recordCipher().decrypt(Buffer.from(JSON.stringify(envelope)));
+function decryptJson(envelope: EncryptedEnvelope, processPortable: boolean): string {
+  return recordCipher(processPortable).decrypt(Buffer.from(JSON.stringify(envelope)));
 }
 
-function serializeRecord<TRecord>(record: TRecord): string {
-  return `${JSON.stringify(encryptJson(JSON.stringify(record)))}\n`;
+function serializeRecord<TRecord>(record: TRecord, processPortable: boolean): string {
+  return `${JSON.stringify(encryptJson(JSON.stringify(record), processPortable))}\n`;
 }
 
-function deserializeRecord<TRecord>(raw: string): TRecord {
+function deserializeRecord<TRecord>(raw: string, processPortable: boolean): TRecord {
   const parsed = JSON.parse(raw) as unknown;
   if (!isEncryptedEnvelope(parsed)) {
     throw new Error("Record file is not an encrypted JSON envelope");
   }
-  return JSON.parse(decryptJson(parsed)) as TRecord;
+  return JSON.parse(decryptJson(parsed, processPortable)) as TRecord;
 }
 
 export abstract class EncryptedJsonStore<TRecord> {
   protected readonly basePath: string;
+  private readonly processPortable: boolean;
 
-  constructor(options: { basePath?: string; defaultBasePath: string }) {
+  constructor(options: {
+    basePath?: string;
+    defaultBasePath: string;
+    /** Records read by non-Electron processes use the profile cipher, never Electron safeStorage. */
+    processPortable?: boolean;
+  }) {
     this.basePath = options.basePath ?? options.defaultBasePath;
+    this.processPortable = options.processPortable ?? false;
   }
 
   protected async saveRecord(
@@ -170,7 +180,7 @@ export abstract class EncryptedJsonStore<TRecord> {
       namespaceDir,
       `.${recordId}.${process.pid}.${Date.now()}.${crypto.randomBytes(16).toString("hex")}.tmp`
     );
-    const fileContents = serializeRecord(record);
+    const fileContents = serializeRecord(record, this.processPortable);
 
     await fs.mkdir(namespaceDir, { recursive: true, mode: 0o700 });
 
@@ -315,7 +325,7 @@ export abstract class EncryptedJsonStore<TRecord> {
     }
 
     try {
-      return deserializeRecord<TRecord>(raw);
+      return deserializeRecord<TRecord>(raw, this.processPortable);
     } catch (error) {
       console.warn(
         `[EncryptedJsonStore] Ignoring unreadable record file ${filePath}: ` +

@@ -265,7 +265,11 @@ export function createProblemReportsService(deps: {
         for (const reference of sanitized.references)
           reference.coordinate = scrub(reference.coordinate).text;
         for (const attachment of sanitized.attachments) {
-          attachment.name = scrub(attachment.name).text.replace(/[\\/\x00-\x1f]/g, "_");
+          attachment.name = Array.from(scrub(attachment.name).text, (character) =>
+            character === "/" || character === "\\" || character.charCodeAt(0) < 32
+              ? "_"
+              : character
+          ).join("");
           if (
             attachment.mimeType.startsWith("text/") ||
             attachment.mimeType === "application/json"

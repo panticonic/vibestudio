@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:2dae2948031fc430fcc567bb1be224e1cf7e58fb760d1336909389ecdd927bff",
+  "censusDigest": "sha256:919a7adcae7ac7397814b46283ac8d31356993af27d97b0a8636da5cae08b75c",
   "decisions": {
     "host:build.buildWebsite": {
       "review": "scoped-website-public-workspace-rpc",
@@ -144,7 +144,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -636,11 +636,11 @@
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.setWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-change",
@@ -652,7 +652,7 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.removeWorkspaceMember": {
       "review": "workspace-membership-owned-removal",
@@ -1385,6 +1385,94 @@
     "host:runtime.supervision.retire#capability:runtime.supervision.manage": {
       "review": "gated-foreign-runtime-management",
       "change": "Host-prepared ownership emits this leaf only when the authenticated caller is not the execution owner. It retains ordinary code/session/user workspace membership and host capability checks, gated acquisition and the exact operation/entity resource. Guest claims cannot omit the foreign-ownership gate."
+    },
+    "host:problemReports.availability": {
+      "review": "owner-scoped-reporting-state",
+      "change": "Reads only whether the authenticated owner's local reporting store is available; no report contents leave the host."
+    },
+    "host:problemReports.incidents": {
+      "review": "owner-scoped-incident-list",
+      "change": "Lists captured incidents for the authenticated owner and current workspace only; recording does not authorize submission."
+    },
+    "host:problemReports.consent": {
+      "review": "owner-scoped-consent-read",
+      "change": "Reads the authenticated owner's consent revision and mode without changing it."
+    },
+    "host:problemReports.serverConsent": {
+      "review": "trusted-shell-owned-server-consent-read",
+      "change": "Requires the verified human shell identity and reads consent for the locally owned server only."
+    },
+    "host:problemReports.decide": {
+      "review": "trusted-shell-local-consent-decision",
+      "change": "Requires the verified human shell identity, owner binding, and expected revision before changing that owner's reporting consent; disabling aborts queued transport."
+    },
+    "host:problemReports.decideServer": {
+      "review": "trusted-shell-owned-server-consent-decision",
+      "change": "Requires the verified human shell identity and an actually owned server; expected revision prevents stale decisions."
+    },
+    "host:problemReports.create": {
+      "review": "owner-scoped-local-draft",
+      "change": "Creates a private local report draft for the authenticated owner and workspace; it does not queue or upload."
+    },
+    "host:problemReports.get": {
+      "review": "owner-scoped-draft-read",
+      "change": "Reads a report only by authenticated owner, workspace, and report id."
+    },
+    "host:problemReports.update": {
+      "review": "owner-scoped-revisioned-draft",
+      "change": "Changes a local draft only for its owner and workspace at the expected revision; publication remains separately human-gated."
+    },
+    "host:problemReports.importPrepared": {
+      "review": "owner-scoped-local-report-import",
+      "change": "Imports a prepared connected source into a new local draft for the authenticated owner; it assigns new report and submission identifiers and never sends."
+    },
+    "host:problemReports.collect": {
+      "review": "owner-scoped-evidence-collection",
+      "change": "Adds selected evidence to an owner's revisioned local draft; each source is collected through the existing caller-bound service dispatch and remains private until reviewed."
+    },
+    "host:problemReports.prepare": {
+      "review": "owner-scoped-redacted-preview",
+      "change": "Builds frozen bytes from an owner's revisioned draft; sanitization produces a new draft revision requiring another preview, and this method never uploads."
+    },
+    "host:problemReports.send": {
+      "review": "trusted-shell-reviewed-send",
+      "change": "Requires verified human shell identity and matching owner, revision, and prepared digest before queueing a reviewed report for transport."
+    },
+    "host:problemReports.cancel": {
+      "review": "owner-scoped-queued-report-cancel",
+      "change": "Cancels only a queued local submission owned by the authenticated caller in this workspace."
+    },
+    "host:problemReports.resume": {
+      "review": "trusted-shell-report-resume",
+      "change": "Requires verified human shell identity and owner binding before resuming a previously queued submission."
+    },
+    "host:problemReports.history": {
+      "review": "owner-scoped-report-history",
+      "change": "Reads only the authenticated owner's local report history for this workspace."
+    },
+    "host:problemReports.retainExport": {
+      "review": "trusted-shell-retention-choice",
+      "change": "Requires verified human shell identity and owner binding to change local export retention for a report."
+    },
+    "host:problemReports.remoteStatus": {
+      "review": "trusted-shell-owner-receipt-status",
+      "change": "Requires verified human shell identity, owner binding, and a stored submission receipt secret; validates returned submission id and digest."
+    },
+    "host:problemReports.deleteRemote": {
+      "review": "trusted-shell-owner-remote-deletion",
+      "change": "Requires verified human shell identity and the owner's stored receipt secret to request remote deletion; validates the returned receipt."
+    },
+    "host:problemReports.deleteLocal": {
+      "review": "trusted-shell-local-deletion",
+      "change": "Requires verified human shell identity, owner binding, and the store's acknowledgement rules before deleting local report history."
+    },
+    "host:problemReports.transport": {
+      "review": "trusted-shell-desktop-report-forwarding",
+      "change": "Forwards reviewed desktop reports through the paired server to the fixed reporting destination. It requires verified shell identity; uploads verify bundle identity and digest. The desktop delivery path owns the prepared local draft; this server forwarding method does not independently check desktop draft state."
+    },
+    "host:problemReports.usageTransport": {
+      "review": "trusted-shell-desktop-usage-forwarding",
+      "change": "Forwards identifier-free aggregate usage from the paired desktop through the server; it requires verified shell identity and contains no report contents."
     }
   }
 }
