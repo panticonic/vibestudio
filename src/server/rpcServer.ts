@@ -1,3 +1,4 @@
+import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { bindInvocationParent } from "@vibestudio/rpc/internal";
 import {
@@ -2743,6 +2744,7 @@ export class RpcServer {
             errorKind: rpcErrorKindOf(error, "internal"),
             ...(errorCode ? { errorCode } : {}),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
           }
         ),
       });
@@ -3054,6 +3056,7 @@ export class RpcServer {
                 errorKind: rpcErrorKindOf(err, "transport"),
                 ...(errorCode ? { errorCode } : {}),
                 ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+                ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
               }
             ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
           }
@@ -3127,6 +3130,7 @@ export class RpcServer {
             errorKind: rpcErrorKindOf(err, "transport"),
             ...(errorCode ? { errorCode } : {}),
             ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+            ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
           },
           workspaceRpcDestination(destination) ?? this.deps.workspaceId
         ),
@@ -3152,6 +3156,7 @@ export class RpcServer {
               code: errorCode,
               errorKind: rpcErrorKindOf(err, "transport"),
               ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+              ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
             }),
           },
           workspaceRpcDestination(destination) ?? this.deps.workspaceId
@@ -3180,6 +3185,7 @@ export class RpcServer {
         errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
         ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+        ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
       });
       return;
     }
@@ -3207,6 +3213,7 @@ export class RpcServer {
         errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
         ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+        ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
       });
     }
   }
@@ -5000,12 +5007,15 @@ export class RpcServer {
     const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
     if (responseMessage && responseMessage.type === "response") {
       if ("error" in responseMessage) {
-        throw new RemoteRpcError(
+        const error = new RemoteRpcError(
           responseMessage.error,
           responseMessage.errorKind,
           responseMessage.errorCode,
           responseMessage.errorData
         );
+        if (responseMessage.diagnosticId)
+          attachRpcDiagnosticId(error, responseMessage.diagnosticId);
+        throw error;
       }
       return responseMessage.result;
     }
@@ -5864,6 +5874,7 @@ export class RpcServer {
                 ...(rpcErrorDataOf(error) !== undefined
                   ? { errorData: rpcErrorDataOf(error) }
                   : {}),
+                ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
               }),
             }
           )
@@ -5916,6 +5927,7 @@ export class RpcServer {
           errorKind: rpcErrorKindOf(error, "internal"),
           ...(errorCode ? { errorCode } : {}),
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
         })
       );
     }

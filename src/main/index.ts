@@ -1,3 +1,5 @@
+import { createAnonymousStartupCounter } from "./anonymousStartup.js";
+const countAnonymousStartup = createAnonymousStartupCounter();
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createNativePanelHost } from "./nativePanelHost.js";
 import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
@@ -770,6 +772,13 @@ function dispatchShellSurface(
         ...((target.workspaceId ?? workspaceId)
           ? { workspaceId: target.workspaceId ?? workspaceId! }
           : {}),
+      });
+      return;
+    case "problem-report":
+      eventService.emit("open-settings", {
+        section: "problem-reporting",
+        ...(workspaceId ? { workspaceId } : {}),
+        ...(target.prepared ? { preparedReport: target.prepared } : {}),
       });
       return;
     case "workspace-chooser":
@@ -1753,6 +1762,7 @@ function installBootstrapConnectionHandlers(): void {
 // =============================================================================
 
 app.on("ready", async () => {
+  void countAnonymousStartup();
   performance.mark("startup:ready");
   console.log(`[Perf] app ready at ${Math.round(process.uptime() * 1000)}ms uptime`);
 

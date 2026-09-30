@@ -11995,6 +11995,423 @@
       }
     }
   },
+  "problemReports": {
+    "service": {
+      "principals": [
+        "user",
+        "code",
+        "host"
+      ]
+    },
+    "methods": {
+      "availability": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "cancel": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "collect": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "consent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "create": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "decide": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "decideServer": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deleteLocal": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deleteRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "get": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "history": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "importPrepared": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "incidents": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "prepare": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "remoteStatus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "resume": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "retainExport": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "send": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "serverConsent": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "transport": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "update": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "usageTransport": {
+        "authority": {
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "push": {
     "service": {
       "principals": [

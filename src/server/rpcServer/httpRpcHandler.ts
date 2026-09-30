@@ -1,3 +1,4 @@
+import { rpcDiagnosticIdOf } from "@vibestudio/rpc";
 import {
   rpcErrorDataOf,
   rpcErrorKindOf,
@@ -258,6 +259,7 @@ export class HttpRpcHandler {
             ...(errorCode ? { errorCode } : {}),
             ...(errorStack ? { errorStack } : {}),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
           }
         )
       );

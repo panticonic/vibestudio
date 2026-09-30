@@ -1,6 +1,7 @@
 import {
   BRIDGE_STREAM_CHUNK_BYTES,
   rpcErrorDataOf,
+  rpcDiagnosticIdOf,
   rpcErrorKindOf,
   stampEnvelopeCaller,
   type RpcCausalParent,
@@ -261,6 +262,7 @@ export class StreamingRelay {
           message: error instanceof Error ? error.message : String(error),
           errorKind: rpcErrorKindOf(error, "transport"),
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
         }).catch(() => {});
       } finally {
         releaseAbort();
@@ -318,6 +320,7 @@ export class StreamingRelay {
         error: error instanceof Error ? error.message : String(error),
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
       });
       releaseAbort();
       return;
@@ -443,6 +446,7 @@ export class StreamingRelay {
             code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
             errorKind: rpcErrorKindOf(error, "transport"),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
           });
         } catch {
           // The client may already be gone.
@@ -480,7 +484,9 @@ export class StreamingRelay {
           });
           return;
         }
-        await this.pipeResponseToWsFrames(result, emitFrame, abortController.signal);
+        await this.pipeResponseToWsFrames(result, emitFrame, abortController.signal, (error) =>
+          this.deps.dispatcher.observeFailure(context, parsed.service, parsed.method, error)
+        );
       } catch (error) {
         try {
           await emitFrame({
@@ -490,6 +496,7 @@ export class StreamingRelay {
             code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
             errorKind: rpcErrorKindOf(error, "internal"),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
           });
         } catch {
           // The client may already be gone.
@@ -547,6 +554,7 @@ export class StreamingRelay {
         code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         errorKind: "access",
         ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
       });
       return;
     }
@@ -637,8 +645,9 @@ export class StreamingRelay {
     req.once("aborted", () => abortController.abort());
     res.once("close", () => abortController.abort());
     let response: Response;
+    let context: ServiceContext;
     try {
-      const context = this.deps.createHttpContext(caller, request, {
+      context = this.deps.createHttpContext(caller, request, {
         ...(request.requestId ? { requestId: request.requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
@@ -671,6 +680,7 @@ export class StreamingRelay {
           code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
           errorKind: rpcErrorKindOf(error, "internal"),
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
         })
       ).catch(() => {});
       res.end();
@@ -680,7 +690,9 @@ export class StreamingRelay {
 
     res.writeHead(200, STREAM_HEADERS);
     try {
-      await this.pipeResponseToHttpFrames(response, res, abortController.signal);
+      await this.pipeResponseToHttpFrames(response, res, abortController.signal, (error) =>
+        this.deps.dispatcher.observeFailure(context, parsed.service, parsed.method, error)
+      );
     } finally {
       releaseAbort();
       if (!res.destroyed && !res.writableEnded) res.end();
@@ -734,6 +746,7 @@ export class StreamingRelay {
             code: frame.code,
             errorKind: frame.errorKind,
             ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
+            ...(frame.diagnosticId ? { diagnosticId: frame.diagnosticId } : {}),
           })
         );
       }
@@ -801,7 +814,8 @@ export class StreamingRelay {
   private async pipeResponseToHttpFrames(
     response: Response,
     res: ServerResponse,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onFailure?: (error: unknown) => unknown
   ): Promise<void> {
     const emitFrame = await this.httpFrameWriter(res);
     await emitFrame({
@@ -828,6 +842,7 @@ export class StreamingRelay {
         }
       } catch (error) {
         if (signal?.aborted) return;
+        onFailure?.(error);
         await emitFrame({
           kind: "error",
           status: 502,
@@ -835,6 +850,7 @@ export class StreamingRelay {
           code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
           errorKind: rpcErrorKindOf(error, "transport"),
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
         });
         return;
       } finally {
@@ -849,7 +865,8 @@ export class StreamingRelay {
   private async pipeResponseToWsFrames(
     response: Response,
     emitFrame: (frame: StreamFrame) => Promise<void> | void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onFailure?: (error: unknown) => unknown
   ): Promise<void> {
     const assertOpen = (): void => {
       if (signal.aborted) throw new Error("Streaming RPC cancelled by client");
@@ -876,6 +893,9 @@ export class StreamingRelay {
           await emitBoundedBodyFrames(next.value, emitFrame);
         }
         assertOpen();
+      } catch (error) {
+        if (!signal.aborted) onFailure?.(error);
+        throw error;
       } finally {
         signal.removeEventListener("abort", onAbort);
         reader.releaseLock();

@@ -122,20 +122,20 @@ interface GitIntentMetadata {
       };
 }
 
-export interface HostGitHttpOperation {
-  service: "workspace-initialization" | "hubControl";
+export interface HostHttpOperation {
+  service: "workspace-initialization" | "hubControl" | "problemReports";
   method: string;
   workspaceId?: string;
   resourceKey: string;
   preparedStateDigest: string;
 }
 
-export type GitHttpAuthority =
+export type HttpRequestAuthority =
   | { kind: "runtime"; caller: VerifiedCaller }
   | {
       kind: "host-operation";
       caller: VerifiedCaller;
-      operation: HostGitHttpOperation;
+      operation: HostHttpOperation;
     };
 
 export type GitCredentialSelection =
@@ -202,7 +202,7 @@ interface HostRequestAttribution {
   callerId: string;
   workerId: string;
   policyKey: string;
-  operation: HostGitHttpOperation;
+  operation: HostHttpOperation;
 }
 
 type RequestAttribution = CodeRequestAttribution | HostRequestAttribution;
@@ -268,6 +268,7 @@ export type StreamFrame =
       code?: string;
       errorKind: import("@vibestudio/rpc").RpcErrorKind;
       errorData?: import("@vibestudio/rpc").RpcErrorData;
+      diagnosticId?: string;
     };
 
 interface CircuitState {
@@ -502,16 +503,39 @@ export class EgressProxy {
     }
   }
 
+  /** Host-owned exact operations share the same credential injection, audit, and network policy as runtime egress. No redirects. */
+  async forwardHostFetch(
+    params: ProxyFetchRequest<string | Uint8Array> & {
+      operation: HostHttpOperation;
+      signal: AbortSignal;
+      responseByteLimit: number;
+    }
+  ): Promise<ProxyFetchResponse> {
+    return this.forwardProxyFetchHop(
+      params,
+      params.signal,
+      "fetch",
+      {
+        kind: "host-operation",
+        caller: params.caller,
+        operation: params.operation,
+      },
+      params.responseByteLimit
+    );
+  }
+
   private async forwardProxyFetchHop(
     params: ProxyFetchRequest<string | Uint8Array>,
     signal: AbortSignal,
-    credentialUse: CredentialBindingUse
+    credentialUse: CredentialBindingUse,
+    authority: HttpRequestAuthority = { kind: "runtime", caller: params.caller },
+    responseByteLimit?: number
   ): Promise<ProxyFetchResponse> {
     const body = params.body;
     const bytesOut =
       body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
     return this.executeAuthorizedRequest({
-      authority: { kind: "runtime", caller: params.caller },
+      authority,
       signal,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
@@ -533,7 +557,9 @@ export class EgressProxy {
         if (redirect) await response.body?.cancel();
         const responseBody = redirect
           ? new Uint8Array()
-          : new Uint8Array(await response.arrayBuffer());
+          : responseByteLimit === undefined
+            ? new Uint8Array(await response.arrayBuffer())
+            : await boundedResponseBytes(response, responseByteLimit);
         await this.deps.recordExternalIngestion?.(
           params.caller,
           new URL(response.url || targetUrl.toString()),
@@ -753,7 +779,7 @@ export class EgressProxy {
   }
 
   async forwardGitHttp(params: {
-    authority: GitHttpAuthority;
+    authority: HttpRequestAuthority;
     url: string;
     method: string;
     headers?: Record<string, string>;
@@ -1065,7 +1091,7 @@ export class EgressProxy {
   }
 
   private async executeAuthorizedRequest<T>(params: {
-    authority: GitHttpAuthority;
+    authority: HttpRequestAuthority;
     signal?: AbortSignal;
     method: string;
     targetUrl: URL;
@@ -1296,16 +1322,16 @@ export class EgressProxy {
     }
   }
 
-  private async authorizeHostGitHttp(
+  private async authorizeHostHttp(
     signal: AbortSignal,
     caller: VerifiedCaller,
-    operation: HostGitHttpOperation,
+    operation: HostHttpOperation,
     targetUrl: URL,
     method: string,
     credentialId: string | null
   ): Promise<void> {
     if (!this.deps.authorizeEffect) {
-      throw new ForwardRejection(403, "Host Git HTTP authority is unavailable");
+      throw new ForwardRejection(403, "Host HTTP authority is unavailable");
     }
     const origin = targetUrl.origin;
     await this.deps.authorizeEffect(
@@ -1355,28 +1381,28 @@ export class EgressProxy {
         }),
         sensitivity: "read",
         challenge: {
-          dedupKey: `host-git:${operation.service}:${operation.resourceKey}:${credentialId}:${origin}`,
-          resource: { type: "url-origin", label: "Git remote", value: origin },
+          dedupKey: `host-http:${operation.service}:${operation.resourceKey}:${credentialId}:${origin}`,
+          resource: { type: "url-origin", label: "Destination", value: origin },
           operation: {
             kind: "credential",
-            verb: "use a credential for Git",
-            object: { type: "url-origin", label: "Git remote", value: origin },
-            groupKey: `host-git:${operation.service}:${operation.resourceKey}`,
+            verb: "use a credential",
+            object: { type: "url-origin", label: "Destination", value: origin },
+            groupKey: `host-http:${operation.service}:${operation.resourceKey}`,
           },
           title: `Use a credential for ${origin}`,
-          description: "Vibestudio needs this credential for the selected Git repository.",
+          description: "Vibestudio needs this credential for the approved host operation.",
           details: [
-            { label: "Git remote", value: origin },
+            { label: "Destination", value: origin },
             { label: "Operation", value: `${operation.service}.${operation.method}` },
           ],
-          deniedReason: "Git credential use denied",
+          deniedReason: "Credential use denied",
         },
       }
     );
   }
 
   private async authorizeRequest(params: {
-    authority: GitHttpAuthority;
+    authority: HttpRequestAuthority;
     targetUrl: URL;
     method: string;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
@@ -1393,7 +1419,7 @@ export class EgressProxy {
       if (caller.hostOriginated !== true) {
         throw new ForwardRejection(
           403,
-          "Host Git HTTP requires an attested host operation",
+          "Host HTTP requires an attested host operation",
           "unknown-caller"
         );
       }
@@ -1505,7 +1531,7 @@ export class EgressProxy {
         };
       }
       if (params.authority.kind === "host-operation") {
-        await this.authorizeHostGitHttp(
+        await this.authorizeHostHttp(
           params.signal,
           caller,
           params.authority.operation,
@@ -1548,7 +1574,7 @@ export class EgressProxy {
     }
     const usage = credentialUseResource(binding, params.targetUrl, params.method);
     if (params.authority.kind === "host-operation") {
-      await this.authorizeHostGitHttp(
+      await this.authorizeHostHttp(
         params.signal,
         caller,
         params.authority.operation,
@@ -3219,7 +3245,7 @@ function attributionWorkerId(attribution: RequestAttribution): string {
   return attribution.kind === "code" ? attribution.repoPath : attribution.workerId;
 }
 
-function hostOperationAuditId(operation: HostGitHttpOperation): string {
+function hostOperationAuditId(operation: HostHttpOperation): string {
   return `host:${operation.service}.${operation.method}:${operation.preparedStateDigest.slice(0, 16)}`;
 }
 
@@ -3494,7 +3520,7 @@ interface ProxyFetchRequest<Body> {
   method: string;
   headers?: Record<string, string>;
   body?: Body;
-  credentialId?: string;
+  credentialId?: string | null;
   audiences?: readonly UrlAudience[];
 }
 
@@ -3552,4 +3578,32 @@ function waitForEgress<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     else signal.addEventListener("abort", abort, { once: true });
     work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
+}
+
+async function boundedResponseBytes(response: Response, limit: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.length;
+      if (total > limit) {
+        await reader.cancel();
+        throw new Error("Response exceeds byte budget");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
 }

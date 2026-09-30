@@ -78,6 +78,13 @@ export class RuntimeDiagnosticsStore {
   private readonly rootDir: string;
   private readonly entryCapacity: number;
   private readonly errorCapacity: number;
+  private readonly observers = new Set<(record: RuntimeDiagnosticRecord) => void>();
+  observe(observer: (record: RuntimeDiagnosticRecord) => void): () => void {
+    this.observers.add(observer);
+    return () => {
+      this.observers.delete(observer);
+    };
+  }
   private readonly cache = new Map<string, PersistedRuntimeDiagnostics>();
 
   constructor(options: { statePath: string; entryCapacity?: number; errorCapacity?: number }) {
@@ -109,6 +116,12 @@ export class RuntimeDiagnosticsStore {
       }
     }
     this.write(record.entityId, history);
+    for (const observer of this.observers)
+      try {
+        observer(record);
+      } catch {
+        /* Diagnostics never change runtime outcomes. */
+      }
   }
 
   history(entityId: string, options: RuntimeDiagnosticOptions = {}): RuntimeDiagnosticHistory {

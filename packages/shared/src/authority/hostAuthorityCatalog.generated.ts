@@ -5673,6 +5673,270 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "problemReports.availability": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.cancel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.collect": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.consent": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.create": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.decide": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.decideServer": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.deleteLocal": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.deleteRemote": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.get": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.history": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.importPrepared": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.incidents": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.prepare": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.remoteStatus": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.resume": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.retainExport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.send": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.serverConsent": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.transport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.update": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.usageTransport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "push.listRegistrations": {
     tier: {
       tier: "gated",

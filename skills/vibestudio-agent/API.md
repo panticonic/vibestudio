@@ -474,6 +474,37 @@ Authority principals: `host`, `user`
 | `presence.markPanelsOwned` |  |
 | `presence.getPanelActiveOwner` |  |
 
+## `problemReports`
+
+Private local problem reporting and explicit sharing
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `problemReports.usageTransport` | Trusted native analytics transport: forward only identifier-free aggregate counters, never an error report or credentials. |
+| `problemReports.availability` | Read reporting destination, limits, anonymous submission policy, and owned incident counts without exposing credentials. |
+| `problemReports.incidents` | Read up to 100 owned local incidents; grouping indicates similarity, not shared causality. |
+| `problemReports.transport` | Trusted native reporting uploader only: forward an exact approved bundle/status/deletion through the existing host credential broker. No secret is returned. |
+| `problemReports.importPrepared` | Copy an explicitly selected frozen report prepared on the connected server into a new local review report. It is a snapshot with provenance, never an editable mirror or automatic submission. |
+| `problemReports.collect` | Collect explicitly selected bounded runtime or server-log evidence into a revision-checked manual draft. Partial, denied, and expired sources remain visible. |
+| `problemReports.serverConsent` | Trusted desktop UI: read the independent reporting choice on its desktop-owned local server. Null means this desktop does not own the server; remote operators manage their own choice. |
+| `problemReports.decideServer` | Trusted desktop UI: explicitly change this user's independent reporting choice on the desktop-owned local server. This never changes the device choice or another user's choice; agents cannot consent. |
+| `problemReports.consent` | Read this user's reporting choice for this capture installation. |
+| `problemReports.decide` | Trusted human shell/CLI only: persist automatic reporting choice. Agents cannot consent. |
+| `problemReports.create` | Create a local manual problem report. Does not send or enroll reporting. |
+| `problemReports.get` | Read an owned report draft. |
+| `problemReports.update` | Revision-checked replacement of a manual draft including selected agent narrative and evidence. The host assigns revisions and submission IDs. |
+| `problemReports.prepare` | Sanitize and freeze an exact revision for preview/download. Returns exact canonical bytes and digest. Never sends. |
+| `problemReports.send` | Trusted human shell/CLI only: approve exactly the reviewed frozen revision/digest for upload. |
+| `problemReports.history` | Bounded owned report history; no secrets or bundle bytes. |
+| `problemReports.cancel` | Cancel pending delivery of an owned report; accepted reports require remote deletion. |
+| `problemReports.resume` | Trusted human shell/CLI only: resume a paused owned submission after reporting access is restored. |
+| `problemReports.retainExport` | Trusted human: retain or release the local received export beyond its default 30-day lifetime. Does not pin remote storage. |
+| `problemReports.remoteStatus` | Trusted human reporting history: recover an exact owned submission ID's remote status using its protected receipt secret. |
+| `problemReports.deleteRemote` | Trusted human reporting history: request deletion of an exact owned submission ID's remote content while retaining its replay-protection tombstone. |
+| `problemReports.deleteLocal` | Trusted human shell/CLI only: delete a draft or local history. Explicit acknowledgement is required when discarding receipt access. |
+
 ## `push`
 
 Push notification device registration and delivery

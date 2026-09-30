@@ -37,7 +37,13 @@
  */
 
 import type { RpcEnvelope, RpcErrorData, RpcErrorKind } from "./types.js";
-import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
+import {
+  attachRpcDiagnosticId,
+  rpcDiagnosticIdOf,
+  RemoteRpcError,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+} from "./errors.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { secureRandomUuid } from "./randomId.js";
@@ -86,6 +92,7 @@ export type BridgeStreamMessage =
       opId: string;
       message: string;
       errorKind?: RpcErrorKind;
+      diagnosticId?: string;
       code?: string;
       errorData?: RpcErrorData;
     };
@@ -348,6 +355,7 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
         opId: op.opId,
         message: error instanceof Error ? error.message : String(error),
         errorKind: rpcErrorKindOf(error, "transport"),
+        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
         ...(typeof code === "string" ? { code } : {}),
         ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
       });
@@ -647,6 +655,7 @@ export async function openBridgeStream(
           msg.code,
           msg.errorData
         );
+        if (msg.diagnosticId) attachRpcDiagnosticId(error, msg.diagnosticId);
         settled = true;
         pumpAborted = true;
         rejectHead(error);

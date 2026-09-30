@@ -1,3 +1,4 @@
+import { problemReportsMethods } from "./problemReports.js";
 import { readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +154,7 @@ const serviceTables: ServiceTable[] = [
   { service: "hostPerformance", file: "hostPerformance.ts", methods: hostPerformanceMethods },
   { service: "hubControl", file: "hubControl.ts", methods: hubControlMethods },
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
+  { service: "problemReports", file: "problemReports.ts", methods: problemReportsMethods },
   { service: "hostTerminal", file: "hostTerminal.ts", methods: hostTerminalMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
@@ -457,6 +459,8 @@ describe("service schema contracts", () => {
           !file.endsWith(".test.ts") &&
           file !== "productBuiltinServices.ts" &&
           file !== "browserPrivacy.ts" &&
+          file !== "problemReportBundle.ts" &&
+          file !== "usageAnalytics.ts" &&
           !file.startsWith("progressSemantics")
       )
       .sort();

@@ -1,3 +1,4 @@
+import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
 import { validateWebsiteMethodPolicy } from "./typedServiceClient.js";
 /**
  * ServiceDispatcher - Unified service dispatch for panels and shell.
@@ -1064,7 +1065,56 @@ export class ServiceDispatcher {
   /**
    * Dispatch a service call.
    */
+  private successObserver?: (outcome: {
+    ctx: ServiceContext;
+    service: string;
+    method: string;
+  }) => void;
+  setSuccessObserver(observer: typeof this.successObserver): void {
+    this.successObserver = observer;
+  }
+  private failureObserver?: (failure: {
+    ctx: ServiceContext;
+    service: string;
+    method: string;
+    error: unknown;
+    diagnosticId: string;
+  }) => void;
+  setFailureObserver(observer: typeof this.failureObserver): void {
+    this.failureObserver = observer;
+  }
   async dispatch(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> {
+    try {
+      const result = await this.dispatchOwned(ctx, service, method, args);
+      try {
+        this.successObserver?.({ ctx, service, method });
+      } catch {
+        /* Observation never changes the operation. */
+      }
+      return result;
+    } catch (error) {
+      this.observeFailure(ctx, service, method, error);
+      throw error;
+    }
+  }
+  /** Transport stream owners report terminal outcomes here, preserving the origin of forwarded failures. */
+  observeFailure(ctx: ServiceContext, service: string, method: string, error: unknown): string {
+    const diagnosticId = rpcDiagnosticIdOf(error) ?? crypto.randomUUID();
+    attachRpcDiagnosticId(error, diagnosticId);
+    try {
+      this.failureObserver?.({ ctx, service, method, error, diagnosticId });
+    } catch {
+      /* Reporting never changes the operation. */
+    }
+    return diagnosticId;
+  }
+
+  private async dispatchOwned(
     ctx: ServiceContext,
     service: string,
     method: string,
@@ -1130,7 +1180,10 @@ export class ServiceDispatcher {
             throw new ServiceError(
               service,
               method,
-              `Invalid return: ${formatReturnValidationError(parsed.error)}`
+              `Invalid return: ${formatReturnValidationError(parsed.error)}`,
+              "INVALID_SERVICE_RETURN",
+              undefined,
+              "protocol"
             );
           }
         }
@@ -1150,7 +1203,7 @@ export class ServiceDispatcher {
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         error,
-        rpcErrorKindOf(error, "service"),
+        rpcErrorKindOf(error, "internal"),
         rpcErrorDataOf(error)
       );
     }

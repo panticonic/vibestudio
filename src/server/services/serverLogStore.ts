@@ -44,6 +44,7 @@ export interface ServerLogRecord {
 export interface ServerLogQuery {
   /** Return records with seq > sinceSeq (streaming catch-up cursor). */
   sinceSeq?: number;
+  untilSeq?: number;
   /** Epoch-ms lower bound (inclusive). */
   since?: number;
   /** Epoch-ms upper bound (inclusive). */
@@ -111,6 +112,7 @@ export interface ServerLogStore {
   stats(): ServerLogStats;
   /** Redact this exact string from all past-buffered and future records. */
   addSecret(secret: string): void;
+  redactText(text: string): string;
   /** Streaming hook: fires per captured record (the service batches). */
   onAppend(listener: (record: ServerLogRecord) => void): () => void;
   /**
@@ -241,6 +243,7 @@ export function createServerLogStore(
       for (let i = buffer.length - 1; i >= 0 && matched.length < limit; i--) {
         const record = buffer[i];
         if (!record) continue;
+        if (query.untilSeq !== undefined && record.seq > query.untilSeq) continue;
         if (query.sinceSeq !== undefined && record.seq <= query.sinceSeq) break;
         if (query.since !== undefined && record.timestamp < query.since) break;
         if (query.until !== undefined && record.timestamp > query.until) continue;
@@ -279,6 +282,7 @@ export function createServerLogStore(
       };
     },
 
+    redactText: (text: string) => redact(text),
     addSecret(secret: string): void {
       if (!secret || secret.length < 8) return; // too short to redact safely
       secrets.push(secret);

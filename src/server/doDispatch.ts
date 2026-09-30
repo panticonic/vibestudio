@@ -15,7 +15,12 @@
  */
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
-import { RemoteRpcError, type AgentExecutionTestPolicy, type RpcErrorKind } from "@vibestudio/rpc";
+import {
+  attachRpcDiagnosticId,
+  RemoteRpcError,
+  type AgentExecutionTestPolicy,
+  type RpcErrorKind,
+} from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import type {
   AlarmDoDispatcher,
@@ -203,6 +208,7 @@ export async function postToDOWithToken(
         errorKind?: unknown;
         errorCode?: unknown;
         errorData?: unknown;
+        diagnosticId?: string;
       };
       if (typeof parsed.error === "string") {
         const kind: RpcErrorKind =
@@ -214,12 +220,15 @@ export async function postToDOWithToken(
           parsed.errorKind === "internal"
             ? parsed.errorKind
             : "application";
-        throw new RemoteRpcError(
+        const remoteError = new RemoteRpcError(
           parsed.error,
           kind,
           typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
           parsed.errorData
         );
+        if (typeof parsed.diagnosticId === "string")
+          attachRpcDiagnosticId(remoteError, parsed.diagnosticId);
+        throw remoteError;
       }
     } catch (error) {
       if (error instanceof RemoteRpcError) throw error;

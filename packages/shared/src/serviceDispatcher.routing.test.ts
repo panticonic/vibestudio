@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createVerifiedCaller,
   ServiceDispatcher,
+  ServiceError,
   verifiedInitiatingUserId,
   callerAccountUserId,
   verifiedInitiator,
@@ -423,5 +424,39 @@ describe("ServiceDispatcher ownership", () => {
         })
       )
     ).toBe("usr_alice");
+  });
+});
+
+describe("ServiceDispatcher completion observation", () => {
+  it("keeps successful results and original failures when an observer throws", async () => {
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      testAuthority(caller, capability, resourceKey)
+    );
+    const failure = new ServiceError("observed", "run", "original operation failure");
+    dispatcher.registerService({
+      name: "observed",
+      authority: { principals: ["code"] },
+      methods: {
+        run: {
+          args: z.tuple([z.boolean()]),
+          website: { kind: "closed", reason: "test" },
+          tier: { tier: "open", session: "family", rationale: "test" },
+        },
+      },
+      handler: async (_ctx, _method, args) => {
+        if (args[0]) throw failure;
+        return "preserved";
+      },
+    });
+    dispatcher.markInitialized();
+    const observer = vi.fn(() => {
+      throw new Error("observer failure");
+    });
+    dispatcher.setSuccessObserver(observer);
+    const ctx = { caller: createVerifiedCaller("extension:test", "extension") };
+    await expect(dispatcher.dispatch(ctx, "observed", "run", [false])).resolves.toBe("preserved");
+    await expect(dispatcher.dispatch(ctx, "observed", "run", [true])).rejects.toBe(failure);
+    expect(observer).toHaveBeenCalledTimes(1);
   });
 });

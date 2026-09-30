@@ -420,6 +420,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           requestId: msg.requestId,
           error: msg.error,
           errorKind: msg.errorKind,
+          ...(msg.diagnosticId ? { diagnosticId: msg.diagnosticId } : {}),
           ...(msg.errorCode ? { errorCode: msg.errorCode } : {}),
           ...(msg.errorData !== undefined ? { errorData: msg.errorData } : {}),
         };

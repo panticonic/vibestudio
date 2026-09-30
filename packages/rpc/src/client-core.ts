@@ -1,3 +1,4 @@
+import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "./errors.js";
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
 import { responseFromDecodedStream } from "./protocol/streamCodec.js";
 import { isLocalRpcDestination, rpcDestinationMatchesCaller } from "./destination.js";
@@ -152,14 +153,18 @@ function createPeer<
     ...(options?.destination ? { destination: options.destination } : {}),
     call: createCallProxy<TMethods>((method, args) => client.call(targetId, method, args, options)),
     on(event, listener, website) {
-      return client.on(event, (ev) => {
-        if (
-          ev.caller.callerId === targetId &&
-          rpcDestinationMatchesCaller(options?.destination, ev.caller)
-        ) {
-          listener(ev as never);
-        }
-      }, website);
+      return client.on(
+        event,
+        (ev) => {
+          if (
+            ev.caller.callerId === targetId &&
+            rpcDestinationMatchesCaller(options?.destination, ev.caller)
+          ) {
+            listener(ev as never);
+          }
+        },
+        website
+      );
     },
     emit: (event, payload) => client.emit(targetId, event, payload, options),
     withContract: (_contract, _role) => createPeer(client, targetId, options) as never,
@@ -262,11 +267,19 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   >();
   const exposurePolicies = new Map<string, RpcExposure["entries"][number]>();
   function publishExposures(): void {
-    if (config.publishExposures) void deliverEnvelope(makeEnvelope("main", {
-      type: "exposure", entries: [...exposurePolicies.values()],
-    })).catch(error => console.error("RPC exposure publication failed", error));
+    if (config.publishExposures)
+      void deliverEnvelope(
+        makeEnvelope("main", {
+          type: "exposure",
+          entries: [...exposurePolicies.values()],
+        })
+      ).catch((error) => console.error("RPC exposure publication failed", error));
   }
-  function declareExposure(name: string, kind: "method" | "stream" | "event", website: WebsiteMethodPolicy): void {
+  function declareExposure(
+    name: string,
+    kind: "method" | "stream" | "event",
+    website: WebsiteMethodPolicy
+  ): void {
     validateWebsiteMethodPolicy(website, name);
     exposurePolicies.set(`${kind}:${name}`, { name, kind, website: { ...website } });
   }
@@ -433,8 +446,9 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     // that happened to start the work: that handler may return while its
     // journaled/background execution is still legitimately running.
     const authorityParentNonce =
-      !executionSessionNonce && (message.type === "request" || message.type === "stream-request" || message.type === "event")
-        ? parent?.nonce ?? config.authorityParentNonce?.()
+      !executionSessionNonce &&
+      (message.type === "request" || message.type === "stream-request" || message.type === "event")
+        ? (parent?.nonce ?? config.authorityParentNonce?.())
         : undefined;
     const carriedMessage =
       (authorityParentNonce || executionSessionNonce) &&
@@ -471,27 +485,49 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       ),
       selfCaller
     );
-    const parentNonce = (inbound.message as InternalRpcRequest | InternalRpcStreamRequest | InternalRpcEvent).authorityParentNonce;
-    const inheritedOptions = <T extends RpcCallOptions | RpcStreamOptions>(options?: T): T | undefined =>
-      parentNonce ? mergeRpcOptions(options, bindInvocationParent({}, { nonce: parentNonce })) as T : options;
+    const parentNonce = (
+      inbound.message as InternalRpcRequest | InternalRpcStreamRequest | InternalRpcEvent
+    ).authorityParentNonce;
+    const inheritedOptions = <T extends RpcCallOptions | RpcStreamOptions>(
+      options?: T
+    ): T | undefined =>
+      parentNonce
+        ? (mergeRpcOptions(options, bindInvocationParent({}, { nonce: parentNonce })) as T)
+        : options;
     const scoped: RpcClient = {
       ...client,
       call: (targetId, method, args, options) =>
-        observeOutbound(callWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))),
+        observeOutbound(
+          callWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
+        ),
       stream: (targetId, method, args, options) =>
         observeOutbound(
           Promise.resolve().then(() =>
-            streamWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
+            streamWithProvenance(
+              scopedProvenance,
+              targetId,
+              method,
+              args,
+              inheritedOptions(options)
+            )
           )
         ),
       streamReadable: (targetId, method, args, options) =>
         observeOutbound(
           Promise.resolve().then(() =>
-            streamReadableWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
+            streamReadableWithProvenance(
+              scopedProvenance,
+              targetId,
+              method,
+              args,
+              inheritedOptions(options)
+            )
           )
         ),
       emit: (targetId, event, payload, options) =>
-        observeOutbound(emitWithProvenance(scopedProvenance, targetId, event, payload, inheritedOptions(options))),
+        observeOutbound(
+          emitWithProvenance(scopedProvenance, targetId, event, payload, inheritedOptions(options))
+        ),
       peer: (targetId, options) => createPeer(scoped, targetId, options),
     };
     return scoped;
@@ -622,6 +658,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         response.errorCode,
         response.errorData
       );
+      if (response.diagnosticId) attachRpcDiagnosticId(err, response.diagnosticId);
       if (response.errorStack) err.stack = response.errorStack;
       pending.reject(err);
       return;
@@ -677,6 +714,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         code?: string;
         errorKind: import("./types.js").RpcErrorKind;
         errorData?: import("./types.js").RpcErrorData;
+        diagnosticId?: string;
       };
       try {
         parsed = JSON.parse(frame.payload);
@@ -689,6 +727,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         parsed.code,
         parsed.errorData
       );
+      if (parsed.diagnosticId) attachRpcDiagnosticId(err, parsed.diagnosticId);
       if (entry.headEmitted) {
         entry.bodyClosed = true;
         entry.controller.error(err);
@@ -783,6 +822,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
                 ? { errorCode: (error as ErrorWithCode).code }
                 : {}),
               ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+              ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
             })
           ).catch(logResponseSendFailure);
         }
@@ -851,6 +891,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           code: frame.code,
           errorKind: frame.errorKind,
           ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
+          ...(frame.diagnosticId ? { diagnosticId: frame.diagnosticId } : {}),
         })
       );
     };
@@ -869,6 +910,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
             message: error instanceof Error ? error.message : String(error),
             errorKind: rpcErrorKindOf(error),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
           })
         ).catch(() => {});
       })
@@ -1316,7 +1358,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
       publishExposures();
     },
-    exposeAll(methods: RpcContextMethods, policies: Readonly<Record<string, WebsiteMethodPolicy>>): void {
+    exposeAll(
+      methods: RpcContextMethods,
+      policies: Readonly<Record<string, WebsiteMethodPolicy>>
+    ): void {
       requireActive();
       for (const name of Object.keys(methods)) validateWebsiteMethodPolicy(policies[name]!, name);
       for (const [name, handler] of Object.entries(methods)) {

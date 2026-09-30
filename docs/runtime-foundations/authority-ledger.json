@@ -24277,6 +24277,1018 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:problemReports.availability",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "availability",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.availability"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.availability),allOf(capability(user,service:problemReports.availability),workspace-member),allOf(capability(code,service:problemReports.availability),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-reporting-state",
+        "change": "Reads only whether the authenticated owner's local reporting store is available; no report contents leave the host."
+      },
+      "capability": "service:problemReports.availability",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.cancel",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "cancel",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.cancel"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.cancel),allOf(capability(user,service:problemReports.cancel),workspace-member),allOf(capability(code,service:problemReports.cancel),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-queued-report-cancel",
+        "change": "Cancels only a queued local submission owned by the authenticated caller in this workspace."
+      },
+      "capability": "service:problemReports.cancel",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.collect",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "collect",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.collect"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.collect),allOf(capability(user,service:problemReports.collect),workspace-member),allOf(capability(code,service:problemReports.collect),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-evidence-collection",
+        "change": "Adds selected evidence to an owner's revisioned local draft; each source is collected through the existing caller-bound service dispatch and remains private until reviewed."
+      },
+      "capability": "service:problemReports.collect",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.consent",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "consent",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.consent"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.consent),allOf(capability(user,service:problemReports.consent),workspace-member),allOf(capability(code,service:problemReports.consent),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-consent-read",
+        "change": "Reads the authenticated owner's consent revision and mode without changing it."
+      },
+      "capability": "service:problemReports.consent",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.create",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "create",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.create"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.create),allOf(capability(user,service:problemReports.create),workspace-member),allOf(capability(code,service:problemReports.create),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-local-draft",
+        "change": "Creates a private local report draft for the authenticated owner and workspace; it does not queue or upload."
+      },
+      "capability": "service:problemReports.create",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.decide",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "decide",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.decide"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.decide),allOf(capability(user,service:problemReports.decide),workspace-member),allOf(capability(code,service:problemReports.decide),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-local-consent-decision",
+        "change": "Requires the verified human shell identity, owner binding, and expected revision before changing that owner's reporting consent; disabling aborts queued transport."
+      },
+      "capability": "service:problemReports.decide",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.decideServer",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "decideServer",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.decideServer"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.decideServer),allOf(capability(user,service:problemReports.decideServer),workspace-member),allOf(capability(code,service:problemReports.decideServer),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-owned-server-consent-decision",
+        "change": "Requires the verified human shell identity and an actually owned server; expected revision prevents stale decisions."
+      },
+      "capability": "service:problemReports.decideServer",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.deleteLocal",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "deleteLocal",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.deleteLocal"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.deleteLocal),allOf(capability(user,service:problemReports.deleteLocal),workspace-member),allOf(capability(code,service:problemReports.deleteLocal),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-local-deletion",
+        "change": "Requires verified human shell identity, owner binding, and the store's acknowledgement rules before deleting local report history."
+      },
+      "capability": "service:problemReports.deleteLocal",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.deleteRemote",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "deleteRemote",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.deleteRemote"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.deleteRemote),allOf(capability(user,service:problemReports.deleteRemote),workspace-member),allOf(capability(code,service:problemReports.deleteRemote),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-owner-remote-deletion",
+        "change": "Requires verified human shell identity and the owner's stored receipt secret to request remote deletion; validates the returned receipt."
+      },
+      "capability": "service:problemReports.deleteRemote",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.get",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "get",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.get"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.get),allOf(capability(user,service:problemReports.get),workspace-member),allOf(capability(code,service:problemReports.get),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-draft-read",
+        "change": "Reads a report only by authenticated owner, workspace, and report id."
+      },
+      "capability": "service:problemReports.get",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.history",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "history",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.history"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.history),allOf(capability(user,service:problemReports.history),workspace-member),allOf(capability(code,service:problemReports.history),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-report-history",
+        "change": "Reads only the authenticated owner's local report history for this workspace."
+      },
+      "capability": "service:problemReports.history",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.importPrepared",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "importPrepared",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.importPrepared"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.importPrepared),allOf(capability(user,service:problemReports.importPrepared),workspace-member),allOf(capability(code,service:problemReports.importPrepared),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-local-report-import",
+        "change": "Imports a prepared connected source into a new local draft for the authenticated owner; it assigns new report and submission identifiers and never sends."
+      },
+      "capability": "service:problemReports.importPrepared",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.incidents",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "incidents",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.incidents"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.incidents),allOf(capability(user,service:problemReports.incidents),workspace-member),allOf(capability(code,service:problemReports.incidents),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-incident-list",
+        "change": "Lists captured incidents for the authenticated owner and current workspace only; recording does not authorize submission."
+      },
+      "capability": "service:problemReports.incidents",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.prepare",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "prepare",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.prepare"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.prepare),allOf(capability(user,service:problemReports.prepare),workspace-member),allOf(capability(code,service:problemReports.prepare),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-redacted-preview",
+        "change": "Builds frozen bytes from an owner's revisioned draft; sanitization produces a new draft revision requiring another preview, and this method never uploads."
+      },
+      "capability": "service:problemReports.prepare",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.remoteStatus",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "remoteStatus",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.remoteStatus"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.remoteStatus),allOf(capability(user,service:problemReports.remoteStatus),workspace-member),allOf(capability(code,service:problemReports.remoteStatus),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-owner-receipt-status",
+        "change": "Requires verified human shell identity, owner binding, and a stored submission receipt secret; validates returned submission id and digest."
+      },
+      "capability": "service:problemReports.remoteStatus",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.resume",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "resume",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.resume"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.resume),allOf(capability(user,service:problemReports.resume),workspace-member),allOf(capability(code,service:problemReports.resume),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-report-resume",
+        "change": "Requires verified human shell identity and owner binding before resuming a previously queued submission."
+      },
+      "capability": "service:problemReports.resume",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.retainExport",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "retainExport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.retainExport"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.retainExport),allOf(capability(user,service:problemReports.retainExport),workspace-member),allOf(capability(code,service:problemReports.retainExport),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-retention-choice",
+        "change": "Requires verified human shell identity and owner binding to change local export retention for a report."
+      },
+      "capability": "service:problemReports.retainExport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.send",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "send",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.send"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.send),allOf(capability(user,service:problemReports.send),workspace-member),allOf(capability(code,service:problemReports.send),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-reviewed-send",
+        "change": "Requires verified human shell identity and matching owner, revision, and prepared digest before queueing a reviewed report for transport."
+      },
+      "capability": "service:problemReports.send",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.serverConsent",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "serverConsent",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.serverConsent"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.serverConsent),allOf(capability(user,service:problemReports.serverConsent),workspace-member),allOf(capability(code,service:problemReports.serverConsent),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-owned-server-consent-read",
+        "change": "Requires the verified human shell identity and reads consent for the locally owned server only."
+      },
+      "capability": "service:problemReports.serverConsent",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.transport",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "transport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.transport"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.transport),allOf(capability(user,service:problemReports.transport),workspace-member),allOf(capability(code,service:problemReports.transport),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-desktop-report-forwarding",
+        "change": "Forwards reviewed desktop reports through the paired server to the fixed reporting destination. It requires verified shell identity; uploads verify bundle identity and digest. The desktop delivery path owns the prepared local draft; this server forwarding method does not independently check desktop draft state."
+      },
+      "capability": "service:problemReports.transport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.update",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "update",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.update"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.update),allOf(capability(user,service:problemReports.update),workspace-member),allOf(capability(code,service:problemReports.update),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-revisioned-draft",
+        "change": "Changes a local draft only for its owner and workspace at the expected revision; publication remains separately human-gated."
+      },
+      "capability": "service:problemReports.update",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.usageTransport",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "usageTransport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.usageTransport"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.usageTransport),allOf(capability(user,service:problemReports.usageTransport),workspace-member),allOf(capability(code,service:problemReports.usageTransport),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-desktop-usage-forwarding",
+        "change": "Forwards identifier-free aggregate usage from the paired desktop through the server; it requires verified shell identity and contains no report contents."
+      },
+      "capability": "service:problemReports.usageTransport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:push.listRegistrations",
       "rpcPlane": "host-service",
       "owner": "push",

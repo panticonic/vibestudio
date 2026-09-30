@@ -8,6 +8,8 @@ import {
   RemoteRpcError,
   RpcBoundaryError,
   rpcErrorKindOf,
+  rpcDiagnosticIdOf,
+  attachRpcDiagnosticId,
 } from "./errors.js";
 import { IROH_CONNECTION_LOST_CODE } from "@vibestudio/iroh-transport";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
@@ -158,5 +160,22 @@ describe("Iroh connection loss reaching a caller", () => {
   it("still reports an untagged handler failure as a failure", () => {
     const relayed = new RemoteRpcError("no such record", rpcErrorKindOf(new Error("x")), undefined);
     expect(isRpcConnectionLost(relayed)).toBe(false);
+  });
+});
+
+describe("diagnostic origin", () => {
+  it("preserves a frozen domain error and finds its origin through forwarding causes", () => {
+    const original = Object.freeze(
+      new RemoteRpcError("original domain error", "access", "EACCES", { reason: "denied" })
+    );
+    const id = "7255b66a-6f86-40df-b2eb-6805e7d47c4b";
+    attachRpcDiagnosticId(original, id);
+    expect(rpcDiagnosticIdOf(new Error("forwarded", { cause: original }))).toBe(id);
+    expect(original.code).toBe("EACCES");
+    expect(original.errorKind).toBe("access");
+    expect(Object.hasOwn(original, "diagnosticId")).toBe(false);
+    const cyclic = new Error("cycle");
+    cyclic.cause = cyclic;
+    expect(rpcDiagnosticIdOf(cyclic)).toBeUndefined();
   });
 });
