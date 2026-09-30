@@ -24,7 +24,6 @@ import {
   clipboard,
   type MenuItemConstructorOptions,
   type WebContents,
-  type NativeImage,
   session,
   shell,
   webContents as electronWebContents,
@@ -1796,11 +1795,9 @@ export class ViewManager {
     this.automationSurfaceIds.add(id);
     if (managed.visible) return;
     this.presentAutomationSurface(managed);
-    await this.waitForRender(managed.view.webContents);
-    // requestAnimationFrame proves renderer progress, not that Viz has
-    // committed the native surface. One bounded compositor turn closes that
-    // gap before the first CDP input or capture command arrives.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // This lease owns native geometry and residency. Frame readiness belongs
+    // to the screenshot command: a view covered by the shell may not receive
+    // animation or presentation callbacks even while its renderer is healthy.
   }
 
   private presentAutomationSurface(managed: ManagedView): void {
@@ -2493,38 +2490,6 @@ export class ViewManager {
   }
 
   /**
-   * Wait for a webContents to render a frame.
-   * Uses requestAnimationFrame via executeJavaScript to ensure compositor has rendered.
-   * Falls back to a short timeout if executeJavaScript fails.
-   */
-  private async waitForRender(contents: WebContents): Promise<void> {
-    const startTime = Date.now();
-    let timer: NodeJS.Timeout | undefined;
-
-    try {
-      // Wait for two animation frames - first schedules, second confirms render
-      await Promise.race([
-        contents.executeJavaScript(
-          "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
-        ),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("Renderer did not produce a frame")), 3_000);
-        }),
-      ]);
-      log.trace(` waitForRender: frame rendered after ${Date.now() - startTime}ms`);
-    } catch (error) {
-      // Fall back to a short timeout if executeJavaScript fails (e.g., page not ready)
-      console.warn(
-        `[ViewManager] waitForRender: executeJavaScript failed, using fallback timeout ` +
-          `(webContentsId=${contents.id}, error=${error instanceof Error ? error.message : String(error)})`
-      );
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  /**
    * Execute an async operation with a view temporarily made visible.
    * For hidden views, shows them briefly, executes the operation, then restores visibility.
    * This is useful for screenshots and other operations that require the view to be rendered.
@@ -2548,8 +2513,7 @@ export class ViewManager {
 
       try {
         // Chromium cannot always produce a Viz surface for a WebContentsView
-        // whose parent window is hidden (capturePage then rejects with
-        // `UnknownVizError`). Reveal the parent without activating it for the
+        // whose parent window is hidden. Reveal the parent without activating it for the
         // duration of an inspection capture, and restore the user's exact
         // window state afterwards. This is especially important for hidden test,
         // headless, and background inspection surfaces.
@@ -2572,19 +2536,11 @@ export class ViewManager {
           // A headed macOS client must composite the real panel to obtain a Viz
           // frame, but appending the WebContentsView promotes its native layer
           // above the shell. Put it at the bottom of the native child stack
-          // before revealing it: capturePage still reads the panel's own surface
+          // before revealing it: the screenshot command reads the panel's own surface
           // while the user continues to see the shell and its overlays.
           if (!this.headless) this.window.contentView.addChildView(managed.view, 0);
           managed.view.setBounds(captureBounds);
           managed.view.setVisible(true);
-
-          // Wait for the compositor to render the view
-          await this.waitForRender(managed.view.webContents);
-          // A pair of renderer animation frames does not guarantee that Viz has
-          // committed the newly attached WebContentsView surface yet. Give the
-          // native compositor one bounded turn before capturePage; this avoids a
-          // first-frame UnknownVizError on otherwise healthy panels.
-          await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
         return await operation();
@@ -2617,75 +2573,18 @@ export class ViewManager {
     }
   }
 
-  /**
-   * Capture screenshot of a view using Electron's capturePage.
-   * For hidden views, temporarily makes them visible for capture.
-   */
-  async captureView(id: string): Promise<NativeImage | null> {
+  /** Supply native capture geometry without treating animation callbacks as readiness. */
+  async captureView<T>(
+    id: string,
+    capture: (contents: WebContents) => Promise<T>
+  ): Promise<T | null> {
     const managed = this.views.get(id);
-    if (!managed) {
-      return null;
-    }
-
-    const contents = managed.view.webContents;
-    if (contents.isDestroyed()) {
-      return null;
-    }
-
-    // An unslotted hidden panel (e.g. a programmatically-opened panel on the
-    // headless host that was never slotted into the UI) has no composited
-    // surface, so a raw capturePage would read back nothing. Force-paint it via
-    // withViewVisible — it shows the view at bounds, waits for two animation
-    // frames (waitForRender), captures, then restores visibility. This is the
-    // headless host's screenshot path (cdpHostProvider routes
-    // Page.captureScreenshot here), so it MUST render unslotted panels instead
-    // of declining. The isDestroyed bail above keeps it correct.
-    let lastError: unknown;
-    const attempts = this.headless ? 3 : 1;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const image = await this.withViewVisible(id, async () => {
-          const bounds = managed.view.getBounds();
-          const capture = contents.capturePage({
-            x: 0,
-            y: 0,
-            width: Math.max(1, Math.round(bounds.width)),
-            height: Math.max(1, Math.round(bounds.height)),
-          });
-          let timer: NodeJS.Timeout | undefined;
-          try {
-            return await Promise.race([
-              capture,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(
-                  () => reject(new Error("capturePage did not produce a frame within 3 seconds")),
-                  3_000
-                );
-              }),
-            ]);
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
-        });
-        if (!image || !image.isEmpty()) return image;
-        lastError = new Error("captureScreenshot returned an empty image");
-      } catch (error) {
-        lastError = error;
-      }
-
-      if (attempt < attempts - 1) {
-        // Viz can lose the first surface while a hidden WebContentsView is
-        // being attached. Invalidate and cycle the view before retrying the
-        // bounded capture; this recovers transient UnknownVizError failures
-        // without letting an inspection request hang indefinitely.
-        this.compositorRecovery.forceRepaint(id);
-        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
-      }
-    }
-
-    throw lastError instanceof Error
-      ? lastError
-      : new Error(`Failed to capture panel view ${id}: ${String(lastError)}`);
+    if (!managed || managed.view.webContents.isDestroyed()) return null;
+    return this.withViewVisible(id, async () => {
+      const contents = managed.view.webContents;
+      if (contents.isDestroyed()) return null;
+      return capture(contents);
+    });
   }
 
   /**

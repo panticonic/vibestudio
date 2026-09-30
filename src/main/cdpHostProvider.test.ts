@@ -8,6 +8,16 @@ import {
 } from "./cdpHostProvider.js";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
+vi.mock("electron", () => ({
+  webContents: {},
+  nativeImage: {
+    createFromBuffer: vi.fn(() => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 800, height: 600 }),
+    })),
+  },
+}));
+
 class FakeSocket extends EventEmitter implements CdpHostProviderSocket {
   readyState: number = WebSocket.OPEN;
   sent: string[] = [];
@@ -28,9 +38,17 @@ function createHarness(
   const openDevTools = vi.fn();
   let socketUrl = "";
   let socketProtocols: string[] = [];
-  const sendCommand = vi.fn<(...args: unknown[]) => Promise<unknown>>(async (method: unknown) =>
-    method === "Accessibility.getFullAXTree" ? { nodes: [{ nodeId: 1 }] } : { ok: true }
-  );
+  const sendCommand = vi.fn<(...args: unknown[]) => Promise<unknown>>(async (method, params) => {
+    if (method === "Accessibility.getFullAXTree") return { nodes: [{ nodeId: 1 }] };
+    if (method === "Page.captureScreenshot") {
+      return {
+        data: Buffer.from(
+          (params as { format: string }).format === "jpeg" ? "jpeg-bytes" : "png-bytes"
+        ).toString("base64"),
+      };
+    }
+    return { ok: true };
+  });
   const debuggerApi = Object.assign(new EventEmitter(), {
     attach: vi.fn(),
     detach: vi.fn(),
@@ -54,14 +72,9 @@ function createHarness(
     })),
     debugger: debuggerApi,
   });
-  // `Page.captureScreenshot` is routed through ViewManager.captureView (which
-  // force-paints + reads back a frame), not the raw debugger — so the harness
-  // supplies a fake image.
-  const captureView = vi.fn(async () => ({
-    toPNG: () => Buffer.from("png-bytes"),
-    toJPEG: (_quality: number) => Buffer.from("jpeg-bytes"),
-    getSize: () => ({ width: 800, height: 600 }),
-  }));
+  const captureView = vi.fn(async (_id: string, capture: (contents: never) => Promise<unknown>) =>
+    capture(contents as never)
+  );
   const setAutomationSurfaceActive = vi.fn(async () => undefined);
   const provider = new CdpHostProvider({
     serverUrl,
@@ -250,11 +263,7 @@ describe("CdpHostProvider", () => {
     });
   });
 
-  it("captures screenshots via ViewManager.captureView, bypassing the raw debugger", async () => {
-    // Raw `Page.captureScreenshot` over CDP blocks forever on an unslotted/hidden
-    // panel (no compositor frame, no timeout). The provider instead routes it
-    // through Electron's capturePage (force-paint + frame read-back), which can
-    // only resolve or fail — never hang. So the debugger must NOT be used here.
+  it("captures screenshots through Chrome after acquiring native capture geometry", async () => {
     const { provider, socket, debuggerApi, captureView } = createHarness();
     provider.registerTarget("panel-1", 42);
     provider.start();
@@ -269,8 +278,10 @@ describe("CdpHostProvider", () => {
       params: { format: "png" },
     });
 
-    expect(captureView).toHaveBeenCalledWith("panel-1");
-    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(captureView).toHaveBeenCalledWith("panel-1", expect.any(Function));
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
+      format: "png",
+    });
     const data = Buffer.from("png-bytes").toString("base64");
     expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
       type: "cdp:result",
@@ -297,8 +308,11 @@ describe("CdpHostProvider", () => {
       args: [{ format: "jpeg", quality: 60 }],
     });
 
-    expect(captureView).toHaveBeenCalledWith("panel-1");
-    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(captureView).toHaveBeenCalledWith("panel-1", expect.any(Function));
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 60,
+    });
     expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
       type: "host:result",
       targetId: "panel-1",
@@ -310,6 +324,19 @@ describe("CdpHostProvider", () => {
         height: 600,
       },
     });
+  });
+
+  it("preserves the debugger owned by an active automation lease after capture", async () => {
+    const { provider, debuggerApi } = createHarness();
+    await provider.handleProviderMessageForTest({
+      type: "cdp:control",
+      targetId: "panel-1",
+      active: true,
+    });
+    await provider.captureScreenshot("panel-1");
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+    await provider.handleProviderMessageForTest({ type: "cdp:detach", targetId: "panel-1" });
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
   });
 
   it("does not mark targets attached when debugger attach fails unexpectedly", async () => {

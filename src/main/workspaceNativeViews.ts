@@ -103,8 +103,8 @@ export class WorkspaceNativeViews {
   focusView(id: string) {
     return this.window.focusView(this.nativeId(id));
   }
-  captureView(id: string) {
-    return this.window.captureView(this.nativeId(id));
+  captureView<T>(id: string, capture: (contents: Electron.WebContents) => Promise<T>) {
+    return this.window.captureView(this.nativeId(id), capture);
   }
   setAutomationSurfaceActive(id: string, active: boolean) {
     return this.window.setAutomationSurfaceActive(this.nativeId(id), active);

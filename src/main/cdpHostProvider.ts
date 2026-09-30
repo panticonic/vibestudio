@@ -1,7 +1,7 @@
 import { DOM_SNAPSHOT_EXPRESSION } from "@vibestudio/shared/panel/domSnapshot";
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
-import { webContents } from "electron";
+import { nativeImage, webContents } from "electron";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
@@ -415,13 +415,7 @@ export class CdpHostProvider {
     };
   }
 
-  /**
-   * Capture a screenshot of a panel view. The one screenshot path for both the
-   * `captureScreenshot` host command and intercepted `Page.captureScreenshot`
-   * CDP commands: routes through ViewManager.captureView (force-paints hidden/
-   * unslotted views, so it resolves or fails — never hangs like raw CDP capture
-   * on an uncomposited surface).
-   */
+  /** Both screenshot entry points use Chrome's capture command on the same CDP owner. */
   async captureScreenshot(
     targetId: string,
     options: { format?: string; quality?: number } = {}
@@ -431,28 +425,35 @@ export class CdpHostProvider {
     width: number;
     height: number;
   }> {
-    const image = await this.options.getViewManager()?.captureView(targetId);
-    if (!image) {
+    const format = options.format === "jpeg" ? "jpeg" : "png";
+    const shot = await this.options.getViewManager()?.captureView(targetId, async (contents) => {
+      await this.ensureDebuggerAttached(targetId, contents);
+      try {
+        // Chrome requests the target's compositor surface itself. Waiting for
+        // requestAnimationFrame first deadlocks an occluded native child view;
+        // capturePage cannot read a surface that has never been submitted.
+        const result = await contents.debugger.sendCommand("Page.captureScreenshot", {
+          format,
+          ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
+        });
+        const data = result.data as string;
+        const image = nativeImage.createFromBuffer(Buffer.from(data, "base64"));
+        if (image.isEmpty()) throw new Error("captureScreenshot returned an empty image");
+        return {
+          data,
+          mimeType: format === "jpeg" ? ("image/jpeg" as const) : ("image/png" as const),
+          ...image.getSize(),
+        };
+      } finally {
+        this.detachDebuggerIfIdle(targetId, contents);
+      }
+    });
+    if (!shot) {
       throw new Error(
         "captureScreenshot unavailable: panel view is not capturable (missing or destroyed)"
       );
     }
-    const size = image.getSize();
-    if (options.format === "jpeg") {
-      const quality = typeof options.quality === "number" ? options.quality : 80;
-      return {
-        data: image.toJPEG(quality).toString("base64"),
-        mimeType: "image/jpeg",
-        width: size.width,
-        height: size.height,
-      };
-    }
-    return {
-      data: image.toPNG().toString("base64"),
-      mimeType: "image/png",
-      width: size.width,
-      height: size.height,
-    };
+    return shot;
   }
 
   async handleProviderMessageForTest(message: ProviderMessage): Promise<void> {
@@ -783,16 +784,8 @@ export class CdpHostProvider {
     if (!targetId || !requestId || !method) return;
     try {
       await this.automationSurfaceReady.get(targetId);
-      // `Page.captureScreenshot` over raw CDP blocks FOREVER on a webContents
-      // whose surface isn't being composited (alive — Runtime.evaluate still
-      // returns — but unslotted/hidden, so the compositor never produces a
-      // frame and Chromium has no timeout). That one hung command parks the
-      // eval's runChain and wedges the whole EvalDO. Route it through Electron's
-      // capturePage (ViewManager.captureView), which force-paints the view
-      // (shows it at bounds + waits for a frame) and reads back a frame even for
-      // an unslotted hidden panel, or declines cleanly (null) only when the view
-      // is missing/destroyed — so this can only ever resolve or fail, never
-      // hang. No timeout.
+      // Both protocol and host screenshots share native geometry ownership
+      // and Chrome capture; hidden targets must not wait for rAF.
       if (method === "Page.captureScreenshot") {
         try {
           const format = (message.params?.["format"] ?? message.params?.["type"]) as

@@ -25,11 +25,9 @@ import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/c
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
-import { RpcBoundaryError } from "@vibestudio/rpc";
 
 const log = createDevLogger("CdpBridge");
 
-const NAV_COMMAND_TIMEOUT_MS = 30_000;
 const MODEL_AWARE_HOST_COMMANDS = new Set(["navigatePanel", "navigatePanelHistory", "reloadPanel"]);
 
 export const CDP_TARGET_LIFECYCLE_REASONS = {
@@ -93,10 +91,10 @@ interface PendingCommand {
   sessionId?: string;
 }
 
+/** Commands settle on provider results or explicit lifecycle failure, never elapsed time. */
 interface PendingNavCommand {
   resolve: (value?: unknown) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
   targetId: string;
   providerHostConnectionId?: string;
   resilientToTargetClose?: boolean;
@@ -318,15 +316,9 @@ export class CdpBridge {
     const requestId = String(this.nextRequestId++);
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingNavCommands.delete(requestId);
-        reject(new Error(`Navigation command timed out: ${command}`));
-      }, NAV_COMMAND_TIMEOUT_MS);
-
       this.pendingNavCommands.set(requestId, {
         resolve,
         reject,
-        timer,
         targetId,
         providerHostConnectionId: this.targetRegistry.get(targetId)?.hostConnectionId,
       });
@@ -346,7 +338,6 @@ export class CdpBridge {
       try {
         provider.send(JSON.stringify(msg));
       } catch (err) {
-        clearTimeout(timer);
         this.pendingNavCommands.delete(requestId);
         reject(err instanceof Error ? err : new Error(String(err)));
       }
@@ -371,33 +362,9 @@ export class CdpBridge {
     const requestId = String(this.nextRequestId++);
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingNavCommands.delete(requestId);
-        reject(
-          new RpcBoundaryError(
-            `Host command timed out: ${action}`,
-            "transport",
-            "host_command_timeout",
-            undefined,
-            {
-              code: "host_command_timeout",
-              failureKind: "infrastructure",
-              targetId,
-              action,
-              recovery: {
-                action: "reobserve",
-                instruction:
-                  "Observe the current panel lifecycle before deciding whether another host command is needed.",
-              },
-            }
-          )
-        );
-      }, NAV_COMMAND_TIMEOUT_MS);
-
       this.pendingNavCommands.set(requestId, {
         resolve,
         reject,
-        timer,
         targetId,
         providerHostConnectionId: this.targetRegistry.get(targetId)?.hostConnectionId,
         resilientToTargetClose: isModelAwareHostCommand(action),
@@ -414,7 +381,6 @@ export class CdpBridge {
           })
         );
       } catch (err) {
-        clearTimeout(timer);
         this.pendingNavCommands.delete(requestId);
         reject(err instanceof Error ? err : new Error(String(err)));
       }
@@ -434,21 +400,15 @@ export class CdpBridge {
     const requestId = String(this.nextRequestId++);
     const targetId = hostConnectionId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingNavCommands.delete(requestId);
-        reject(new Error(`Host command timed out: ${action}`));
-      }, NAV_COMMAND_TIMEOUT_MS);
       this.pendingNavCommands.set(requestId, {
         resolve,
         reject,
-        timer,
         targetId,
         providerHostConnectionId: hostConnectionId,
       });
       try {
         provider.send(JSON.stringify({ type: "host:operation", requestId, action, args }));
       } catch (error) {
-        clearTimeout(timer);
         this.pendingNavCommands.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -494,7 +454,6 @@ export class CdpBridge {
   async stop(): Promise<void> {
     // Reject all pending nav commands
     for (const [requestId, pending] of this.pendingNavCommands) {
-      clearTimeout(pending.timer);
       pending.reject(new Error("CDP bridge shutting down"));
       this.pendingNavCommands.delete(requestId);
     }
@@ -673,7 +632,7 @@ export class CdpBridge {
         // Target readiness is the provider's authenticated registration, not
         // a metadata round trip. In particular, panelTree.create can be the DO
         // request whose completion makes that metadata readable; awaiting it
-        // here creates a circular 30-second readiness timeout. Enrich in the
+        // here creates a circular readiness wait. Enrich in the
         // background and update only if this exact registration is still live.
         void Promise.resolve(this.getTargetInfo?.(targetId))
           .then((targetInfo) => {
@@ -775,7 +734,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.resolve();
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -787,7 +745,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.reject(new Error(msg.error ?? "Navigation failed"));
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -799,7 +756,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.resolve(msg.result);
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -811,7 +767,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.reject(new Error(msg.error ?? "Host command failed"));
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -823,7 +778,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.resolve(msg.result);
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -835,7 +789,6 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          clearTimeout(pending.timer);
           pending.reject(new Error(msg.error ?? "Host operation failed"));
           this.pendingNavCommands.delete(msg.requestId);
         }
@@ -1058,7 +1011,6 @@ export class CdpBridge {
   private flushProvider(hostConnectionId: string, reason: string): void {
     for (const [requestId, pending] of this.pendingNavCommands) {
       if (pending.providerHostConnectionId !== hostConnectionId) continue;
-      clearTimeout(pending.timer);
       pending.reject(new Error(reason));
       this.pendingNavCommands.delete(requestId);
     }
@@ -1137,7 +1089,6 @@ export class CdpBridge {
       if (pending.targetId !== targetId) continue;
       if (pending.resilientToTargetClose && reason === CDP_TARGET_LIFECYCLE_REASONS.closed)
         continue;
-      clearTimeout(pending.timer);
       pending.reject(new Error(reason));
       this.pendingNavCommands.delete(requestId);
     }
