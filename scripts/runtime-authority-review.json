@@ -1399,16 +1399,16 @@
       "change": "Reads the authenticated owner's consent revision and mode without changing it."
     },
     "host:problemReports.serverConsent": {
-      "review": "trusted-shell-owned-server-consent-read",
-      "change": "Requires the verified human shell identity and reads consent for the locally owned server only."
+      "review": "trusted-shell-connected-server-consent-read",
+      "change": "Requires the verified human shell identity and reads the authenticated user's consent on the connected local or headless server. It does not read another user's choice."
     },
     "host:problemReports.decide": {
       "review": "trusted-shell-local-consent-decision",
       "change": "Requires the verified human shell identity, owner binding, and expected revision before changing that owner's reporting consent; disabling aborts queued transport."
     },
     "host:problemReports.decideServer": {
-      "review": "trusted-shell-owned-server-consent-decision",
-      "change": "Requires the verified human shell identity and an actually owned server; expected revision prevents stale decisions."
+      "review": "trusted-shell-connected-server-consent-decision",
+      "change": "Requires the verified human shell identity and forwards only to the authenticated user's per-server consent receiver. Local and externally hosted servers use the same connection; expected revision prevents stale decisions. It never changes device consent or another user's choice."
     },
     "host:problemReports.create": {
       "review": "owner-scoped-local-draft",

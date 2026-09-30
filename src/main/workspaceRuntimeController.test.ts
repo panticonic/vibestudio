@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createDesktopWorkspaceRuntime,
   prepareDesktopWorkspaceRuntime,
@@ -17,11 +20,16 @@ const edges = vi.hoisted(() => ({
   cdp: vi.fn(),
   watch: vi.fn(),
   personal: vi.fn(),
+  reportingRoot: "",
 }));
 
 vi.mock("electron", () => ({
-  app: { getPath: () => "/tmp/runtime-test" },
+  app: { getPath: () => "/tmp/runtime-test", getVersion: () => "0.1.52" },
   session: { fromPartition: (partition: string) => ({ partition }) },
+}));
+vi.mock("@vibestudio/env-paths", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@vibestudio/env-paths")>()),
+  getCentralDataPath: () => edges.reportingRoot,
 }));
 vi.mock("./desktopWorkspaceController.js", () => ({
   createDesktopWorkspaceController: edges.controller,
@@ -210,17 +218,23 @@ describe("prepareDesktopWorkspaceRuntime", () => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  edges.reportingRoot = mkdtempSync(join(tmpdir(), "workspace-runtime-reporting-"));
   setWorkspaceAppTrust({ chromeApps: ["apps/shell"] });
   edges.partition.mockResolvedValue("persist:workspace-test");
   edges.personal.mockResolvedValue({ publishedServices: [] });
 });
 afterEach(async () => {
   await Promise.allSettled(closing.splice(0).map((runtime) => runtime.close()));
+  rmSync(edges.reportingRoot, { recursive: true, force: true });
   vi.useRealTimers();
   setWorkspaceAppTrust(null);
 });
 
-function fixture(workspaceId: string, personal = false) {
+function fixture(
+  workspaceId: string,
+  personal = false,
+  serverOwnership: WorkspaceSessionConnection["serverOwnership"] = "desktop-local"
+) {
   const orchestrator = {
     registerRuntimeClient: vi.fn(async (): Promise<void> => undefined),
     unregisterRuntimeClient: vi.fn(async () => undefined),
@@ -253,7 +267,10 @@ function fixture(workspaceId: string, personal = false) {
   const release = vi.fn();
   const directEvents = new Map<string, (payload: unknown) => void>();
   const serverClient = {
-    call: vi.fn(async () => undefined),
+    call: vi.fn(
+      async (_service: string, _method: string, _args: unknown[]): Promise<unknown> => undefined
+    ),
+    isConnected: () => true,
     getConnectionStatus: () => "connected",
     onDirectEvent: vi.fn((event: string, handler: (payload: unknown) => void) => {
       directEvents.set(event, handler);
@@ -287,8 +304,10 @@ function fixture(workspaceId: string, personal = false) {
   const runtime = createDesktopWorkspaceRuntime({
     connection: {
       workspaceId,
+      nativeStorageScope: `test:${workspaceId}`,
+      serverOwnership,
       statePath: `/tmp/${workspaceId}`,
-      connectionMode: "local",
+      connectionMode: serverOwnership === "external" ? "iroh" : "local",
       gatewayConfig: { serverUrl: "http://localhost/" },
       serverClient,
     } as unknown as WorkspaceSessionConnection,
@@ -358,6 +377,57 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
 }
 
 describe("workspace runtime ownership", () => {
+  it.each(["desktop-local", "external"] as const)(
+    "forwards a trusted user's server choice over the authenticated connection to a %s server",
+    async (ownership) => {
+      const owner = fixture("reporting", false, ownership);
+      const undecided = {
+        state: "undecided",
+        revision: 0,
+        policy: "problem-reporting.v2",
+        decidedAt: null,
+        pseudonym: null,
+      };
+      owner.serverClient.call.mockImplementation(async (service, method, args) => {
+        if (service === "account" && method === "getProfile")
+          return { userId: "alice", handle: "alice", displayName: "Alice", role: "member" };
+        if (service === "problemReports" && method === "consent") return undecided;
+        if (service === "problemReports" && method === "decide")
+          return { ...undecided, state: args[1], revision: 1 };
+        return undefined;
+      });
+      await owner.runtime.start();
+      const definition = owner.runtime.dispatcher
+        .getServiceDefinitions()
+        .find((service) => service.name === "problemReports")!;
+      const human = {
+        caller: createVerifiedCaller("native-system-shell", "shell", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      expect(await definition.handler!(human, "serverConsent", [])).toEqual(undecided);
+      expect(await definition.handler!(human, "decideServer", [0, "on"])).toMatchObject({
+        state: "on",
+        revision: 1,
+      });
+      expect(owner.serverClient.call).toHaveBeenCalledWith("problemReports", "decide", [0, "on"]);
+      expect(await definition.handler!(human, "consent", [])).toMatchObject({ state: "undecided" });
+      const agent = {
+        caller: createVerifiedCaller("agent", "do", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      await expect(definition.handler!(agent, "decideServer", [1, "off"])).rejects.toThrow(
+        "trusted reporting UI"
+      );
+      expect(
+        owner.serverClient.call.mock.calls.filter(([, method]) => method === "decide")
+      ).toHaveLength(1);
+    }
+  );
+
   it("registers the runtime while browser permissions are still loading", async () => {
     const permissions = deferred<string>();
     edges.partition.mockReturnValueOnce(permissions.promise);

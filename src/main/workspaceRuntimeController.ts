@@ -258,13 +258,10 @@ export function createDesktopWorkspaceRuntime(deps: {
     createProblemReportsService({
       store: reportingStore,
       usage: reportingUsage,
-      ownedServer:
-        connection.serverOwnership === "desktop-local"
-          ? {
-              consent: () => reportingRemote.consent(),
-              decide: (revision, state) => reportingRemote.decide(revision, state),
-            }
-          : undefined,
+      connectedServer: {
+        consent: () => reportingRemote.consent(),
+        decide: (revision, state) => reportingRemote.decide(revision, state),
+      },
       workspaceId,
       redact: (text) => text,
       prepareRedactor: async () => {

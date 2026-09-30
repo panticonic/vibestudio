@@ -488,8 +488,8 @@ Authority principals: `code`, `host`, `user`
 | `problemReports.transport` | Trusted native reporting uploader only: forward an exact approved bundle/status/deletion through the existing host credential broker. No secret is returned. |
 | `problemReports.importPrepared` | Copy an explicitly selected frozen report prepared on the connected server into a new local review report. It is a snapshot with provenance, never an editable mirror or automatic submission. |
 | `problemReports.collect` | Collect explicitly selected bounded runtime or server-log evidence into a revision-checked manual draft. Partial, denied, and expired sources remain visible. |
-| `problemReports.serverConsent` | Trusted desktop UI: read the independent reporting choice on its desktop-owned local server. Null means this desktop does not own the server; remote operators manage their own choice. |
-| `problemReports.decideServer` | Trusted desktop UI: explicitly change this user's independent reporting choice on the desktop-owned local server. This never changes the device choice or another user's choice; agents cannot consent. |
+| `problemReports.serverConsent` | Trusted desktop UI: read this user's independent reporting choice on the connected server, whether locally or remotely hosted. The choice applies across that user's workspaces on that server. Null means there is no separate connected-server choice. |
+| `problemReports.decideServer` | Trusted desktop UI: explicitly change this user's independent reporting choice on the connected server, whether locally or remotely hosted. This never changes the device choice or another user's choice; agents cannot consent. |
 | `problemReports.consent` | Read this user's reporting choice for this capture installation. |
 | `problemReports.decide` | Trusted human shell/CLI only: persist automatic reporting choice. Agents cannot consent. |
 | `problemReports.create` | Create a local manual problem report. Does not send or enroll reporting. |

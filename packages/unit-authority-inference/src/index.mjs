@@ -431,23 +431,34 @@ export function inferWorkspacePackageReferences(source, workspacePackageNames) {
  */
 export function inferHostedRuntimeCapabilities(source, hostCapabilities) {
   const capabilities = new Set();
-  for (const [facade, service] of Object.entries(HOSTED_RUNTIME_FACADES)) {
-    const pattern = new RegExp(
-      `\\b${facade}\\s*\\.\\s*([A-Za-z_$][\\w$]*(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*)\\s*\\(`,
-      "g"
-    );
-    for (const match of source.matchAll(pattern)) {
-      const methodPath = match[1].replace(/\\s+/g, "");
-      const facadeCall = `${facade}.${methodPath}`;
-      const serviceMethods = HOSTED_RUNTIME_DERIVED_METHODS[facadeCall] ?? [
-        `${service}.${methodPath}`,
-      ];
-      for (const serviceMethod of serviceMethods) {
-        const capability = `service:${serviceMethod}`;
-        if (hostCapabilities.has(capability)) capabilities.add(capability);
-      }
+  // The textual anchor avoids parsing unrelated dependency modules. Actual
+  // calls must come from syntax: SDK documentation and client.webhooks are not
+  // calls to the hosted-runtime webhooks facade.
+  const anchors = Object.keys(HOSTED_RUNTIME_FACADES).join("|");
+  if (!new RegExp(`\\b(?:${anchors})\\s*(?:\\?\\.|\\.)`).test(source)) return capabilities;
+  const visit = (node) => {
+    if (!ts.isCallExpression(node)) return;
+    let receiver = node.expression;
+    const members = [];
+    while (ts.isPropertyAccessExpression(receiver)) {
+      members.unshift(receiver.name.text);
+      receiver = receiver.expression;
     }
-  }
+    if (!ts.isIdentifier(receiver) || members.length === 0) return;
+    const facade = receiver.text === "runtime" ? members.shift() : receiver.text;
+    const service = HOSTED_RUNTIME_FACADES[facade];
+    if (!service || members.length === 0) return;
+    const methodPath = members.join(".");
+    const facadeCall = `${facade}.${methodPath}`;
+    const serviceMethods = HOSTED_RUNTIME_DERIVED_METHODS[facadeCall] ?? [
+      `${service}.${methodPath}`,
+    ];
+    for (const serviceMethod of serviceMethods) {
+      const capability = `service:${serviceMethod}`;
+      if (hostCapabilities.has(capability)) capabilities.add(capability);
+    }
+  };
+  for (const sourceFile of sourceFilesFor(source)) walkNodes(sourceFile, visit);
   return capabilities;
 }
 
