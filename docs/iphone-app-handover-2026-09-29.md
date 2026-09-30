@@ -1,9 +1,9 @@
 # iPhone app handover — 2026-09-29
 
-**Current status (2026-09-30):** Signed Release builds and simulator bootstrap
-launch, rotation, and foreground recovery passed. End-to-end pairing remains
-unverified. Warm pairing-link delivery has since been repaired and the visible
-review screen verified; credential creation and activation still need testing. Read
+**Current status (2026-09-30):** Signed Release builds, simulator bootstrap
+launch, rotation, foreground recovery, and pairing passed. Debug installation
+and connection to Metro passed too. Streamed workspace activation and recovery
+remain unverified. Computer Use cannot currently access native windows. Read
 the latest checkpoint below for continuation; earlier sections preserve the
 original handover.
 
@@ -394,3 +394,67 @@ guidance, and accept TestFlight's 90-day expiry. Reuse the existing desktop phon
 provisioning service and System-owned phone setup flow, rather than creating
 a second installer. Reviewed distribution needs a separate assessment of the
 streamed executable bundle design against Apple's review requirements.
+
+### Pairing, Debug installation, and workspace provisioning checkpoint
+
+The invitation for `iphone-20260930-0210` referred to a server that had already
+exited and whose temporary root was gone when Pair was clicked. The resulting
+connection failure does not establish an iOS Iroh transport defect. A fresh,
+owned ephemeral instance `iphone-20260930-0220` stayed live, and pairing reached
+**Start this workspace?** for the System template. Credential creation and the
+pairing handshake therefore passed. Workspace activation was not clicked or
+verified before native-window access became unavailable.
+
+The first Debug build succeeded, but installation looked for
+`Debug-iphoneos/Vibestudio.app` after Xcode built `Debug-iphonesimulator`: an
+explicit simulator UDID incorrectly selected the physical SDK/product path.
+The SDK and destination now come from one build-target calculation, and artifact
+selection uses that same SDK. The normal installer rerun exited zero; the Debug
+app launched and connected to Metro. Evidence is in
+`/tmp/vibestudio-ios-debug-install-20260930.log` and
+`/tmp/vibestudio-iphone-metro-20260930.log`. `mobile dev` now forwards a selected
+simulator UDID instead of ignoring it. Published in `850aa89ea`.
+
+The desktop workspace phone setup service now forwards the discovered simulator
+kind to the existing installer. Discovery shares the installer's iOS-only,
+available simulator filter. Physical discovery uses CoreDevice JSON with the
+current Xcode 27 `properties` schema, excludes Macs and simulated entries, and
+requires a paired connection before declaring a phone ready. Actual discovery
+succeeded without duplicating the booted simulator as a physical phone.
+Published in `3ffeb838e`. Ten provisioning tests passed, including detached
+native cancellation; ten iOS helper tests passed. Physical discovery remains
+fixture-tested only. Full commit checks passed for both commits.
+
+The bootstrap now highlights Pair when no launch session exists and removes a
+duplicate pairing instruction. Metro served this updated source, but visual
+verification of that small layout change is still pending.
+
+Computer Use returned `cgWindowNotFound` for both Device Hub and Xcode, although
+the simulator remained booted and its app connected to Metro. Rebinding the apps
+and checking the native-window inventory did not restore access. Do not replace
+interactive acceptance with CLI launch evidence, or bypass the UI through a
+second automation mechanism. Resume at workspace trust review once native
+windows are accessible, then test bundle streaming, rendered panels, messages,
+stored-credential restoration, reconnect, and permission/lifecycle recovery.
+
+All 17 tracked server, Metro, and app processes retired; none was a zombie in
+the pre-stop snapshot. The exact owned simulator was shut down. The server's
+interrupt shutdown logged repeated SIGINT/SIGTERM and `kill EPERM` from the IPC
+owner-loss handler; its processes exited but its ephemeral root remained. After
+checking the exact registry record, ephemeral ownership, and dead supervisor,
+the root was removed through `removeEphemeralInstanceRoot` and its registry entry
+unregistered. This is an observed shutdown/state-retirement defect, not evidence
+of a surviving process leak. Investigate the signal/ownership lifecycle before
+claiming automatic cleanup works for this launch route. No unrelated instance
+or process was stopped.
+
+Additional deployment gaps remain: iOS discovery still does not report installed
+apps or their compatibility; the current native marketing version is 0.1.0 while
+the desktop is 0.1.52. Derive a coherent native compatibility/version contract
+before allowing setup to skip installation. Simulator doctor checks still ask
+for physical signing. Physical-device signing, OAuth/notification behavior,
+APNs credentials, and actual TestFlight distribution need the unavailable phone
+and Apple/Firebase accounts. TestFlight's 90-day expiry is accepted, but review
+eligibility for executable workspace bundles must be resolved before relying on
+that route. Continue through the existing System phone setup extension and
+desktop provisioning service; do not create another installer.

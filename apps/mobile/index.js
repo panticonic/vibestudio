@@ -626,7 +626,8 @@ function VibestudioMobileHostBootstrap() {
     return () => subscription.remove();
   }, [handleIncomingConnectLink]);
 
-  const activeStep = approvals.length > 0 ? "approve" : pendingConnect ? "pair" : "load";
+  const activeStep =
+    approvals.length > 0 ? "approve" : pendingConnect || !launchSession ? "pair" : "load";
   const launchGate = approvals.length > 0 ? launchGateView({ approvals }) : null;
   const launchGateDetailsKey = launchGate?.approvalIds[0] ?? "launch-gate";
   const launchGateDetailsOpen =
@@ -754,10 +755,6 @@ function VibestudioMobileHostBootstrap() {
                 </View>
               ) : (
                 <>
-                  <Text style={styles.hint}>
-                    Open a Vibestudio pairing link or scan a QR code from a trusted desktop or
-                    terminal.
-                  </Text>
                   <ActionButton title="Scan QR" onPress={openScanner} />
                   <ActionButton title="Paste pairing link" onPress={pasteConnectLink} />
                   <ActionButton title="Retry" onPress={load} variant="secondary" />

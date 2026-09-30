@@ -144,3 +144,17 @@ App Store Connect access are unavailable now. TestFlight's 90-day build expiry
 is acceptable for beta distribution. Assess the streamed executable workspace
 bundle design against Apple's review requirements before relying on TestFlight
 or App Store approval. Continue independent simulator acceptance work.
+
+### Latest verification: 2026-09-30
+
+Pairing with the live isolated `iphone-20260930-0220` server reached System
+workspace trust review. The earlier connection failure used an invitation for
+an already-stopped instance; no transport workaround was added. Debug install
+and Metro connection passed after repairing SDK/product selection for explicit
+simulator UDIDs. Workspace-guided installation now preserves simulator targets,
+and discovery excludes other Apple platforms and Macs. Streamed activation,
+rendered workspace use, and recovery remain unverified because Computer Use
+cannot currently access native windows. The owned server, Metro, app, and exact
+simulator were stopped; retained ephemeral state was removed after ownership
+verification. See the latest handover checkpoint for the observed shutdown
+signal defect and remaining deployment gaps.
