@@ -1,11 +1,13 @@
 # iPhone app handover — 2026-09-29
 
-**Current status (2026-09-30):** Signed Release builds, simulator bootstrap
-launch, rotation, foreground recovery, and pairing passed. Debug installation
-and connection to Metro passed too. Streamed workspace activation and recovery
-remain unverified. Computer Use cannot currently access native windows. Read
-the latest checkpoint below for continuation; earlier sections preserve the
-original handover.
+**Current status (2026-09-30):** Signed Release and Debug simulator installation,
+bootstrap launch, Metro connection, and pairing through workspace trust review
+passed. The previously recorded version/discovery, simulator doctor, supervisor
+shutdown, and Iroh runtime lifetime defects are fixed and published. Native
+XCTest verifies Iroh retirement. Streamed workspace activation and recovery
+remain unverified: activation confirmation is pending and native window capture
+has again returned `cgWindowNotFound`. Physical-device and distribution accounts
+are unavailable. Read the latest checkpoint below; earlier sections are historical.
 
 ## Original stopping point: 2026-09-29
 
@@ -458,3 +460,92 @@ and Apple/Firebase accounts. TestFlight's 90-day expiry is accepted, but review
 eligibility for executable workspace bundles must be resolved before relying on
 that route. Continue through the existing System phone setup extension and
 desktop provisioning service; do not create another installer.
+
+### Source repairs and native lifetime verification: 2026-09-30
+
+This checkpoint supersedes the source gaps in the preceding checkpoint.
+
+- `f1b56d1e9`: Root SemVer now generates the app-only numeric iOS marketing
+  version, checked at commit time. CoreDevice discovery includes installed apps,
+  applies the existing shared compatibility contract, and respects the configured
+  bundle ID. Workspace setup reuses a compatible installed iPhone shell without
+  requiring native sources and checks compatibility after installation. Simulator
+  doctor excludes physical signing; APNs checks use the entitlements generator's
+  actual environment input. The normal Debug installer and actual simulator
+  discovery reported version 0.1.52, compatible, with no issues. Twenty-two CLI
+  tests and eleven provisioning tests passed.
+- `f03a1804a`: The developer supervisor owns signals through child retirement and
+  ephemeral state cleanup. Repeated signals coalesce into one retirement;
+  competing Hub force-stop signaling was removed. Lifecycle entry points run
+  directly under Node's TS loader, avoiding an outer CLI wrapper that could exit
+  before cleanup. A regression failed before the fix and passed afterward. The
+  actual `iphone-shutdown-20260930-0810` CLI launch stopped with exit zero: all
+  eight tracked processes retired, the ephemeral root disappeared automatically,
+  and no `EPERM` occurred. Seventeen focused ownership tests passed; one
+  platform-specific test was skipped.
+- `c729c6a97`: Iroh implements native runtime invalidation. It closes owned
+  connections/endpoints, rejects late resources from a retired runtime, and
+  preserves persistent Keychain identities. The app-hosted native test target
+  proves a pending accept ends, the retired module is released, and a replacement
+  runtime rebinds the identity. Both tests passed on the owned iPhone 18 Pro,
+  iOS 27 simulator using normal ad hoc signing. Private evidence:
+  `/tmp/vibestudio-ios-native-lifecycle-20260930-0810.log` and `.xcresult`.
+
+Full commit checks passed for these commits, including host types/lint,
+version metadata, source boundaries, and external template hygiene. This task changed only the
+host repository; it did not edit the configured template repositories.
+Native unit execution does not establish streamed workspace acceptance.
+
+Native-window access briefly recovered and exposed the System workspace review,
+including Start/Quit. Activating System declares saved-account, workspace-data,
+and host-command access. The specific Start confirmation remains pending under
+Computer Use's action-time confirmation rule for material access grants; general
+autonomy does not satisfy that tool rule. No Start click has been made. A later
+rebind again returned `cgWindowNotFound`, and the inventory listed running apps
+without accessible windows. The cause is not established; do not claim that
+Accessibility permissions were absent or that source work was blocked by it.
+
+
+### Expanded native resource coverage and CI verification
+
+Published in `5a65b5fca` (native resource ownership) and `707577a17` (CI).
+
+The mobile host now uses one serial resource queue, including document-picker
+callbacks, and retires its bundle/asset streams, owned temporary archives, and
+picker promises when React Native invalidates it. Cleanup touches owned staging
+files only; committed bundles and durable stores survive. OAuth invalidation
+cancels the session and timer, rejects its pending promise once, and refuses new
+starts. Completion callbacks belong to the session that created them.
+
+All five app-hosted native XCTest cases passed on the same iPhone 18 Pro/iOS 27
+simulator. Evidence is `/tmp/vibestudio-ios-runtime-resources-fixed-20260930.log`
+and `.xcresult`. The initial expanded test build failed because its new Objective-C
+tests needed AuthenticationServices linked in the test target; that target
+metadata was repaired and the normal command rerun successfully. Three focused
+host Iroh contract tests passed. Native tests used no UI automation and do not
+establish real OAuth/browser or streamed workspace acceptance.
+
+The CI iOS build now uses a generic simulator destination with normal ad hoc
+signing through the shared scheme, rather than a fixed iPhone model, disabled
+signing, and global app-entitlement injection. It checks generated version
+metadata and covers native tooling changes in PR path filters. The exact command
+built successfully for both arm64 and x86_64; evidence is
+`/tmp/vibestudio-ios-ci-generic-20260930.log`.
+
+The owned `iphone-20260930-0725` server was stopped through its exact supervisor
+and awaited with exit zero. All eight tracked processes are gone and its
+registered ephemeral root disappeared automatically. Metro and both console
+launch sessions exited zero. All native builds/tests completed, and simulator
+`2E2862EF-43D4-432B-A483-9807C3F0C6E8` was shut down. No task-owned server,
+Metro, app, or native build is intentionally left running. No unrelated process
+was stopped. Continuation needs a new isolated server and fresh invite; do not
+reuse invitations for the retired instance.
+
+The unresolved work is explicit: restore native-window capture and obtain the
+pending workspace Start confirmation, then exercise streamed activation, rendered
+panels, agent messages, layout/keyboard behavior, stored state, warm links from a
+loaded workspace, reconnect and failure recovery. `mobile smoke --platform ios`
+remains unsupported. Physical signing, camera/permissions, real OAuth/APNs,
+associated-domain delivery, and TestFlight installation need the unavailable
+phone and accounts. The integration plan records the reviewed distribution
+architecture assessment; no beta URL or release approval exists.

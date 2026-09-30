@@ -76,7 +76,7 @@ Record the source revision, phone/simulator model, iOS version, build
 configuration, and captured evidence for each run. Do not mark a step complete
 from source-level tests alone.
 
-- [ ] Build and launch Debug on a simulator with Metro and Release with its
+- [x] Build and launch Debug on a simulator with Metro and Release with its
       bundled bootstrap and no Metro dependency.
 - [ ] Fresh pairing through a pasted link and a custom-scheme link downloads
       the workspace bundle and renders interactive workspace content. Invalid and
@@ -158,3 +158,64 @@ cannot currently access native windows. The owned server, Metro, app, and exact
 simulator were stopped; retained ephemeral state was removed after ownership
 verification. See the latest handover checkpoint for the observed shutdown
 signal defect and remaining deployment gaps.
+
+
+### Source gap closure: 2026-09-30
+
+The preceding window/shutdown/deployment source-gap checkpoint is historical.
+Published repairs align numeric iOS app versions with root SemVer, inspect and
+reuse compatible installed iOS apps, share custom signing/bundle configuration,
+and make simulator doctor independent of physical signing. The normal installer
+and real simulator discovery verified the version/compatibility result.
+
+Developer shutdown now retains one signal owner through ordered retirement and
+state cleanup; the real CLI launch exited zero with all tracked descendants gone
+and its ephemeral root removed automatically. Native Iroh runtime invalidation
+now closes transient resources and preserves identities. Two app-hosted native
+XCTest cases passed, including a pending accept and replacement-runtime rebind.
+See the latest handover for commits and private evidence paths.
+
+Pairing remains verified through System workspace trust review. Native capture
+briefly recovered, then returned `cgWindowNotFound` again. Workspace Start also
+awaits its specific access-grant confirmation. Streamed panels, agent messaging,
+restoration, reconnect, and full mobile layout acceptance remain open. Physical
+phone, signing, Firebase/APNs, and App Store Connect access remain unavailable.
+
+### Deployment decision
+
+Continue the existing System phone setup extension and desktop provisioning
+service. On a Mac, use its existing native build/install operation with the user's
+Apple signing configuration; reuse a compatible installed shell for pairing.
+No separate iPhone installer or credential service is needed.
+
+For users without a Mac, TestFlight remains a candidate, not an available release.
+Apple permits testing a build for up to 90 days and reviews the first external
+beta build. See [Apple's TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
+
+The current host downloads and activates executable React Native workspace
+bundles and exposes native modules. My assessment is that review eligibility is
+unresolved: guideline 2.5.2 restricts downloaded feature-changing code; its limited
+educational exception requires viewable, editable source. Guideline 4.7 permits
+certain external software but requires permission for native API exposure and
+adds consent, indexing, moderation, and age-rating obligations. A trust review
+alone does not establish compliance. See [Apple's review guidelines](https://developer.apple.com/app-store/review/guidelines/).
+
+Resolve this with Apple against the actual architecture before promising beta
+self-installation. Do not add a hidden review mode or a second runtime to disguise
+execution. If approval cannot accommodate the design, a product-level execution
+model decision is required; missing signing credentials are a separate blocker.
+
+
+### Expanded native verification
+
+All five native XCTest cases passed on iPhone 18 Pro / iOS 27: Iroh retirement
+and identity reuse, OAuth timeout/session retirement and module release, rejection
+after invalidation, and owned temporary-file cleanup with committed-file
+preservation. Browser-import callbacks now share the module's serial queue.
+The CI-equivalent generic signed Debug build passed for arm64 and x86_64.
+Private logs and results are referenced in the handover.
+
+The owned server, Metro, console sessions, builds/tests, and simulator were
+retired and awaited; all eight tracked server processes and its temporary root
+are gone. Recreate an isolated instance and fresh invitation for interactive
+continuation. The open acceptance items above remain open.
