@@ -24,17 +24,34 @@ export function sanitizeReportText(
         url.username = "";
         url.password = "";
         redactions.add("url-credentials-and-query");
+        return url.toString();
       }
-      return url.toString();
+      return candidate;
     } catch {
       return "[invalid URL removed]";
     }
   });
+  // Recognize credential syntax, rather than matching a sensitive word in
+  // ordinary prose (for example, "with future authorization: whether...").
   result = result.replace(
-    /\b(authorization|password|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*[^\s,;]+/gi,
-    (_, key: string) => {
+    /\b(authorization\s*:\s*)(?:Bearer|Basic)\s+[^\s,;]+/gi,
+    (_, field: string) => {
       redactions.add("sensitive-field");
-      return `${key}: [removed]`;
+      return `${field}[removed]`;
+    }
+  );
+  result = result.replace(
+    /^(\s*(?:authorization|password|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*)[^\r\n]+/gim,
+    (_, field: string) => {
+      redactions.add("sensitive-field");
+      return `${field}[removed]`;
+    }
+  );
+  result = result.replace(
+    /(["'])(authorization|password|api[_-]?key|access[_-]?token|secret)\1\s*:\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+    (_, quote: string, key: string) => {
+      redactions.add("sensitive-field");
+      return `${quote}${key}${quote}: ${quote}[removed]${quote}`;
     }
   );
   return { text: result, redactions: [...redactions] };
