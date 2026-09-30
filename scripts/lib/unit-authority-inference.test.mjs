@@ -27,7 +27,10 @@ function* shippedUnitDirectories() {
       if (!fs.existsSync(directory)) continue;
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (entry.isDirectory()) {
-          yield { name: `${template}/${root}/${entry.name}`, directory: path.join(directory, entry.name) };
+          yield {
+            name: `${template}/${root}/${entry.name}`,
+            directory: path.join(directory, entry.name),
+          };
         }
       }
     }
@@ -123,10 +126,10 @@ describe("inferTypedServiceClientCapabilities", () => {
       new Set([...host, "service:autofill.passwords.list"])
     );
 
-    assert.deepEqual([...inferred], [
-      "service:autofill.confirmSave",
-      "service:autofill.passwords.list",
-    ]);
+    assert.deepEqual(
+      [...inferred],
+      ["service:autofill.confirmSave", "service:autofill.passwords.list"]
+    );
   });
 
   it("walks deeply generated executable syntax without consuming the JavaScript stack", () => {
@@ -159,6 +162,37 @@ describe("hosted runtime service-backed methods", () => {
         ),
       ].sort(),
       ["service:browserEnvironment.listDownloads", "service:browserEnvironment.pauseDownload"]
+    );
+  });
+});
+
+describe("hosted-runtime facade call syntax", () => {
+  const host = new Set(["service:webhookIngress.rotateSecret", "service:vcs.push"]);
+
+  it("ignores SDK documentation, strings, and unrelated object members", () => {
+    const source = `
+      /** await client.webhooks.rotateSecret('whe_123'); */
+      // await webhooks.rotateSecret('subscription');
+      const example = "webhooks.rotateSecret('subscription')";
+      await client.webhooks.rotateSecret('whe_123');
+      await client.vcs.push('main');
+    `;
+    assert.deepEqual([...inferHostedRuntimeCapabilities(source, host)], []);
+    assert.deepEqual(
+      [...inferUnitTransportCapabilities(source, { hostCapabilities: host })],
+      ["context.boundary"]
+    );
+  });
+
+  it("still charges direct and runtime namespace facade calls, including optional calls", () => {
+    assert.deepEqual(
+      [
+        ...inferHostedRuntimeCapabilities(
+          `await webhooks.rotateSecret('subscription'); await runtime.vcs?.push('main');`,
+          host
+        ),
+      ].sort(),
+      [...host].sort()
     );
   });
 });
