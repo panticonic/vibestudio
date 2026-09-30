@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { it, expect, afterEach } from "vitest";
+import { it, expect, afterEach, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { problemReportsMethods } from "@vibestudio/service-schemas/problemReports";
@@ -16,7 +16,11 @@ afterEach(() =>
     .reverse()
     .forEach((fn) => fn())
 );
-function fixture(ownedServer?: Parameters<typeof createProblemReportsService>[0]["ownedServer"]) {
+function fixture(
+  connectedServer?: Parameters<typeof createProblemReportsService>[0]["connectedServer"],
+  approveSend?: Parameters<typeof createProblemReportsService>[0]["approveSend"],
+  forwardDraft?: Parameters<typeof createProblemReportsService>[0]["forwardDraft"]
+) {
   const dir = mkdtempSync(join(tmpdir(), "report-service-"));
   const store = new ProblemReportingStore(dir);
   cleanup.push(
@@ -25,7 +29,9 @@ function fixture(ownedServer?: Parameters<typeof createProblemReportsService>[0]
   );
   const service = createProblemReportsService({
     store,
-    ownedServer,
+    connectedServer,
+    approveSend,
+    forwardDraft,
     workspaceId: "ws",
     redact: (text) => text.replaceAll("registered-sensitive-token", "[secret removed]"),
     importPrepared: async () =>
@@ -125,7 +131,7 @@ it("edits only draft content while the host assigns identity and revision and pr
   await expect(f.human.send(draft.id, draft.revision, preview.digest)).rejects.toThrow();
 });
 
-it("exposes an owned server's independent choice only through trusted human controls", async () => {
+it("exposes the connected server's independent per-user choice only through trusted human controls", async () => {
   const remote = fixture();
   const local = fixture({
     consent: () => remote.human.consent(),
@@ -138,8 +144,124 @@ it("exposes an owned server's independent choice only through trusted human cont
   await local.human.decideServer(0, "on");
   expect((await local.human.consent()).state).toBe("off");
   expect((await remote.human.consent()).state).toBe("on");
+  expect(remote.store.consent("bob").state).toBe("undecided");
+  const otherWorkspace = createProblemReportsService({
+    store: remote.store,
+    workspaceId: "another-workspace",
+    redact: (text) => text,
+  });
+  expect(
+    await otherWorkspace.handler!(
+      {
+        caller: createVerifiedCaller("shell-other-workspace", "shell", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      },
+      "consent",
+      []
+    )
+  ).toMatchObject({ state: "on", revision: 1 });
   await expect(local.human.decideServer(0, "off")).rejects.toThrow("Consent changed");
-  const external = fixture();
-  expect(await external.human.serverConsent()).toBeNull();
-  await expect(external.human.decideServer(0, "on")).rejects.toThrow("does not own");
+  const withoutConnection = fixture();
+  expect(await withoutConnection.human.serverConsent()).toBeNull();
+  await expect(withoutConnection.human.decideServer(0, "on")).rejects.toThrow(
+    "No connected server"
+  );
+});
+
+it("submits an agent-prepared report only after targeted approval, even with automatic reporting off", async () => {
+  const approve = vi.fn(async () => true);
+  const f = fixture(undefined, approve);
+  await f.human.decide(0, "off");
+  const draft = await f.agent.create(reportFixture().problem);
+  const preview = await f.agent.prepare(draft.id, draft.revision);
+  await f.agent.send(draft.id, draft.revision, preview.digest);
+  expect(approve).toHaveBeenCalledWith(
+    expect.objectContaining({
+      caller: expect.objectContaining({ subject: expect.objectContaining({ userId: "alice" }) }),
+    }),
+    draft.value,
+    preview.digest
+  );
+  expect((await f.human.consent()).state).toBe("off");
+  expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).toBe("queued");
+});
+it("keeps a denied agent report unsent and does not request approval for forged or another owner's previews", async () => {
+  const approve = vi.fn(async () => false);
+  const f = fixture(undefined, approve);
+  const draft = await f.agent.create(reportFixture().problem);
+  const preview = await f.agent.prepare(draft.id, draft.revision);
+  await expect(f.other.send(draft.id, draft.revision, preview.digest)).rejects.toThrow();
+  await expect(f.agent.send(draft.id, draft.revision, "0".repeat(64))).rejects.toThrow();
+  expect(approve).not.toHaveBeenCalled();
+  await expect(f.agent.send(draft.id, draft.revision, preview.digest)).rejects.toThrow(
+    "not approved"
+  );
+  expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).toBe("prepared");
+});
+it("does not upload a report edited while its submission approval is pending", async () => {
+  let accept!: (value: boolean) => void;
+  const f = fixture(
+    undefined,
+    () =>
+      new Promise<boolean>((resolve) => {
+        accept = resolve;
+      })
+  );
+  const draft = await f.agent.create(reportFixture().problem);
+  const preview = await f.agent.prepare(draft.id, draft.revision);
+  const pending = f.agent.send(draft.id, draft.revision, preview.digest);
+  await f.agent.update(draft.id, draft.revision, {
+    problem: { ...draft.value.problem, symptom: "A newer user correction" },
+    references: [],
+    narrative: [],
+    evidence: [],
+    attachments: [],
+  });
+  accept(true);
+  await expect(pending).rejects.toThrow("Report changed");
+  expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).not.toBe("queued");
+});
+
+it("preserves substantial narrative in the agent-side handoff without a launch-prompt payload", async () => {
+  const destination = { reportId: randomUUID(), revision: 2 };
+  const forward = vi.fn(async () => destination);
+  const f = fixture(undefined, undefined, forward);
+  const draft = await f.human.importPrepared({
+    reportId: randomUUID(),
+    revision: 1,
+    digest: "a".repeat(64),
+  });
+  expect(JSON.stringify(draft.value.narrative).length).toBeGreaterThan(4000);
+  expect(await f.human.forConversation(draft.id, draft.revision)).toEqual(destination);
+  expect(forward).toHaveBeenCalledWith(draft.value);
+  await expect(f.other.forConversation(draft.id, draft.revision)).rejects.toThrow();
+  await expect(f.human.forConversation(draft.id, draft.revision + 1)).rejects.toThrow();
+  expect(forward).toHaveBeenCalledTimes(1);
+});
+it("leaves a server draft in place when the reporting conversation already runs on that server", async () => {
+  const f = fixture();
+  const draft = await f.agent.create(reportFixture().problem);
+  expect(await f.agent.forConversation(draft.id, draft.revision)).toEqual({
+    reportId: draft.id,
+    revision: draft.revision,
+  });
+});
+it("does not upload a cancelled report after its pending approval is accepted", async () => {
+  let accept!: (value: boolean) => void;
+  const f = fixture(
+    undefined,
+    () =>
+      new Promise<boolean>((resolve) => {
+        accept = resolve;
+      })
+  );
+  const draft = await f.agent.create(reportFixture().problem);
+  const preview = await f.agent.prepare(draft.id, draft.revision);
+  const pending = f.agent.send(draft.id, draft.revision, preview.digest);
+  await f.agent.cancel(draft.id);
+  accept(true);
+  await expect(pending).rejects.toThrow();
+  expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).not.toBe("queued");
 });

@@ -483,7 +483,7 @@ interface KernelLeaseState {
 
 export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
-  static override schemaVersion = 3;
+  static override schemaVersion = 4;
 
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;
@@ -667,8 +667,8 @@ export class EvalDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS run_result_artifacts (
-      run_id TEXT PRIMARY KEY,
-      owner TEXT NOT NULL
+      run_id TEXT NOT NULL,
+      owner TEXT PRIMARY KEY
     )`);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS run_checkpoints (
@@ -3171,22 +3171,24 @@ export class EvalDO extends DurableObjectBase {
     if (!result.success) return result;
     const row = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
     if (row?.["status"] !== "running") return result;
-    const owner = `eval-result:${runId}`;
     const work = (async () => {
       let found = false;
       const returnValue = await mapEvalResultLeaves(result.returnValue, async (value) => {
         const image = evalImagePayloadSchema.safeParse(value);
         if (!image.success) return undefined;
-        if (!found) {
-          // Record ownership before the first upload, including nested images.
-          this.sql.exec(
-            `INSERT OR IGNORE INTO run_result_artifacts(run_id, owner) VALUES (?, ?)`,
-            runId,
-            owner
-          );
-          found = true;
-        }
         const { data, ...metadata } = image.data;
+        // A retention owner names one immutable blob, not a run's collection.
+        // Content-qualified owners are stable for retries and repeated images.
+        const digest = createHash("sha256").update(data, "base64").digest("hex");
+        const owner = `eval-result:${runId}:${digest}`;
+        // Record every ownership intent before upload so partial success and
+        // interrupted writes remain covered by the same disposal boundary.
+        this.sql.exec(
+          `INSERT OR IGNORE INTO run_result_artifacts(run_id, owner) VALUES (?, ?)`,
+          runId,
+          owner
+        );
+        found = true;
         const stored = await this.infrastructureExecution().blobstore.putRetained({
           base64: data,
           owner,

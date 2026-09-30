@@ -5,7 +5,7 @@ Status: implementation specification, 2026-09-29. Companion to
 
 This document supplies the concrete contract for the reporting pipeline. Limits
 are initial product policy, defined once in code and shared by collectors,
-composer, uploader, and intake validation. They are not alternate transport
+draft service, uploader, and intake validation. They are not alternate transport
 formats or a second report system.
 
 ## 1. Local observation, automatic sharing, and manual reporting
@@ -81,20 +81,20 @@ uploader key; it cannot cryptographically prove a human clicked a client dialog.
 
 `ProblemReportBundleV1` is a strict, versioned JSON object:
 
-| Field | Contents |
-| --- | --- |
-| `schema` | Literal `vibestudio.problem-report.v1`. |
-| `submissionId`, `reportId`, `reportRevision` | Opaque UUIDs and positive revision; submissionId is the idempotency coordinate. |
-| `intent` | Automatic diagnostic or manual problem. |
-| `createdAt`, `observedAt` | UTC timestamps; remote received time is recorded separately. |
-| `consent` | Applicable manual approval or automatic policy reference, policy version, approval time, destination. |
-| `environment` | Product/build/template versions, platform/architecture, runtime type; availability declared per field. |
-| `problem` | Category, component, operation/stage, stable failure code/kind, normalized product frames, optional user symptom/expected behavior. |
-| `occurrence` | Origin coordinate, fingerprint/version, observed count and first/last time, plus explicit sampling/drop completeness. |
-| `references` | Report-local refs and permitted exact causal coordinates, including optional prior receipt. |
-| `narrative` | User/agent-authored structured Markdown sections with evidence references. Empty for automatic reports. |
-| `evidence` | Bounded inline JSON/text sections with source, capture time, completeness, and sanitization metadata. |
-| `attachments` | Selected files, each with local attachment ID, MIME type, byte size, SHA-256 digest, and base64 bytes. |
+| Field                                        | Contents                                                                                                                            |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`                                     | Literal `vibestudio.problem-report.v1`.                                                                                             |
+| `submissionId`, `reportId`, `reportRevision` | Opaque UUIDs and positive revision; submissionId is the idempotency coordinate.                                                     |
+| `intent`                                     | Automatic diagnostic or manual problem.                                                                                             |
+| `createdAt`, `observedAt`                    | UTC timestamps; remote received time is recorded separately.                                                                        |
+| `consent`                                    | Applicable manual approval or automatic policy reference, policy version, approval time, destination.                               |
+| `environment`                                | Product/build/template versions, platform/architecture, runtime type; availability declared per field.                              |
+| `problem`                                    | Category, component, operation/stage, stable failure code/kind, normalized product frames, optional user symptom/expected behavior. |
+| `occurrence`                                 | Origin coordinate, fingerprint/version, observed count and first/last time, plus explicit sampling/drop completeness.               |
+| `references`                                 | Report-local refs and permitted exact causal coordinates, including optional prior receipt.                                         |
+| `narrative`                                  | User/agent-authored structured Markdown sections with evidence references. Empty for automatic reports.                             |
+| `evidence`                                   | Bounded inline JSON/text sections with source, capture time, completeness, and sanitization metadata.                               |
+| `attachments`                                | Selected files, each with local attachment ID, MIME type, byte size, SHA-256 digest, and base64 bytes.                              |
 
 Local-only ownership IDs, credential IDs, filesystem locations, and visibility
 grants are not wire fields. Nullable/unavailable versions are explicit; never
@@ -136,18 +136,18 @@ allowlist policy and consent revision rather than a per-report dialog.
 
 ## 5. Payload budgets
 
-| Item | Limit / behavior |
-| --- | --- |
-| Observation input message/field rendering | 16 KiB before normalization; reject/truncate unbounded fields with visible loss metadata. |
-| Automatic bundle | 16 KiB encoded; no attachments or free-text narrative. |
-| Manual diagnostic sections combined | 256 KiB UTF-8 JSON/text after sanitization. |
-| Manual narrative combined | 128 KiB UTF-8, independent of diagnostics; substantial reports are supported. |
-| Card summary | 2 KiB; a derived preview, never the full narrative. |
-| Attachments | At most five, 7 MiB decoded total; retain per-file sizes and digests. |
-| Whole manual bundle | 10 MiB encoded, including base64, metadata, narrative, and diagnostics. |
-| Collection | Five seconds overall, concurrency two collectors; partial results remain useful. |
-| Local background observation queue | 256 records and 1 MiB, whichever fills first; per-record caps precede enqueue. |
-| Automatic outbound allowance | One initial report per fingerprint/version per 24 hours; at most 20 automatic submissions/installation/day. |
+| Item                                      | Limit / behavior                                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Observation input message/field rendering | 16 KiB before normalization; reject/truncate unbounded fields with visible loss metadata.                   |
+| Automatic bundle                          | 16 KiB encoded; no attachments or free-text narrative.                                                      |
+| Manual diagnostic sections combined       | 256 KiB UTF-8 JSON/text after sanitization.                                                                 |
+| Manual narrative combined                 | 128 KiB UTF-8, independent of diagnostics; substantial reports are supported.                               |
+| Card summary                              | 2 KiB; a derived preview, never the full narrative.                                                         |
+| Attachments                               | At most five, 7 MiB decoded total; retain per-file sizes and digests.                                       |
+| Whole manual bundle                       | 10 MiB encoded, including base64, metadata, narrative, and diagnostics.                                     |
+| Collection                                | Five seconds overall, concurrency two collectors; partial results remain useful.                            |
+| Local background observation queue        | 256 records and 1 MiB, whichever fills first; per-record caps precede enqueue.                              |
+| Automatic outbound allowance              | One initial report per fingerprint/version per 24 hours; at most 20 automatic submissions/installation/day. |
 
 Collectors allocate budget before reading. Keep structured failure/identity and
 the nearest causal evidence first. Preserve valid JSON by dropping/trimming
@@ -203,15 +203,15 @@ record/byte budget, and cancellation/deadline. It returns an immutable section
 with an ID, typed value, capture/observation time, source coordinate, visibility
 decision, completeness, retained/omitted counts, and sanitization actions.
 
-| Collector | What it selects |
-| --- | --- |
-| Runtime health/logs | One supervised entity. Freeze sequence ceiling; up to 100 records at/before it, prioritizing failure-level records and nearest preceding context. |
-| Server logs | Exact boot, permitted source tag when known, frozen sequence ceiling; up to 100 nearby records. Time proximity is supporting context, not proof of causality. |
-| Agent invocation | `gad.diagnoseInvocation()` for exact trajectory/branch/invocation, bounded at 20 events, 20 commands, 50 effects. Original typed failure and receipt/outcome evidence take precedence. |
-| Build | Exact build key and failure diagnostics, related publication/revision if available; selected file snippets require manual inclusion. |
-| Panel | Exact device/process/panel/runtime attempt, health/lifecycle/component stack. State args and console excerpts are manual selections. |
-| Selected chat | Explicit message IDs plus referenced tool/card evidence; never the whole conversation unless deliberately selected within the budget. |
-| User files | Explicit picker/attachment handles with the user's read authority. No recursive workspace harvesting or arbitrary host path input. |
+| Collector           | What it selects                                                                                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime health/logs | One supervised entity. Freeze sequence ceiling; up to 100 records at/before it, prioritizing failure-level records and nearest preceding context.                                      |
+| Server logs         | Exact boot, permitted source tag when known, frozen sequence ceiling; up to 100 nearby records. Time proximity is supporting context, not proof of causality.                          |
+| Agent invocation    | `gad.diagnoseInvocation()` for exact trajectory/branch/invocation, bounded at 20 events, 20 commands, 50 effects. Original typed failure and receipt/outcome evidence take precedence. |
+| Build               | Exact build key and failure diagnostics, related publication/revision if available; selected file snippets require manual inclusion.                                                   |
+| Panel               | Exact device/process/panel/runtime attempt, health/lifecycle/component stack. State args and console excerpts are manual selections.                                                   |
+| Selected chat       | Explicit message IDs plus referenced tool/card evidence; never the whole conversation unless deliberately selected within the budget.                                                  |
+| User files          | Explicit picker/attachment handles with the user's read authority. No recursive workspace harvesting or arbitrary host path input.                                                     |
 
 Collect incident snapshots asynchronously after the observation; keep event
 coordinates and current failure value in the bounded input so rotating logs do
@@ -261,7 +261,7 @@ The intake labels authorship as uploader-asserted; it never authenticates an
 agent identity merely because the bundle names it.
 
 Ingestion validates structure and bounds but never executes commands, follows
-links, or launches a model. Dashboard and local composer render Markdown with
+links, or launches a model. Dashboard and host approval render report content with
 raw HTML disabled and no executable components. Evidence links resolve through
 authorized report APIs, not arbitrary URLs embedded in submitted prose.
 
@@ -338,13 +338,13 @@ validates every field before storage, including the automatic allowlist.
 Verify on the primary D1 binding; do not introduce stale replica reads into
 idempotency or acceptance decisions.
 
-| Status | Meaning / client action |
-| --- | --- |
-| 400 / 415 / 422 | Invalid format/schema; retain report, reject this frozen submission, show actionable reason. |
-| 401 / 403 | Pause for signature/local authority repair; do not discard the report. |
-| 409 | Submission identity conflict; stop and surface integrity mismatch. |
-| 413 | Payload too large; open editing with exact budget feedback. |
-| 429 | Retry same ID/digest after Retry-After. |
+| Status              | Meaning / client action                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| 400 / 415 / 422     | Invalid format/schema; retain report, reject this frozen submission, show actionable reason.   |
+| 401 / 403           | Pause for signature/local authority repair; do not discard the report.                         |
+| 409                 | Submission identity conflict; stop and surface integrity mismatch.                             |
+| 413                 | Payload too large; open editing with exact budget feedback.                                    |
+| 429                 | Retry same ID/digest after Retry-After.                                                        |
 | Network error / 5xx | Ambiguous outcome; query receipt or retry same ID/digest. Never create another ID to “fix” it. |
 
 Use jittered retry delays starting at 5 seconds and capped at 1 hour; honor a
@@ -359,15 +359,15 @@ to resolve an ambiguous accepted request before offering remote deletion.
 
 ### Fixed read/status/deletion routes
 
-| Route | Authority and response |
-| --- | --- |
-| `GET /v1/problem-reports/admin/reports` | Developer key. Bounded indexed filters for time/component/version/code/fingerprint/intent/status/machine-public-key; default 50, maximum 200 rows. |
-| `GET /v1/problem-reports/admin/overview` | Developer key. Time-bucketed aggregate counts with selected window/filters and query timestamp. |
-| `GET /v1/problem-reports/admin/reports/:submissionId` | Developer key. Index metadata, completeness and investigation links; no implicit bundle download. |
-| `GET /v1/problem-reports/admin/reports/:submissionId/bundle` | Developer key. Exact retained bytes/digest as a private download, or explicit deleted/expired outcome. |
-| `GET /v1/problem-reports/submissions/:submissionId/status` | Receipt secret. This submission's status/digest/receipt only. |
-| `DELETE /v1/problem-reports/submissions/:submissionId` | Receipt secret. Idempotent deletion request/status for this submission. |
-| `POST /v1/problem-reports/admin/sql` | Developer key. Administrative SQL as specified in the main plan; no anonymous SQL route. |
+| Route                                                        | Authority and response                                                                                                                             |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/problem-reports/admin/reports`                      | Developer key. Bounded indexed filters for time/component/version/code/fingerprint/intent/status/machine-public-key; default 50, maximum 200 rows. |
+| `GET /v1/problem-reports/admin/overview`                     | Developer key. Time-bucketed aggregate counts with selected window/filters and query timestamp.                                                    |
+| `GET /v1/problem-reports/admin/reports/:submissionId`        | Developer key. Index metadata, completeness and investigation links; no implicit bundle download.                                                  |
+| `GET /v1/problem-reports/admin/reports/:submissionId/bundle` | Developer key. Exact retained bytes/digest as a private download, or explicit deleted/expired outcome.                                             |
+| `GET /v1/problem-reports/submissions/:submissionId/status`   | Receipt secret. This submission's status/digest/receipt only.                                                                                      |
+| `DELETE /v1/problem-reports/submissions/:submissionId`       | Receipt secret. Idempotent deletion request/status for this submission.                                                                            |
+| `POST /v1/problem-reports/admin/sql`                         | Developer key. Administrative SQL as specified in the main plan; no anonymous SQL route.                                                           |
 
 List ordering is `(receivedAt, submissionId)` with opaque keyset cursors bound
 to the selected filters; return `nextCursor` and completeness. Default overview
@@ -425,15 +425,15 @@ secret, private signing key, or developer key.
 
 ## 12. Capture coverage and implementation gates
 
-| Failure owner | Required observation / verification |
-| --- | --- |
-| Service/RPC | Entire validation/admission/handler outcome and terminal stream errors; preserve origin ID through HTTP, session, worker/DO paths. |
-| Agent trajectory | Exact terminal failed invocation plus retry/recovery observations projected from durable events with replay cursor. |
-| Build/activation | Exact unit/build/revision diagnostics; user-source failures remain manual, not automatically product defects. |
+| Failure owner         | Required observation / verification                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Service/RPC           | Entire validation/admission/handler outcome and terminal stream errors; preserve origin ID through HTTP, session, worker/DO paths.                   |
+| Agent trajectory      | Exact terminal failed invocation plus retry/recovery observations projected from durable events with replay cursor.                                  |
+| Build/activation      | Exact unit/build/revision diagnostics; user-source failures remain manual, not automatically product defects.                                        |
 | Panel/mobile/headless | Render and initialization failure, main-frame load, renderer exit; no duplicate occurrence when console and lifecycle reflect the same known origin. |
-| Background work | Permanent readiness, scheduled-work, and supervision failure at the owning lifecycle boundary; retain original fault and later recovery. |
-| Server/main/bootstrap | Host-local unhandled failure and supervisor process-exit observation; useful even before pairing/server readiness. |
-| Quality feedback | Selected message or user-authored symptom with no exception; same narrative/composer contract. |
+| Background work       | Permanent readiness, scheduled-work, and supervision failure at the owning lifecycle boundary; retain original fault and later recovery.             |
+| Server/main/bootstrap | Host-local unhandled failure and supervisor process-exit observation; useful even before pairing/server readiness.                                   |
+| Quality feedback      | Selected message or user-authored symptom with no exception; same narrative and approval contract.                                                   |
 
 Audit each path before claiming complete capture; document paths without exact
 causal joins instead of inventing them. Capture remains independent of reporting

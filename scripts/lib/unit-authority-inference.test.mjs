@@ -186,6 +186,37 @@ describe("hosted runtime service-backed methods", () => {
   });
 });
 
+describe("hosted-runtime facade call syntax", () => {
+  const host = new Set(["service:webhookIngress.rotateSecret", "service:vcs.push"]);
+
+  it("ignores SDK documentation, strings, and unrelated object members", () => {
+    const source = `
+      /** await client.webhooks.rotateSecret('whe_123'); */
+      // await webhooks.rotateSecret('subscription');
+      const example = "webhooks.rotateSecret('subscription')";
+      await client.webhooks.rotateSecret('whe_123');
+      await client.vcs.push('main');
+    `;
+    assert.deepEqual([...inferHostedRuntimeCapabilities(source, host)], []);
+    assert.deepEqual(
+      [...inferUnitTransportCapabilities(source, { hostCapabilities: host })],
+      ["context.boundary"]
+    );
+  });
+
+  it("still charges direct and runtime namespace facade calls, including optional calls", () => {
+    assert.deepEqual(
+      [
+        ...inferHostedRuntimeCapabilities(
+          `await webhooks.rotateSecret('subscription'); await runtime.vcs?.push('main');`,
+          host
+        ),
+      ].sort(),
+      [...host].sort()
+    );
+  });
+});
+
 describe("inferDirectRpcCapabilities", () => {
   const direct = new Set(["rpc:publish", "rpc:subscribe", "rpc:subscribeChannel", "rpc:unknown"]);
 

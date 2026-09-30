@@ -270,3 +270,39 @@ The refreshed bundle's keyboard/rotation verification is still in progress.
 Hosted iOS CI was manually dispatched as run `36706691764`; successful ordinary
 push runs skipped that job. Device provisioning and distribution remain unavailable.
 See the latest handover checkpoint for exact evidence and owned-resource cleanup.
+
+### Panel-owned screen-edge geometry (2026-09-30)
+
+The app keeps panel canvases edge to edge. It does not add a safety strip or
+force panel padding. The mobile host publishes optional measured CSS properties
+`--vibestudio-safe-area-inset-top/right/bottom/left` and the appearance hint
+`--vibestudio-viewport-corner-radius-hint`. The shared UI foundation supplies
+browser `env()` defaults. Panels opt into these values for their own controls;
+scroll viewports retain their full canvas, with any spacing applied to content.
+Chat uses this contract for its composer and coordinates nested surface curves.
+The radius hint is approximate and uses no private hardware API.
+
+Hosted workflow [36706691764](https://github.com/panticonic/vibestudio/actions/runs/36706691764)
+passed the iOS Debug simulator build and all 13 app-hosted native tests together.
+Touch settings/composer and measured geometry source checks pass; final combined
+native keyboard/rotation acceptance is still being exercised in an isolated
+fixture. Physical hardware, signing, APNs/Firebase, and distribution access remain
+external acceptance requirements.
+
+Directional corner hints are now published separately for all four panel corners
+(System `d8475d1`). The host derives exposure from the measured panel/window
+edges, so a header or keyboard removes hints for the corners it excludes. Base
+`f49920d` rounds only the composer bottom corners with these hints; its top
+corners retain the normal card radius. Five geometry tests, 22 chat tests, both
+composition typechecks and checkout hygiene pass. Final native visual acceptance
+is tracked in the handover. A newly captured long-lived Debug/Metro reload
+assertion remains a separate native lifecycle gap; hosted native tests do not
+cover that sequence.
+
+Native acceptance on the fresh corner fixture confirms ordinary top composer
+corners, larger exposed bottom corners, portrait keyboard flattening, draft
+preservation across rotation, and mobile settings scrolling/Advanced expansion.
+There is no separate native safety strip. Landscape software-keyboard accessory
+overlap remains open, as does the separate Debug reload assertion. Owned test
+resources were stopped and awaited, simulator keyboard capture was restored,
+and the owned simulator and retired fixture state were cleaned up.

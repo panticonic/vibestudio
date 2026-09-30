@@ -122,6 +122,14 @@ export const problemReportsMethods = defineServiceMethods({
     returns: report,
     access: { sensitivity: "write" },
   },
+  forConversation: {
+    ...local,
+    description:
+      "Make a selected owned draft available where the reporting agent runs. Returns its agent-side ID and revision, preserving full narrative and evidence without embedding them in a launch prompt. Never submits or changes consent.",
+    args: z.tuple([id, z.number().int().positive()]),
+    returns: z.object({ reportId: id, revision: z.number().int().positive() }),
+    access: { sensitivity: "write" },
+  },
   collect: {
     ...local,
     description:
@@ -149,7 +157,7 @@ export const problemReportsMethods = defineServiceMethods({
   serverConsent: {
     ...local,
     description:
-      "Trusted desktop UI: read the independent reporting choice on its desktop-owned local server. Null means this desktop does not own the server; remote operators manage their own choice.",
+      "Trusted desktop UI: read this user's independent reporting choice on the connected server, whether locally or remotely hosted. The choice applies across that user's workspaces on that server. Null means there is no separate connected-server choice.",
     args: z.tuple([]),
     returns: consent.nullable(),
     access: { sensitivity: "read" },
@@ -158,7 +166,7 @@ export const problemReportsMethods = defineServiceMethods({
   decideServer: {
     ...local,
     description:
-      "Trusted desktop UI: explicitly change this user's independent reporting choice on the desktop-owned local server. This never changes the device choice or another user's choice; agents cannot consent.",
+      "Trusted desktop UI: explicitly change this user's independent reporting choice on the connected server, whether locally or remotely hosted. This never changes the device choice or another user's choice; agents cannot consent.",
     args: z.tuple([z.number().int().nonnegative(), z.enum(["off", "on"])]),
     returns: consent,
     access: { sensitivity: "write" },
@@ -213,7 +221,7 @@ export const problemReportsMethods = defineServiceMethods({
   send: {
     ...local,
     description:
-      "Trusted human shell/CLI only: approve exactly the reviewed frozen revision/digest for upload.",
+      "Request submission of an exact prepared revision/digest. Agents wait for a targeted one-time human approval; denial or a changed draft sends nothing. Trusted human callers approve directly. Never changes automatic reporting consent.",
     args: z.tuple([id, z.number().int().positive(), z.string().regex(/^[a-f0-9]{64}$/)]),
     returns: z.object({ queued: z.literal(true) }),
     access: { sensitivity: "write" },

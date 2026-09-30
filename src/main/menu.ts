@@ -1,3 +1,4 @@
+import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
 import { app, dialog, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
 import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
@@ -535,7 +536,7 @@ export function buildHamburgerMenuTemplate(
     { type: "separator" },
     {
       label: "Report a problem",
-      click: () => emitMenuEvent("open-settings", { section: "problem-reporting" }),
+      click: () => emitMenuEvent("open-command-agent", { prompt: problemReportingConversation() }),
     },
     {
       label: "About Vibestudio",
@@ -820,7 +821,8 @@ export function setupMenu(
         },
         {
           label: "Report a problem",
-          click: () => emitMenuEvent("open-settings", { section: "problem-reporting" }),
+          click: () =>
+            emitMenuEvent("open-command-agent", { prompt: problemReportingConversation() }),
         },
         {
           label: "About Vibestudio",

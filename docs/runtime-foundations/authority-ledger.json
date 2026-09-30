@@ -24592,8 +24592,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:problemReports.decideServer),allOf(capability(user,service:problemReports.decideServer),workspace-member),allOf(capability(code,service:problemReports.decideServer),workspace-member))",
       "r3b": {
-        "review": "trusted-shell-owned-server-consent-decision",
-        "change": "Requires the verified human shell identity and an actually owned server; expected revision prevents stale decisions."
+        "review": "trusted-shell-connected-server-consent-decision",
+        "change": "Requires the verified human shell identity and forwards only to the authenticated user's per-server consent receiver. Local and externally hosted servers use the same connection; expected revision prevents stale decisions. It never changes device consent or another user's choice."
       },
       "capability": "service:problemReports.decideServer",
       "parityAssertion": "generated-census:host-authority"
@@ -25144,8 +25144,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:problemReports.serverConsent),allOf(capability(user,service:problemReports.serverConsent),workspace-member),allOf(capability(code,service:problemReports.serverConsent),workspace-member))",
       "r3b": {
-        "review": "trusted-shell-owned-server-consent-read",
-        "change": "Requires the verified human shell identity and reads consent for the locally owned server only."
+        "review": "trusted-shell-connected-server-consent-read",
+        "change": "Requires the verified human shell identity and reads the authenticated user's consent on the connected local or headless server. It does not read another user's choice."
       },
       "capability": "service:problemReports.serverConsent",
       "parityAssertion": "generated-census:host-authority"

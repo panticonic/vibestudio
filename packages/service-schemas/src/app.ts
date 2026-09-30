@@ -51,14 +51,6 @@ export const ShellSurfaceTargetSchema = z.union([
   z
     .object({
       kind: z.literal("problem-report"),
-      prepared: z
-        .object({
-          reportId: z.string().uuid(),
-          revision: z.number().int().positive(),
-          digest: z.string().regex(/^[a-f0-9]{64}$/),
-        })
-        .strict()
-        .optional(),
     })
     .strict(),
   z.object({ kind: z.literal("about"), page: z.string().min(1).max(64) }).strict(),

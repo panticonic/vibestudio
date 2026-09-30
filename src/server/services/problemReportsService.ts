@@ -27,13 +27,21 @@ function owner(ctx: ServiceContext): string {
 function human(ctx: ServiceContext): void {
   // Verified transport identity, not the agent's claimed initiator or a draft flag.
   if (!["shell"].includes(ctx.caller.runtime.kind))
-    throw new Error("Use the trusted reporting UI or CLI; agents cannot consent or send");
+    throw new Error(
+      "Use the trusted reporting UI or CLI; agents cannot grant consent or bypass submission approval"
+    );
   owner(ctx);
 }
 export function createProblemReportsService(deps: {
   store: ProblemReportingStore;
+  forwardDraft?: (value: ProblemReportBundle) => Promise<{ reportId: string; revision: number }>;
+  approveSend?: (
+    ctx: ServiceContext,
+    report: ProblemReportBundle,
+    digest: string
+  ) => Promise<boolean>;
   usage?: UsageAnalytics;
-  ownedServer?: {
+  connectedServer?: {
     consent: () => Promise<ReturnType<ProblemReportingStore["consent"]>>;
     decide: (
       revision: number,
@@ -143,6 +151,11 @@ export function createProblemReportsService(deps: {
           value
         );
       },
+      forConversation: async (ctx, [id, revision]) => {
+        const report = store.get(owner(ctx), workspaceId, id);
+        if (report.revision !== revision) throw new Error("Report changed; refresh selection");
+        return deps.forwardDraft ? deps.forwardDraft(report.value) : { reportId: id, revision };
+      },
       collect: async (ctx, [id, revision, selections]) => {
         const current = store.get(owner(ctx), workspaceId, id);
         if (current.revision !== revision) throw new Error("Report changed; refresh selection");
@@ -165,12 +178,13 @@ export function createProblemReportsService(deps: {
       incidents: (ctx) => store.incidents(owner(ctx), workspaceId),
       serverConsent: (ctx) => {
         checkHuman(ctx);
-        return deps.ownedServer?.consent() ?? null;
+        return deps.connectedServer?.consent() ?? null;
       },
       decideServer: (ctx, [revision, state]) => {
         checkHuman(ctx);
-        if (!deps.ownedServer) throw new Error("This desktop does not own the connected server");
-        return deps.ownedServer.decide(revision, state);
+        if (!deps.connectedServer)
+          throw new Error("No connected server reporting choice is available");
+        return deps.connectedServer.decide(revision, state);
       },
       consent: (ctx) => store.consent(owner(ctx)),
       decide: (ctx, [revision, state]) => {
@@ -297,8 +311,19 @@ export function createProblemReportsService(deps: {
         deps.usage?.record(owner(ctx), "report-preview");
         return result;
       },
-      send: (ctx, [id, revision, digest]) => {
-        checkHuman(ctx);
+      send: async (ctx, [id, revision, digest]) => {
+        const report = store.get(owner(ctx), workspaceId, id);
+        if (report.revision !== revision) throw new Error("Report changed; prepare again");
+        const frozen = store.submission(owner(ctx), workspaceId, report.value.submissionId);
+        if (frozen["digest"] !== digest || frozen["state"] !== "prepared")
+          throw new Error("Exact prepared report unavailable");
+        const isHuman = deps.isHuman ? deps.isHuman(ctx) : ctx.caller.runtime.kind === "shell";
+        if (!isHuman) {
+          if (!deps.approveSend) throw new Error("Human reporting approval unavailable");
+          if (!(await deps.approveSend(ctx, report.value, digest)))
+            throw new Error("Report submission was not approved");
+          ctx.signal?.throwIfAborted();
+        }
         store.queue(owner(ctx), workspaceId, id, revision, digest);
         deps.usage?.record(owner(ctx), "report-queued");
         deps.wake?.();

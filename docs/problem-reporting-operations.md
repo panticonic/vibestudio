@@ -73,16 +73,31 @@ creation on 2026-09-30. Its service successfully read the live overview and
 queried `sqlite_schema` through the host-held credential after normal
 credential-use review. No bearer entered the workspace or evaluation code.
 
+## Headless server consent
+
+A desktop connection to an independently hosted server uses one combined
+first-start prompt for device and current-user server reporting. The unit audit
+waits for that decision, then shows the saved choice as its default. Subsequent
+audits keep the reporting option inline; there is no second server dialog.
+The preference is shared across workspaces. Accepting an explicit audit edit
+updates that preference; cancelling saves nothing. Different saved device and
+server choices remain mixed and untouched unless edited. Settings still exposes
+both scopes independently. Reconnect reloads server consent without adding a
+standalone prompt. Agents cannot answer the reporting choice. Trusted CLI setup
+can also record the server choice before a desktop connects.
+
 ## Product release boundary
 
 Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
 On 2026-09-30 ordinary template inspection, review, and publication produced
 Base `v0.3.58` at `9343aa2e4a88da9f50af9e1072a2eee6cafec283` and System
-`v0.3.68` at `740c6b00a747eb060565b825a39050feb1db46dd`. Their actual
+`v0.3.70` at `33ab644152659b2230bda51b2fefede526fbb2d4`. Their actual
 publication receipts supply the packaged host pins. A main-branch push alone
 does not update those pins. Never substitute fabricated receipts or moving
-branch refs for that release boundary.
+branch refs for that release boundary. System `v0.3.70` includes one combined first-start consent prompt and saved reporting defaults in subsequent unit audits. Its publication finalized after the normal
+workspace build/typecheck gate passed; the host pin was adopted from that
+publication receipt.
 
 During this release, a template update from a moved `refs/heads/main` pin failed
 while reconstructing its prior exact snapshot. This is a template refresh

@@ -48,6 +48,10 @@ export default defineConfig(async () => {
         enabled: true,
         provider: "playwright",
         headless: true,
+        screenshotDirectory: path.resolve(
+          __dirname,
+          "node_modules/.cache/vitest/browser-screenshots"
+        ),
         instances: [{ browser: "chromium" }],
       },
     },
