@@ -314,9 +314,13 @@ It renders report text and logs inertly. Local investigation is user-initiated
 and uses the existing panel diagnostic launcher or System Agent entry point;
 incident capture alone never starts paid model work.
 
-The first-use dialog offers **Enable automatic reports** and **Keep automatic
-reports off** equally, with no preselected answer. A choice is required to
-dismiss it; either answer permits normal use. Unknown consent fails closed.
+One first-start dialog offers **Enable automatic reports** and **Keep automatic
+reports off** equally for device and connected-server reporting. The unit audit
+waits for this decision. Subsequent unit audits show the saved preference as
+the default of an inline reporting option; accepting saves explicit edits,
+while cancellation saves nothing. Existing different device/server choices
+remain mixed and unchanged unless edited. There are no subsequent standalone
+server reporting dialogs. Unknown consent fails closed.
 Settings can revoke enrollment and cancel queued automatic reports. Manual
 reporting remains available while opted out. Follow the companion UI contract
 for exact copy, accessibility, scope, and reconnect behavior.
