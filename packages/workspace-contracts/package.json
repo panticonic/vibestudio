@@ -7,6 +7,7 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./serviceMutation": "./src/serviceMutation.ts",
     "./aboutNamespace": "./src/aboutNamespace.ts",
     "./sourceDirs": "./src/sourceDirs.ts",
     "./types": "./src/types.ts",
