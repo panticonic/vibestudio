@@ -91,11 +91,11 @@ can also record the server choice before a desktop connects.
 Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
 On 2026-09-30 ordinary template inspection, review, and publication produced
-Base `v0.3.58` at `9343aa2e4a88da9f50af9e1072a2eee6cafec283` and System
-`v0.3.70` at `33ab644152659b2230bda51b2fefede526fbb2d4`. Their actual
+Base `v0.3.59` at `00ede7f7b669422a3f71b171b75a979e16f82353` and System
+`v0.3.72` at `46cee0e7fd27ae8a027cefe809560cd0728eac5d`. Their actual
 publication receipts supply the packaged host pins. A main-branch push alone
 does not update those pins. Never substitute fabricated receipts or moving
-branch refs for that release boundary. System `v0.3.70` includes one combined first-start consent prompt and saved reporting defaults in subsequent unit audits. Its publication finalized after the normal
+branch refs for that release boundary. System `v0.3.72` removes the report form in favor of agent conversations and retains one combined first-start consent prompt with saved defaults in subsequent unit audits. Base `v0.3.59` supplies the reporting skill and persisted-draft handoff. Its publication finalized after the normal
 workspace build/typecheck gate passed; the host pin was adopted from that
 publication receipt.
 
@@ -104,3 +104,5 @@ while reconstructing its prior exact snapshot. This is a template refresh
 limitation, not a reporting intake failure. The final releases came from fresh
 authoring workspaces and preserved concurrent upstream changes; rejected stale
 reviews were not published and no force push was used.
+
+The conversational reporting follow-up passed 41 focused host tests, 59 shell tests, host TypeScript, and Base plus System desktop/mobile projection typechecks. A real headless agent saved substantial narrative without submitting when asked to save only (`st_0ac7420b1a3f422897fc103d9b5d9102`), with zero failed tool calls. Submission tests verify targeted approval while automatic reporting is off, ownership/digest checks, denial, and edits or cancellation while approval is pending. Large narrative handoff preserves the full selected content and uses only a draft reference in the launch prompt.

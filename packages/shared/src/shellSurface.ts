@@ -370,20 +370,7 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
       };
       break;
     case "report":
-      candidate = {
-        kind: "problem-report",
-        ...(decoded.has("prepared")
-          ? {
-              prepared: (() => {
-                try {
-                  return JSON.parse(decoded.get("prepared")!);
-                } catch {
-                  return null;
-                }
-              })(),
-            }
-          : {}),
-      };
+      candidate = { kind: "problem-report" };
       break;
     case "about":
       candidate = { kind: "about", page: decoded.get("page") };
@@ -400,7 +387,6 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
   }
   const known = new Set([
     "v",
-    "prepared",
     "kind",
     "section",
     "workspace",
