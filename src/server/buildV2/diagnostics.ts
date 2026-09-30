@@ -13,6 +13,7 @@
  */
 
 import type * as esbuild from "esbuild";
+import * as fs from "node:fs";
 import * as path from "path";
 import { RpcBoundaryError } from "@vibestudio/rpc";
 import type { AgentDiagnosticRepairWire } from "@vibestudio/service-schemas/build";
@@ -155,7 +156,14 @@ function slashPath(file: string): string {
 
 function relUnderRoot(file: string, root?: string | null): string | null {
   if (!root || !path.isAbsolute(file)) return null;
-  const rel = path.relative(root, file);
+  const physical = (value: string): string => {
+    try {
+      return fs.realpathSync.native(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const rel = path.relative(physical(root), physical(file));
   if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
     return slashPath(rel);
   }

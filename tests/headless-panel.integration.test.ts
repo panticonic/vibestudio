@@ -117,10 +117,18 @@ maybeDescribe("headless browser panel integration", () => {
       repoRoot: process.cwd(),
       checkpointRoot: path.join(tempRoot, "template-checkpoints"),
     });
+    const playwrightChromiumPath = chromium.executablePath();
 
     serverProc = spawn(
       process.execPath,
-      [serverPath, "--ephemeral", "--serve-panels", "--ready-file", readyFile],
+      [
+        serverPath,
+        "--bootstrap-workspace",
+        "headless-panel-integration",
+        "--serve-panels",
+        "--ready-file",
+        readyFile,
+      ],
       {
         cwd: process.cwd(),
         env: {
@@ -130,8 +138,9 @@ maybeDescribe("headless browser panel integration", () => {
           XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
           VIBESTUDIO_HEADLESS_HOST_AUTOSPAWN: "1",
           VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry!,
-          VIBESTUDIO_CHROMIUM_PATH: chromium.executablePath(),
-          VIBESTUDIO_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
+          ...(fs.existsSync(playwrightChromiumPath)
+            ? { VIBESTUDIO_CHROMIUM_PATH: playwrightChromiumPath }
+            : {}),
           VIBESTUDIO_HEADLESS_IDLE_EXIT_MS: "1000",
           ...(developmentTemplates ? developmentTemplateSetEnv(developmentTemplates) : {}),
         },
@@ -182,10 +191,19 @@ maybeDescribe("headless browser panel integration", () => {
     const panel = await openBrowserPanelFromWorker(workerConnection, `${fixture.baseUrl}/first`);
     expect(panel.kind).toBe("browser");
 
-    await workerConnection.rpc.call("main", "panelRuntime.ensureSlot", [
-      panel.id,
-      panel.runtimeEntityId,
-    ]);
+    const ensured = await workerConnection.rpc.call<{ status: string }>(
+      "main",
+      "panelRuntime.ensureSlot",
+      [panel.id]
+    );
+    if (ensured.status === "unavailable") {
+      const hostLogs = await shellConnection.rpc.call("main", "serverLog.query", [
+        { contains: "HeadlessHost", limit: 100 },
+      ]);
+      throw new Error(
+        `Headless host was unavailable after bounded startup: ${JSON.stringify(hostLogs)}\n${serverOutput}`
+      );
+    }
 
     await waitForPanelReady(
       workerConnection,
@@ -218,6 +236,38 @@ maybeDescribe("headless browser panel integration", () => {
         "(() => { window.__vibestudioIntegration = 42; return window.__vibestudioIntegration; })()"
       )
     ).resolves.toBe(42);
+
+    const clickTarget = (await cdpClient.evaluate(`(() => {
+      const rect = document.querySelector('[data-testid="automation-button"]')?.getBoundingClientRect();
+      return rect ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : null;
+    })()`)) as { x: number; y: number } | null;
+    expect(clickTarget).toBeTruthy();
+    await cdpClient.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: clickTarget!.x,
+      y: clickTarget!.y,
+    });
+    await cdpClient.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: clickTarget!.x,
+      y: clickTarget!.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await cdpClient.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: clickTarget!.x,
+      y: clickTarget!.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await expect(
+      waitForEval(
+        cdpClient,
+        "document.querySelector('[data-testid=\"automation-status\"]')?.textContent",
+        "Automation click delivered"
+      )
+    ).resolves.toBe("Automation click delivered");
 
     const screenshot = await cdpClient.send<{ data: string }>("Page.captureScreenshot", {
       format: "png",
@@ -339,6 +389,11 @@ async function startFixtureServer(): Promise<{ baseUrl: string }> {
     <main>
       <h1>${title}</h1>
       <div data-testid="marker">${marker}</div>
+      <button
+        data-testid="automation-button"
+        onclick="document.querySelector('[data-testid=&quot;automation-status&quot;]').textContent = 'Automation click delivered'"
+      >Automation probe</button>
+      <div data-testid="automation-status"></div>
     </main>
   </body>
 </html>`);

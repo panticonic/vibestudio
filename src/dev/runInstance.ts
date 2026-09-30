@@ -194,7 +194,7 @@ async function runServer(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
   instance: DevInstanceRecord
-): Promise<number> {
+): Promise<DevInstanceSupervisor> {
   // credentialStore/environment paths are resolved at module evaluation time.
   // Load the bootstrap only after main() has installed this instance's process
   // environment, so an ephemeral server can never mistake the developer's
@@ -255,10 +255,13 @@ async function runServer(
     },
   });
   await supervisor.start();
-  return supervisor.wait();
+  return supervisor;
 }
 
-async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
+async function runDesktop(
+  forwarded: string[],
+  env: NodeJS.ProcessEnv
+): Promise<DevInstanceSupervisor> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   // Desktop launches share the repository host artifacts with parallel
   // developer instances. The coordinator waits for an in-flight build and
@@ -274,7 +277,7 @@ async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<
     forwardParentSignals: true,
   });
   await supervisor.start();
-  return await supervisor.wait();
+  return supervisor;
 }
 
 async function main(): Promise<void> {
@@ -333,6 +336,7 @@ async function main(): Promise<void> {
     instance.generationId
   );
   let retirementFailed = false;
+  let supervisor: DevInstanceSupervisor | undefined;
   try {
     const defaultTemplates =
       (await resolveDevelopmentTemplateSet({
@@ -448,35 +452,40 @@ async function main(): Promise<void> {
     if (!disposable) {
       await prunePersistentInstanceBuildCache(root, id);
     }
-    process.exitCode =
+    supervisor =
       mode === "server"
         ? await runServer(launchArgs, env, instance)
         : await runDesktop(launchArgs, env);
+    process.exitCode = await supervisor.wait();
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
     throw error;
   } finally {
-    if (retirementFailed) {
-      // State remains owned until every executor retires. Preserve the exact
-      // registry and source checkpoints when that join cannot be established.
-      console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
-    } else {
-      if (!disposable) await prunePersistentInstanceBuildCache(root, id);
-      fs.rmSync(checkpointTarget, { recursive: true, force: true });
-      fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
-      const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
-      if (cleanupError) {
-        // Preserve the registry record and root together: the stale supervisor
-        // PID makes the instance unusable, while retaining the exact root makes
-        // a leaked descendant diagnosable. Most importantly, cleanup must not
-        // replace the hub's original exit status with a bare ENOTEMPTY.
-        console.error(
-          `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
-        );
-        process.exitCode = process.exitCode || 1;
+    try {
+      if (retirementFailed) {
+        // State remains owned until every executor retires. Preserve the exact
+        // registry and source checkpoints when that join cannot be established.
+        console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
       } else {
-        unregisterDevInstance(repoRoot, id);
+        if (!disposable) await prunePersistentInstanceBuildCache(root, id);
+        fs.rmSync(checkpointTarget, { recursive: true, force: true });
+        fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
+        const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
+        if (cleanupError) {
+          // Preserve the registry record and root together: the stale supervisor
+          // PID makes the instance unusable, while retaining the exact root makes
+          // a leaked descendant diagnosable. Most importantly, cleanup must not
+          // replace the hub's original exit status with a bare ENOTEMPTY.
+          console.error(
+            `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
+          );
+          process.exitCode = process.exitCode || 1;
+        } else {
+          unregisterDevInstance(repoRoot, id);
+        }
       }
+    } finally {
+      await supervisor?.close();
     }
   }
 }

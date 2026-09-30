@@ -106,6 +106,9 @@ export class WorkspaceNativeViews {
   captureView(id: string) {
     return this.window.captureView(this.nativeId(id));
   }
+  setAutomationSurfaceActive(id: string, active: boolean) {
+    return this.window.setAutomationSurfaceActive(this.nativeId(id), active);
+  }
   isContentOverlayWebContentsId(id: number): boolean {
     return (
       this.getVisibleHostChromeAppId() !== null && this.window.isContentOverlayWebContentsId(id)

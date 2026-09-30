@@ -153,6 +153,28 @@ export class TaskAuthorityRegistry {
     return membership;
   }
 
+  /** An active invocation renews an existing closure; only a new root needs an author. */
+  resolveInvocationAuthority(
+    binding: TaskAuthorityBinding & { entityId: string },
+    causalParent: { logId: string; head: string },
+    entities: Pick<EntityCache, "resolveActive">,
+    admission: { active: boolean; mayCreateRoot: boolean }
+  ): TaskGrantPrincipal | null {
+    if (!admission.active) return null;
+    const inherited = this.resolveCausalBinding(binding, causalParent, entities);
+    if (inherited) return inherited;
+    if (!admission.mayCreateRoot) return null;
+    const coordinates = {
+      workspaceId: binding.workspaceId,
+      contextId: binding.contextId,
+      channelId: binding.channelId,
+    };
+    const authority = taskAuthorityPrincipal(coordinates);
+    this.bindPrincipal(authority, coordinates);
+    this.bindCausalOrigin(authority, binding, causalParent, entities);
+    return authority;
+  }
+
   inheritRuntime(
     runtimeId: string,
     caller: Pick<VerifiedCaller, "runtime" | "executionSession" | "taskAuthority">,

@@ -2,7 +2,10 @@
 
 #import <React/RCTBundleURLProvider.h>
 #import <React/RCTLinkingManager.h>
-#import <React/RCTReloadCommand.h>
+#import <React/RCTBridge.h>
+#import <RCTDefaultReactNativeFactoryDelegate.h>
+#import <RCTReactNativeFactory.h>
+#import <ReactAppDependencyProvider/RCTAppDependencyProvider.h>
 #import <UserNotifications/UserNotifications.h>
 #import <CommonCrypto/CommonDigest.h>
 
@@ -32,7 +35,16 @@ static NSString *const VibestudioActiveBundleIntegrity = @"activeBundle.integrit
 static NSString *const VibestudioActiveBundleSource = @"activeBundle.source";
 static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integrity);
 static BOOL VibestudioIsPairingURL(NSURL *url);
-static void VibestudioResetToNativeBootstrap(void);
+static void VibestudioClearActiveBundle(void);
+
+@interface VibestudioReactNativeDelegate : RCTDefaultReactNativeFactoryDelegate
+@end
+
+@interface AppDelegate ()
+@property(nonatomic, strong) RCTReactNativeFactory *reactNativeFactory;
+@property(nonatomic, strong) VibestudioReactNativeDelegate *reactNativeDelegate;
+@property(nonatomic, copy) NSDictionary *launchOptions;
+@end
 
 @implementation AppDelegate
 
@@ -52,18 +64,36 @@ static void VibestudioResetToNativeBootstrap(void);
 
   [UNUserNotificationCenter currentNotificationCenter].delegate = (id<UNUserNotificationCenterDelegate>)self;
 
-  self.moduleName = @"Vibestudio";
-  self.initialProps = @{};
-  return [super application:application didFinishLaunchingWithOptions:launchOptions];
+  self.launchOptions = launchOptions ?: @{};
+  self.reactNativeDelegate = [VibestudioReactNativeDelegate new];
+  self.reactNativeDelegate.dependencyProvider = [RCTAppDependencyProvider new];
+  return YES;
+}
+
+- (BOOL)prepareInitialURL:(NSURL *)url
+{
+  if (!VibestudioIsPairingURL(url)) return NO;
+  VibestudioClearActiveBundle();
+  return YES;
+}
+
+- (void)startReactNativeInWindow:(UIWindow *)window launchOptions:(NSDictionary *)launchOptions
+{
+  // Replacing the runtime makes a new link a launch input, rather than an event
+  // sent to the runtime that is about to be discarded. Releasing the old host
+  // invalidates its bridgeless instance; the legacy bridge requires invalidate.
+  window.rootViewController = nil;
+  [self.reactNativeFactory.bridge invalidate];
+  self.reactNativeFactory = nil;
+  self.reactNativeFactory = [[RCTReactNativeFactory alloc] initWithDelegate:self.reactNativeDelegate];
+  [self.reactNativeFactory startReactNativeWithModuleName:@"Vibestudio"
+      inWindow:window initialProperties:@{} launchOptions:launchOptions];
 }
 
 - (BOOL)application:(UIApplication *)application
             openURL:(NSURL *)url
             options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options
 {
-  if (VibestudioIsPairingURL(url)) {
-    VibestudioResetToNativeBootstrap();
-  }
   return [RCTLinkingManager application:application openURL:url options:options];
 }
 
@@ -71,10 +101,6 @@ static void VibestudioResetToNativeBootstrap(void);
 continueUserActivity:(NSUserActivity *)userActivity
  restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler
 {
-  NSURL *url = userActivity.webpageURL;
-  if (VibestudioIsPairingURL(url)) {
-    VibestudioResetToNativeBootstrap();
-  }
   return [RCTLinkingManager application:application continueUserActivity:userActivity restorationHandler:restorationHandler];
 }
 
@@ -88,6 +114,10 @@ continueUserActivity:(NSUserActivity *)userActivity
   completionHandler(UIBackgroundFetchResultNoData);
 #endif
 }
+
+@end
+
+@implementation VibestudioReactNativeDelegate
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
 {
@@ -105,7 +135,7 @@ continueUserActivity:(NSUserActivity *)userActivity
     return [NSURL fileURLWithPath:activeBundlePath];
   }
   if (activeBundlePath.length > 0) {
-    VibestudioResetToNativeBootstrap();
+    VibestudioClearActiveBundle();
   }
 #if DEBUG
   return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
@@ -127,7 +157,7 @@ static BOOL VibestudioIsPairingURL(NSURL *url)
   return NO;
 }
 
-static void VibestudioResetToNativeBootstrap(void)
+static void VibestudioClearActiveBundle(void)
 {
   NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
   [defaults removeObjectForKey:VibestudioActiveBundleLocalPath];
@@ -135,10 +165,6 @@ static void VibestudioResetToNativeBootstrap(void)
   [defaults removeObjectForKey:VibestudioActiveBundleIntegrity];
   [defaults removeObjectForKey:VibestudioActiveBundleSource];
   [defaults synchronize];
-  dispatch_async(dispatch_get_main_queue(), ^{
-    RCTReloadCommandSetBundleURL(nil);
-    RCTTriggerReloadCommandListeners(@"Vibestudio connect link reset");
-  });
 }
 
 static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integrity)

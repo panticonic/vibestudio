@@ -82,6 +82,10 @@ export async function launchChromium(opts: {
     "--disable-renderer-backgrounding",
     "--mute-audio",
     "--window-size=1280,800",
+    // Automated macOS hosts do not own an interactive login keychain. Avoid a
+    // native keychain prompt blocking Chromium before it publishes the CDP
+    // endpoint; this affects only Chromium's disposable test profile.
+    ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
     ...(opts.extraArgs ?? []),
   ];
   let child: ChildProcess;
@@ -90,7 +94,8 @@ export async function launchChromium(opts: {
       stdio: ["ignore", "ignore", "pipe"],
       // Chromium's crash reporter and other ancillary state otherwise use the
       // user's global config/cache even with a separate --user-data-dir.
-      env: { ...process.env,
+      env: {
+        ...process.env,
         XDG_CONFIG_HOME: path.join(profileDir, "config"),
         XDG_CACHE_HOME: path.join(profileDir, "cache"),
         CHROME_CONFIG_HOME: path.join(profileDir, "config"),
@@ -102,11 +107,12 @@ export async function launchChromium(opts: {
   }
   const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
   let retirement: Promise<void> | undefined;
-  const stop = (): Promise<void> => retirement ??= (async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await closed;
-    await fs.promises.rm(profileDir, { recursive: true, force: true });
-  })();
+  const stop = (): Promise<void> =>
+    (retirement ??= (async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await closed;
+      await fs.promises.rm(profileDir, { recursive: true, force: true });
+    })());
   let wsEndpoint: string;
   try {
     wsEndpoint = await new Promise<string>((resolve, reject) => {

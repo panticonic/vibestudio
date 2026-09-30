@@ -54,7 +54,14 @@ maybeDescribe("image-service extension server smoke", () => {
     });
     proc = spawn(
       process.execPath,
-      [serverPath, "--ephemeral", "--serve-panels", "--ready-file", readyFile],
+      [
+        serverPath,
+        "--bootstrap-workspace",
+        "extension-image-service-integration",
+        "--serve-panels",
+        "--ready-file",
+        readyFile,
+      ],
       {
         cwd: process.cwd(),
         env: {

@@ -28,6 +28,7 @@ interface HeadlessHostChildMessage {
   type?: unknown;
   clientSessionId?: unknown;
   diagnostic?: unknown;
+  error?: unknown;
 }
 
 export type HeadlessHostBridgeDiagnosticPhase =
@@ -280,6 +281,7 @@ export class HeadlessHostManager {
     let childReportedReady = false;
     let reportedClientSessionId: string | null = null;
     let lastBridgeDiagnostic: HeadlessHostBridgeDiagnostic | null = null;
+    let startupError: string | null = null;
     let lastLoggedBridgeState: string | null = null;
     child.stdout?.on("data", (chunk: Buffer) => {
       log.info(`[host] ${String(chunk).trimEnd()}`);
@@ -304,8 +306,18 @@ export class HeadlessHostManager {
       if (this.keepAlive && !this.stopped) this.scheduleEnsure(250);
     });
     child.on("message", (message: HeadlessHostChildMessage) => {
-      if (message?.type !== "registered" && message?.type !== "ready" && message?.type !== "bridge")
+      if (
+        message?.type !== "registered" &&
+        message?.type !== "ready" &&
+        message?.type !== "bridge" &&
+        message?.type !== "startup-error"
+      )
         return;
+      if (message.type === "startup-error") {
+        startupError = typeof message.error === "string" ? message.error : "unknown startup error";
+        log.warn(`headless host startup failed: ${startupError}`);
+        return;
+      }
       if (typeof message.clientSessionId === "string") {
         reportedClientSessionId = message.clientSessionId;
       }
@@ -350,8 +362,13 @@ export class HeadlessHostManager {
       label: "Headless (server)",
     });
 
-    const registrationDeadline = Date.now() + registrationTimeout;
+    const readinessDeadline = Date.now() + registrationTimeout;
     while (child.exitCode === null) {
+      if (startupError) {
+        this.terminateChild("startup failed");
+        this.recordFailure();
+        return null;
+      }
       const host = this.availableHeadlessHost();
       if (host) {
         this.consecutiveFailures = 0;
@@ -360,9 +377,14 @@ export class HeadlessHostManager {
         log.info(`headless host registered as ${host.clientSessionId}`);
         return host;
       }
-      if (!childReportedRegistered && Date.now() >= registrationDeadline) {
-        log.warn("headless host did not register with the server in time");
-        this.terminateChild("registration timeout");
+      if (Date.now() >= readinessDeadline) {
+        const readiness = childReportedRegistered
+          ? `registered but its CDP bridge did not become available${
+              lastBridgeDiagnostic ? ` (${formatBridgeDiagnostic(lastBridgeDiagnostic)})` : ""
+            }`
+          : "did not register with the server";
+        log.warn(`headless host ${readiness} in time`);
+        this.terminateChild("readiness timeout");
         this.recordFailure();
         return null;
       }

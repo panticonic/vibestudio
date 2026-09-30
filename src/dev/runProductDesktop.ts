@@ -46,6 +46,7 @@ async function main(): Promise<void> {
 
   const repoRoot = fs.realpathSync(process.cwd());
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-start-"));
+  let desktop: DevInstanceSupervisor | undefined;
   try {
     const needsInitialWorkspace = !profileHasWorkspace();
     const defaultTemplates =
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
     await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);
     await run(process.execPath, ["scripts/ensure-host-build.mjs"], env);
 
-    const desktop = new DevInstanceSupervisor({
+    desktop = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
       args: [
@@ -95,7 +96,11 @@ async function main(): Promise<void> {
     await desktop.start();
     process.exitCode = await desktop.wait();
   } finally {
-    fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    try {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } finally {
+      await desktop?.close();
+    }
   }
 }
 

@@ -18,7 +18,7 @@ import { currentContextProjectionsPath } from "./contextProjections.js";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
-const originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
+const originalInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
 const tempRoots: string[] = [];
 
 const removeWorkspaceTreeForTest = (target: string): void => {
@@ -72,10 +72,10 @@ function exactCreation(workspaceId: string) {
 }
 
 afterEach(() => {
-  if (originalXdgConfigHome === undefined) {
-    delete process.env["XDG_CONFIG_HOME"];
+  if (originalInstanceRoot === undefined) {
+    delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
   } else {
-    process.env["XDG_CONFIG_HOME"] = originalXdgConfigHome;
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = originalInstanceRoot;
   }
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -88,11 +88,10 @@ describe("loadWorkspaceConfig", () => {
     () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
       tempRoots.push(root);
-      process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
 
       const sourceRoot = path.join(
-        process.env["XDG_CONFIG_HOME"],
-        "vibestudio",
+        process.env["VIBESTUDIO_INSTANCE_ROOT"],
         "workspaces",
         "cloned-ws",
         "source"
@@ -318,7 +317,7 @@ describe("initWorkspace", () => {
   it("creates an external-root bootstrap with only deterministic host-owned artifacts", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const pin = {
       url: "https://example.com/news-template.git",
       ref: "refs/tags/v1",
@@ -333,8 +332,7 @@ describe("initWorkspace", () => {
     });
 
     const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
+      process.env["VIBESTUDIO_INSTANCE_ROOT"],
       "workspaces",
       "external-root"
     );
@@ -362,7 +360,7 @@ describe("initWorkspace", () => {
   it("removes staging state when the atomic publish rename fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     const rename = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
@@ -377,19 +375,18 @@ describe("initWorkspace", () => {
       rename.mockRestore();
     }
 
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
+    const workspacesDir = path.join(process.env["VIBESTUDIO_INSTANCE_ROOT"], "workspaces");
     expect(fs.readdirSync(workspacesDir)).toEqual([]);
   });
 
   it("rejects an existing partial final directory without deleting or adopting it", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "workspace-template");
     writeConfig(templateRoot, "initPanels: []\n");
     const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
+      process.env["VIBESTUDIO_INSTANCE_ROOT"],
       "workspaces",
       "partial"
     );
@@ -405,13 +402,12 @@ describe("initWorkspace", () => {
   it("restores the workspace directory when the registry deletion transaction fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     initWorkspace("delete-failure", exactCreation("ws_delete_failure"));
     const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
+      process.env["VIBESTUDIO_INSTANCE_ROOT"],
       "workspaces",
       "delete-failure"
     );
@@ -441,13 +437,12 @@ describe("initWorkspace", () => {
   it("leaves registry and workspace untouched when the delete staging rename fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     initWorkspace("delete-rename-failure", exactCreation("ws_delete_rename_failure"));
     const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
+      process.env["VIBESTUDIO_INSTANCE_ROOT"],
       "workspaces",
       "delete-rename-failure"
     );
@@ -488,13 +483,13 @@ describe("initWorkspace", () => {
   it("returns committed deletion success and durably retries post-commit cleanup", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     const centralData = new CentralDataManager({ databasePath: path.join(root, "identity.db") });
     initWorkspace("cleanup-retry", exactCreation("ws_cleanup_retry"));
     const workspace = centralData.addWorkspace("cleanup-retry", "ws_cleanup_retry");
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
+    const workspacesDir = path.join(process.env["VIBESTUDIO_INSTANCE_ROOT"], "workspaces");
     const originalRmSync = fs.rmSync.bind(fs);
     const rm = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
       if (path.basename(String(target)).startsWith(".delete-cleanup-retry-")) {
@@ -531,8 +526,8 @@ describe("initWorkspace", () => {
   it("cleans only empty receiptless deletion shells and reports nonempty shells", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
+    const workspacesDir = path.join(process.env["VIBESTUDIO_INSTANCE_ROOT"], "workspaces");
     const emptyTrashRoot = path.join(workspacesDir, ".delete-receiptless-empty");
     const nonemptyTrashRoot = path.join(workspacesDir, ".delete-receiptless-nonempty");
     fs.mkdirSync(emptyTrashRoot, { recursive: true });
@@ -561,7 +556,7 @@ describe("initWorkspace", () => {
   it("completes the registered filesystem and control-data lifecycle as one operation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     const databasePath = path.join(root, "identity.db");
@@ -582,8 +577,7 @@ describe("initWorkspace", () => {
        VALUES (?, ?, ?)`
     ).run("usr_member", entry.workspaceId, 1);
     const workspaceDir = path.join(
-      process.env["XDG_CONFIG_HOME"],
-      "vibestudio",
+      process.env["VIBESTUDIO_INSTANCE_ROOT"],
       "workspaces",
       "full-lifecycle"
     );
@@ -616,15 +610,14 @@ describe("resolveOrCreateWorkspace", () => {
     () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
       tempRoots.push(root);
-      process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "instance");
 
       const templateRoot = path.join(root, "workspace-template");
       writeConfig(templateRoot, "initPanels: []\n");
       writeBaseRelease(root);
 
       const emptyWorkspace = path.join(
-        process.env["XDG_CONFIG_HOME"],
-        "vibestudio",
+        process.env["VIBESTUDIO_INSTANCE_ROOT"],
         "workspaces",
         "interrupted"
       );
@@ -643,8 +636,7 @@ describe("resolveOrCreateWorkspace", () => {
       );
 
       const occupiedWorkspace = path.join(
-        process.env["XDG_CONFIG_HOME"],
-        "vibestudio",
+        process.env["VIBESTUDIO_INSTANCE_ROOT"],
         "workspaces",
         "occupied"
       );

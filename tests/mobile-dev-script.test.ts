@@ -60,7 +60,7 @@ describe("mobile dev process composition", () => {
 
     const ios = mobileDevInstallArgs({
       platform: "ios",
-      device: "android-option-must-not-leak",
+      device: "simulator-udid",
       noLaunch: false,
     });
     expect(ios).toEqual(
@@ -70,9 +70,10 @@ describe("mobile dev process composition", () => {
         "--simulator",
         "--configuration",
         "Debug",
+        "--device",
+        "simulator-udid",
         "--launch",
       ])
     );
-    expect(ios).not.toContain("--device");
   });
 });

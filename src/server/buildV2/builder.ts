@@ -87,6 +87,7 @@ import { resolveBuildProvider } from "./buildProviderRegistry.js";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
+import { stateLayout } from "../stateLayout.js";
 import { getUserDataPath } from "@vibestudio/env-paths";
 import type {
   BuildProvider,
@@ -2106,9 +2107,27 @@ function authorityFromMaterializedSource(
     vibestudio?: { authority?: unknown };
   };
   const authority = packageJson.vibestudio?.authority;
-  return authority === undefined
-    ? EMPTY_UNIT_AUTHORITY
-    : parseUnitAuthorityManifest(authority, `${node.name} vibestudio.authority`);
+  if (authority === undefined) return EMPTY_UNIT_AUTHORITY;
+  try {
+    return parseUnitAuthorityManifest(
+      authority,
+      `${node.relativePath}/package.json vibestudio.authority`
+    );
+  } catch (error) {
+    // Bundling and source validation report the same authored defect under
+    // one canonical identity, not a second anonymous esbuild error.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new BuildDiagnosticsError(message, [
+      {
+        source: "authority",
+        severity: "error",
+        file: `${node.relativePath}/package.json`,
+        line: 1,
+        column: 1,
+        message,
+      },
+    ]);
+  }
 }
 
 async function doBuild(
@@ -4070,7 +4089,7 @@ async function buildApp(
       const worker = _immutableTreeWorker;
       if (!worker) throw new Error("builder is not initialized");
       resources = await prepareBuildProviderResources({
-        buildsRoot: path.join(getUserDataPath(), "builds"),
+        inputsRoot: stateLayout(getUserDataPath()).buildProviderInputsDir,
         sourceRoot,
         input,
         materialize: (source, destination) => worker.materialize(source, destination),

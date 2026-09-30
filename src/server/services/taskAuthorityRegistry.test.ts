@@ -190,6 +190,61 @@ describe("TaskAuthorityRegistry", () => {
 
     active = false;
     expect(registry.resolveRuntime("do:subagent", cache)).toBeNull();
+    const childBinding = { ...coordinates, entityId: "do:subagent", channelId: "channel:child" };
+    // The child invocation was authored by the parent agent, not an account.
+    expect(
+      registry.resolveInvocationAuthority(
+        childBinding,
+        channelTrajectoryFor("channel:child"),
+        cache,
+        { active: true, mayCreateRoot: false }
+      )
+    ).toBe(taskAuthority);
+    expect(
+      registry.resolveInvocationAuthority(
+        childBinding,
+        channelTrajectoryFor("channel:child"),
+        cache,
+        { active: false, mayCreateRoot: true }
+      )
+    ).toBeNull();
+    expect(
+      registry.resolveInvocationAuthority(
+        childBinding,
+        channelTrajectoryFor("channel:other"),
+        cache,
+        { active: true, mayCreateRoot: false }
+      )
+    ).toBeNull();
+    activate(cache, "do:unbound");
+    expect(
+      registry.resolveInvocationAuthority(
+        { ...childBinding, entityId: "do:unbound" },
+        channelTrajectoryFor("channel:child"),
+        cache,
+        { active: true, mayCreateRoot: false }
+      )
+    ).toBeNull();
+    const newAuthority = registry.resolveInvocationAuthority(
+      { ...childBinding, entityId: "do:unbound" },
+      channelTrajectoryFor("channel:child"),
+      cache,
+      { active: true, mayCreateRoot: true }
+    );
+    expect(newAuthority).toBe(
+      taskAuthorityPrincipal({ ...coordinates, channelId: "channel:child" })
+    );
+    expect(newAuthority).not.toBe(taskAuthority);
+    expect(() =>
+      registry.bindExecution({
+        ...execution("eval:child", taskAuthority),
+        agentBinding: {
+          entityId: childBinding.entityId,
+          channelId: childBinding.channelId,
+          bindingId: "binding:child",
+        },
+      })
+    ).not.toThrow();
     expect(
       registry.resolveCausalBinding(
         { entityId: "do:subagent", channelId: "channel:one" },

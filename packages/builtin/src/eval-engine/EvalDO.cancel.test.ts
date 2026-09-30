@@ -353,13 +353,13 @@ describe("EvalDO cancellation + forced recovery", () => {
         value: { call: lifecycleCall },
         configurable: true,
       });
-      const first = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      const first = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
       await instance.attachKernelLeaseHolder("kernel-1");
       const held = instance.holdKernelLease("kernel-1");
 
       await vi.advanceTimersByTimeAsync(750);
-      const refreshed = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
-      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt);
+      const refreshed = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt!);
 
       await vi.advanceTimersByTimeAsync(750);
       let settled = false;
@@ -395,6 +395,52 @@ describe("EvalDO cancellation + forced recovery", () => {
     }
   });
 
+  it("starts the idle interval only after active work and cancellation settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const { instance, sql } = await createTestDO(EvalDO);
+      const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+      Object.defineProperty(instance, "rpc", {
+        value: { call: lifecycleCall },
+        configurable: true,
+      });
+      const { runLocked, started } = blockUntilAborted();
+      setPriv(instance, "runLocked", runLocked);
+      await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 });
+      await instance.attachKernelLeaseHolder("active-kernel");
+      const held = instance.holdKernelLease("active-kernel");
+      let settled = false;
+      void held.then(() => {
+        settled = true;
+      });
+      seedPendingRun(sql, "long-active-run");
+      const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+        instance,
+        "long-active-run"
+      );
+      await started;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      expect(
+        await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 })
+      ).toMatchObject({ expiresAt: null });
+      await instance.cancel("long-active-run");
+      await run;
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(held).resolves.toEqual({ leaseId: "active-kernel", reason: "expired" });
+      expect(lifecycleCall).toHaveBeenCalledTimes(2);
+      expect(lifecycleCall).toHaveBeenLastCalledWith(
+        "main",
+        "workspace-state.lifecycleLeaseClear",
+        [expect.any(Object)]
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
     const { instance } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
@@ -402,7 +448,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       value: { call: lifecycleCall },
       configurable: true,
     });
-    instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
+    await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
     await instance.attachKernelLeaseHolder("kernel-1");
     const held = instance.holdKernelLease("kernel-1");
 
@@ -479,7 +525,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
 
-    instance.acquireKernelLease({ leaseId: "kernel-active", idleMs: 60_000 });
+    await instance.acquireKernelLease({ leaseId: "kernel-active", idleMs: 60_000 });
     await instance.attachKernelLeaseHolder("kernel-active");
     const held = instance.holdKernelLease("kernel-active");
     seedPendingRun(sql, "lifecycle-active-run");
@@ -2046,7 +2092,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       value: { call: lifecycleCall },
       configurable: true,
     });
-    instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
+    await instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
     await instance.attachKernelLeaseHolder("finite-kernel");
     const held = instance.holdKernelLease("finite-kernel");
     seedPendingRun(sql, "finite");
@@ -2523,8 +2569,18 @@ describe("EvalDO cancellation + forced recovery", () => {
     let recordOperation!: (entry: Record<string, unknown>) => void;
     const journalA = { append: vi.fn() };
     const journalB = { append: vi.fn() };
-    const executionA = { contextId: "ctx", marker: "cell-a", rpc: rpcA, operationJournal: journalA };
-    const executionB = { contextId: "ctx", marker: "cell-b", rpc: rpcB, operationJournal: journalB };
+    const executionA = {
+      contextId: "ctx",
+      marker: "cell-a",
+      rpc: rpcA,
+      operationJournal: journalA,
+    };
+    const executionB = {
+      contextId: "ctx",
+      marker: "cell-b",
+      rpc: rpcB,
+      operationJournal: journalB,
+    };
     const support = {
       createPanelRuntime: (options: Record<string, unknown>) => {
         retainedLoadModule = options["loadModule"] as (id: string) => Promise<unknown>;

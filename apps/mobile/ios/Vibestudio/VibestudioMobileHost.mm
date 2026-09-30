@@ -4,6 +4,7 @@
 extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
 #import <React/RCTReloadCommand.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <dlfcn.h>
@@ -11,7 +12,9 @@ extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 #import <objc/message.h>
 #import <zlib.h>
 
-@interface VibestudioMobileHost : NSObject <RCTBridgeModule, UIDocumentPickerDelegate>
+@interface VibestudioMobileHost : NSObject <RCTBridgeModule, RCTInvalidating, UIDocumentPickerDelegate>
+@property(nonatomic, strong) dispatch_queue_t resourceQueue;
+@property(atomic, assign) BOOL invalidated;
 @property(nonatomic, strong) NSFileHandle *bundleStream;
 @property(nonatomic, copy) NSString *bundleTransferPath;
 @property(nonatomic, copy) NSString *bundleFinalPath;
@@ -25,6 +28,29 @@ extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 @implementation VibestudioMobileHost
 
 RCT_EXPORT_MODULE();
+
+- (void)invalidate
+{
+  self.invalidated = YES;
+  dispatch_async(self.resourceQueue, ^{
+    [self closeBundleStream];
+    if (self.bundleTransferPath) [NSFileManager.defaultManager removeItemAtPath:self.bundleTransferPath error:nil];
+    self.bundleTransferPath = nil;
+    self.bundleFinalPath = nil;
+    [self abortAllAssetWrites];
+    // Remove only this module's staging files; a replacement may already exist.
+    for (NSDictionary *archive in self.browserImportArchives.allValues) {
+      [NSFileManager.defaultManager removeItemAtPath:archive[@"path"] error:nil];
+    }
+    [self.browserImportArchives removeAllObjects];
+  });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self rejectBrowserImportPicker:@"browser_import_invalidated" message:@"The browser-import runtime was invalidated"];
+    self.browserImportPicker.delegate = nil;
+    [self.browserImportPicker dismissViewControllerAnimated:NO completion:nil];
+    self.browserImportPicker = nil;
+  });
+}
 
 RCT_EXPORT_METHOD(clearWorkspaceCookies:(NSString *)scope resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -64,6 +90,7 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 {
   self = [super init];
   if (self) {
+    _resourceQueue = dispatch_queue_create("app.vibestudio.mobile.asset-store", DISPATCH_QUEUE_SERIAL);
     _assetWrites = [NSMutableDictionary dictionary];
     _browserImportArchives = [NSMutableDictionary dictionary];
     [NSFileManager.defaultManager removeItemAtURL:[self assetStagingURL] error:nil];
@@ -82,7 +109,7 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 
 - (dispatch_queue_t)methodQueue
 {
-  return dispatch_queue_create("app.vibestudio.mobile.asset-store", DISPATCH_QUEUE_SERIAL);
+  return self.resourceQueue;
 }
 
 - (NSDictionary *)constantsToExport
@@ -120,6 +147,10 @@ RCT_EXPORT_METHOD(pickBrowserImportArchive:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @synchronized(self) {
+    if (self.invalidated) {
+      reject(@"browser_import_invalidated", @"The browser-import runtime was invalidated", nil);
+      return;
+    }
     if (self.browserImportPickerResolve != nil) {
       reject(@"browser_import_pick_busy", @"A browser-import document picker is already active", nil);
       return;
@@ -128,6 +159,7 @@ RCT_EXPORT_METHOD(pickBrowserImportArchive:(RCTPromiseResolveBlock)resolve
     self.browserImportPickerReject = reject;
   }
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.invalidated) return;
     NSArray<UTType *> *types = @[
       UTTypeZIP,
       UTTypeHTML,
@@ -182,6 +214,7 @@ RCT_EXPORT_METHOD(releaseBrowserImportArchive:(NSString *)handle
     return;
   }
   dispatch_async([self methodQueue], ^{
+    if (self.invalidated) return;
     @try {
       NSDictionary *result = [self stageBrowserImportArchiveURL:url];
       [self resolveBrowserImportPicker:result];
@@ -338,25 +371,25 @@ RCT_EXPORT_METHOD(reloadActiveAppBundle:(RCTPromiseResolveBlock)resolve
   }
 }
 
-RCT_EXPORT_METHOD(assetStoreLookup:(NSDictionary *)namespace
+RCT_EXPORT_METHOD(assetStoreLookup:(NSDictionary *)assetNamespace
                   key:(NSString *)key
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    resolve([self lookupStoredAsset:namespace key:key]);
+    resolve([self lookupStoredAsset:assetNamespace key:key]);
   } @catch (NSException *exception) {
     reject(@"asset_store_lookup_failed", exception.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(assetStoreOpenWrite:(NSDictionary *)namespace
+RCT_EXPORT_METHOD(assetStoreOpenWrite:(NSDictionary *)assetNamespace
                   key:(NSString *)key
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSString *namespaceKey = [self validatedAssetNamespace:namespace];
+    NSString *namespaceKey = [self validatedAssetNamespace:assetNamespace];
     [self validateAssetKey:key];
     NSString *writeId = NSUUID.UUID.UUIDString.lowercaseString;
     NSURL *staging = [self assetStagingURL];
@@ -494,9 +527,9 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   }
 }
 
-- (NSDictionary *)lookupStoredAsset:(NSDictionary *)namespace key:(NSString *)key
+- (NSDictionary *)lookupStoredAsset:(NSDictionary *)assetNamespace key:(NSString *)key
 {
-  NSString *namespaceKey = [self validatedAssetNamespace:namespace];
+  NSString *namespaceKey = [self validatedAssetNamespace:assetNamespace];
   [self validateAssetKey:key];
   NSURL *indexURL = [self assetIndexURL:namespaceKey];
   if (![NSFileManager.defaultManager fileExistsAtPath:indexURL.path]) return nil;
@@ -539,12 +572,12 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   };
 }
 
-- (NSString *)validatedAssetNamespace:(NSDictionary *)namespace
+- (NSString *)validatedAssetNamespace:(NSDictionary *)assetNamespace
 {
-  NSString *server = [namespace[@"serverEndpointId"] isKindOfClass:NSString.class]
-    ? [namespace[@"serverEndpointId"] lowercaseString] : nil;
-  NSString *workspace = [namespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
-    ? namespace[@"workspaceIdentity"] : nil;
+  NSString *server = [assetNamespace[@"serverEndpointId"] isKindOfClass:NSString.class]
+    ? [assetNamespace[@"serverEndpointId"] lowercaseString] : nil;
+  NSString *workspace = [assetNamespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
+    ? assetNamespace[@"workspaceIdentity"] : nil;
   if (![self isAssetDigest:server]) {
     [NSException raise:@"VibestudioAssetNamespaceInvalid" format:@"Asset namespace has invalid server Endpoint ID"];
   }
@@ -884,7 +917,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   NSFileHandle *signatureFile = [NSFileHandle fileHandleForReadingAtPath:url.path];
   NSData *signature = [signatureFile readDataOfLength:4];
   [signatureFile closeFile];
-  const uint8_t *signatureBytes = signature.bytes;
+  const uint8_t *signatureBytes = static_cast<const uint8_t *>(signature.bytes);
   BOOL zip = signature.length == 4 && signatureBytes[0] == 0x50 && signatureBytes[1] == 0x4b &&
     ((signatureBytes[2] == 0x03 && signatureBytes[3] == 0x04) || (signatureBytes[2] == 0x05 && signatureBytes[3] == 0x06));
   if (!zip) {
@@ -901,7 +934,7 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
   if (archiveData.length < 22) {
     [NSException raise:@"VibestudioBrowserImportZipInvalid" format:@"Browser export ZIP is truncated"];
   }
-  const uint8_t *bytes = archiveData.bytes;
+  const uint8_t *bytes = static_cast<const uint8_t *>(archiveData.bytes);
   NSUInteger searchStart = archiveData.length > 65557 ? archiveData.length - 65557 : 0;
   NSUInteger eocd = NSNotFound;
   for (NSUInteger cursor = archiveData.length - 22;; cursor--) {

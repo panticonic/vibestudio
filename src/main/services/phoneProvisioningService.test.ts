@@ -56,7 +56,7 @@ function discovery(deviceId = "android-1", compatibleAppInstalled = false): stri
   })}\n`;
 }
 
-function hubControlClient() {
+function hubControlClient(platform: "android" | "ios" = "android") {
   let listCount = 0;
   return {
     call: vi.fn(async (_service: string, method: string) => {
@@ -75,8 +75,8 @@ function hubControlClient() {
                   {
                     deviceId: "paired-mobile",
                     userId: "user-1",
-                    label: "Android phone",
-                    platform: "android",
+                    label: "Test phone",
+                    platform,
                     createdAt: 1,
                   },
                 ],
@@ -301,5 +301,98 @@ describe("desktop phone provisioning service", () => {
       ["--platform", "android", "--launch", "--device", "android-1"],
       { signal: expect.any(AbortSignal) }
     );
+  });
+
+  it.each(["simulator", "physical"] as const)(
+    "preserves an iOS %s target through workspace phone setup",
+    async (kind) => {
+      const root = sourceRoot();
+      const project = path.join(root, "apps/mobile/ios/Vibestudio.xcodeproj/project.pbxproj");
+      fs.mkdirSync(path.dirname(project), { recursive: true });
+      fs.writeFileSync(project, "");
+      let discoveries = 0;
+      const runScript = vi.fn(async (name: string, args: string[]) => {
+        const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
+        if (isDiscovery) discoveries += 1;
+        return {
+          stdout: isDiscovery
+            ? JSON.stringify({
+                devices: [
+                  {
+                    platform: "ios",
+                    deviceId: "ios-1",
+                    state: "connected",
+                    kind,
+                    ready: true,
+                    installedApps: [],
+                    compatibleAppInstalled: discoveries > 1,
+                  },
+                ],
+                issues: [],
+              })
+            : "",
+          stderr: "",
+        };
+      });
+      const definition = createPhoneProvisioningService({
+        appRoot: root,
+        appVersion: "0.1.5",
+        workspaceName: "current-workspace",
+        hostPlatform: "darwin",
+        resolveScriptPath: (name) => name,
+        runScript,
+        hubControlClient: hubControlClient("ios"),
+      });
+      const result = await provision(definition, { platform: "ios", deviceId: "ios-1" });
+      expect(runScript).toHaveBeenCalledWith(
+        "mobile-install.mjs",
+        [
+          "--platform",
+          "ios",
+          "--launch",
+          "--device",
+          "ios-1",
+          ...(kind === "simulator" ? ["--simulator"] : []),
+          "--from-source",
+        ],
+        { signal: expect.any(AbortSignal) }
+      );
+      expect(result).toMatchObject({ installStatus: "installed", pairingStatus: "paired" });
+    }
+  );
+
+  it("pairs an already-compatible iOS app without requiring a source checkout or rebuilding", async () => {
+    const runScript = vi.fn(async (name: string, args: string[]) => ({
+      stdout:
+        name === "mobile-device.mjs" && args[0] === "devices"
+          ? JSON.stringify({
+              devices: [
+                {
+                  platform: "ios",
+                  deviceId: "phone",
+                  state: "connected",
+                  kind: "physical",
+                  ready: true,
+                  installedApps: [{ packageId: "app.vibestudio.mobile", versionName: "0.1.5" }],
+                  compatibleAppInstalled: true,
+                },
+              ],
+              issues: [],
+            })
+          : "",
+      stderr: "",
+    }));
+    const definition = createPhoneProvisioningService({
+      appRoot: sourceRoot(),
+      appVersion: "0.1.5",
+      workspaceName: "current-workspace",
+      hostPlatform: "darwin",
+      resolveScriptPath: (name) => name,
+      runScript,
+      hubControlClient: hubControlClient("ios"),
+    });
+    const result = await provision(definition, { platform: "ios", deviceId: "phone" });
+    expect(runScript.mock.calls.some(([name]) => name === "mobile-install.mjs")).toBe(false);
+    expect(result).toMatchObject({ installStatus: "already-compatible", pairingStatus: "paired" });
   });
 });

@@ -281,6 +281,21 @@ export function describeEvalMethod(
   };
 }
 
+export function unknownHelpNameResponse(name: string): {
+  name: string;
+  error: string;
+  guidance: string;
+} {
+  return {
+    name,
+    error: "No injected runtime binding or callable service has this name.",
+    guidance:
+      "help() describes injected @workspace/runtime bindings and receiver services, not exports of other packages. " +
+      "For a workspace package or skill, read its SKILL.md/API reference and exported source types, then import its documented functions from its package name. " +
+      "A missing help entry does not make a documented package API unavailable. Use docs_search/docs_open as agent tools for receiver contracts, or await help() for binding names.",
+  };
+}
+
 export function invalidHelpArgumentResponse(value: unknown): Record<string, unknown> {
   const received =
     value && typeof value === "object"

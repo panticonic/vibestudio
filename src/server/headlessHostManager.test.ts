@@ -272,7 +272,7 @@ describe("HeadlessHostManager keep-alive", () => {
     expect(signalProcessGroup).toHaveBeenCalledWith(4_322, "SIGTERM");
   });
 
-  it("keeps a registered child alive past the registration timeout while waiting for CDP readiness", async () => {
+  it("bounds CDP readiness after the child registers", async () => {
     const spawnFn = vi.fn((_entry: string): ChildProcess => {
       const child = new MockChild();
       children.push(child);
@@ -300,14 +300,39 @@ describe("HeadlessHostManager keep-alive", () => {
     child.emit("message", { type: "registered", clientSessionId: "headless-1" });
 
     await vi.advanceTimersByTimeAsync(250);
-    expect(child.kill).not.toHaveBeenCalled();
+    await expect(pending).resolves.toBeNull();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await manager.stop();
+  });
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(child.kill).not.toHaveBeenCalled();
+  it("returns promptly when the child reports its startup failure", async () => {
+    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+      const child = new MockChild();
+      children.push(child);
+      return child as unknown as ChildProcess;
+    });
+    const manager = new HeadlessHostManager({
+      tokenManager,
+      coordinator,
+      isHostAvailable: () => true,
+      getServerUrl: () => "http://127.0.0.1:0",
+      config: {
+        enabled: true,
+        entryPath: "/fake/entry.js",
+        spawnTimeoutMs: 60_000,
+      },
+      spawnFn,
+    });
 
-    registerHeadless("headless-1");
+    const pending = manager.ensureDefaultHost();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = children[0];
+    if (!child) throw new Error("expected a spawned child");
+    child.emit("message", { type: "startup-error", error: "Chromium failed" });
     await vi.advanceTimersByTimeAsync(250);
-    await expect(pending).resolves.toMatchObject({ clientSessionId: "headless-1" });
+
+    await expect(pending).resolves.toBeNull();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     await manager.stop();
   });
 

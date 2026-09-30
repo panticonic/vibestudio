@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, mkdirSync, openSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,18 @@ describe("isProfileRunning", () => {
     const dir = profileDir();
     writeFileSync(path.join(dir, ".parentlock"), "");
     expect(isProfileRunning("firefox", dir)).toBe(false);
+  });
+
+  it("recognizes an open macOS .parentlock as a running Firefox profile", () => {
+    if (process.platform !== "darwin") return;
+    const dir = profileDir();
+    const lock = path.join(dir, ".parentlock");
+    const descriptor = openSync(lock, "w");
+    try {
+      expect(isProfileRunning("firefox", dir)).toBe(true);
+    } finally {
+      closeSync(descriptor);
+    }
   });
 
   it("accepts the Windows parent.lock name", () => {

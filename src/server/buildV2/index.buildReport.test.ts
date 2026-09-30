@@ -107,7 +107,11 @@ function fakeSource(
 }
 
 async function loadWithMocks(
-  options: { blockingAuthorityConsumer?: boolean; isolatedExports?: unknown } = {}
+  options: {
+    blockingAuthorityConsumer?: boolean;
+    isolatedExports?: unknown;
+    invalidPanelManifest?: boolean;
+  } = {}
 ): Promise<{
   buildSystem: BuildSystemV2;
   workspaceRoot: string;
@@ -151,6 +155,12 @@ async function loadWithMocks(
     writeUnit(workspaceRoot, "workers/removed-notes", "@workspace-workers/removed-notes");
   }
   writeUnit(workspaceRoot, "panels/solo", "@workspace-panels/solo");
+  if (options.invalidPanelManifest) {
+    fs.writeFileSync(
+      path.join(workspaceRoot, "panels/solo/package.json"),
+      '{"name":"@workspace-panels/solo","vibestudio":{"entry":"index.tsx"],}\n'
+    );
+  }
 
   const { setUserDataPath } = await import("@vibestudio/env-paths");
   setUserDataPath(path.join(root, "state"));
@@ -492,6 +502,29 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(typecheckCalls).toBe(0);
   });
 
+  it("reports an invalid located unit as a schema failure and selects it for publication", async () => {
+    env = await loadWithMocks({ invalidPanelManifest: true });
+
+    await expect(
+      env.buildSystem.getBuildReport("panels/solo", "ctx:review")
+    ).resolves.toMatchObject({
+      repoPath: "panels/solo",
+      kind: "panel",
+      status: "failed",
+      builds: [],
+      diagnostics: [
+        expect.objectContaining({
+          source: "schema",
+          file: "panels/solo/package.json",
+          message: expect.stringContaining("Invalid JSON in package.json"),
+        }),
+      ],
+    });
+    await expect(
+      env.buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["panels/solo/package.json"])
+    ).resolves.toContain("panels/solo");
+  });
+
   it("propagates source refresh failures instead of certifying a stale main snapshot", async () => {
     env = await loadWithMocks();
     const failure = new Error("protected publication unavailable");
@@ -612,6 +645,26 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(typecheckCalls).toBe(2);
     expect(report.builds.length).toBeGreaterThan(1);
     expect(report.builds.every((build) => build.diagnosticIndexes[0] === 0)).toBe(true);
+  });
+
+  it("references a repeated diagnostic only once within each build target", async () => {
+    typecheckDiagnostics = (unitRelativePath) => {
+      const diagnostic = {
+        source: "authority" as const,
+        severity: "error" as const,
+        file: `${unitRelativePath}/index.ts`,
+        line: 1,
+        column: 1,
+        message: "one source defect",
+      };
+      return [diagnostic, diagnostic];
+    };
+    env = await loadWithMocks();
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.diagnostics).toHaveLength(1);
+    expect(report.builds.every((build) => JSON.stringify(build.diagnosticIndexes) === "[0]")).toBe(
+      true
+    );
   });
 
   it("includes authority errors in the same report consumed by protected-main validation", async () => {

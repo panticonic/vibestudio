@@ -5,7 +5,7 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import {
@@ -349,6 +349,7 @@ function createHarness(
     service,
     calls,
     executionSessions,
+    taskAuthorities,
     activity,
     retireEntity,
     shutdown: async (deadlineMs?: number) => {
@@ -497,6 +498,30 @@ describe("createEvalService", () => {
 
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, subKey)}`;
     expect(executionSessions.resolve(runtimeId)).toBeNull();
+  });
+
+  it("rolls back failed task binding so the next eval can acquire the same cell", async () => {
+    const ownerId = "session:default";
+    const { service, executionSessions, taskAuthorities } = createHarness({ [ownerId]: "ctx_1" });
+    vi.spyOn(taskAuthorities, "bindExecution").mockImplementationOnce(() => {
+      throw new Error("Runtime subagent is already bound to another task authority");
+    });
+    const ctx = { caller: authenticatedCaller("shell:dev_cli", "shell") };
+    const input = {
+      target: { kind: "owner-session" as const, sessionId: ownerId },
+      scopeKey: "default",
+      code: "return 1;",
+    };
+    await expect(
+      service.handler(ctx, "start", [inlineEvalStart({ ...input, runId: "run:binding-error" })])
+    ).rejects.toThrow("already bound to another task authority");
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, "default")}`;
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    await expect(
+      service.handler(ctx, "start", [
+        inlineEvalStart({ ...input, runId: "run:after-binding-error" }),
+      ])
+    ).resolves.toBeDefined();
   });
 
   ledgerTest("execution.eval-do", async () => {

@@ -9,6 +9,13 @@ on:
       - "apps/mobile/**"
       - "packages/rpc/**"
       - "packages/shared/**"
+      - "scripts/cli/mobile-*.mjs"
+      - "scripts/cli/lib/mobile-*.mjs"
+      - "scripts/cli/ios-entitlements.mjs"
+      - "scripts/generate-mobile-version.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/build-mobile.yml"
   workflow_dispatch:
 
 permissions: {}
@@ -193,7 +200,7 @@ jobs:
           generate_release_notes: true
 
   build-ios:
-    name: Build iOS shell
+    name: Build and test iOS shell
     runs-on: macos-15
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     permissions:
@@ -220,8 +227,8 @@ jobs:
         working-directory: apps/mobile/ios
         run: pod install
 
-      - name: Generate entitlements
-        run: node scripts/cli/ios-entitlements.mjs --configuration Debug --output apps/mobile/ios/Generated/Vibestudio.entitlements
+      - name: Check iOS application version
+        run: pnpm check:mobile-version
 
       - name: Build iOS Debug simulator shell
         working-directory: apps/mobile/ios
@@ -231,7 +238,49 @@ jobs:
             -scheme Vibestudio \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS=Generated/Vibestudio.entitlements \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
             build
+
+      - name: Run native iOS regression tests
+        working-directory: apps/mobile/ios
+        run: |
+          simulator_id=$(node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          const inventory = JSON.parse(execFileSync("xcrun", ["simctl", "list", "devices", "available", "--json"], { encoding: "utf8" }));
+          const choices = Object.entries(inventory.devices).flatMap(([runtime, devices]) =>
+            runtime.startsWith("com.apple.CoreSimulator.SimRuntime.iOS-")
+              ? devices.filter(device => device.isAvailable && device.name.startsWith("iPhone") && device.deviceTypeIdentifier).map(device => ({ runtime, device }))
+              : []);
+          const selected = choices[0];
+          if (!selected) throw new Error("The runner has no available iPhone simulator runtime.");
+          console.log(execFileSync("xcrun", ["simctl", "create", "Vibestudio Native Tests", selected.device.deviceTypeIdentifier, selected.runtime], { encoding: "utf8" }).trim());
+          NODE
+          )
+          trap 'test_status=$?; xcrun simctl shutdown "$simulator_id" || true; xcrun simctl delete "$simulator_id" || exit 1; exit "$test_status"' EXIT
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild \
+            -workspace Vibestudio.xcworkspace \
+            -scheme Vibestudio \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath build \
+            -resultBundlePath build/native-tests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:VibestudioNativeTests \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            test
+
+      - name: Upload native iOS test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-ios-native-tests-${{ github.sha }}
+          path: apps/mobile/ios/build/native-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 14

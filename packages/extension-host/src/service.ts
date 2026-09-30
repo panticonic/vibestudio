@@ -893,6 +893,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           dependencyEvs: candidate.dependencyEvs,
           externalDeps: candidate.externalDeps,
         }),
+        ...(typeof packageJson.vibestudio.icon === "string" &&
+        packageJson.vibestudio.icon.trim().startsWith("./")
+          ? { iconState: candidate.stateHash }
+          : {}),
         target: null,
         capabilities,
         authority: {
@@ -2163,6 +2167,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         dependencyEvs: candidate.dependencyEvs,
         externalDeps: candidate.externalDeps,
       }),
+      ...(node.manifest.icon?.trim().startsWith("./") ? { iconState: candidate.stateHash } : {}),
       target: null,
       capabilities: extensionRuntimeCapabilities(),
       authority: {

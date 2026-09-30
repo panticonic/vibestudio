@@ -16,17 +16,14 @@ export type { WorkspaceEntry } from "../workspace.js";
 
 type WorkspaceTypedClient = TypedServiceClient<typeof workspaceMethods>;
 
-export type WorkspaceProjectsClient = {
+export type WorkspaceProjectMethods = {
   /** List project-root unit paths (for example `projects/my-app`). */
-  list(): Promise<string[]>;
+  projects(): Promise<string[]>;
   /** Resolve a path to its owning project, or null when it is not under projects/. */
-  findForPath(path: string): ReturnType<WorkspaceTypedClient["findUnitForPath"]>;
+  projectForPath(path: string): ReturnType<WorkspaceTypedClient["findUnitForPath"]>;
 };
 
-export type WorkspaceClient = WorkspaceTypedClient & {
-  /** Ergonomic project discovery; distinct from `workspace.list()` (workspace catalog). */
-  projects: WorkspaceProjectsClient;
-};
+export type WorkspaceClient = WorkspaceTypedClient & WorkspaceProjectMethods;
 
 type WorkspaceRpc = RpcCaller;
 
@@ -43,12 +40,10 @@ export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
   };
   return {
     ...typed,
-    projects: {
-      list: listProjects,
-      findForPath: async (path) => {
-        const resolved = await typed.findUnitForPath(path);
-        return resolved?.unitPath.startsWith("projects/") ? resolved : null;
-      },
+    projects: listProjects,
+    projectForPath: async (path) => {
+      const resolved = await typed.findUnitForPath(path);
+      return resolved?.unitPath.startsWith("projects/") ? resolved : null;
     },
   };
 }

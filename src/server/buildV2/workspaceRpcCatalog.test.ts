@@ -18,6 +18,47 @@ afterEach(() => {
 });
 
 describe("workspace RPC build catalog", () => {
+  it("reports all independent declaration defects across methods without exposing a partial catalog", () => {
+    const root = ownedTempRoot("vibestudio-rpc-all-errors-");
+    writeFileSync(
+      join(root, "provider.ts"),
+      `class NotesDO {
+      @rpc({ principals: ["code"], tier: "open", sensitivity: "read" })
+      snapshot() {}
+      @rpc({ principals: ["code"], tier: "open", sensitivity: "write" })
+      save() {}
+    }`
+    );
+    let caught: unknown;
+    try {
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    const diagnostics = (caught as BuildDiagnosticsError).diagnostics;
+    expect(diagnostics).toHaveLength(4);
+    for (const name of ["snapshot", "save"]) {
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining(`${name} requires a literal website`),
+            suggestion: expect.stringContaining('kind: "closed"'),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining(`${name} must declare a literal RPC effect`),
+            suggestion: expect.stringContaining('kind: "userland-capability"'),
+          }),
+        ])
+      );
+    }
+    expect(
+      diagnostics.every((d) => d.file === join(root, "provider.ts") && d.line > 0 && d.column > 0)
+    ).toBe(true);
+  });
   it("reports unmatched authored capability definitions at their manifest", () => {
     const root = ownedTempRoot("vibestudio-rpc-invalid-manifest-");
     writeFileSync(join(root, "provider.ts"), "class NotesDO {}\n");

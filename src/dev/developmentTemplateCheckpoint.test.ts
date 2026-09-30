@@ -107,7 +107,7 @@ describe("development template checkpoint", () => {
 
     expect(result).toEqual({
       checkout: target,
-      sourceCheckout: checkout,
+      sourceCheckout: fs.realpathSync(checkout),
       changedPaths: [],
     });
     fs.writeFileSync(path.join(checkout, "tracked.txt"), "later edit\n");

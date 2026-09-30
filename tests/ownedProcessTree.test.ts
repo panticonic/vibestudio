@@ -3,11 +3,75 @@ import { once } from "node:events";
 import {
   captureOwnedProcessIdentity,
   observeOwnedProcessGroup,
+  type OwnedProcessIdentity,
 } from "@vibestudio/shared/ownedProcessIdentity";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { processTreeAlive, terminateOwnedProcessTree } from "../scripts/owned-process-tree.mjs";
 
 describe.skipIf(process.platform === "win32")("owned POSIX process tree", () => {
+  it.each(["parent-death", "ipc-disconnect"])(
+    "revokes a detached hub and workspace on %s before readiness",
+    async (failure) => {
+      const lifetimeModule = new URL("../scripts/owned-process-tree.mjs", import.meta.url).href;
+      const identityModule = new URL("../scripts/owned-process-identity.mjs", import.meta.url).href;
+      const workspace =
+        'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);';
+      const hub = `
+        import { spawn } from "node:child_process";
+        import { bindProcessLifetimeToParent } from ${JSON.stringify(lifetimeModule)};
+        import { captureOwnedProcessIdentity } from ${JSON.stringify(identityModule)};
+        bindProcessLifetimeToParent();
+        const workspace = spawn(process.execPath, ["-e", ${JSON.stringify(workspace)}], {
+          detached: true, stdio: ["ignore", "pipe", "ignore"],
+        });
+        workspace.stdout.once("data", () => process.send({
+          hub: captureOwnedProcessIdentity(process.pid),
+          workspace: captureOwnedProcessIdentity(workspace.pid),
+        }));
+        setInterval(() => {}, 1000);
+      `;
+      const desktop = `
+        const { spawn } = require("node:child_process");
+        const hub = spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(hub)}], {
+          detached: true, stdio: ["ignore", "ignore", "inherit", "ipc"],
+        });
+        hub.once("message", (receipt) => process.send(receipt));
+        process.on("message", () => hub.disconnect());
+        setInterval(() => {}, 1000);
+      `;
+      const parent = spawn(process.execPath, ["-e", desktop], {
+        detached: true,
+        stdio: ["ignore", "ignore", "inherit", "ipc"],
+      });
+      const parentIdentity = captureOwnedProcessIdentity(parent.pid!);
+      let receipts: { hub: OwnedProcessIdentity; workspace: OwnedProcessIdentity } | undefined;
+      try {
+        [receipts] = (await once(parent, "message", {
+          signal: AbortSignal.timeout(5_000),
+        })) as [typeof receipts];
+        expect(observeOwnedProcessGroup(receipts!.hub)).toBe("owned");
+        expect(observeOwnedProcessGroup(receipts!.workspace)).toBe("owned");
+        if (failure === "parent-death") parent.kill("SIGKILL");
+        else parent.send({ disconnect: true });
+        await vi.waitFor(() => expect(observeOwnedProcessGroup(receipts!.hub)).toBe("absent"), {
+          timeout: 5_000,
+        });
+        await vi.waitFor(
+          () => expect(observeOwnedProcessGroup(receipts!.workspace)).toBe("absent"),
+          { timeout: 5_000 }
+        );
+      } finally {
+        await terminateOwnedProcessTree(parent.pid!, {
+          identity: parentIdentity,
+          termTimeoutMs: 100,
+        });
+        for (const identity of receipts ? [receipts.hub, receipts.workspace] : []) {
+          await terminateOwnedProcessTree(identity.pid, { identity, termTimeoutMs: 100 });
+        }
+      }
+    },
+    10_000
+  );
   it("escalates and removes a three-level tree whose descendants ignore SIGTERM", async () => {
     const grandchild = `
       process.on("SIGTERM", () => {});

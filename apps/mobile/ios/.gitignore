@@ -1,2 +1,4 @@
 Generated/
 Signing.local.xcconfig
+.xcode.env.local
+**/xcuserdata/

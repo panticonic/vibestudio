@@ -626,7 +626,8 @@ function VibestudioMobileHostBootstrap() {
     return () => subscription.remove();
   }, [handleIncomingConnectLink]);
 
-  const activeStep = approvals.length > 0 ? "approve" : pendingConnect ? "pair" : "load";
+  const activeStep =
+    approvals.length > 0 ? "approve" : pendingConnect || !launchSession ? "pair" : "load";
   const launchGate = approvals.length > 0 ? launchGateView({ approvals }) : null;
   const launchGateDetailsKey = launchGate?.approvalIds[0] ?? "launch-gate";
   const launchGateDetailsOpen =
@@ -649,7 +650,7 @@ function VibestudioMobileHostBootstrap() {
             <LaunchTimeline session={launchSession} />
             {busy ? (
               <View style={styles.loadingRow}>
-                <ActivityIndicator color="#496fa8" />
+                <ActivityIndicator color="#3d6ff0" />
                 <Text style={styles.loadingText}>Preparing secure workspace access</Text>
               </View>
             ) : null}
@@ -709,7 +710,7 @@ function VibestudioMobileHostBootstrap() {
                         ) : null}
                         {source.units.map((unit) => (
                           <View
-                            key={`${source.origin.originKey}:${unit.name}`}
+                            key={unit.identityKey}
                             style={styles.unitRow}
                           >
                             <Text style={styles.unitRowName}>{unit.name}</Text>
@@ -754,10 +755,6 @@ function VibestudioMobileHostBootstrap() {
                 </View>
               ) : (
                 <>
-                  <Text style={styles.hint}>
-                    Open a Vibestudio pairing link or scan a QR code from a trusted desktop or
-                    terminal.
-                  </Text>
                   <ActionButton title="Scan QR" onPress={openScanner} />
                   <ActionButton title="Paste pairing link" onPress={pasteConnectLink} />
                   <ActionButton title="Retry" onPress={load} variant="secondary" />
@@ -774,7 +771,7 @@ function VibestudioMobileHostBootstrap() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#1a202a",
+    backgroundColor: "#111419",
   },
   scrollContent: {
     flexGrow: 1,
@@ -797,7 +794,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   eyebrow: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0,
@@ -807,25 +804,25 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   title: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     fontSize: 26,
     fontWeight: "800",
   },
   statusPanel: {
-    backgroundColor: "#242e3c",
-    borderColor: "#485667",
+    backgroundColor: "#171b22",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
     padding: 14,
   },
   message: {
-    color: "#dbe9eb",
+    color: "#eef1f6",
     fontSize: 16,
     lineHeight: 23,
   },
   timeline: {
-    borderColor: "#485667",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -837,7 +834,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   timelineDot: {
-    backgroundColor: "#63708a",
+    backgroundColor: "#6b778c",
     borderRadius: 999,
     height: 9,
     marginTop: 5,
@@ -856,13 +853,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#f87171",
   },
   timelineDot_skipped: {
-    backgroundColor: "#4b5568",
+    backgroundColor: "#434d5f",
   },
   timelineText: {
     flex: 1,
   },
   timelineLabel: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 18,
@@ -880,10 +877,10 @@ const styles = StyleSheet.create({
     color: "#fecaca",
   },
   timelineLabel_skipped: {
-    color: "#829ba5",
+    color: "#78849a",
   },
   timelineDetail: {
-    color: "#95aeb7",
+    color: "#b1bbcb",
     fontSize: 12,
     lineHeight: 17,
   },
@@ -893,7 +890,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   loadingText: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     flex: 1,
     fontSize: 13,
   },
@@ -903,7 +900,7 @@ const styles = StyleSheet.create({
   },
   step: {
     alignItems: "center",
-    borderColor: "#485667",
+    borderColor: "#434d5f",
     borderRadius: 999,
     borderWidth: 1,
     flexDirection: "row",
@@ -912,57 +909,57 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   stepActive: {
-    backgroundColor: "#323e4e",
-    borderColor: "#496fa8",
+    backgroundColor: "#252b36",
+    borderColor: "#3d6ff0",
   },
   stepDot: {
-    backgroundColor: "#63708a",
+    backgroundColor: "#6b778c",
     borderRadius: 999,
     height: 6,
     width: 6,
   },
   stepDotActive: {
-    backgroundColor: "#496fa8",
+    backgroundColor: "#3d6ff0",
   },
   stepText: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 12,
     fontWeight: "700",
   },
   stepTextActive: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
   },
   sectionHeader: {
     gap: 3,
   },
   sectionTitle: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     fontSize: 18,
     fontWeight: "800",
     lineHeight: 24,
   },
   approval: {
-    color: "#dbe9eb",
+    color: "#eef1f6",
     fontSize: 14,
     lineHeight: 20,
   },
   approvalEmphasis: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     fontSize: 14,
     fontWeight: "700",
     lineHeight: 20,
   },
   approvalBox: {
-    backgroundColor: "#242e3c",
-    borderColor: "#485667",
+    backgroundColor: "#171b22",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
     padding: 14,
   },
   unitCard: {
-    backgroundColor: "#242e3c",
-    borderColor: "#485667",
+    backgroundColor: "#171b22",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
@@ -976,7 +973,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   unitName: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     flexShrink: 1,
     fontSize: 15,
     fontWeight: "700",
@@ -993,33 +990,33 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   unitMeta: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 13,
     lineHeight: 18,
   },
   unitRow: {
-    borderTopColor: "#485667",
+    borderTopColor: "#434d5f",
     borderTopWidth: 1,
     gap: 3,
     paddingTop: 8,
   },
   unitRowName: {
-    color: "#dbe9eb",
+    color: "#eef1f6",
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 18,
   },
   connectCard: {
-    backgroundColor: "#242e3c",
-    borderColor: "#485667",
+    backgroundColor: "#171b22",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 14,
   },
   scannerCard: {
-    backgroundColor: "#1a202a",
-    borderColor: "#485667",
+    backgroundColor: "#111419",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
@@ -1034,31 +1031,31 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   hostLabel: {
-    color: "#dbe9eb",
+    color: "#eef1f6",
     fontSize: 14,
     lineHeight: 20,
   },
   workspaceButton: {
-    backgroundColor: "#242e3c",
-    borderColor: "#485667",
+    backgroundColor: "#171b22",
+    borderColor: "#434d5f",
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
   workspaceName: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     fontSize: 16,
     fontWeight: "800",
     lineHeight: 22,
   },
   workspaceMeta: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 13,
     lineHeight: 18,
   },
   hint: {
-    color: "#c7cdd5",
+    color: "#b1bbcb",
     fontSize: 14,
     lineHeight: 20,
   },
@@ -1072,12 +1069,12 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   primaryButton: {
-    backgroundColor: "#496fa8",
-    borderColor: "#496fa8",
+    backgroundColor: "#3d6ff0",
+    borderColor: "#3d6ff0",
   },
   secondaryButton: {
-    backgroundColor: "#323e4e",
-    borderColor: "#485667",
+    backgroundColor: "#252b36",
+    borderColor: "#434d5f",
   },
   dangerButton: {
     backgroundColor: "#321e25",
@@ -1089,7 +1086,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   secondaryButtonText: {
-    color: "#f4f5f6",
+    color: "#eef1f6",
     fontSize: 15,
     fontWeight: "800",
   },

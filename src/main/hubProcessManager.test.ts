@@ -514,6 +514,10 @@ describe("HubProcessManager", () => {
       "--bootstrap-workspace",
       "alpha",
     ]);
+    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
+      detached: true,
+      stdio: ["ignore", expect.any(Number), expect.any(Number), "ipc"],
+    });
   });
 
   it("keeps the detached hub referenced until its outer owner accepts the birth identity", async () => {

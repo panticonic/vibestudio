@@ -99,13 +99,13 @@ function signalOwnedProcessIdentity(identity, signal) {
   }
 }
 function processGroupExists(processGroupId) {
-  try {
-    process.kill(-processGroupId, 0);
-  } catch (error) {
-    if (error.code === "ESRCH") return false;
-    throw error;
-  }
   if (process.platform === "linux") {
+    try {
+      process.kill(-processGroupId, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") return false;
+      throw error;
+    }
     for (const entry of fs.readdirSync("/proc")) {
       if (!/^\d+$/u.test(entry)) continue;
       try {
@@ -122,6 +122,9 @@ function processGroupExists(processGroupId) {
     }
     return false;
   }
+  // macOS reports EPERM for `kill(-pgid, 0)` once a group contains only
+  // zombies, even when the caller owns the processes. The process table is the
+  // authoritative observation here and also lets us exclude those zombies.
   const result = spawnSync("ps", ["-axo", "pgid=,stat="], { encoding: "utf8" });
   if (result.status !== 0) throw ownershipError("Cannot observe native process-group members");
   return result.stdout.split(/\r?\n/u).some((line) => {

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as ts from "typescript/unstable/ast";
@@ -67,6 +68,15 @@ export interface CreateAuthorityCompilerSnapshotInput {
 function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+}
+
+function physicalPath(value: string): string {
+  const absolute = path.resolve(value);
+  try {
+    return fs.realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
 }
 
 const CHECK_IRRELEVANT_COMPILER_OPTIONS = new Set([
@@ -152,7 +162,7 @@ function materializeSourceFiles(
     // `SourceFile` is a synchronous remote-AST proxy. Reading fileName here
     // once is materially different from reading it for every consumer during
     // dependency composition.
-    const file = path.resolve(sourceFile.fileName);
+    const file = physicalPath(sourceFile.fileName);
     const isWorkspace = isWithin(sourceRoot, file);
     return { file, sourceFile, isWorkspace, isExternal: !isWorkspace };
   });
@@ -180,7 +190,7 @@ function resolvedImportGraphs(
     const symbols = checker.getSymbolAtLocation(sourceFile.imports);
     for (const symbol of symbols) {
       for (const declaration of symbol?.declarations ?? []) {
-        const target = path.resolve(declaration.path);
+        const target = physicalPath(declaration.path);
         imports.add(target);
         if (workspaceFiles.has(target)) workspaceImports.add(target);
       }
@@ -299,7 +309,10 @@ function factsForConsumer(
 export async function createAuthorityCompilerSnapshot(
   input: CreateAuthorityCompilerSnapshotInput
 ): Promise<AuthorityCompilerSnapshot> {
-  const sourceRoot = path.resolve(input.sourceRoot);
+  // TypeScript canonicalizes symlinked filesystem prefixes (notably macOS
+  // /var -> /private/var). Build every root and reachability key from the same
+  // physical path so imported workspace files cannot fall out of the graph.
+  const sourceRoot = await fsp.realpath(path.resolve(input.sourceRoot));
   const sourceLoadStartedAt = Date.now();
   const infos = await Promise.all(input.units.map((unit) => packageInfo(sourceRoot, unit)));
   const workspaceContext: WorkspaceContext = {

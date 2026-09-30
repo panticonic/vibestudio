@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createCatalogIndex } from "./catalogIndex.js";
 import type { BuildCatalogDeps } from "./buildCatalog.js";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 
 const TEST_OPEN_TIER = {
   tier: "open" as const,
@@ -42,6 +43,27 @@ const blobstore: ServiceDefinition = {
 const load = () => ({ definitions: [blobstore] });
 
 describe("createCatalogIndex", () => {
+  it("discovers primary and prepared capabilities from the receiver contract", () => {
+    const index = createCatalogIndex(() => ({
+      definitions: [
+        {
+          name: "runtime",
+          authority: { principals: ["code", "host"] },
+          methods: runtimeMethods,
+          handler: async () => undefined,
+        },
+      ],
+    }));
+    const clone = index.get("service:runtime.cloneContext", "worker");
+    expect(clone?.access?.["authority"]).toEqual(runtimeMethods.cloneContext.authority);
+    expect(index.search("capability context.clone", "worker")[0]?.id).toBe(
+      "service:runtime.cloneContext"
+    );
+    expect(
+      index.search("context.boundary", "worker", { limit: 100 }).map((hit) => hit.id)
+    ).toContain("service:runtime.cloneContext");
+    expect(clone?.access?.["tier"]).toBe("gated");
+  });
   it("ranks token-overlap hits and filters by caller", () => {
     const index = createCatalogIndex(load);
     const hits = index.search("store text digest", "panel");

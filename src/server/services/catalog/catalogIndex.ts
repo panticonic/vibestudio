@@ -100,10 +100,10 @@ function sourceKey(deps: BuildCatalogDeps): string {
 function tokenize(text: string): string[] {
   return Array.from(
     new Set(
-      text
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((t) => t.length > 1)
+      [
+        ...(text.toLowerCase().match(/[a-z0-9]+(?:[.:/_-][a-z0-9]+)+/g) ?? []),
+        ...text.toLowerCase().split(/[^a-z0-9]+/),
+      ].filter((t) => t.length > 1)
     )
   );
 }
@@ -112,9 +112,18 @@ function tokenize(text: string): string[] {
 function score(entry: CatalogEntry, terms: string[]): number {
   if (terms.length === 0) return 1; // empty query → list (rank stable)
   const name = `${entry.qualifiedName} ${entry.title}`.toLowerCase();
-  const body = `${entry.description ?? ""} ${(entry.members ?? []).join(" ")}`.toLowerCase();
+  // Capability/resource contracts are discovery inputs, not just display
+  // metadata. Authors reviewing a build diagnostic must be able to find the
+  // receiver that owns that capability without knowing its method name first.
+  const authority = JSON.stringify(entry.access?.["authority"] ?? null).toLowerCase();
+  const body =
+    `${entry.description ?? ""} ${(entry.members ?? []).join(" ")} ${authority}`.toLowerCase();
   let s = 0;
   for (const t of terms) {
+    // Preserve exact capability identifiers above generic prose matches such
+    // as "context". Otherwise a diagnostic query can bury its receiver under
+    // unrelated methods that merely discuss the same domain.
+    if (authority.includes(JSON.stringify(t))) s += 6;
     if (name.includes(t)) s += 3;
     if (body.includes(t)) s += 1;
   }

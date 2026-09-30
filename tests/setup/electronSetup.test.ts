@@ -41,7 +41,9 @@ describe("hosted-shell initialization diagnostics", () => {
 
     for (const cacheDir of ["npm-cache", "external-deps", "extension-runtime-deps"]) {
       const linked = path.join(isolatedCentralDataDir, "derived-cache", cacheDir);
-      expect(fs.realpathSync(linked)).toBe(path.join(sharedDerivedDataDir, cacheDir));
+      expect(fs.realpathSync(linked)).toBe(
+        fs.realpathSync(path.join(sharedDerivedDataDir, cacheDir))
+      );
     }
     expect(fs.existsSync(path.join(isolatedCentralDataDir, "external-deps"))).toBe(false);
   });

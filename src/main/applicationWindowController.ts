@@ -1,4 +1,4 @@
-import { app, BaseWindow, dialog, nativeTheme, shell } from "electron";
+import { app, BaseWindow, dialog, nativeTheme, screen, shell } from "electron";
 import * as path from "node:path";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
@@ -26,6 +26,7 @@ import { setMenuEventService, setMenuViewManager, setupMenu } from "./menu.js";
 import { getResourcesPath } from "./paths.js";
 import { assertPresent } from "../lintHelpers";
 import { recordPanelInitializationFailure } from "./panelInitializationFailure.js";
+import { DesktopWindowState } from "./desktopWindowState.js";
 
 const log = createDevLogger("ApplicationWindowController");
 
@@ -76,8 +77,8 @@ interface ApplicationWindowLifetime {
 
 export function chromeWindowColors(dark: boolean): { background: string; symbol: string } {
   return dark
-    ? { background: "#202225", symbol: "#bfc1c5" }
-    : { background: "#eaebed", symbol: "#55585e" };
+    ? { background: "#111419", symbol: "#b1bbcb" }
+    : { background: "#edf1f6", symbol: "#445166" };
 }
 
 /** Owns the Electron window and every renderer-host object whose lifetime is the window. */
@@ -185,9 +186,14 @@ export class ApplicationWindowController {
     }
 
     const chrome = chromeWindowColors(nativeTheme.shouldUseDarkColors);
+    const windowState = this.deps.isHeadlessHost
+      ? null
+      : new DesktopWindowState(path.join(app.getPath("userData"), "desktop-window-state.json"));
+    const bounds = windowState?.initialBounds(
+      (saved) => (saved ? screen.getDisplayMatching(saved) : screen.getPrimaryDisplay()).workArea
+    ) ?? { width: 1440, height: 900 };
     const window = new BaseWindow({
-      width: 1280,
-      height: 800,
+      ...bounds,
       show: false,
       icon: path.join(__dirname, "assets", "brand", "vibestudio-symbol-512.png"),
       skipTaskbar: this.deps.isHeadlessHost,
@@ -203,6 +209,9 @@ export class ApplicationWindowController {
           }
         : {}),
     });
+    windowState?.attach(window, (error) =>
+      log.warn(`[window] Failed to save window state: ${String(error)}`)
+    );
     const viewManager = new ViewManager({
       window,
       shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
@@ -212,6 +221,7 @@ export class ApplicationWindowController {
       shellAdditionalArguments: [],
       devTools: false,
       showWindowOnShellLoad: !this.deps.isHeadlessHost,
+      headless: this.deps.isHeadlessHost,
       hidePanelViewsUntilHostedShellReady: true,
     });
     if (this.deps.onCodeIdentityChanged)

@@ -36,7 +36,6 @@ import {
   isHubControlHttpPath,
   selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
-  signalWorkspaceChildTree,
   terminateWorkspaceChild,
   waitForWorkspaceReadyFile,
   type HubRuntimeState,
@@ -249,33 +248,6 @@ describe("workspace child process-tree ownership", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("signals the complete POSIX runtime group for explicit forced shutdown", () => {
-    const child = fakeChild();
-    const killProcess = vi.fn((): true => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return true;
-    });
-
-    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
-      true
-    );
-    expect(killProcess).toHaveBeenCalledWith(-4321, "SIGKILL");
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the child handle when no POSIX process group exists", () => {
-    const child = fakeChild();
-    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
-    const killProcess = vi.fn((): true => {
-      throw missing;
-    });
-
-    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
-      true
-    );
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-  });
-
   it("attempts cleanup of the exact detached child process group", async () => {
     const child = fakeChild();
     const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
@@ -287,11 +259,33 @@ describe("workspace child process-tree ownership", () => {
     await reapWorkspaceChildProcessGroup(child, {
       platform: "linux",
       killProcess,
-      groupAlive: () => false,
+      groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
     });
 
     expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
     expect(killProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not signal a group with no live runtime members", async () => {
+    const killProcess = vi.fn();
+    await reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
+      platform: "darwin",
+      killProcess,
+      groupAlive: () => false,
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("joins a group whose last member exits during signal delivery", async () => {
+    await expect(
+      reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
+        platform: "darwin",
+        killProcess: () => {
+          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        },
+        groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("retains cleanup failure when descendant retirement cannot be performed", async () => {
@@ -303,6 +297,7 @@ describe("workspace child process-tree ownership", () => {
       reapWorkspaceChildProcessGroup(child, {
         platform: "darwin",
         killProcess,
+        groupAlive: () => true,
       })
     ).rejects.toThrow("descendant retirement failed");
   });

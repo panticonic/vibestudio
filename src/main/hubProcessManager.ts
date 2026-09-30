@@ -388,7 +388,15 @@ export class HubProcessManager {
         readyFile,
         ...(this.config.workspaceName ? ["--bootstrap-workspace", this.config.workspaceName] : []),
       ],
-      { detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env }
+      {
+        detached: true,
+        // Detachment isolates terminal signals, not lifetime ownership. The
+        // server revokes its execution tree when this desktop's IPC closes,
+        // including when the desktop dies before readiness or graceful stop.
+        stdio: ["ignore", logFd, logFd, "ipc"],
+        windowsHide: true,
+        env,
+      }
     );
     fs.closeSync(logFd);
     let exitedWith: number | null | undefined;

@@ -1,6 +1,5 @@
 import type { TestApp } from "../../setup/electronSetup";
-import fs from "node:fs";
-import path from "node:path";
+import { configureInspectionFixture } from "../support/inspectionFixture";
 /**
  * Panel Lifecycle E2E Tests
  *
@@ -33,19 +32,8 @@ test.describe("Panel Rebuild Lifecycle", () => {
   test("CDP keep-loaded delivery preserves the rebuilt panel target", async () => {
     test.setTimeout(300_000);
     const workspacePath = await createManagedTestWorkspace({
-      configureSource(sourceRoot) {
-        const manifestPath = path.join(sourceRoot, "panels/chat/package.json");
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
-          vibestudio: { authority: { requests: unknown[] } };
-        };
-        manifest.vibestudio.authority.requests.push({
-          capability: "panel.inspect",
-          resource: { kind: "prefix", prefix: "panel:tree/" },
-          tier: "gated",
-          evidence: "bounded-dynamic",
-        });
-        fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      },
+      workspaceKind: "project",
+      configureSource: configureInspectionFixture,
     });
     let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
 

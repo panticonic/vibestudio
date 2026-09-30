@@ -30,12 +30,7 @@ async function readSectionManifests(
           (candidate) => candidate.kind === "file" && candidate.name === manifestName
         );
         if (!manifest || manifest.kind !== "file") {
-          if (section.kind === "template") {
-            console.warn(
-              `[PackageGraph] Template directory ${entry.name} has no template.json, skipping`
-            );
-          }
-          return null;
+          return { relativePath, kind: section.kind };
         }
         const bytes = await getBytes(blobsDir, manifest.contentHash);
         if (!bytes) {

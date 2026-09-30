@@ -531,12 +531,12 @@ describe("buildUnit app builds", () => {
     });
     expect(result.sourceStateHash).toBe(SOURCE_STATE_HASH);
     expect(providerInput).toMatchObject({
-      sourcePath: expect.stringContaining(path.join(root, "state", "builds", ".provider-inputs")),
+      sourcePath: expect.stringContaining(path.join(root, "state", "build-provider-inputs")),
       dependencyProjection: {
         nodeModulesPath: null,
         modules: {
           "@platform/fake": expect.stringContaining(
-            path.join(root, "state", "builds", ".provider-inputs")
+            path.join(root, "state", "build-provider-inputs")
           ),
           "@workspace-apps/mobile": providerInput!.sourcePath,
         },

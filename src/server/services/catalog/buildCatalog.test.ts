@@ -99,6 +99,10 @@ describe("buildCatalog", () => {
     expect(byId(entries, "service:demo.get").parent).toBe("service:demo");
     expect(byId(entries, "service:demo.admin.wipe").qualifiedName).toBe("demo.admin.wipe");
     expect(entries.some((entry) => entry.id === "service:demo.internalTransport")).toBe(false);
+    expect(byId(entries, "service:demo.get").access?.["authority"]).toEqual(demo.authority);
+    expect(byId(entries, "service:demo.probe").access?.["authority"]).toEqual(
+      demo.methods["probe"]!.authority
+    );
   });
 
   it("discovers workspace-declared capabilities without a checked-in census", () => {
@@ -363,7 +367,7 @@ describe("buildCatalog", () => {
 
     expect(byId(projected, "runtime:workerRuntime.openPanel")).toMatchObject({
       signature: "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>",
-      description: expect.stringContaining("const session = await handle.cdp.session()"),
+      description: expect.stringContaining("session = (await session.refresh()).session"),
     });
   });
 

@@ -696,7 +696,8 @@ export function analyzeWorkspaceServiceCalls(
     call: ts.CallExpression,
     kind: "resolution" | "invocation",
     service: ServiceValue,
-    method: ts.Node | undefined
+    method: ts.Node | undefined,
+    methodIsPropertyName = false
   ): WorkspaceServiceCallFact => {
     const sourceFile = call.getSourceFile();
     const unit = sourceUnitForFile(input.sourceRoot, sourceFile.fileName, input.units);
@@ -713,7 +714,7 @@ export function analyzeWorkspaceServiceCalls(
           }
         : undefined);
     const methodValue = method
-      ? ts.isIdentifier(method) || ts.isStringLiteralLikeNode(method)
+      ? ts.isStringLiteralLikeNode(method) || (methodIsPropertyName && ts.isIdentifier(method))
         ? method.text
         : null
       : null;
@@ -780,7 +781,7 @@ export function analyzeWorkspaceServiceCalls(
       const fact = factFor(call, "invocation", receiverValue, method);
       fact.arguments = call.arguments.slice(1).map(argumentValue);
     } else if (receiverValue.client) {
-      const fact = factFor(call, "invocation", receiverValue, method);
+      const fact = factFor(call, "invocation", receiverValue, method, true);
       fact.arguments = call.arguments.map(argumentValue);
     }
   }

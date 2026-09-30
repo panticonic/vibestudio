@@ -708,11 +708,12 @@ export class FsDisk implements FsDiskPort {
         const p = await resolveFsFilePath(scope, args[0] as string);
         const real = await fs.realpath(p);
         if (scope.exposeHostPaths) return real;
+        const realRoot = await fs.realpath(scope.root);
         // Return relative to root (panel sees paths relative to context root)
-        if (!real.startsWith(scope.root + path.sep) && real !== scope.root) {
+        if (!real.startsWith(realRoot + path.sep) && real !== realRoot) {
           throw new Error("Realpath escapes sandbox");
         }
-        return "/" + path.relative(scope.root, real);
+        return "/" + path.relative(realRoot, real);
       }
 
       case "truncate": {

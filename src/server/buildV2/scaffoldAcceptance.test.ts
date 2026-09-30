@@ -1,7 +1,7 @@
 import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 /**
  * Scaffold-to-verifier acceptance: every supported default scaffold produced by
- * the PUBLIC Base createProjects path must pass the canonical build report
+ * the PUBLIC Base prepareProjects path must pass the canonical build report
  * (compiler + bundler + manifest + workspace-RPC + static-authority) with zero
  * diagnostics BEFORE an agent customizes it. The failure class guarded here is
  * drift between scaffold output and the real verifier, so the real Build V2
@@ -27,6 +27,23 @@ import { exactWorkspaceServiceBindings } from "./userlandAuthority.js";
 import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
+const noEffects = { requests: [], provides: [] };
+const recordMethods = {
+  listRecords: {
+    website: { kind: "closed", reason: "Workspace-private records" },
+    principals: ["user", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  },
+  upsertRecord: {
+    website: { kind: "closed", reason: "Workspace-private records" },
+    principals: ["user", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  },
+};
 
 const mocks = vi.hoisted(() => {
   const files = new Map<string, string | Uint8Array>();
@@ -55,7 +72,14 @@ function addFile(p: string, content: string | Uint8Array): void {
 // instead of publishing, so the REAL generated files land in a temp workspace.
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx:test",
+  rpc: { call: async () => undefined },
   vcs: {
+    resolveRepository: async () => ({ repositoryId: "repo:meta", repoPath: "meta" }),
+    readFile: async () => ({
+      repositoryId: "repo:meta",
+      fileId: "file:config",
+      content: { kind: "text", text: mocks.files.get("meta/vibestudio.yml") },
+    }),
     status: async () => ({
       contextId: "ctx:test",
       committed: { kind: "event", eventId: "event:committed" },
@@ -68,6 +92,8 @@ vi.mock("@workspace/runtime", () => ({
     }),
     edit: async (input: {
       changes: Array<{
+        kind: string;
+        edits?: Array<{ text: string }>;
         repoPath: string;
         files: Array<{
           path: string;
@@ -76,6 +102,10 @@ vi.mock("@workspace/runtime", () => ({
       }>;
     }) => {
       for (const change of input.changes) {
+        if (change.kind === "text-edit") {
+          addFile("meta/vibestudio.yml", change.edits![0]!.text);
+          continue;
+        }
         for (const file of change.files) {
           addFile(
             `${change.repoPath}/${file.path}`,
@@ -87,14 +117,12 @@ vi.mock("@workspace/runtime", () => ({
       }
       return { workingHead: { kind: "application", applicationId: "application:created" } };
     },
-    commit: async () => ({ event: { kind: "event", eventId: "event:committed" } }),
-    push: async () => ({
-      contextId: "ctx:test",
-      eventId: "event:committed",
-      mainEventId: "event:committed",
-      effectId: "effect:published",
-      appliedAt: "2026-08-14T00:00:00.000Z",
-    }),
+    commit: async () => {
+      throw new Error("Preparation must not commit");
+    },
+    push: async () => {
+      throw new Error("Preparation must not publish");
+    },
   },
   fs: {
     async exists(p: string): Promise<boolean> {
@@ -238,20 +266,44 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     fs.mkdirSync(workspaceRoot, { recursive: true });
     setUserDataPath(path.join(root, "state"));
 
-    // 1. Generate every covered scaffold through the public createProjects path.
-    const { createProjects } = (await import(
+    // 1. Generate every covered scaffold through the public prepareProjects path.
+    const { prepareProjects, prepareApplication } = (await import(
       path.join(exactUserlandRoot, "skills", "workspace-dev", "create-project.ts")
-    )) as { createProjects: (params: unknown[]) => Promise<unknown[]> };
-    await createProjects([
-      { projectType: "panel", name: "acceptance-panel", title: "Acceptance Panel" },
-      { projectType: "worker", name: "acceptance-worker", title: "Acceptance Worker" },
+    )) as {
+      prepareProjects: (params: unknown[]) => Promise<unknown[]>;
+      prepareApplication: (params: unknown) => Promise<unknown>;
+    };
+    await prepareProjects([
+      {
+        projectType: "panel",
+        name: "acceptance-panel",
+        title: "Acceptance Panel",
+        authority: noEffects,
+        authorityReason: "Pure UI without protected effects",
+      },
+      {
+        projectType: "worker",
+        name: "acceptance-worker",
+        title: "Acceptance Worker",
+        authority: noEffects,
+        authorityReason: "Returns a response without protected effects",
+      },
       {
         projectType: "worker",
         name: "notes-store",
         title: "Notes Store",
         template: "durable-service",
+        authority: noEffects,
+        authorityReason: "Owns private records without downstream effects",
+        methods: recordMethods,
       },
-      { projectType: "panel", name: "notes-viewer", title: "Notes Viewer" },
+      {
+        projectType: "panel",
+        name: "notes-viewer",
+        title: "Notes Viewer",
+        authority: noEffects,
+        authorityReason: "Initial pure UI; the test authors and verifies a service call later",
+      },
     ]);
 
     // 2. Materialize the captured scaffold files into the temp workspace.
@@ -295,6 +347,48 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
         "",
       ].join("\n")
     );
+
+    // Generate the connected pair with the existing declarations present. Its
+    // exact config and units must pass the real verifier without a repair loop.
+    addFile(
+      "meta/vibestudio.yml",
+      fs.readFileSync(path.join(workspaceRoot, "meta", "vibestudio.yml"), "utf8")
+    );
+    await prepareApplication({
+      name: "connected-notes",
+      title: "Connected Notes",
+      authority: {
+        rationale:
+          "Only the paired panel may access this private singleton through reviewed wiring. No website or downstream host effects.",
+        panel: {
+          requests: [
+            {
+              capability: "workspace-service:connected-notes-store",
+              resource: {
+                kind: "exact",
+                key: "do:workers/connected-notes-store:ConnectedNotesStore:main",
+              },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+          provides: [],
+          serviceRequests: [{ protocol: "connected-notes.v1", availability: "required" }],
+        },
+        worker: noEffects,
+        methods: recordMethods,
+        service: {
+          principals: ["user", "code"],
+          binding: { declaredFor: ["panels/connected-notes"] },
+          notability: "everyday",
+        },
+      },
+    });
+    for (const [relPath, content] of mocks.files) {
+      const absolute = path.join(workspaceRoot, relPath);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, content);
+    }
 
     // 4. The consumer panel calls the declared service (the customization an
     //    agent would make on top of the default scaffold).
@@ -385,6 +479,14 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     const result = await report("workers/notes-store");
     expect(result.diagnostics).toEqual([]);
     expect(result.status).toBe("ok");
+  }, 240_000);
+
+  it("builds both connected application units without customization or authority repairs", async () => {
+    for (const target of ["workers/connected-notes-store", "panels/connected-notes"]) {
+      const result = await report(target);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.status).toBe("ok");
+    }
   }, 240_000);
 
   it("repairs the consuming panel with the exact structured request and then builds clean", async () => {

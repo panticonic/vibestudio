@@ -312,6 +312,14 @@ export class ViewManager {
   private currentThemeCss: string | null = null;
   /** Per-view locks to prevent concurrent withViewVisible operations */
   private visibilityLocks = new Map<string, Promise<unknown>>();
+  /**
+   * Background views with a live automation client. Electron keeps hidden
+   * WebContentsViews schedulable, but Chromium cannot hit-test or capture one
+   * until it has a composited native surface. These views stay at the bottom
+   * of the native stack for the lifetime of the automation client, beneath
+   * host chrome and every user-visible panel.
+   */
+  private automationSurfaceIds = new Set<string>();
   /** Current layout state for calculating panel bounds */
   private layoutState: LayoutState = {
     titleBarHeight: 32,
@@ -373,6 +381,8 @@ export class ViewManager {
   /** Callbacks invoked once the workspace shell has taken over from the launch gate. */
   private hostedShellReadyCallbacks: Array<() => void> = [];
   private readonly compositorRecovery: CompositorRecovery;
+  /** Isolated renderers may retry captures by cycling their non-user-facing surface. */
+  private readonly headless: boolean;
 
   constructor(options: {
     window: BaseWindow;
@@ -383,9 +393,11 @@ export class ViewManager {
     shellAdditionalArguments?: string[];
     devTools?: boolean;
     showWindowOnShellLoad?: boolean;
+    headless?: boolean;
     hidePanelViewsUntilHostedShellReady?: boolean;
   }) {
     this.window = options.window;
+    this.headless = options.headless ?? false;
     this.hidePanelViewsUntilHostedShellReady = options.hidePanelViewsUntilHostedShellReady ?? false;
     // Create the minimal shipped bootstrap launch gate. The full shell is a
     // workspace app; this surface only owns host-target startup approval.
@@ -524,7 +536,10 @@ export class ViewManager {
     // Compositor probes are focus-gated (no GPU readbacks while the user is
     // elsewhere); on refocus, reset the probe backoff and check immediately
     // so a stall that happened in the background recovers right away.
-    this.window.on("focus", () => this.compositorRecovery.handleWindowFocused());
+    this.window.on("focus", () => {
+      this.compositorRecovery.handleWindowFocused();
+      this.restoreWindowKeyboardFocus();
+    });
 
     this.compositorRecovery.start();
   }
@@ -1075,6 +1090,7 @@ export class ViewManager {
       return;
     }
     this.contextMenuContributors.delete(id);
+    this.automationSurfaceIds.delete(id);
 
     const contents = managed.view.webContents;
     if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === id) {
@@ -1134,9 +1150,13 @@ export class ViewManager {
     }
 
     managed.bounds = bounds;
-    managed.view.setBounds(
-      this.shouldHideUnslottedPanelView(managed) ? this.hiddenBounds() : bounds
-    );
+    if (this.automationSurfaceIds.has(id) && !managed.visible) {
+      this.presentAutomationSurface(managed);
+    } else {
+      managed.view.setBounds(
+        this.shouldHideUnslottedPanelView(managed) ? this.hiddenBounds() : bounds
+      );
+    }
   }
 
   setPanelViewportBounds(bounds: ViewBounds | null): void {
@@ -1346,8 +1366,11 @@ export class ViewManager {
       this.nativePanelSlots.hostedShellReady = true;
       for (const managed of this.views.values()) {
         if (managed.type !== "panel") continue;
-        managed.view.setBounds(this.hiddenBounds());
-        managed.view.setVisible(false);
+        if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
+        else {
+          managed.view.setBounds(this.hiddenBounds());
+          managed.view.setVisible(false);
+        }
       }
       this.hideBootstrapShell();
       this.setViewVisible(ownerViewId, true);
@@ -1734,7 +1757,11 @@ export class ViewManager {
       this.applyNativePanelVisibility(managed, bounds);
       this.reconcileNativeLayerOrder();
     } else {
-      managed.view.setVisible(visible);
+      if (!visible && this.automationSurfaceIds.has(id)) {
+        this.presentAutomationSurface(managed);
+      } else {
+        managed.view.setVisible(visible);
+      }
       if (!visible && this.visiblePanelId === id) {
         this.visiblePanelId = null;
         // Notify listeners (e.g., autofill overlay dismissal)
@@ -1743,6 +1770,50 @@ export class ViewManager {
         }
       }
     }
+  }
+
+  /**
+   * Keep a target composited while a CDP client owns it.
+   *
+   * This is presentation-neutral: `managed.visible` continues to describe
+   * user presentation, while the native view is inserted at stack index zero
+   * solely so Chromium has a surface for screenshots and trusted input.
+   */
+  async setAutomationSurfaceActive(id: string, active: boolean): Promise<void> {
+    const managed = this.views.get(id);
+    if (!managed || managed.view.webContents.isDestroyed()) return;
+
+    if (!active) {
+      this.automationSurfaceIds.delete(id);
+      if (!managed.visible) {
+        managed.view.setVisible(false);
+        managed.view.setBounds(managed.bounds);
+        if (!this.headless) this.reconcileNativeLayerOrder();
+      }
+      return;
+    }
+
+    this.automationSurfaceIds.add(id);
+    if (managed.visible) return;
+    this.presentAutomationSurface(managed);
+    await this.waitForRender(managed.view.webContents);
+    // requestAnimationFrame proves renderer progress, not that Viz has
+    // committed the native surface. One bounded compositor turn closes that
+    // gap before the first CDP input or capture command arrives.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  private presentAutomationSurface(managed: ManagedView): void {
+    const bounds =
+      managed.bounds.width > 0 && managed.bounds.height > 0
+        ? managed.bounds
+        : this.calculatePanelBounds();
+    if (!this.headless) this.window.contentView.addChildView(managed.view, 0);
+    managed.view.setBounds(bounds);
+    // The shell overlay remains above index zero in the native stack. Keeping
+    // this surface visible underneath it preserves compositor-backed
+    // automation without exposing or making the target interactive to users.
+    managed.view.setVisible(true);
   }
 
   /** Focus an already-presented view as the result of an explicit focus intent. */
@@ -1769,7 +1840,14 @@ export class ViewManager {
       // the overlay invariant across every panel surface, including fallback or
       // transitioning panels that are not represented by an active slot.
       for (const managed of this.views.values()) {
-        if (managed.type === "panel") managed.view.setVisible(false);
+        if (managed.type !== "panel") continue;
+        if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
+        else managed.view.setVisible(false);
+      }
+    } else {
+      for (const id of this.automationSurfaceIds) {
+        const managed = this.views.get(id);
+        if (managed && !managed.visible) this.presentAutomationSurface(managed);
       }
     }
 
@@ -1806,6 +1884,30 @@ export class ViewManager {
     const wc = managed.view.webContents;
     if (wc.isDestroyed()) return;
     wc.focus();
+  }
+
+  private restoreWindowKeyboardFocus(): void {
+    if (!this.window.isFocused() || electronWebContents.getFocusedWebContents()) return;
+    // A BaseWindow has no document of its own. If selection materialized while
+    // the app was inactive, it deliberately received no OS focus; activation
+    // must now route input to the current presentation, without disturbing an
+    // already-focused chrome control or crossing a blocking overlay.
+    const overlay = this.shellContentOverlay.getVisibleViews().at(-1);
+    if (overlay && !overlay.webContents.isDestroyed()) {
+      overlay.webContents.focus();
+      return;
+    }
+    const panelId = this.getFocusedPanelId() ?? this.visiblePanelId;
+    const panel = panelId ? this.views.get(panelId) : null;
+    if (
+      !this.nativeShellOverlay.isVisible() &&
+      !this.shellChromeInteractiveFocus &&
+      panel?.visible
+    ) {
+      this.focusVisibleView(panel);
+    } else {
+      this.getShellChromeWebContents()?.focus();
+    }
   }
 
   /**
@@ -1876,8 +1978,11 @@ export class ViewManager {
 
   private applyNativePanelVisibility(managed: ManagedView, bounds: ViewBounds): boolean {
     if (this.shouldHideUnslottedPanelView(managed)) {
-      managed.view.setBounds(this.hiddenBounds());
-      managed.view.setVisible(false);
+      if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
+      else {
+        managed.view.setBounds(this.hiddenBounds());
+        managed.view.setVisible(false);
+      }
       return false;
     }
     managed.view.setBounds(bounds);
@@ -2005,7 +2110,8 @@ export class ViewManager {
     const managed = this.views.get(slot.panelId);
     if (managed) {
       managed.visible = false;
-      managed.view.setVisible(false);
+      if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
+      else managed.view.setVisible(false);
       if (options.notifyHidden !== false) {
         for (const cb of this.viewHiddenCallbacks) {
           cb(slot.panelId);
@@ -2393,12 +2499,18 @@ export class ViewManager {
    */
   private async waitForRender(contents: WebContents): Promise<void> {
     const startTime = Date.now();
+    let timer: NodeJS.Timeout | undefined;
 
     try {
       // Wait for two animation frames - first schedules, second confirms render
-      await contents.executeJavaScript(
-        "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
-      );
+      await Promise.race([
+        contents.executeJavaScript(
+          "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Renderer did not produce a frame")), 3_000);
+        }),
+      ]);
       log.trace(` waitForRender: frame rendered after ${Date.now() - startTime}ms`);
     } catch (error) {
       // Fall back to a short timeout if executeJavaScript fails (e.g., page not ready)
@@ -2407,6 +2519,8 @@ export class ViewManager {
           `(webContentsId=${contents.id}, error=${error instanceof Error ? error.message : String(error)})`
       );
       await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2423,67 +2537,74 @@ export class ViewManager {
       return null;
     }
 
-    // Wait for any pending visibility operation on this view to complete
+    // Chain before yielding so every concurrent caller gets its own turn.
     const existingLock = this.visibilityLocks.get(id);
-    if (existingLock) {
-      await existingLock.catch(() => {}); // Ignore errors from previous operation
-    }
 
     // Create a new lock for this operation
     const runOperation = async (): Promise<T | null> => {
-      const wasVisible = managed.visible;
+      const wasVisible = managed.visible || this.automationSurfaceIds.has(id);
       const originalBounds = { ...managed.bounds };
       const windowWasVisible = !this.window.isDestroyed() && this.window.isVisible();
 
-      // Chromium cannot always produce a Viz surface for a WebContentsView
-      // whose parent window is hidden (capturePage then rejects with
-      // `UnknownVizError`). Reveal the parent without activating it for the
-      // duration of an inspection capture, and restore the user's exact
-      // window state afterwards. This is especially important for hidden test,
-      // headless, and background inspection surfaces.
-      if (!windowWasVisible && !this.window.isDestroyed()) {
-        this.window.showInactive();
-        // showInactive is not supported on every Linux compositor. Keep the
-        // capture contract reliable there too; this fallback only runs when
-        // the non-activating call did not make the window visible.
-        if (!this.window.isVisible()) this.window.show();
-      }
-
-      // If hidden, temporarily show the view
-      if (!wasVisible) {
-        // Use reasonable bounds if current bounds are zero
-        const captureBounds =
-          originalBounds.width > 0 && originalBounds.height > 0
-            ? originalBounds
-            : { x: 0, y: 0, width: 1280, height: 800 };
-
-        managed.view.setBounds(captureBounds);
-        managed.view.setVisible(true);
-
-        // Wait for the compositor to render the view
-        await this.waitForRender(managed.view.webContents);
-        // A pair of renderer animation frames does not guarantee that Viz has
-        // committed the newly attached WebContentsView surface yet. Give the
-        // native compositor one bounded turn before capturePage; this avoids a
-        // first-frame UnknownVizError on otherwise healthy panels.
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-
       try {
+        // Chromium cannot always produce a Viz surface for a WebContentsView
+        // whose parent window is hidden (capturePage then rejects with
+        // `UnknownVizError`). Reveal the parent without activating it for the
+        // duration of an inspection capture, and restore the user's exact
+        // window state afterwards. This is especially important for hidden test,
+        // headless, and background inspection surfaces.
+        if (!windowWasVisible && !this.window.isDestroyed()) {
+          this.window.showInactive();
+          // showInactive is not supported on every Linux compositor. Keep the
+          // capture contract reliable there too; this fallback only runs when
+          // the non-activating call did not make the window visible.
+          if (!this.window.isVisible()) this.window.show();
+        }
+
+        // If hidden, temporarily show the view
+        if (!wasVisible) {
+          // Use reasonable bounds if current bounds are zero
+          const captureBounds =
+            originalBounds.width > 0 && originalBounds.height > 0
+              ? originalBounds
+              : { x: 0, y: 0, width: 1280, height: 800 };
+
+          // A headed macOS client must composite the real panel to obtain a Viz
+          // frame, but appending the WebContentsView promotes its native layer
+          // above the shell. Put it at the bottom of the native child stack
+          // before revealing it: capturePage still reads the panel's own surface
+          // while the user continues to see the shell and its overlays.
+          if (!this.headless) this.window.contentView.addChildView(managed.view, 0);
+          managed.view.setBounds(captureBounds);
+          managed.view.setVisible(true);
+
+          // Wait for the compositor to render the view
+          await this.waitForRender(managed.view.webContents);
+          // A pair of renderer animation frames does not guarantee that Viz has
+          // committed the newly attached WebContentsView surface yet. Give the
+          // native compositor one bounded turn before capturePage; this avoids a
+          // first-frame UnknownVizError on otherwise healthy panels.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
         return await operation();
       } finally {
-        // Restore original visibility state
+        // Release only our temporary presentation. A user focus or a CDP lease
+        // acquired during capture owns the current surface and must survive.
         if (!wasVisible) {
-          managed.view.setVisible(false);
-          managed.view.setBounds(originalBounds);
+          if (!managed.visible && !this.automationSurfaceIds.has(id)) {
+            managed.view.setVisible(false);
+            managed.view.setBounds(managed.bounds);
+          }
+          if (!this.headless) this.reconcileNativeLayerOrder();
         }
-        if (!windowWasVisible && !this.window.isDestroyed()) {
+        if (!windowWasVisible && !this.window.isDestroyed() && !this.window.isFocused()) {
           this.window.hide();
         }
       }
     };
 
-    const lockPromise = runOperation();
+    const lockPromise = (existingLock ?? Promise.resolve()).catch(() => {}).then(runOperation);
     this.visibilityLocks.set(id, lockPromise);
 
     try {
@@ -2520,16 +2641,31 @@ export class ViewManager {
     // Page.captureScreenshot here), so it MUST render unslotted panels instead
     // of declining. The isDestroyed bail above keeps it correct.
     let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const attempts = this.headless ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         const image = await this.withViewVisible(id, async () => {
           const bounds = managed.view.getBounds();
-          return contents.capturePage({
+          const capture = contents.capturePage({
             x: 0,
             y: 0,
             width: Math.max(1, Math.round(bounds.width)),
             height: Math.max(1, Math.round(bounds.height)),
           });
+          let timer: NodeJS.Timeout | undefined;
+          try {
+            return await Promise.race([
+              capture,
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("capturePage did not produce a frame within 3 seconds")),
+                  3_000
+                );
+              }),
+            ]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
         });
         if (!image || !image.isEmpty()) return image;
         lastError = new Error("captureScreenshot returned an empty image");
@@ -2537,7 +2673,7 @@ export class ViewManager {
         lastError = error;
       }
 
-      if (attempt < 2) {
+      if (attempt < attempts - 1) {
         // Viz can lose the first surface while a hidden WebContentsView is
         // being attached. Invalidate and cycle the view before retrying the
         // bounded capture; this recovers transient UnknownVizError failures

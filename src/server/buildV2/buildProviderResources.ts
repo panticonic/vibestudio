@@ -7,14 +7,16 @@ import type { BuildProviderInput } from "@vibestudio/shared/buildProvider";
  * Host/shared npm caches and temporary compiler projections are never mounted
  * into the workspace native domain. Keep this lease through artifact reads. */
 export async function prepareBuildProviderResources(options: {
-  buildsRoot: string;
+  inputsRoot: string;
   sourceRoot: string;
   input: BuildProviderInput;
   materialize(source: string, destination: string): Promise<void>;
 }): Promise<{ input: BuildProviderInput; dispose(): Promise<void> }> {
-  await mkdir(options.buildsRoot, { recursive: true });
-  const buildsRoot = await realpath(options.buildsRoot);
-  const inputsRoot = path.join(buildsRoot, ".provider-inputs");
+  await mkdir(path.dirname(options.inputsRoot), { recursive: true });
+  const inputsRoot = path.join(
+    await realpath(path.dirname(options.inputsRoot)),
+    path.basename(options.inputsRoot)
+  );
   await mkdir(inputsRoot, { recursive: true });
   if ((await realpath(inputsRoot)) !== inputsRoot) {
     throw new Error("Build provider input anchor must be owned by the host");

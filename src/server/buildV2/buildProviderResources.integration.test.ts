@@ -1,11 +1,12 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
 import { materializeImmutableTree } from "./immutableTreeMaterializer.js";
 import { startNativeWorkspaceRuntime } from "../nativeWorkspaceRuntime.js";
 import { waitForNativeJob } from "../nativeWorkspaceJob.js";
+import { stateLayout } from "../stateLayout.js";
 
 let root: string | undefined;
 afterEach(async () => {
@@ -30,8 +31,9 @@ it("admits a complete native provider input without granting host sources or cac
   await writeFile(path.join(dependencies, "package.js"), "module.exports = 9;");
   await writeFile(sibling, "secret");
   const buildsRoot = path.join(statePath, "builds");
+  const inputsRoot = stateLayout(statePath).buildProviderInputsDir;
   const resources = await prepareBuildProviderResources({
-    buildsRoot,
+    inputsRoot,
     sourceRoot,
     materialize: materializeImmutableTree,
     input: {
@@ -53,14 +55,18 @@ it("admits a complete native provider input without granting host sources or cac
   let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
   try {
     const input = resources.input;
-    // All provider-visible paths fit the existing read-only builds resource.
+    const physicalInputsRoot = await realpath(inputsRoot);
+    // Provider inputs have a dedicated read-only resource, outside immutable build inventory.
     for (const file of [
       input.sourcePath,
       input.dependencyProjection.nodeModulesPath!,
       ...Object.values(input.dependencyProjection.modules),
     ]) {
-      expect(file.startsWith(buildsRoot + path.sep)).toBe(true);
+      expect(file.startsWith(physicalInputsRoot + path.sep)).toBe(true);
     }
+    // The active input lease cannot be mistaken for an unreconstructible build by GC.
+    await mkdir(buildsRoot, { recursive: true });
+    expect(await readdir(buildsRoot)).toEqual([]);
     const probe = path.join(context, "probe.cjs");
     await writeFile(
       probe,
@@ -97,15 +103,15 @@ it("admits a complete native provider input without granting host sources or cac
     if (runtime) expect((await runtime.stop()).launcherExited).toBe(true);
     await resources.dispose();
   }
-  expect(await readdir(path.join(buildsRoot, ".provider-inputs"))).toEqual([]);
+  expect(await readdir(inputsRoot)).toEqual([]);
 });
 
 it("cleans incomplete input publication on materialization failure", async () => {
   root = await mkdtemp(path.join(tmpdir(), "provider-resources-failure-"));
-  const buildsRoot = path.join(root, "builds");
+  const inputsRoot = stateLayout(root).buildProviderInputsDir;
   await expect(
     prepareBuildProviderResources({
-      buildsRoot,
+      inputsRoot,
       sourceRoot: root,
       input: {
         target: "react-native",
@@ -118,5 +124,5 @@ it("cleans incomplete input publication on materialization failure", async () =>
       materialize: materializeImmutableTree,
     })
   ).rejects.toThrow();
-  expect(await readdir(path.join(buildsRoot, ".provider-inputs"))).toEqual([]);
+  expect(await readdir(inputsRoot)).toEqual([]);
 });

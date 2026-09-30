@@ -5,6 +5,7 @@ import { getCentralDataPath, getUserDataPath, setUserDataPath } from "@vibestudi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialStore } from "./store.js";
 import type { Credential } from "./types.js";
+import { __setSafeStorageForTests } from "./encryptedJsonStore.js";
 
 function makeCredential(overrides: Partial<Credential> = {}): Credential {
   return {
@@ -36,9 +37,40 @@ describe("CredentialStore", () => {
   });
 
   afterEach(async () => {
+    __setSafeStorageForTests(null);
     setUserDataPath(originalUserDataPath);
     await rm(tempDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
+  });
+
+  it("preserves the OS-encrypted record format", async () => {
+    __setSafeStorageForTests({
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`native:${value}`),
+      decryptString: (value) => value.toString().slice(7),
+    });
+    const credential = makeCredential();
+    await store.save(credential);
+    const raw = JSON.parse(await readFile(path.join(tempDir, "github/primary.json"), "utf8"));
+    expect(raw.v).toBe("v1-electron");
+    expect(await store.load("github", "primary")).toEqual(credential);
+  });
+
+  it("keeps provider persistence working when native encryption is denied", async () => {
+    __setSafeStorageForTests({
+      isEncryptionAvailable: () => true,
+      encryptString: () => {
+        throw new Error("Keychain denied");
+      },
+      decryptString: () => {
+        throw new Error("Keychain denied");
+      },
+    });
+    const credential = makeCredential();
+    await store.save(credential);
+    const raw = JSON.parse(await readFile(path.join(tempDir, "github/primary.json"), "utf8"));
+    expect(raw.v).toBe("v1-aesgcm");
+    expect(await store.load("github", "primary")).toEqual(credential);
   });
 
   it("reuses the default central credential store after a workspace is deleted and replaced", async () => {

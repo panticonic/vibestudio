@@ -19,7 +19,11 @@ import * as os from "os";
 import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
-import { execFileSync } from "child_process";
+import {
+  captureOwnedProcessIdentity,
+  type OwnedProcessIdentity,
+} from "../../scripts/owned-process-identity.mjs";
+import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
@@ -330,6 +334,10 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   const projectRoot = path.resolve(__dirname, "../..");
   let workspacePath = workspace ?? (await createManagedTestWorkspace());
   const workspaceInfo = getWorkspaceInfo(workspacePath);
+  // A restart owns a new process lifetime even when it reuses the fixture's
+  // state. Mark it pending again so an interrupted restart cannot authorize
+  // run-level deletion using the previous launch's release record.
+  registerRunCleanupPath(workspaceInfo.testRoot);
   const ownsWorkspace = workspace === undefined;
   const workspaceKind =
     readCaseRootTemplateSelection(workspaceInfo.testRoot)?.workspaceKind ?? "project";
@@ -409,6 +417,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   app.once("close", () => closedElectronApplications.add(app));
   const output: string[] = [];
   const child = app.process();
+  const mainIdentity = captureTestProcessIdentity(child.pid);
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
   child.stderr?.on("data", (chunk) => output.push(String(chunk)));
 
@@ -481,6 +490,11 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       const centralDataDir = getCentralDataDirFromEnv(workspaceInfo.env);
       const hubReady = readHubReadyFile(path.join(centralDataDir, "server-auth", "hub-ready.json"));
       const hubPid = hubReady?.pid;
+      const processReceipts = [
+        { pid: mainPid, identity: mainIdentity },
+        { pid: workspaceServerPid, identity: captureTestProcessIdentity(workspaceServerPid) },
+        { pid: hubPid, identity: captureTestProcessIdentity(hubPid) },
+      ];
       const closeWithTimeout = async (timeoutMs: number): Promise<void> =>
         Promise.race([
           app.close(),
@@ -496,23 +510,12 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         await closeWithTimeout(20_000);
       } catch (error) {
         console.warn("[TestSetup] Graceful close failed, force killing:", error);
-        try {
-          killProcessTree(mainPid, "SIGKILL");
-          await waitForProcessExit(mainPid, 3000);
-        } catch {
-          // Process may already be dead.
-        }
       }
 
-      cleanupKnownChildProcesses(mainPid);
-      cleanupKnownChildProcesses(workspaceServerPid);
-      for (const detachedPid of [workspaceServerPid, hubPid]) {
-        killProcessTree(detachedPid, "SIGTERM");
-        if (!(await waitForProcessExit(detachedPid, 15_000))) {
-          cleanupKnownChildProcesses(detachedPid);
-          killProcessTree(detachedPid, "SIGKILL");
-          await waitForProcessExit(detachedPid, 3000);
-        }
+      for (const receipt of processReceipts) {
+        if (!receipt.pid || (process.platform !== "win32" && !receipt.identity)) continue;
+        const result = await terminateOwnedProcessTree(receipt.pid, { identity: receipt.identity });
+        if (!result.gone) throw new Error(`Test process tree ${receipt.pid} did not retire`);
       }
 
       // A forced hub stop cannot execute its final lease release. Once the
@@ -535,6 +538,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         } catch (error) {
           console.warn("[TestSetup] Error removing workspace:", error);
         }
+      } else {
+        releaseRunCleanupPath(workspaceInfo.testRoot);
       }
 
       if (ledgerFailure) throw ledgerFailure;
@@ -678,6 +683,13 @@ export async function approvePendingWorkspaceCreationReview(
   owner: TestWorkspaceOwner,
   approvalIds?: readonly string[]
 ): Promise<void> {
+  // A desktop fixture adopts both System and the selected workspace. Leaving
+  // System's review pending keeps a blocking native card above the test target.
+  // Explicit workspace owners/approval IDs still exercise exactly that review.
+  const systemWorkspaceId = (owner as Partial<TestApp>).systemWorkspaceId;
+  if (!approvalIds && systemWorkspaceId && systemWorkspaceId !== owner.workspaceId) {
+    await approvePendingWorkspaceCreationReview({ app: owner.app, workspaceId: systemWorkspaceId });
+  }
   await owner.app.evaluate(
     async (_electron, request) => {
       const root = globalThis.__testApi;
@@ -794,14 +806,14 @@ function readHubReadyFile(readyFile: string): { pid: number; serverBootId: strin
   }
 }
 
-async function waitForProcessExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
-  if (!pid || process.platform === "win32") return true;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+function captureTestProcessIdentity(pid: number | undefined): OwnedProcessIdentity | undefined {
+  if (!pid || process.platform === "win32") return undefined;
+  try {
+    return captureOwnedProcessIdentity(pid);
+  } catch (error) {
+    if (!isProcessAlive(pid)) return undefined;
+    throw error;
   }
-  return !isProcessAlive(pid);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -860,85 +872,6 @@ async function waitForTestApiReady(
       details ? `\n\nElectron output before test API timeout:\n${details}` : ""
     }`
   );
-}
-
-function cleanupKnownChildProcesses(mainPid: number | undefined): void {
-  if (!mainPid) return;
-  if (process.platform === "win32") return;
-  const workerdConfigDir = `/tmp/vibestudio-workerd-${mainPid}/config.capnp`;
-  for (const pid of findPidsByCommand(workerdConfigDir)) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // already gone
-    }
-  }
-}
-
-function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    try {
-      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
-    } catch {
-      // already gone
-    }
-    return;
-  }
-  for (const childPid of collectChildPids(pid)) {
-    try {
-      process.kill(childPid, signal);
-    } catch {
-      // already gone
-    }
-  }
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // already gone
-  }
-}
-
-function collectChildPids(rootPid: number): number[] {
-  const result: number[] = [];
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let stdout = "";
-    try {
-      stdout = execFileSync("ps", ["-o", "pid=", "--ppid", String(current)], {
-        encoding: "utf8",
-      });
-    } catch {
-      continue;
-    }
-    for (const token of stdout.trim().split(/\s+/)) {
-      if (!token) continue;
-      const childPid = Number(token);
-      if (!Number.isInteger(childPid) || childPid <= 0) continue;
-      result.unshift(childPid);
-      stack.push(childPid);
-    }
-  }
-  return result;
-}
-
-function findPidsByCommand(needle: string): number[] {
-  let stdout = "";
-  try {
-    stdout = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
-  } catch {
-    return [];
-  }
-  const pids: number[] = [];
-  for (const line of stdout.split("\n")) {
-    if (!line.includes(needle)) continue;
-    const match = line.match(/^\s*(\d+)\s+/);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
-  }
-  return pids;
 }
 
 /**

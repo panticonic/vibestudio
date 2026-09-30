@@ -1,4 +1,5 @@
 nodeLinker: hoisted
+engineStrict: true
 
 # Desktop releases cross-package x64 and arm64 installers from one Linux
 # runner. Keep both native payloads installed so electron-builder can select

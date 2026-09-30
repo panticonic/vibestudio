@@ -90,7 +90,11 @@ describe("collectStartupHostReuseFindings", () => {
       );
       fs.writeFileSync(
         path.join(base, "apps", "shell", "package.json"),
-        JSON.stringify({ name: "@workspace-apps/shell", dependencies: { react: "^19.0.0" } })
+        JSON.stringify({
+          name: "@workspace-apps/shell",
+          vibestudio: { app: { target: "electron" } },
+          dependencies: { react: "^19.0.0" },
+        })
       );
       fs.writeFileSync(
         path.join(base, "panels", "chat", "package.json"),

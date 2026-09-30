@@ -69,8 +69,8 @@ const HOSTED_RUNTIME_DERIVED_METHODS = {
   "browserData.revealDownload": ["browserEnvironment.revealDownload"],
   "extensions.use": ["extensions.invoke", "extensions.invokeStream", "extensions.streamingMethods"],
   "extensions.on": ["events.watch"],
-  "workspace.projects.findForPath": ["workspace.findUnitForPath"],
-  "workspace.projects.list": ["workspace.sourceTree"],
+  "workspace.projectForPath": ["workspace.findUnitForPath"],
+  "workspace.projects": ["workspace.sourceTree"],
   "workspace.switchTo": ["workspace.select"],
 };
 

@@ -210,7 +210,7 @@ export async function authorityDiagnosticsForProgram(input: {
     line: 1,
     column: 1,
     message: `Installed code uses capability '${capability}' but vibestudio.authority.requests does not declare it. Add the narrowest reviewed request, then rebuild this exact context.`,
-    suggestion: `Add an authority request for ${JSON.stringify(capability)}; use live capability docs to select its narrowest resource scope.`,
+    suggestion: `Search live docs for ${JSON.stringify(capability)} and inspect the receiver's access.authority (including prepared leaves), resource contract, and tier. Review reachable dependency code too: inherited lifecycle methods count even when your subclass has no external calls. Choose the narrowest intended request, or remove the effect; a request is not a grant.`,
   }));
   if (!input.environment) return hostDiagnostics;
 
@@ -367,7 +367,11 @@ export async function authorityDiagnosticsForProgram(input: {
       const result = await input.environment!.resolveService(query);
       if (result.kind === "missing") {
         if (declaration.availability === "required") {
-          addDiagnostic(fact, `Required workspace service protocol '${query}' is unavailable.`);
+          addDiagnostic(
+            fact,
+            `Required workspace service protocol '${query}' is unavailable.`,
+            "The exact candidate has no service exposing this protocol. Inspect workers.listServices() in this context and use an advertised protocol, or declare the intended provider and protocols through workspace_service in meta/vibestudio.yml. A consumer serviceRequests entry does not register a provider."
+          );
         }
       } else if (result.kind === "inaccessible") {
         addDiagnostic(
@@ -434,12 +438,10 @@ export async function authorityDiagnosticsForProgram(input: {
               selectedMethods.push(["<dynamic>", authorityEntry]);
             }
           }
-          if (selectedMethods.length > 0) {
-            addDiagnostic(
-              fact,
-              `The workspace service '${service.binding.name}' is called with an unbounded method value; static authority includes every code-reachable protected method. Narrow the method to a literal union when possible.`
-            );
-          }
+          addDiagnostic(
+            fact,
+            `Authority analysis cannot bound the RPC method called on workspace service '${service.binding.name}'. Use a literal or finite literal union so the build can verify the provider method and its authority.`
+          );
         }
       } else {
         for (const methodName of methodValues) {
@@ -578,7 +580,7 @@ export async function authorityDiagnosticsForProgram(input: {
           line: 1,
           column: 1,
           message: `Installed code uses capability '${capability}' but vibestudio.authority.requests does not declare it. Add the narrowest reviewed request, then rebuild this exact context.`,
-          suggestion: `Add an authority request for ${JSON.stringify(capability)}; use live capability docs to select its narrowest resource scope.`,
+          suggestion: `Search live docs for ${JSON.stringify(capability)} and inspect the receiver's access.authority (including prepared leaves), resource contract, and tier. Choose the narrowest intended request, or remove the effect; a request is not a grant.`,
         });
       }
     }

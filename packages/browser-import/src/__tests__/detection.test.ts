@@ -249,6 +249,8 @@ describe("packaged browser roots", () => {
       family: "chromium" as const,
       displayName: "x",
       linux: "/one",
+      darwin: "/one",
+      win32: "/one",
     };
     expect(getBrowserDataDirs(entry)).toEqual([{ path: "/one" }]);
   });

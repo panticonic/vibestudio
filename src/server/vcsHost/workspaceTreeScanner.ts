@@ -13,7 +13,11 @@ import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
-import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
+import {
+  discoverPackageGraph,
+  type GraphNode,
+  type PackageGraphManifestIssue,
+} from "../buildV2/packageGraph.js";
 import { readWorkspaceSkillEntry } from "./workspaceSkills.js";
 
 /**
@@ -59,10 +63,10 @@ export class WorkspaceTreeScanner {
   private async scan(generation: number): Promise<WorkspaceTree> {
     const workspaceRoot =
       typeof this.sourceRoot === "string" ? this.sourceRoot : await this.sourceRoot();
-    const graphByPath = new Map(
-      discoverPackageGraph(workspaceRoot)
-        .allNodes()
-        .map((node) => [node.relativePath, node])
+    const graph = discoverPackageGraph(workspaceRoot);
+    const graphByPath = new Map(graph.allNodes().map((node) => [node.relativePath, node]));
+    const graphIssuesByPath = new Map(
+      graph.allManifestIssues().map((issue) => [issue.relativePath, issue])
     );
     const children: WorkspaceNode[] = [];
     for (const scope of WORKSPACE_SOURCE_DIRS) {
@@ -94,7 +98,8 @@ export class WorkspaceTreeScanner {
           workspaceRoot,
           unitRel,
           entry.name,
-          graphByPath.get(unitRel)
+          graphByPath.get(unitRel),
+          graphIssuesByPath.get(unitRel)
         );
         if (node) scopeChildren.push(node);
       }
@@ -119,7 +124,8 @@ export class WorkspaceTreeScanner {
     workspaceRoot: string,
     unitRel: string,
     name: string,
-    graphNode?: GraphNode
+    graphNode?: GraphNode,
+    graphIssue?: PackageGraphManifestIssue
   ): Promise<WorkspaceNode | null> {
     const abs = path.join(workspaceRoot, unitRel);
     const node: WorkspaceNode = { name, path: unitRel, isUnit: true, children: [] };
@@ -128,7 +134,7 @@ export class WorkspaceTreeScanner {
       node.packageInfo = { name: graphNode.name };
       this.applyManifestMetadata(node, unitRel, name, graphNode.manifest);
       await this.attachIconVersion(node, abs);
-    } else {
+    } else if (!graphIssue) {
       try {
         const pkg = JSON.parse(await fs.readFile(path.join(abs, "package.json"), "utf8")) as {
           name?: string;
@@ -155,9 +161,9 @@ export class WorkspaceTreeScanner {
     if (skill) node.skillInfo = { name: skill.name, description: skill.description };
 
     if (!node.packageInfo && !node.skillInfo) {
-      // Bare directory with no unit markers — still listed so the UI can
-      // surface it (matches the old tree manager's lenient posture) as long
-      // as it has any files.
+      // A source directory remains navigable even when its location-owned
+      // build manifest is invalid. It deliberately receives no package or
+      // launch metadata: only the build graph may certify those contracts.
       try {
         const sub = await fs.readdir(abs);
         if (sub.length === 0) return null;

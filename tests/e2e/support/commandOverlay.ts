@@ -109,14 +109,37 @@ export async function pressChordOnFocusedContents(
   modifiers: string[] = []
 ): Promise<boolean> {
   return testApp.app.evaluate(
-    async ({ webContents }, chord) => {
-      const focused = webContents.getFocusedWebContents();
-      const target =
-        focused ??
-        webContents
-          .getAllWebContents()
-          .find((c) => !c.isDestroyed() && c.getTitle() === "@workspace-apps/shell");
-      if (!target || target.isDestroyed()) return false;
+    async ({ app, webContents, BaseWindow }, chord) => {
+      // Electron only delivers synthetic keyboard input when the containing
+      // native window has focus. Successive macOS test apps may be visible
+      // without being the active application.
+      const window = BaseWindow.getAllWindows().find(
+        (candidate) => !candidate.isDestroyed() && candidate.isVisible()
+      );
+      if (!window) throw new Error("Keyboard input requires a visible native window");
+      app.focus({ steal: true });
+      window.focus();
+      // Native focus is asynchronous on macOS. Wait for the actual focused
+      // contents; falling back to the shell would not exercise panel shortcuts.
+      const deadline = Date.now() + 5_000;
+      let target = webContents.getFocusedWebContents();
+      while ((!window.isFocused() || !target) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        target = webContents.getFocusedWebContents();
+      }
+      if (!window.isFocused() || !target || target.isDestroyed()) {
+        throw new Error(
+          `Native keyboard focus did not settle: ${JSON.stringify({
+            windowFocused: window.isFocused(),
+            contents: webContents.getAllWebContents().map((contents) => ({
+              id: contents.id,
+              title: contents.getTitle(),
+              url: contents.getURL(),
+              focused: contents.isFocused(),
+            })),
+          })}`
+        );
+      }
       target.sendInputEvent({
         type: "keyDown",
         keyCode: chord.key,

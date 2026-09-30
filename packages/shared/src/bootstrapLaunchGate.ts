@@ -56,6 +56,8 @@ export function plural(count: number, singular: string, pluralLabel = `${singula
 
 /** One unit line: name and its notable rows in plain language (level 2). */
 export interface LaunchGateUnitRow {
+  /** Canonical reviewed-unit identity; titles can repeat across different parts. */
+  identityKey: string;
   name: string;
   kind: "Client App" | "Extension";
   /** Notable rows in the same words the collection route uses for this unit. */
@@ -183,6 +185,7 @@ export function sourceLabel(origin: InstallReviewOrigin): string {
 export function launchGateUnitRow(part: InstallReviewPart): LaunchGateUnitRow {
   const notable = part.notableRows.map(installRowHeadline);
   return {
+    identityKey: part.identityKey,
     name: part.title || part.name,
     kind: part.kind === "app" ? "Client App" : "Extension",
     // The same words the collection route uses for the same unit, so what a

@@ -807,6 +807,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           ...(typeof packageJson.vibestudio?.icon === "string"
             ? { icon: packageJson.vibestudio.icon }
             : {}),
+          ...(typeof packageJson.vibestudio?.icon === "string" &&
+          packageJson.vibestudio.icon.trim().startsWith("./")
+            ? { iconState: candidate.stateHash }
+            : {}),
           version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
           sourceRepo: candidate.unitPath,
           ref: declaration.ref,
@@ -2220,6 +2224,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         dependencyEvs: candidate.dependencyEvs,
         externalDeps: this.currentExternalDeps(node, decl, active),
       }),
+      ...(node.manifest.icon?.trim().startsWith("./") ? { iconState: candidate.stateHash } : {}),
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
       authority: {

@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { parseUnitAuthorityManifest } from "./authorityManifest.js";
 
 describe("unit authority manifest", () => {
+  it("rejects bare protocol strings with the complete expected declaration shape", () => {
+    expect(() =>
+      parseUnitAuthorityManifest({ requests: [], provides: [], serviceRequests: ["notes.v1"] })
+    ).toThrow("serviceRequests[0] must be an object with protocol and availability");
+    expect(() =>
+      parseUnitAuthorityManifest({ requests: [], provides: [], serviceRequests: ["notes.v1"] })
+    ).toThrow('"availability": "required"');
+  });
   it("does not charge runtime-intrinsic extension lifecycle calls to authors", () => {
     const authority = parseUnitAuthorityManifest({ requests: [], provides: [] });
     expect(authority.requests).toEqual([]);

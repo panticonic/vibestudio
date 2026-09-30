@@ -99,12 +99,21 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 
+  let startupError: unknown = null;
   try {
     await host.start();
     await host.done;
+  } catch (error) {
+    startupError = error;
+    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    // Report before cleanup: cleanup may itself wait on a failed native child,
+    // while the parent needs the original startup cause to recover promptly.
+    console.error(`[headless-host] fatal: ${detail}`);
+    process.send?.({ type: "startup-error", error: detail });
   } finally {
     await host.stop("host lifetime ended");
   }
+  if (startupError) process.exitCode = 1;
 }
 
 main().catch((error) => {

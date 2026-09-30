@@ -45,6 +45,21 @@ describe("userland authority facts", () => {
     });
   });
 
+  it("does not mistake a dynamic RPC method identifier for its variable name", () => {
+    const facts = analyze(`
+      declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
+      declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+      async function invoke(method: string) {
+        const service = await workers.resolveService("example.notes.v1");
+        await rpc.call(service.targetId, method, []);
+      }
+    `);
+
+    expect(facts.find((fact) => fact.kind === "invocation")?.methods).toMatchObject({
+      kind: "symbolic",
+    });
+  });
+
   it("does not infer an unrelated object named workers", () => {
     const facts = analyze(`
       const workers = { resolveService: async (_query: string) => ({ targetId: "x" }) };

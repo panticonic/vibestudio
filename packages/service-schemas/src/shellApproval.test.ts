@@ -254,6 +254,8 @@ describe("shellApproval service contract", () => {
             label: "Panel",
             surfaces: [],
             name: "example",
+            icon: "./assets/icon.svg",
+            iconState: `state:${"a".repeat(64)}`,
             title: "Example",
             purpose: "An example panel",
             repoPath: "panels/example",
@@ -303,6 +305,10 @@ describe("shellApproval service contract", () => {
     // review carries parts, so narrow before reading them.
     expect(review?.kind).toBe("unit-install-review");
     if (review?.kind !== "unit-install-review") throw new Error("expected an install review");
+    expect(review.parts[0]).toMatchObject({
+      icon: "./assets/icon.svg",
+      iconState: `state:${"a".repeat(64)}`,
+    });
     expect(review.parts[0]?.notableRows[0]).toMatchObject({
       binding: { protocol: "example.notes.v1", serviceName: "notes" },
     });

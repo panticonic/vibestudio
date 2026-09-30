@@ -14,16 +14,21 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import https from "node:https";
-import { ensureAdb, platformToolsVersion, vibestudioCacheDir } from "./lib/android-platform-tools.mjs";
+import {
+  ensureAdb,
+  platformToolsVersion,
+  vibestudioCacheDir,
+} from "./lib/android-platform-tools.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
 import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
+import { bootedIosSimulator, iosBuildTarget } from "./lib/mobile-ios.mjs";
+import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const iosDir = path.join(repoRoot, "apps", "mobile", "ios");
-const iosEntitlementsScript = path.join(repoRoot, "scripts", "cli", "ios-entitlements.mjs");
 const pkgPath = path.join(repoRoot, "package.json");
 const pkg = fs.existsSync(pkgPath)
   ? JSON.parse(fs.readFileSync(pkgPath, "utf8"))
@@ -40,24 +45,8 @@ const defaultArtifactUrl =
   process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
 const defaultChecksumUrl =
   process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS-android`;
-function readXcconfig(file) {
-  if (!fs.existsSync(file)) return {};
-  const values = {};
-  const text = fs.readFileSync(file, "utf8");
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z0-9_.$()[\]-]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!match) continue;
-    values[match[1]] = match[2];
-  }
-  return values;
-}
-
-function firstNonEmpty(...values) {
-  return values.find((value) => typeof value === "string" && value.trim()) ?? null;
-}
-
 function parseArgs(argv) {
-  const signing = readXcconfig(path.join(iosDir, "Signing.local.xcconfig"));
+  const signing = readIosSigningConfig(iosDir);
   const options = {
     platform: "android",
     device: null,
@@ -71,17 +60,8 @@ function parseArgs(argv) {
     launch: false,
     resetApp: false,
     configuration: "Release",
-    teamId: firstNonEmpty(
-      process.env.VIBESTUDIO_IOS_TEAM_ID,
-      signing.VIBESTUDIO_IOS_TEAM_ID,
-      signing.DEVELOPMENT_TEAM
-    ),
-    bundleId:
-      firstNonEmpty(
-        process.env.VIBESTUDIO_IOS_BUNDLE_ID,
-        signing.VIBESTUDIO_IOS_BUNDLE_ID,
-        signing.PRODUCT_BUNDLE_IDENTIFIER
-      ) ?? "app.vibestudio.mobile",
+    teamId: signing.teamId,
+    bundleId: signing.bundleId,
     help: false,
   };
 
@@ -212,18 +192,7 @@ function adbArgs(device, args) {
   return device ? ["-s", device, ...args] : args;
 }
 
-function iosDestination(options) {
-  if (options.device) return ["-destination", `id=${options.device}`];
-  if (options.simulator) return ["-destination", "platform=iOS Simulator,name=iPhone 16"];
-  return ["-destination", "generic/platform=iOS"];
-}
-
-function iosSdk(options) {
-  return options.device || !options.simulator ? "iphoneos" : "iphonesimulator";
-}
-
-function iosAppPath(options) {
-  const sdk = iosSdk(options);
+function iosAppPath(options, sdk) {
   return path.join(
     iosDir,
     "build",
@@ -234,18 +203,7 @@ function iosAppPath(options) {
   );
 }
 
-async function ensureIosEntitlements(options) {
-  await run(process.execPath, [
-    iosEntitlementsScript,
-    "--output",
-    path.join(iosDir, "Generated", "Vibestudio.entitlements"),
-    "--configuration",
-    options.configuration,
-  ]);
-}
-
 async function ensurePods() {
-  if (fs.existsSync(path.join(iosDir, "Pods", "Manifest.lock"))) return;
   await run("pod", ["install"], { cwd: iosDir });
 }
 
@@ -255,16 +213,23 @@ async function installIos(options) {
       "iOS install requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac for provisioning details."
     );
   }
-  await ensureIosEntitlements(options);
+  await runCapture("xcodebuild", ["-version"]);
+  const simulatorId = options.simulator
+    ? bootedIosSimulator(
+        (await runCapture("xcrun", ["simctl", "list", "devices", "available", "--json"])).stdout,
+        options.device
+      )
+    : null;
+  const target = iosBuildTarget(options, simulatorId);
   await ensurePods();
   const buildTarget = fs.existsSync(path.join(iosDir, "Vibestudio.xcworkspace"))
     ? ["-workspace", "Vibestudio.xcworkspace"]
     : ["-project", "Vibestudio.xcodeproj"];
-  const signingArgs = [
-    `PRODUCT_BUNDLE_IDENTIFIER=${options.bundleId}`,
-    "CODE_SIGN_ENTITLEMENTS=Generated/Vibestudio.entitlements",
-  ];
-  if (options.teamId) signingArgs.push(`DEVELOPMENT_TEAM=${options.teamId}`);
+  const signingArgs = [`VIBESTUDIO_IOS_BUNDLE_ID=${options.bundleId}`];
+  if (options.teamId) signingArgs.push(`VIBESTUDIO_IOS_TEAM_ID=${options.teamId}`);
+  // Simulator builds need their normal entitlements for Keychain access.
+  // Local ad hoc signing does not require a developer certificate or team.
+  if (options.simulator) signingArgs.push("CODE_SIGN_IDENTITY=-", "CODE_SIGNING_ALLOWED=YES");
   await run(
     "xcodebuild",
     [
@@ -275,18 +240,21 @@ async function installIos(options) {
       options.configuration,
       "-derivedDataPath",
       path.join(iosDir, "build"),
-      ...iosDestination(options),
+      "-sdk",
+      target.sdk,
+      "-destination",
+      target.destination,
       ...signingArgs,
       "build",
     ],
     { cwd: iosDir }
   );
-  const appPath = iosAppPath(options);
+  const appPath = iosAppPath(options, target.sdk);
   if (!fs.existsSync(appPath)) throw new Error(`iOS build did not produce ${appPath}`);
   if (options.simulator) {
-    await run("xcrun", ["simctl", "bootstatus", "booted", "-b"]);
-    await run("xcrun", ["simctl", "install", "booted", appPath]);
-    if (options.launch) await run("xcrun", ["simctl", "launch", "booted", options.bundleId]);
+    await run("xcrun", ["simctl", "bootstatus", simulatorId, "-b"]);
+    await run("xcrun", ["simctl", "install", simulatorId, appPath]);
+    if (options.launch) await run("xcrun", ["simctl", "launch", simulatorId, options.bundleId]);
   } else if (options.device) {
     await run("xcrun", [
       "devicectl",
