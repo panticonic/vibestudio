@@ -11,6 +11,13 @@ The checked-in Xcode project is authoritative. Do not regenerate it with
 `react-native init`; update `Vibestudio.xcodeproj/project.pbxproj` directly when
 native sources, build phases, or configurations change.
 
+The native marketing version comes from the root application's SemVer through
+`Vibestudio.Version.xcconfig`. Run `pnpm generate:mobile-version` after changing
+the root version; `pnpm check:mobile-version` and the commit gate reject stale
+metadata. Apple marketing versions contain the numeric major/minor/patch;
+desktop compatibility compares that same core version. Debug and Release use
+the generated app configuration without overriding CocoaPods target metadata.
+
 ## Local Signing
 
 For simulator testing, install full Xcode with an iOS simulator runtime and
@@ -58,8 +65,15 @@ Associated-domain entitlements are emitted only when
 `VIBESTUDIO_IOS_PAIR_HOST` or `VIBESTUDIO_IOS_ASSOCIATED_DOMAINS` is set; APNs
 is emitted only when `VIBESTUDIO_IOS_APS_ENV` is set.
 
-`mobile doctor` currently checks device signing even when planning a simulator
-build. Its signing failures do not prevent the locally signed simulator command above.
+Use `mobile doctor --platform ios --simulator` to check simulator prerequisites.
+`mobile doctor --platform ios` also checks physical-device signing. APNs
+configuration uses `VIBESTUDIO_IOS_APS_ENV=development|production`, matching
+the entitlements generator.
+
+Device discovery inspects the selected bundle through CoreDevice, including
+non-development installations. It uses the same local/environment bundle ID
+configuration as the installer. Workspace phone setup reuses a compatible
+installed app and verifies compatibility again after an installation.
 
 ## Verification boundary
 

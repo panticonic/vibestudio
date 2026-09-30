@@ -299,14 +299,14 @@ export function createPhoneProvisioningService(
       await runScript("mobile-install.mjs", installArgs, { signal });
       installStatus = "installed";
 
-      if (input.platform === "android") {
-        const afterInstall = await discover("android", signal);
+      {
+        const afterInstall = await discover(input.platform, signal);
         const installed = afterInstall.devices.find(
           (device) => device.deviceId === selected.deviceId
         );
         if (!installed?.compatibleAppInstalled) {
           throw new Error(
-            "The Android app installed successfully but its version is not compatible with this desktop"
+            `The ${input.platform === "ios" ? "iOS" : "Android"} app installed successfully but its version is not compatible with this desktop`
           );
         }
       }

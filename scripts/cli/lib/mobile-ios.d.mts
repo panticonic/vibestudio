@@ -19,3 +19,10 @@ export function coreDeviceIosPhones(raw: string): Array<{
   installedApps: never[];
   compatibleAppInstalled: boolean;
 }>;
+export function coreDeviceIosApps(
+  raw: string,
+  bundleId: string
+): Array<{
+  packageId: string;
+  versionName?: string;
+}>;

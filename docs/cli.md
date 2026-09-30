@@ -436,7 +436,8 @@ vibestudio mobile dev --platform android
 vibestudio mobile dev --platform ios
 vibestudio mobile logs --platform android
 vibestudio mobile logs --platform ios
-vibestudio mobile doctor
+vibestudio mobile doctor --platform ios --simulator
+vibestudio mobile doctor --platform ios
 ```
 
 Run a clean installed-app pairing smoke against an emulator or attached device:

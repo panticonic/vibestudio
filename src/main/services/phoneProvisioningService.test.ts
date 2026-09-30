@@ -310,9 +310,12 @@ describe("desktop phone provisioning service", () => {
       const project = path.join(root, "apps/mobile/ios/Vibestudio.xcodeproj/project.pbxproj");
       fs.mkdirSync(path.dirname(project), { recursive: true });
       fs.writeFileSync(project, "");
-      const runScript = vi.fn(async (name: string, args: string[]) => ({
-        stdout:
-          name === "mobile-device.mjs" && args[0] === "devices"
+      let discoveries = 0;
+      const runScript = vi.fn(async (name: string, args: string[]) => {
+        const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
+        if (isDiscovery) discoveries += 1;
+        return {
+          stdout: isDiscovery
             ? JSON.stringify({
                 devices: [
                   {
@@ -322,14 +325,15 @@ describe("desktop phone provisioning service", () => {
                     kind,
                     ready: true,
                     installedApps: [],
-                    compatibleAppInstalled: false,
+                    compatibleAppInstalled: discoveries > 1,
                   },
                 ],
                 issues: [],
               })
             : "",
-        stderr: "",
-      }));
+          stderr: "",
+        };
+      });
       const definition = createPhoneProvisioningService({
         appRoot: root,
         appVersion: "0.1.5",
@@ -356,4 +360,39 @@ describe("desktop phone provisioning service", () => {
       expect(result).toMatchObject({ installStatus: "installed", pairingStatus: "paired" });
     }
   );
+
+  it("pairs an already-compatible iOS app without requiring a source checkout or rebuilding", async () => {
+    const runScript = vi.fn(async (name: string, args: string[]) => ({
+      stdout:
+        name === "mobile-device.mjs" && args[0] === "devices"
+          ? JSON.stringify({
+              devices: [
+                {
+                  platform: "ios",
+                  deviceId: "phone",
+                  state: "connected",
+                  kind: "physical",
+                  ready: true,
+                  installedApps: [{ packageId: "app.vibestudio.mobile", versionName: "0.1.5" }],
+                  compatibleAppInstalled: true,
+                },
+              ],
+              issues: [],
+            })
+          : "",
+      stderr: "",
+    }));
+    const definition = createPhoneProvisioningService({
+      appRoot: sourceRoot(),
+      appVersion: "0.1.5",
+      workspaceName: "current-workspace",
+      hostPlatform: "darwin",
+      resolveScriptPath: (name) => name,
+      runScript,
+      hubControlClient: hubControlClient("ios"),
+    });
+    const result = await provision(definition, { platform: "ios", deviceId: "phone" });
+    expect(runScript.mock.calls.some(([name]) => name === "mobile-install.mjs")).toBe(false);
+    expect(result).toMatchObject({ installStatus: "already-compatible", pairingStatus: "paired" });
+  });
 });

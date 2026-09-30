@@ -3,7 +3,12 @@
 import fs from "node:fs";
 import { ensureAdb, resolveAdb } from "./lib/android-platform-tools.mjs";
 import path from "node:path";
-import { availableIosSimulators, coreDeviceIosPhones } from "./lib/mobile-ios.mjs";
+import {
+  availableIosSimulators,
+  coreDeviceIosPhones,
+  coreDeviceIosApps,
+} from "./lib/mobile-ios.mjs";
+import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 import { spawn } from "node:child_process";
 import { bindProcessLifetimeToParent } from "../owned-process-tree.mjs";
 
@@ -18,6 +23,7 @@ import {
   parseAdbDevices,
   parseAndroidPackageVersion,
   compatibleAndroidApp,
+  versionsCompatible,
 } from "./lib/mobile-device-tools.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -40,7 +46,7 @@ function parseArgs(argv) {
     deviceId: undefined,
     pairUrl: undefined,
     packageId: undefined,
-    bundleId: "app.vibestudio.mobile",
+    bundleId: readIosSigningConfig(path.join(repoRoot, "apps/mobile/ios")).bundleId,
   };
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -139,7 +145,7 @@ async function androidDevices() {
   return devices;
 }
 
-async function iosDevices() {
+async function iosDevices(bundleId) {
   if (process.platform !== "darwin") {
     throw new Error("iOS devices require a macOS desktop with Xcode installed.");
   }
@@ -165,13 +171,36 @@ async function iosDevices() {
     "--quiet",
   ]);
   devices.push(...coreDeviceIosPhones(physical.stdout));
+  for (const device of devices.filter((candidate) => candidate.ready)) {
+    const result = await run("xcrun", [
+      "devicectl",
+      "device",
+      "info",
+      "apps",
+      "--device",
+      device.deviceId,
+      "--bundle-id",
+      bundleId,
+      "--include-default-apps",
+      "--json-output",
+      "-",
+      "--quiet",
+    ]);
+    device.installedApps = coreDeviceIosApps(result.stdout, bundleId);
+    device.compatibleAppInstalled = device.installedApps.some((app) =>
+      versionsCompatible(app.versionName, expectedVersion)
+    );
+  }
   return devices;
 }
 
 async function discover(options) {
   try {
     return {
-      devices: options.platform === "android" ? await androidDevices() : await iosDevices(),
+      devices:
+        options.platform === "android"
+          ? await androidDevices()
+          : await iosDevices(options.bundleId),
       issues: [],
     };
   } catch (error) {
@@ -244,7 +273,7 @@ async function connectAndroid(options) {
 }
 
 async function connectIos(options) {
-  const discovery = await iosDevices();
+  const discovery = await iosDevices(options.bundleId);
   const ready = discovery.filter((device) => device.ready);
   const device = options.deviceId
     ? ready.find((candidate) => candidate.deviceId === options.deviceId)

@@ -24,6 +24,7 @@ import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
 import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
 import { bootedIosSimulator, iosBuildTarget } from "./lib/mobile-ios.mjs";
+import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
@@ -44,24 +45,8 @@ const defaultArtifactUrl =
   process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
 const defaultChecksumUrl =
   process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS-android`;
-function readXcconfig(file) {
-  if (!fs.existsSync(file)) return {};
-  const values = {};
-  const text = fs.readFileSync(file, "utf8");
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z0-9_.$()[\]-]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!match) continue;
-    values[match[1]] = match[2];
-  }
-  return values;
-}
-
-function firstNonEmpty(...values) {
-  return values.find((value) => typeof value === "string" && value.trim()) ?? null;
-}
-
 function parseArgs(argv) {
-  const signing = readXcconfig(path.join(iosDir, "Signing.local.xcconfig"));
+  const signing = readIosSigningConfig(iosDir);
   const options = {
     platform: "android",
     device: null,
@@ -75,17 +60,8 @@ function parseArgs(argv) {
     launch: false,
     resetApp: false,
     configuration: "Release",
-    teamId: firstNonEmpty(
-      process.env.VIBESTUDIO_IOS_TEAM_ID,
-      signing.VIBESTUDIO_IOS_TEAM_ID,
-      signing.DEVELOPMENT_TEAM
-    ),
-    bundleId:
-      firstNonEmpty(
-        process.env.VIBESTUDIO_IOS_BUNDLE_ID,
-        signing.VIBESTUDIO_IOS_BUNDLE_ID,
-        signing.PRODUCT_BUNDLE_IDENTIFIER
-      ) ?? "app.vibestudio.mobile",
+    teamId: signing.teamId,
+    bundleId: signing.bundleId,
     help: false,
   };
 

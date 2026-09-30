@@ -54,3 +54,9 @@ export function coreDeviceIosPhones(raw) {
       compatibleAppInstalled: false,
     }));
 }
+
+export function coreDeviceIosApps(raw, bundleId) {
+  return (JSON.parse(raw).result?.apps ?? [])
+    .filter((app) => app.bundleIdentifier === bundleId)
+    .map((app) => ({ packageId: app.bundleIdentifier, versionName: app.version }));
+}

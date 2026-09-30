@@ -4,6 +4,7 @@ import {
   bootedIosSimulator,
   iosBuildTarget,
   coreDeviceIosPhones,
+  coreDeviceIosApps,
 } from "../scripts/cli/lib/mobile-ios.mjs";
 
 const ios = "com.apple.CoreSimulator.SimRuntime.iOS-18-0";
@@ -86,6 +87,22 @@ describe("iOS SDK and product selection", () => {
 });
 
 describe("CoreDevice iOS discovery", () => {
+  it("reads the selected installed app without conflating other bundle identities", () => {
+    expect(
+      coreDeviceIosApps(
+        JSON.stringify({
+          result: {
+            apps: [
+              { bundleIdentifier: "custom.phone", version: "0.1.52" },
+              { bundleIdentifier: "other.phone", version: "0.1.52" },
+            ],
+          },
+        }),
+        "custom.phone"
+      )
+    ).toEqual([{ packageId: "custom.phone", versionName: "0.1.52" }]);
+    expect(coreDeviceIosApps('{"result":{"apps":[]}}', "custom.phone")).toEqual([]);
+  });
   it("excludes Macs and simulated devices and preserves unpaired phone readiness", () => {
     const device = (udid: string, platform: string, reality: string, pairingState = "paired") => ({
       properties: {
