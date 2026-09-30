@@ -33,7 +33,7 @@ function human(ctx: ServiceContext): void {
 export function createProblemReportsService(deps: {
   store: ProblemReportingStore;
   usage?: UsageAnalytics;
-  ownedServer?: {
+  connectedServer?: {
     consent: () => Promise<ReturnType<ProblemReportingStore["consent"]>>;
     decide: (
       revision: number,
@@ -165,12 +165,13 @@ export function createProblemReportsService(deps: {
       incidents: (ctx) => store.incidents(owner(ctx), workspaceId),
       serverConsent: (ctx) => {
         checkHuman(ctx);
-        return deps.ownedServer?.consent() ?? null;
+        return deps.connectedServer?.consent() ?? null;
       },
       decideServer: (ctx, [revision, state]) => {
         checkHuman(ctx);
-        if (!deps.ownedServer) throw new Error("This desktop does not own the connected server");
-        return deps.ownedServer.decide(revision, state);
+        if (!deps.connectedServer)
+          throw new Error("No connected server reporting choice is available");
+        return deps.connectedServer.decide(revision, state);
       },
       consent: (ctx) => store.consent(owner(ctx)),
       decide: (ctx, [revision, state]) => {

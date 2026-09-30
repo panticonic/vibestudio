@@ -149,7 +149,7 @@ export const problemReportsMethods = defineServiceMethods({
   serverConsent: {
     ...local,
     description:
-      "Trusted desktop UI: read the independent reporting choice on its desktop-owned local server. Null means this desktop does not own the server; remote operators manage their own choice.",
+      "Trusted desktop UI: read this user's independent reporting choice on the connected server, whether locally or remotely hosted. The choice applies across that user's workspaces on that server. Null means there is no separate connected-server choice.",
     args: z.tuple([]),
     returns: consent.nullable(),
     access: { sensitivity: "read" },
@@ -158,7 +158,7 @@ export const problemReportsMethods = defineServiceMethods({
   decideServer: {
     ...local,
     description:
-      "Trusted desktop UI: explicitly change this user's independent reporting choice on the desktop-owned local server. This never changes the device choice or another user's choice; agents cannot consent.",
+      "Trusted desktop UI: explicitly change this user's independent reporting choice on the connected server, whether locally or remotely hosted. This never changes the device choice or another user's choice; agents cannot consent.",
     args: z.tuple([z.number().int().nonnegative(), z.enum(["off", "on"])]),
     returns: consent,
     access: { sensitivity: "write" },

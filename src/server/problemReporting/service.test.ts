@@ -16,7 +16,9 @@ afterEach(() =>
     .reverse()
     .forEach((fn) => fn())
 );
-function fixture(ownedServer?: Parameters<typeof createProblemReportsService>[0]["ownedServer"]) {
+function fixture(
+  connectedServer?: Parameters<typeof createProblemReportsService>[0]["connectedServer"]
+) {
   const dir = mkdtempSync(join(tmpdir(), "report-service-"));
   const store = new ProblemReportingStore(dir);
   cleanup.push(
@@ -25,7 +27,7 @@ function fixture(ownedServer?: Parameters<typeof createProblemReportsService>[0]
   );
   const service = createProblemReportsService({
     store,
-    ownedServer,
+    connectedServer,
     workspaceId: "ws",
     redact: (text) => text.replaceAll("registered-sensitive-token", "[secret removed]"),
     importPrepared: async () =>
@@ -125,7 +127,7 @@ it("edits only draft content while the host assigns identity and revision and pr
   await expect(f.human.send(draft.id, draft.revision, preview.digest)).rejects.toThrow();
 });
 
-it("exposes an owned server's independent choice only through trusted human controls", async () => {
+it("exposes the connected server's independent per-user choice only through trusted human controls", async () => {
   const remote = fixture();
   const local = fixture({
     consent: () => remote.human.consent(),
@@ -138,8 +140,28 @@ it("exposes an owned server's independent choice only through trusted human cont
   await local.human.decideServer(0, "on");
   expect((await local.human.consent()).state).toBe("off");
   expect((await remote.human.consent()).state).toBe("on");
+  expect(remote.store.consent("bob").state).toBe("undecided");
+  const otherWorkspace = createProblemReportsService({
+    store: remote.store,
+    workspaceId: "another-workspace",
+    redact: (text) => text,
+  });
+  expect(
+    await otherWorkspace.handler!(
+      {
+        caller: createVerifiedCaller("shell-other-workspace", "shell", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      },
+      "consent",
+      []
+    )
+  ).toMatchObject({ state: "on", revision: 1 });
   await expect(local.human.decideServer(0, "off")).rejects.toThrow("Consent changed");
-  const external = fixture();
-  expect(await external.human.serverConsent()).toBeNull();
-  await expect(external.human.decideServer(0, "on")).rejects.toThrow("does not own");
+  const withoutConnection = fixture();
+  expect(await withoutConnection.human.serverConsent()).toBeNull();
+  await expect(withoutConnection.human.decideServer(0, "on")).rejects.toThrow(
+    "No connected server"
+  );
 });

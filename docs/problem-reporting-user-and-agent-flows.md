@@ -33,7 +33,6 @@ sharing remains off and the choice returns on next first-use entry.
 
 Reporting requires no account, login, enrollment, or submission-key configuration. A local sharing choice remains usable offline; connection state is distinct from consent.
 
-
 The dialog belongs to System shell presentation; host-side consent gating is
 authoritative even if the dialog fails to render. Bootstrap recovery can show
 the same choice using host chrome when necessary, through the same consent
@@ -42,9 +41,13 @@ focus restoration, screen-reader-readable field list, and no competing modal.
 
 Do not repeatedly ask after a persisted off choice. Prompt again only for a
 new installation/user, changed reporting destination, or materially expanded
-automatic fields. Headless-owned server setup uses the same explicit consent
-contract through trusted setup; an agent or environment variable cannot answer
-the user's first-use prompt.
+automatic fields. Headless server setup uses the same explicit consent contract
+through trusted CLI access or the first desktop connection. After the device
+choice, the desktop shows a separate mandatory prompt for the current user's
+account on that server if its choice is undecided. This applies to locally and
+externally hosted servers. Reconnection refreshes the server choice if the server
+was initially unavailable. An agent or environment variable cannot answer the
+first-use prompt.
 
 ## 2. Settings and reporting status
 
@@ -66,8 +69,11 @@ failures and does not silently send historical local evidence. Local queue
 counts/status update after disconnect/reconnect from the canonical store;
 events are invalidation hints, not an alternate source of truth.
 
-The client cannot turn another installation or another user's reporting on.
-Owned-server consent is a separately labelled operator setting. Explain that
+The client cannot change another user's reporting choice. Connected-server
+consent is a separately labelled per-user setting and applies across that user's
+workspaces on the server. Device and server decisions never implicitly enable
+each other, and a saved server choice is not requested again for each workspace.
+Explain that
 local operational logs continue to exist for recovery; “Off” refers to external
 automatic sharing. Export/clear actions remain available while offline.
 
@@ -206,10 +212,9 @@ developer key, SQL access, or extra workspace dependency. Offline intake still a
 
 No reporting account, login, submission-key setup, or challenge is allowed. Opt-in is a local sharing decision, not enrollment. All reports are silently signed with an automatically generated machine key held in the host's external encrypted secret store. The public key links reports from that machine and supports developer joins/aggregation. First-use and settings state this explicitly. Developer SQL/dashboard access alone requires a developer key through secure host input. Local draft ownership remains isolated by the app's existing caller identity; those account/handle values are never automatically sent to intake.
 
-
 ## Normal workflow integration
 
-The shipped System shell mounts the mandatory device reporting choice outside the main desktop error boundary. Desktop-owned local servers have an independent first-use choice after the device decision and labelled settings controls; a desktop connected to an externally owned server cannot enroll that server. Both choices are backed by the existing per-installation/per-user consent store and require trusted human chrome. A device choice never implicitly enables server capture. A temporarily unreachable server keeps its existing choice and exposes a retry; it does not prevent the local device choice.
+The shipped System shell mounts the mandatory device reporting choice outside the main desktop error boundary. Every connected server, including an independently hosted headless server, has an independent first-use choice after the device decision and labelled settings controls. Server consent belongs to the authenticated user across that server's workspaces; the desktop cannot enroll other users. Both choices are backed by the existing per-installation/per-user consent store and require trusted human chrome. A device choice never implicitly enables server capture. A temporarily unreachable server keeps its existing choice, exposes a retry, and reloads consent on reconnect; it does not prevent the local device choice.
 
 Application menus and the command palette open the same composer. Panel render failures, selected chat messages, and tool-result cards prepare user-selected reports through the Base runtime client. The shell's own failure screen also opens the composer directly, even when MainMode and its settings router cannot mount.
 
