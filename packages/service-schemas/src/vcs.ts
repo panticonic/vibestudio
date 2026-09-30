@@ -2311,6 +2311,28 @@ export const vcsErrorSchema = z.discriminatedUnion("code", [
       code: z.literal("IntegrityFailure"),
       ...errorBase,
       handle: id("Opaque integrity diagnostic."),
+      coordinates: z.array(vcsMergeCoordinateRefSchema).max(500).optional(),
+      comparison: z
+        .object({
+          target: vcsStateNodeRefSchema,
+          source: z.union([vcsStateNodeRefSchema, vcsMergeSourceSchema]),
+        })
+        .strict()
+        .optional(),
+      attribution: z
+        .object({
+          aspect: z.enum(["presence", "content", "placement", "mode", "path"]),
+          base: z.record(z.unknown()),
+          final: z.record(z.unknown()),
+          reached: z.unknown(),
+          next: z.unknown().optional(),
+          examinedChangeCount: z.number().int().nonnegative().optional(),
+          firstChangeId: z.string().nullable(),
+          lastChangeId: z.string().nullable(),
+        })
+        .strict()
+        .optional(),
+      subjects: z.array(vcsSemanticNodeRefSchema).max(4).optional(),
     })
     .strict(),
 ]);
