@@ -236,3 +236,20 @@ workspaces…”. Construction outside the registry publication lock is publishe
 as `7ea12683d` and passes the concurrent-reader native regression. Do not mark panel use, messages, keyboard,
 cache recovery, or reconnect complete until the repaired app visibly performs
 those flows. The handover records source commits and private evidence paths.
+
+### Approval control verification
+
+System `9d3de21` preserves approval-sheet accessibility children and marks its
+visible title as a heading. All 49 UI unit cases and the composed System
+mobile typecheck pass. The simulator now exposes search, filters, checkboxes,
+dismissal, and the decision action individually. System `6de53eb` makes the
+shared surface honor its queue's closed state; five surface tests pass, including
+closing without a decision and reopening the same request. Its native dismissal
+check is in progress on `iphone-20260930-visibility`.
+
+Host `1d118f7ec` extends the iOS CI job with native XCTest execution and result
+artifacts. The runner creates and cleans its own compatible simulator. Local
+selection/create/delete validation and all nine native tests passed; a hosted
+run has not been observed. This coverage is separate from full workspace smoke.
+Warm pairing from a running managed app and cancel/reopen retry have now been
+observed. Interactive panel/message and restart acceptance remain open.

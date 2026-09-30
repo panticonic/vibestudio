@@ -259,7 +259,7 @@ jobs:
           console.log(execFileSync("xcrun", ["simctl", "create", "Vibestudio Native Tests", selected.device.deviceTypeIdentifier, selected.runtime], { encoding: "utf8" }).trim());
           NODE
           )
-          trap 'xcrun simctl shutdown "$simulator_id"; xcrun simctl delete "$simulator_id"' EXIT
+          trap 'test_status=$?; xcrun simctl shutdown "$simulator_id" || true; xcrun simctl delete "$simulator_id" || exit 1; exit "$test_status"' EXIT
           xcrun simctl boot "$simulator_id"
           xcrun simctl bootstatus "$simulator_id" -b
           xcodebuild \

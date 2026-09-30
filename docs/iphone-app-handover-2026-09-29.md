@@ -622,3 +622,43 @@ Continuation uses the separately owned persistent instance
 check, unlike destroying an ephemeral root. The app has launched; interactive
 acceptance is pending. Stop and await these exact resources at verification end.
 Do not stop the unrelated `authority-preparation-0930` server or user apps.
+
+### Approval accessibility and presentation continuation
+
+The patched native host streamed and ran the managed System app, authenticated,
+started its panel facade, reconciled System and Personal, and advanced past the
+previous loading freeze to Personal's onboarding review. A fresh native sample
+shows the main and JavaScript threads waiting in their ordinary run loops,
+not the old registry/UIKit lock inversion.
+
+Published System changes:
+
+- `9d3de21`: the approval sheet is a modal container that preserves individual
+  accessibility children; its title is a heading. The earlier accessible summary
+  swallowed fields, filters, dismissal, and decision controls on iOS. All 49
+  ApprovalSheet tests and the composed System typecheck passed. On the refreshed
+  simulator the heading, search field, filters, part checkboxes, dismiss button,
+  and decision button are now separately exposed.
+- `6de53eb`: the workspace approval surface honors the shared queue's open state.
+  Closing deliberately retains selection for reopening; rendering from selection
+  alone left the sheet visible after dismissal. All five surface tests passed,
+  including disappearance without a decision and reopening the same request.
+  Native confirmation of dismissal is pending the fresh server's mobile build.
+
+Published host CI change `1d118f7ec` runs native XCTest on an owned simulator
+created from an available runtime/device-type pair, cleans it with an EXIT trap,
+and uploads its result. YAML parsing, shell syntax, and an actual local
+create/delete metadata check passed. Hosted CI has not been observed yet.
+This does not implement full iOS workspace smoke.
+
+The ordinary Vitest userland route excludes React Native UI tests; its attempted
+focused invocation correctly found no tests. Verification instead used the
+existing host-owned `pnpm test:mobile` Jest dependency projection, with no build
+or package-manager invocation inside the external System checkout.
+
+The stopped `iphone-20260930-reboot` and `iphone-20260930-accessibility` servers
+were signaled and awaited with exit zero. The current owned persistent server
+is `iphone-20260930-visibility`; Metro, simulator, native log stream, and awake
+helper remain owned for continuation. Private logs stay in the persistent
+verification folder above. No Personal onboarding grant was accepted during
+these checks. Dismiss its review and verify the already-approved System UI.
