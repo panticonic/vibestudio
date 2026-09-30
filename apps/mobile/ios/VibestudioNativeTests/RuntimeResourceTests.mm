@@ -2,6 +2,12 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <React/RCTBridgeModule.h>
 #import <React/UIView+React.h>
+#import <React/RCTFabricSurface.h>
+#import <React/RCTSurfacePresenter.h>
+#import <React/RCTSurfaceDelegate.h>
+#import <React/RCTSurfaceView.h>
+#import <ReactCommon/RCTHost.h>
+#import <RCTReactNativeFactory.h>
 #import <react-native-webview/RNCWebViewImpl.h>
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
 #include <react/renderer/components/view/ViewComponentDescriptor.h>
@@ -407,4 +413,72 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
   XCTAssertEqual(replacement.preferredStatusBarStyle, UIStatusBarStyleDefault);
 }
 
+@end
+
+@interface FabricSurfaceLifecycleTests : XCTestCase <RCTSurfaceDelegate>
+@property(nonatomic, strong) XCTestExpectation *running;
+@end
+@implementation FabricSurfaceLifecycleTests
+- (RCTSurfacePresenter *)isolatedPresenter
+{
+  id appDelegate = UIApplication.sharedApplication.delegate;
+  RCTReactNativeFactory *factory = [appDelegate valueForKey:@"reactNativeFactory"];
+  RCTSurfacePresenter *hostPresenter = factory.rootViewFactory.reactHost.surfacePresenter;
+  XCTAssertNotNil(hostPresenter);
+  if (!hostPresenter) return nil;
+  return [[RCTSurfacePresenter alloc] initWithContextContainer:hostPresenter.contextContainer
+      runtimeExecutor:[](std::function<void(facebook::jsi::Runtime &)> &&callback) {}
+      bridgelessBindingsExecutor:std::nullopt];
+}
+- (void)surface:(RCTSurface *)surface didChangeStage:(RCTSurfaceStage)stage
+{
+  if (stage == RCTSurfaceStageRunning) [self.running fulfill];
+}
+- (void)testRepeatedStartsQueueOnlyOneAttachment
+{
+  self.running = [self expectationWithDescription:@"The empty surface starts exactly once"];
+  __block RCTSurfacePresenter *presenter;
+  __block RCTFabricSurface *surface;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    presenter = [self isolatedPresenter];
+    if (!presenter) { [self.running fulfill]; return; }
+    surface = [[RCTFabricSurface alloc] initWithSurfacePresenter:presenter moduleName:@"" initialProperties:@{}];
+    surface.delegate = self;
+    // Hold the main queue while both callers request a start. Neither queued
+    // attachment can run yet, so this reproduces the Registered/Starting gap.
+    dispatch_sync(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      [surface start];
+      [surface start];
+    });
+  });
+  [self waitForExpectations:@[self.running] timeout:10];
+  void (^cleanup)(void) = ^{
+    XCTAssertEqual(surface.view.subviews.count, 1U);
+    [surface stop];
+    [presenter unregisterSurface:surface];
+    surface = nil;
+    presenter = nil;
+  };
+  if (NSThread.isMainThread) cleanup();
+  else dispatch_sync(dispatch_get_main_queue(), cleanup);
+}
+- (void)testStopCancelsAnAttachmentQueuedBeforeTheMainQueueRuns
+{
+  XCTestExpectation *drained = [self expectationWithDescription:@"Cancelled attachment drains"];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RCTSurfacePresenter *presenter = [self isolatedPresenter];
+    if (!presenter) { [drained fulfill]; return; }
+    RCTFabricSurface *surface = [[RCTFabricSurface alloc] initWithSurfacePresenter:presenter moduleName:@"" initialProperties:@{}];
+    dispatch_sync(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      [surface start];
+      [surface stop];
+    });
+    [presenter unregisterSurface:surface];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      XCTAssertEqual(surface.view.subviews.count, 0U);
+      [drained fulfill];
+    });
+  });
+  [self waitForExpectations:@[drained] timeout:10];
+}
 @end

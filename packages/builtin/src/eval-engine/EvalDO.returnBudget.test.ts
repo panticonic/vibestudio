@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
@@ -19,6 +20,8 @@ type Reach = {
   }): { operationJournal?: unknown };
 };
 const reach = (instance: EvalDO): Reach => instance as unknown as Reach;
+const imageOwner = (runId: string, data: string): string =>
+  `eval-result:${runId}:${createHash("sha256").update(data, "base64").digest("hex")}`;
 
 describe("eval return budget", () => {
   it("keeps operation evidence when independently compacting large guest output", async () => {
@@ -101,9 +104,9 @@ describe("eval return budget", () => {
       height: 720,
     });
     expect(JSON.stringify(compact).length).toBeLessThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
-    expect(putRetained).toHaveBeenCalledWith({ base64: data, owner: "eval-result:image" });
+    expect(putRetained).toHaveBeenCalledWith({ base64: data, owner: imageOwner("image", data) });
     await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:image" });
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("image", data) });
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
   });
 
@@ -136,7 +139,7 @@ describe("eval return budget", () => {
     expect(putRetained).toHaveBeenCalledTimes(1);
     expect(input.screenshots[0]).toBe(image);
     await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:nested" });
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("nested", image.data) });
   });
 
   it("joins a pending artifact write before releasing its ownership during disposal", async () => {
@@ -172,7 +175,7 @@ describe("eval return budget", () => {
     finish({ digest: "b".repeat(64), size: 1 });
     await image;
     await disposal;
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:pending-image" });
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("pending-image", "eA==") });
   });
 
   it("retains ownership of a failed nested upload until disposal", async () => {
@@ -197,10 +200,76 @@ describe("eval return budget", () => {
       })
     ).rejects.toThrow("upload interrupted");
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
-      { owner: "eval-result:failed-image" },
+      { owner: imageOwner("failed-image", "eA==") },
     ]);
     await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:failed-image" });
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("failed-image", "eA==") });
+  });
+
+  it("retains multiple distinct images in one result under the blobstore's one-content-per-owner contract", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec("INSERT INTO runs(run_id,args,status,started_at) VALUES ('multi','{}','running',0)");
+    const owners = new Map<string, string>();
+    const putRetained = vi.fn(async ({ base64, owner }: { base64: string; owner: string }) => {
+      if (owners.has(owner) && owners.get(owner) !== base64)
+        throw new Error("Blob retention owner already names different content");
+      owners.set(owner, base64);
+      return { digest: createHash("sha256").update(base64, "base64").digest("hex"), size: 1 };
+    });
+    const releaseRetention = vi.fn(async ({ owner }: { owner: string }) => {
+      owners.delete(owner);
+    });
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained, releaseRetention },
+    });
+    const one = { data: "eA==", mimeType: "image/png" };
+    const two = { data: "eQ==", mimeType: "image/png" };
+    const result = await reach(instance).materializeResultArtifact("multi", {
+      success: true,
+      console: "",
+      returnValue: { screenshots: [one, two, { ...one }], checks: { passed: true } },
+    });
+    expect(result.returnValue).toMatchObject({
+      screenshots: [
+        { digest: createHash("sha256").update("x").digest("hex") },
+        { digest: createHash("sha256").update("y").digest("hex") },
+        { digest: createHash("sha256").update("x").digest("hex") },
+      ],
+      checks: { passed: true },
+    });
+    expect(owners.size).toBe(2);
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
+    await instance.dispose();
+    expect(owners.size).toBe(0);
+    expect(releaseRetention).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps every retention intent for cleanup when a later image upload fails", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec("INSERT INTO runs(run_id,args,status,started_at) VALUES ('partial','{}','running',0)");
+    const releaseRetention = vi.fn(async () => {});
+    const putRetained = vi
+      .fn()
+      .mockResolvedValueOnce({ digest: "a".repeat(64), size: 1 })
+      .mockRejectedValueOnce(new Error("second upload interrupted"));
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained, releaseRetention },
+    });
+    await expect(
+      reach(instance).materializeResultArtifact("partial", {
+        success: true,
+        console: "",
+        returnValue: [
+          { data: "eA==", mimeType: "image/png" },
+          { data: "eQ==", mimeType: "image/png" },
+        ],
+      })
+    ).rejects.toThrow("second upload interrupted");
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
+    await instance.dispose();
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("partial", "eA==") });
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("partial", "eQ==") });
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
   });
 
   it("does not allocate an artifact after its run was cancelled", async () => {

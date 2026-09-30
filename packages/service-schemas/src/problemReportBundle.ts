@@ -21,7 +21,11 @@ const label = z.string().max(256);
 const productToken = z
   .string()
   .max(128)
-  .regex(/^[a-zA-Z0-9_.:@/-]+$/);
+  .regex(/^[a-zA-Z0-9_.:@/-]+$/, {
+    message:
+      "Expected a product token using letters, digits, _, ., :, @, / or -; put human-readable prose in symptom or expected, or use null when the token is unknown.",
+  })
+  .describe("Product identifier, not prose: letters, digits, _, ., :, @, / and - only.");
 export const ReportProblemSchema = z
   .object({
     category: z.enum(["runtime", "service", "build", "activation", "agent", "quality", "startup"]),
@@ -151,7 +155,15 @@ export const ProblemReportBundleSchema = z
       .array(
         z
           .object({
-            id,
+            id: z
+              .string()
+              .uuid({
+                message:
+                  "Expected a new report-local reference UUID; put the panel, invocation, or other target identifier in coordinate.",
+              })
+              .describe(
+                "UUID identifying this reference entry within the report, not the referenced target. Preserve it when editing."
+              ),
             kind: z.enum(["invocation", "build", "panel", "receipt", "message", "report"]),
             coordinate: z.string().max(1024),
           })
