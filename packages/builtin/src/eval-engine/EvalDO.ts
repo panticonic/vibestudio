@@ -32,6 +32,7 @@ import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
   evalLifecycleFailureCodes,
   evalImagePayloadSchema,
+  mapEvalResultLeaves,
 } from "@vibestudio/service-schemas/eval";
 import {
   EVAL_ENGINE_HOST_CONTRACT_VERSION,
@@ -3168,32 +3169,31 @@ export class EvalDO extends DurableObjectBase {
 
   private async materializeResultArtifact(runId: string, result: RunResult): Promise<RunResult> {
     if (!result.success) return result;
-    const image = evalImagePayloadSchema.safeParse(result.returnValue);
-    if (!image.success) return result;
     const row = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
     if (row?.["status"] !== "running") return result;
     const owner = `eval-result:${runId}`;
-    // Record the ownership intent before writing CAS bytes. Disposal can then
-    // recover and release an upload interrupted before the terminal receipt.
-    this.sql.exec(
-      `INSERT OR IGNORE INTO run_result_artifacts(run_id, owner) VALUES (?, ?)`,
-      runId,
-      owner
-    );
     const work = (async () => {
-      const { data, ...metadata } = image.data;
-      const stored = await this.infrastructureExecution().blobstore.putRetained({
-        base64: data,
-        owner,
+      let found = false;
+      const returnValue = await mapEvalResultLeaves(result.returnValue, async (value) => {
+        const image = evalImagePayloadSchema.safeParse(value);
+        if (!image.success) return undefined;
+        if (!found) {
+          // Record ownership before the first upload, including nested images.
+          this.sql.exec(
+            `INSERT OR IGNORE INTO run_result_artifacts(run_id, owner) VALUES (?, ?)`,
+            runId,
+            owner
+          );
+          found = true;
+        }
+        const { data, ...metadata } = image.data;
+        const stored = await this.infrastructureExecution().blobstore.putRetained({
+          base64: data,
+          owner,
+        });
+        return { value: { protocol: "eval-image-artifact.v1", ...stored, ...metadata } };
       });
-      return {
-        ...result,
-        returnValue: {
-          protocol: "eval-image-artifact.v1",
-          ...stored,
-          ...metadata,
-        },
-      };
+      return found ? { ...result, returnValue } : result;
     })();
     this.inFlightResultArtifacts.add(work);
     try {

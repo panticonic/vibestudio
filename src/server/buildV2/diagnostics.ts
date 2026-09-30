@@ -57,6 +57,8 @@ export interface BuildDiagnostic {
   endLine?: number;
   endColumn?: number;
   message: string;
+  /** Preserve the producer's diagnostic identity instead of parsing prose. */
+  compilerCode?: number;
   lineText?: string;
   suggestion?: string;
   repair?: AgentDiagnosticRepair;

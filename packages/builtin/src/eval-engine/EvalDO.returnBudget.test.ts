@@ -107,6 +107,38 @@ describe("eval return budget", () => {
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
   });
 
+  it("materializes nested images without truncating sibling verification evidence", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('nested', '{}', 'running', 0)"
+    );
+    const putRetained = vi.fn(async () => ({ digest: "c".repeat(64), size: 400_000 }));
+    const releaseRetention = vi.fn(async () => {});
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained, releaseRetention },
+    });
+    const image = { data: btoa("x".repeat(400_000)), mimeType: "image/png" };
+    const input = { checks: { passed: true }, screenshots: [image, image] };
+    const materialized = await reach(instance).materializeResultArtifact("nested", {
+      success: true,
+      console: "",
+      returnValue: input,
+    });
+    const compact = reach(instance).compactReturnValue(
+      materialized.returnValue,
+      "$lastLargeReturn"
+    );
+    expect(compact).toMatchObject({
+      checks: { passed: true },
+      screenshots: [{ protocol: "eval-image-artifact.v1" }, { protocol: "eval-image-artifact.v1" }],
+    });
+    expect(JSON.stringify(compact)).not.toContain(image.data);
+    expect(putRetained).toHaveBeenCalledTimes(1);
+    expect(input.screenshots[0]).toBe(image);
+    await instance.dispose();
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:nested" });
+  });
+
   it("joins a pending artifact write before releasing its ownership during disposal", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     sql.exec(
@@ -123,7 +155,10 @@ describe("eval return budget", () => {
     const image = reach(instance).materializeResultArtifact("pending-image", {
       success: true,
       console: "",
-      returnValue: { data: "eA==", mimeType: "image/png" },
+      returnValue: {
+        checks: { passed: true },
+        screenshot: { data: "eA==", mimeType: "image/png" },
+      },
     });
     let disposed = false;
     const disposal = instance.dispose().then(() => {
@@ -138,6 +173,34 @@ describe("eval return budget", () => {
     await image;
     await disposal;
     expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:pending-image" });
+  });
+
+  it("retains ownership of a failed nested upload until disposal", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('failed-image', '{}', 'running', 0)"
+    );
+    const releaseRetention = vi.fn(async () => {});
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: {
+        putRetained: async () => {
+          throw new Error("upload interrupted");
+        },
+        releaseRetention,
+      },
+    });
+    await expect(
+      reach(instance).materializeResultArtifact("failed-image", {
+        success: true,
+        console: "",
+        returnValue: { screenshot: { data: "eA==", mimeType: "image/png" } },
+      })
+    ).rejects.toThrow("upload interrupted");
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: "eval-result:failed-image" },
+    ]);
+    await instance.dispose();
+    expect(releaseRetention).toHaveBeenCalledWith({ owner: "eval-result:failed-image" });
   });
 
   it("does not allocate an artifact after its run was cancelled", async () => {
