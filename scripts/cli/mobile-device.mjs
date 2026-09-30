@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { ensureAdb, resolveAdb } from "./lib/android-platform-tools.mjs";
 import path from "node:path";
+import { availableIosSimulators, coreDeviceIosPhones } from "./lib/mobile-ios.mjs";
 import { spawn } from "node:child_process";
 import { bindProcessLifetimeToParent } from "../owned-process-tree.mjs";
 
@@ -142,40 +143,28 @@ async function iosDevices() {
   if (process.platform !== "darwin") {
     throw new Error("iOS devices require a macOS desktop with Xcode installed.");
   }
-  const simulators = JSON.parse(
+  const simulators = availableIosSimulators(
     (await run("xcrun", ["simctl", "list", "devices", "--json"])).stdout
   );
-  const devices = Object.values(simulators.devices ?? {})
-    .flat()
-    .filter((device) => device?.isAvailable !== false)
-    .map((device) => ({
-      platform: "ios",
-      deviceId: device.udid,
-      name: device.name,
-      state: device.state,
-      kind: "simulator",
-      ready: device.state === "Booted",
-      installedApps: [],
-      compatibleAppInstalled: false,
-    }));
-  try {
-    const physical = (await run("xcrun", ["xctrace", "list", "devices"])).stdout;
-    const section = physical.split("== Devices ==")[1]?.split("== Simulators ==")[0] ?? "";
-    for (const line of section.split(/\r?\n/)) {
-      const match = line.trim().match(/^(.+?)\s+\([^)]*\)\s+\(([0-9a-f-]{8,})\)$/i);
-      if (!match) continue;
-      devices.push({
-        platform: "ios",
-        deviceId: match[2],
-        name: match[1].trim(),
-        state: "connected",
-        kind: "physical",
-        ready: true,
-        installedApps: [],
-        compatibleAppInstalled: false,
-      });
-    }
-  } catch {}
+  const devices = simulators.map((device) => ({
+    platform: "ios",
+    deviceId: device.udid,
+    name: device.name,
+    state: device.state,
+    kind: "simulator",
+    ready: device.state === "Booted",
+    installedApps: [],
+    compatibleAppInstalled: false,
+  }));
+  const physical = await run("xcrun", [
+    "devicectl",
+    "list",
+    "devices",
+    "--json-output",
+    "-",
+    "--quiet",
+  ]);
+  devices.push(...coreDeviceIosPhones(physical.stdout));
   return devices;
 }
 

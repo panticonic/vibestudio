@@ -287,6 +287,7 @@ export function createPhoneProvisioningService(
         mode === "source" ||
         (mode === "auto" && sourcePlatforms.includes(input.platform));
       const installArgs = ["--platform", input.platform, "--launch", "--device", selected.deviceId];
+      if (selected.kind === "simulator") installArgs.push("--simulator");
       if (useSource) installArgs.push("--from-source");
       emit({
         type: "progress",

@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { bootedIosSimulator, iosBuildTarget } from "../scripts/cli/lib/mobile-ios.mjs";
+import {
+  availableIosSimulators,
+  bootedIosSimulator,
+  iosBuildTarget,
+  coreDeviceIosPhones,
+} from "../scripts/cli/lib/mobile-ios.mjs";
 
 const ios = "com.apple.CoreSimulator.SimRuntime.iOS-18-0";
 const phone = { udid: "phone-udid", name: "iPhone 15", state: "Booted", isAvailable: true };
 const inventory = (devices: Record<string, unknown[]>) => JSON.stringify({ devices });
 
 describe("iOS install target", () => {
+  it("discovers only available iOS simulators, including ones not yet booted", () => {
+    const shutdown = { ...phone, udid: "shutdown", state: "Shutdown" };
+    expect(
+      availableIosSimulators(
+        JSON.stringify({
+          devices: {
+            [ios]: [phone, shutdown, { ...phone, udid: "unavailable", isAvailable: false }],
+            "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [{ ...phone, udid: "watch" }],
+          },
+        })
+      )
+    ).toEqual([phone, shutdown]);
+  });
   it("selects the booted phone without requiring a particular model or runtime", () => {
     expect(bootedIosSimulator(inventory({ [ios]: [phone, { ...phone, state: "Shutdown" }] }))).toBe(
       "phone-udid"
@@ -64,5 +82,34 @@ describe("iOS SDK and product selection", () => {
       destination: "id=phone-udid",
     });
     expect(iosBuildTarget({})).toEqual({ sdk: "iphoneos", destination: "generic/platform=iOS" });
+  });
+});
+
+describe("CoreDevice iOS discovery", () => {
+  it("excludes Macs and simulated devices and preserves unpaired phone readiness", () => {
+    const device = (udid: string, platform: string, reality: string, pairingState = "paired") => ({
+      properties: {
+        hardware: { udid, platform, reality },
+        state: { name: udid },
+        connection: { state: "connected", pairingState },
+      },
+    });
+    expect(
+      coreDeviceIosPhones(
+        JSON.stringify({
+          result: {
+            devices: [
+              device("phone", "iOS", "physical"),
+              device("unpaired", "iOS", "physical", "unpaired"),
+              device("mac", "macOS", "physical"),
+              device("simulator", "iOS", "simulated"),
+            ],
+          },
+        })
+      ).map(({ deviceId, ready }) => ({ deviceId, ready }))
+    ).toEqual([
+      { deviceId: "phone", ready: true },
+      { deviceId: "unpaired", ready: false },
+    ]);
   });
 });
