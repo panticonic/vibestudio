@@ -73,16 +73,29 @@ creation on 2026-09-30. Its service successfully read the live overview and
 queried `sqlite_schema` through the host-held credential after normal
 credential-use review. No bearer entered the workspace or evaluation code.
 
+## Headless server consent
+
+A desktop connection to an independently hosted server uses the same trusted
+first-use flow as a desktop-owned local server. After the device choice, an
+undecided server choice prompts the authenticated user to enable or disable
+server reporting. The server saves this per-user choice across its workspaces;
+it does not change device consent or other users' choices. Reconnection reloads
+consent if the server was unavailable. Agents cannot answer either prompt.
+Trusted CLI setup can also record the server choice before a desktop connects.
+
 ## Product release boundary
 
 Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
 On 2026-09-30 ordinary template inspection, review, and publication produced
 Base `v0.3.58` at `9343aa2e4a88da9f50af9e1072a2eee6cafec283` and System
-`v0.3.68` at `740c6b00a747eb060565b825a39050feb1db46dd`. Their actual
+`v0.3.69` at `71d4e175dd746c65993c218ee5a116a71020b022`. Their actual
 publication receipts supply the packaged host pins. A main-branch push alone
 does not update those pins. Never substitute fabricated receipts or moving
-branch refs for that release boundary.
+branch refs for that release boundary. System `v0.3.69` includes connected
+headless-server first-use consent. Its publication finalized after the normal
+workspace build/typecheck gate passed; the host pin was adopted from that
+publication receipt.
 
 During this release, a template update from a moved `refs/heads/main` pin failed
 while reconstructing its prior exact snapshot. This is a template refresh
