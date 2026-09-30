@@ -1,6 +1,7 @@
 #import <XCTest/XCTest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <React/RCTBridgeModule.h>
+#import <React/UIView+React.h>
 #import <react-native-webview/RNCWebViewImpl.h>
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
 #include <react/renderer/components/view/ViewComponentDescriptor.h>
@@ -52,6 +53,7 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 @property (nonatomic, strong) NSURL *fileURL;
 @end
 @implementation RoutingWebView
+- (NSURL *)URL { return self.requestURL; }
 - (WKNavigation *)loadRequest:(NSURLRequest *)request { self.requestURL = request.URL; return nil; }
 - (WKNavigation *)loadFileURL:(NSURL *)URL allowingReadAccessToURL:(NSURL *)root { self.fileURL = URL; return nil; }
 @end
@@ -64,6 +66,116 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 @end
 @implementation SourceRoutingView
 - (void)syncCookiesToWebView:(void (^)(void))completion { completion(); }
+@end
+
+@interface WorkspaceWebView : RNCWebViewImpl
+@property(nonatomic, copy) NSString *workspaceProfile;
+@property(nonatomic, copy) RCTDirectEventBlock onWorkspaceWebsiteNotification;
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message;
+- (WKWebViewConfiguration *)setUpWkWebViewConfig;
+- (void)resetupScripts:(WKWebViewConfiguration *)configuration;
+@end
+
+@interface NotificationOriginFixture : NSObject
+@property(nonatomic, copy) NSString *protocol;
+@property(nonatomic, copy) NSString *host;
+@property(nonatomic, assign) NSInteger port;
+@end
+@implementation NotificationOriginFixture
+@end
+@interface NotificationFrameFixture : NSObject
+@property(nonatomic, assign, getter=isMainFrame) BOOL mainFrame;
+@property(nonatomic, strong) NotificationOriginFixture *securityOrigin;
+@end
+@implementation NotificationFrameFixture
+@end
+@interface NotificationMessageFixture : NSObject
+@property(nonatomic, copy) NSString *name;
+@property(nonatomic, copy) NSString *body;
+@property(nonatomic, strong) NotificationFrameFixture *frameInfo;
+@end
+@implementation NotificationMessageFixture
+@end
+
+@interface WorkspaceScriptLifecycleTests : XCTestCase
+@end
+@implementation WorkspaceScriptLifecycleTests
+- (void)testNotificationArgumentsAcceptJsonFragmentsAndRejectMalformedRequests
+{
+  void (^check)(void) = ^{
+    WorkspaceWebView *owner = [WorkspaceWebView new];
+    owner.reactTag = @1;
+    RoutingWebView *webView = [RoutingWebView new];
+    webView.requestURL = [NSURL URLWithString:@"https://example.com/"];
+    [owner setValue:webView forKey:@"_webView"];
+    NotificationOriginFixture *origin = [NotificationOriginFixture new];
+    origin.protocol = @"https"; origin.host = @"example.com"; origin.port = 443;
+    NotificationFrameFixture *frame = [NotificationFrameFixture new];
+    frame.mainFrame = YES; frame.securityOrigin = origin;
+    NotificationMessageFixture *message = [NotificationMessageFixture new];
+    message.name = @"vibestudioWebsiteNotifications"; message.frameInfo = frame;
+    NSMutableArray *arguments = [NSMutableArray new];
+    owner.onWorkspaceWebsiteNotification = ^(NSDictionary *event) { [arguments addObject:event[@"argsJson"]]; };
+    for (NSString *body in @[@"[]", @"invalid json", @"{\"requestId\":\"null-args\",\"method\":\"permissionState\",\"args\":null}", @"{\"requestId\":\"string-args\",\"method\":\"permissionState\",\"args\":\"test\"}"]) {
+      message.body = body;
+      XCTAssertNoThrow([owner userContentController:nil didReceiveScriptMessage:(WKScriptMessage *)message]);
+    }
+    XCTAssertEqualObjects(arguments, (@[@"null", @"\"test\""]));
+    owner.onWorkspaceWebsiteNotification = nil;
+    message.body = @"{\"requestId\":\"no-host\",\"method\":\"permissionState\"}";
+    XCTAssertNoThrow([owner userContentController:nil didReceiveScriptMessage:(WKScriptMessage *)message]);
+  };
+  if (NSThread.isMainThread) check();
+  else dispatch_sync(dispatch_get_main_queue(), check);
+}
+
+- (void)testWorkspaceAdaptersAreAvailableToStartupScriptsAfterEveryRebuild
+{
+  XCTestExpectation *loaded = [self expectationWithDescription:@"Both documents execute their startup bridge"];
+  loaded.expectedFulfillmentCount = 2;
+  NSMutableArray *retainedViews = [NSMutableArray new];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    WorkspaceWebView *owner = [WorkspaceWebView new];
+    XCTAssertTrue(owner.javaScriptEnabled);
+    owner.workspaceProfile = [@"native-script-test:" stringByAppendingString:NSUUID.UUID.UUIDString];
+    owner.messagingEnabled = YES;
+    NSString *startup = @"window.ReactNativeWebView.postMessage(typeof globalThis.__vibestudioWorkspaceNative + ',' + typeof globalThis.__vibestudioWebsiteNotificationsNative);";
+    owner.injectedJavaScriptBeforeContentLoaded = startup;
+    WKWebViewConfiguration *configuration = [owner setUpWkWebViewConfig];
+    configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+    XCTAssertTrue([configuration.userContentController.userScripts containsObject:[owner valueForKey:@"postMessageScript"]], @"Script rebuilding must preserve the inherited message bridge");
+    WKWebView *webView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 0, 320, 480) configuration:configuration];
+    [owner setValue:webView forKey:@"_webView"];
+    __weak WorkspaceWebView *weakOwner = owner;
+    __weak WKWebView *weakWebView = webView;
+    __block NSUInteger documents = 0;
+    owner.onMessage = ^(NSDictionary *event) {
+      XCTAssertEqualObjects(event[@"data"], @"object,object");
+      documents += 1;
+      [loaded fulfill];
+      if (documents == 1) {
+        weakOwner.injectedJavaScriptBeforeContentLoaded = [startup stringByAppendingString:@"true;"];
+        [weakWebView loadHTMLString:@"<!doctype html><html><body>Rebuilt native script fixture</body></html>" baseURL:nil];
+      }
+    };
+    UIWindowScene *scene = (UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject;
+    UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+    UIViewController *controller = [UIViewController new];
+    controller.view = webView;
+    window.rootViewController = controller;
+    window.hidden = NO;
+    [retainedViews addObjectsFromArray:@[owner, window]];
+    [webView loadHTMLString:@"<!doctype html><html><body>Native script lifecycle fixture</body></html>" baseURL:nil];
+  });
+  [self waitForExpectations:@[loaded] timeout:30];
+  void (^cleanup)(void) = ^{
+    for (id object in retainedViews) if ([object isKindOfClass:UIWindow.class]) ((UIWindow *)object).hidden = YES;
+    [retainedViews removeAllObjects];
+  };
+  if (NSThread.isMainThread) cleanup();
+  else dispatch_sync(dispatch_get_main_queue(), cleanup);
+}
+
 @end
 
 @interface WebViewSourceRoutingTests : XCTestCase

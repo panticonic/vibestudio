@@ -84,7 +84,9 @@ identity. The same target verifies OAuth cancellation and cleanup of interrupted
 bundle, asset, and browser-import transfers while preserving committed files.
 It also verifies scene-owned status-bar updates and WebView URL routing: only
 file URLs use WebKit’s file loader; blank, data, HTTPS, and panel URLs use normal
-requests. Run it on an available simulator:
+requests. Real WebKit fixtures verify startup adapter ordering, inherited message
+delegation, and script rebuilds. Native notification tests cover JSON fragment
+arguments and malformed requests. Run it on an available simulator:
 
 ```bash
 cd apps/mobile/ios
@@ -96,9 +98,9 @@ xcodebuild -workspace Vibestudio.xcworkspace -scheme Vibestudio \
 ```
 
 Use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` if the Mac's global
-developer directory selects Command Line Tools. The native tests cover module lifetime, explicit asset-cache misses, scene
-appearance, WebView URL routing, and concurrent descriptor construction. Interactive workspace acceptance
-uses the separate checklist below.
+developer directory selects Command Line Tools. Native coverage also includes
+explicit asset-cache misses, picker cancellation, and concurrent descriptor
+construction. Interactive workspace acceptance uses the separate checklist below.
 
 `mobile smoke --platform ios` is currently unsupported. The Android runner
 tests pairing, streamed workspace activation, rendered panels, and recovery;

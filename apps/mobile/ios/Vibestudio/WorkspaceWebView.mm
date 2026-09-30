@@ -6,6 +6,11 @@
 #import <WebKit/WebKit.h>
 #import <CommonCrypto/CommonDigest.h>
 
+@interface RNCWebViewImpl (WorkspaceScriptLifecycle)
+- (void)resetupScripts:(WKWebViewConfiguration *)configuration;
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message;
+@end
+
 WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   if (scope.length == 0) @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"A workspace browser profile is required" userInfo:nil];
   NSData *data = [scope dataUsingEncoding:NSUTF8StringEncoding];
@@ -170,27 +175,42 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   _notificationMessageHandler = [WorkspaceNotificationMessageHandler new];
   _notificationMessageHandler.owner = self;
   [configuration.userContentController addScriptMessageHandler:_notificationMessageHandler name:@"vibestudioWebsiteNotifications"];
-  NSString *adapter = @"globalThis.__vibestudioWebsiteNotificationsNative={postMessage:function(value){window.webkit.messageHandlers.vibestudioWebsiteNotifications.postMessage(value)},onmessage:null};";
-  [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:adapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
   _workspaceMessageHandler = [WorkspaceRpcMessageHandler new];
   _workspaceMessageHandler.owner = self;
   [configuration.userContentController addScriptMessageHandlerWithReply:_workspaceMessageHandler contentWorld:WKContentWorld.pageWorld name:@"vibestudioWorkspace"];
-  // WebKit replies target the requesting JavaScript context, including the receive
-  // wait. Never evaluate a reply into whichever document happens to be visible.
-  NSString *workspaceAdapter = @"(() => { const send = value => window.webkit.messageHandlers.vibestudioWorkspace.postMessage(value); const bridge = {onmessage:null,postMessage:value=>{void send(value).then(data=>bridge.onmessage?.({data}));}}; globalThis.__vibestudioWorkspaceNative=bridge; const receive=async()=>{try{for(;;){const data=await send(JSON.stringify({method:'receive'}));bridge.onmessage?.({data});}}catch(_){}}; void receive(); })();";
-  [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:workspaceAdapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
   return configuration;
 }
 
+// The base view rebuilds its script set when React changes injection props.
+// Workspace adapters are dependencies of those scripts and must run first on
+// every document, including after a rebuild.
+- (void)resetupScripts:(WKWebViewConfiguration *)configuration {
+  [super resetupScripts:configuration];
+  // WebKit exposes a live immutable array; copy into owned Foundation storage.
+  NSArray<WKUserScript *> *baseScripts = [NSMutableArray arrayWithArray:configuration.userContentController.userScripts];
+  [configuration.userContentController removeAllUserScripts];
+  NSString *adapter = @"globalThis.__vibestudioWebsiteNotificationsNative={postMessage:function(value){window.webkit.messageHandlers.vibestudioWebsiteNotifications.postMessage(value)},onmessage:null};";
+  [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:adapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+  // WebKit replies target the requesting context, including the receive wait.
+  NSString *workspaceAdapter = @"(() => { const send = value => window.webkit.messageHandlers.vibestudioWorkspace.postMessage(value); const bridge = {onmessage:null,postMessage:value=>{void send(value).then(data=>bridge.onmessage?.({data}));}}; globalThis.__vibestudioWorkspaceNative=bridge; const receive=async()=>{try{for(;;){const data=await send(JSON.stringify({method:'receive'}));bridge.onmessage?.({data});}}catch(_){}}; void receive(); })();";
+  [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:workspaceAdapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+  for (WKUserScript *script in baseScripts) [configuration.userContentController addUserScript:script];
+}
+
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
-  if (![message.name isEqualToString:@"vibestudioWebsiteNotifications"] || !message.frameInfo.mainFrame || ![message.body isKindOfClass:NSString.class]) return;
+  if (![message.name isEqualToString:@"vibestudioWebsiteNotifications"]) {
+    [super userContentController:controller didReceiveScriptMessage:message];
+    return;
+  }
+  if (!_onWorkspaceWebsiteNotification || !message.frameInfo.mainFrame || ![message.body isKindOfClass:NSString.class]) return;
   NSURL *url = self.webView.URL;
   WKSecurityOrigin *source = message.frameInfo.securityOrigin;
   NSInteger port = url.port ? url.port.integerValue : ([url.scheme.lowercaseString isEqualToString:@"https"] ? 443 : 80);
   NSInteger sourcePort = source.port == 0 ? ([source.protocol.lowercaseString isEqualToString:@"https"] ? 443 : 80) : source.port;
   if (!url || ![source.protocol.lowercaseString isEqualToString:url.scheme.lowercaseString] || ![source.host.lowercaseString isEqualToString:url.host.lowercaseString] || port != sourcePort) return;
   NSData *data = [(NSString *)message.body dataUsingEncoding:NSUTF8StringEncoding];
-  NSDictionary *input = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  id input = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![input isKindOfClass:NSDictionary.class]) return;
   NSString *requestId = input[@"requestId"], *method = input[@"method"];
   if (![requestId isKindOfClass:NSString.class] || ![@[@"permissionState", @"requestPermission", @"show", @"close"] containsObject:method]) return;
   if (!_notificationCalls) _notificationCalls = [NSMutableDictionary new];
@@ -205,7 +225,7 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
     return;
   }
   _notificationCalls[requestId] = @{ @"epoch": @(_documentEpoch), @"method": method };
-  NSData *argsData = [NSJSONSerialization dataWithJSONObject:args options:0 error:nil];
+  NSData *argsData = [NSJSONSerialization dataWithJSONObject:args options:NSJSONWritingFragmentsAllowed error:nil];
   NSURLComponents *origin = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
   origin.path = @""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil;
   _onWorkspaceWebsiteNotification(@{ @"requestId": requestId, @"target": self.reactTag, @"origin": origin.string,
