@@ -1,6 +1,9 @@
 # Error reporting and “Help vibestudio improve” implementation plan
 
-Status: proposed implementation sequence, 2026-09-29.
+Status: implemented in host, Base, System, System Testing, and the developer
+template source; production intake provisioned and verified on 2026-09-30.
+Packaged template publication remains the normal release boundary described in
+[reporting operations](problem-reporting-operations.md).
 
 Detailed implementation contracts:
 
@@ -8,6 +11,9 @@ Detailed implementation contracts:
   specifies payloads, budgets, capture coverage, storage, receipts, and deletion.
 - [First-use UI and agent assistance](problem-reporting-user-and-agent-flows.md)
   specifies opt-in/out, manual reporting, and the Base problem-reporting skill.
+- [Reporting operations](problem-reporting-operations.md) records the live
+  storage bindings, developer credential setup, deployment checks, and release
+  boundary.
 
 These companion contracts refine the corresponding sections below. There is
 one report pipeline for automatic diagnostics and user-reviewed problem reports.

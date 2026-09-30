@@ -12,6 +12,22 @@ if (!/^[a-f0-9]{64}$/.test(token)) {
   throw new Error("The existing developer credential has invalid material; rotate it explicitly");
 }
 
+const probe = await fetch("https://vibestudio.app/v1/problem-reports/admin/overview", {
+  headers: { authorization: `Bearer ${token}` },
+});
+if (probe.status === 200) {
+  console.log(`Developer credential ${credentialId} is already provisioned and accepted.`);
+  process.exit(0);
+}
+if (
+  probe.status !== 503 ||
+  !(await probe.text()).includes("Developer access is not configured")
+) {
+  throw new Error(
+    `Developer access returned HTTP ${probe.status}; existing server keys will not be replaced. Review or rotate them explicitly.`
+  );
+}
+
 if (!existing) {
   await store.saveUrlBound({
     id: credentialId,

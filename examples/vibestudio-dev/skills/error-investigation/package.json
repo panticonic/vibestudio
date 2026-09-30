@@ -1,7 +1,0 @@
-{
-  "name": "@workspace-skills/error-investigation",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "SQL investigation and the report-to-self-development workflow."
-}
