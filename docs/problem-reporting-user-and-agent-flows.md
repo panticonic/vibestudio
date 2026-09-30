@@ -6,11 +6,12 @@ Status: implementation specification, 2026-09-29. Companion to
 
 ## 1. Mandatory first-use choice
 
-Add a shell-owned first-use dialog, backed by the host consent API. It appears
-the first time a user enters a reporting-capable installation,
-before automatic uploads can run. Serialize it behind indispensable pairing/
-sign-in flows, then present it before ordinary interactive work. Persisting the
-choice is required to dismiss it. Do not require acceptance to use vibestudio.
+Use one shell-owned first-start dialog backed by the host consent API. It
+combines device and connected-server reporting in one decision and appears
+before the unit audit. A saved device decision suppresses subsequent separate
+prompts; undecided server reporting is then handled in the unit audit using the
+previous choice as its default. Persisting the first choice is required to
+dismiss the initial dialog. Either answer permits ordinary use.
 
 Suggested copy:
 
@@ -34,20 +35,23 @@ sharing remains off and the choice returns on next first-use entry.
 Reporting requires no account, login, enrollment, or submission-key configuration. A local sharing choice remains usable offline; connection state is distinct from consent.
 
 The dialog belongs to System shell presentation; host-side consent gating is
-authoritative even if the dialog fails to render. Bootstrap recovery can show
-the same choice using host chrome when necessary, through the same consent
-contract. Test accessibility: focus trap, announced title, keyboard actions,
-focus restoration, screen-reader-readable field list, and no competing modal.
+authoritative even if presentation fails. The approval coordinator waits until
+the first-start decision is complete, then loads canonical consent before
+showing the unit audit. This prevents stacked dialogs and stale audit defaults.
 
-Do not repeatedly ask after a persisted off choice. Prompt again only for a
-new installation/user, changed reporting destination, or materially expanded
-automatic fields. Headless server setup uses the same explicit consent contract
-through trusted CLI access or the first desktop connection. After the device
-choice, the desktop shows a separate mandatory prompt for the current user's
-account on that server if its choice is undecided. This applies to locally and
-externally hosted servers. Reconnection refreshes the server choice if the server
-was initially unavailable. An agent or environment variable cannot answer the
-first-use prompt.
+Every subsequent unit audit includes an improvement-reporting option with the
+saved choice already selected. Accepting the audit saves an explicit edit;
+cancelling or closing it does not. Unchanged saved device/server choices require
+no writes. If those choices differ, display a mixed checkbox and preserve both
+unless the user edits it. The preference remains per installation/user across
+workspaces; the audit must clearly state this shared scope.
+
+Headless setup can still record consent through trusted CLI access. A first
+desktop connection uses the same combined initial prompt; it does not produce a
+second server dialog. If device consent already exists, the unit audit handles
+any undecided server choice using that saved default. Reconnect refreshes the
+canonical preference without opening another standalone reporting prompt.
+Agents and environment variables cannot answer the user's reporting choice.
 
 ## 2. Settings and reporting status
 
@@ -214,7 +218,17 @@ No reporting account, login, submission-key setup, or challenge is allowed. Opt-
 
 ## Normal workflow integration
 
-The shipped System shell mounts the mandatory device reporting choice outside the main desktop error boundary. Every connected server, including an independently hosted headless server, has an independent first-use choice after the device decision and labelled settings controls. Server consent belongs to the authenticated user across that server's workspaces; the desktop cannot enroll other users. Both choices are backed by the existing per-installation/per-user consent store and require trusted human chrome. A device choice never implicitly enables server capture. A temporarily unreachable server keeps its existing choice, exposes a retry, and reloads consent on reconnect; it does not prevent the local device choice.
+The shipped System shell mounts one combined first-start reporting dialog outside
+the main desktop error boundary. The unit audit waits for that decision, then
+shows the saved preference as its default. Later audits keep this option inline
+and never open a second reporting dialog. Audit acceptance persists explicit
+changes or a previously undecided server choice; cancellation saves nothing.
+Both device and server choices remain backed by per-installation/per-user stores
+and trusted human authority. Mixed existing choices are preserved unless edited.
+Server consent belongs to the authenticated user across the server's workspaces.
+Reporting settings continue to expose device and server choices independently.
+A temporarily unreachable server is retried on reconnect without creating a new
+prompt; device consent can still be recorded while it is unavailable.
 
 Application menus and the command palette open the same composer. Panel render failures, selected chat messages, and tool-result cards prepare user-selected reports through the Base runtime client. The shell's own failure screen also opens the composer directly, even when MainMode and its settings router cannot mount.
 

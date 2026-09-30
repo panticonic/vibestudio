@@ -75,13 +75,16 @@ credential-use review. No bearer entered the workspace or evaluation code.
 
 ## Headless server consent
 
-A desktop connection to an independently hosted server uses the same trusted
-first-use flow as a desktop-owned local server. After the device choice, an
-undecided server choice prompts the authenticated user to enable or disable
-server reporting. The server saves this per-user choice across its workspaces;
-it does not change device consent or other users' choices. Reconnection reloads
-consent if the server was unavailable. Agents cannot answer either prompt.
-Trusted CLI setup can also record the server choice before a desktop connects.
+A desktop connection to an independently hosted server uses one combined
+first-start prompt for device and current-user server reporting. The unit audit
+waits for that decision, then shows the saved choice as its default. Subsequent
+audits keep the reporting option inline; there is no second server dialog.
+The preference is shared across workspaces. Accepting an explicit audit edit
+updates that preference; cancelling saves nothing. Different saved device and
+server choices remain mixed and untouched unless edited. Settings still exposes
+both scopes independently. Reconnect reloads server consent without adding a
+standalone prompt. Agents cannot answer the reporting choice. Trusted CLI setup
+can also record the server choice before a desktop connects.
 
 ## Product release boundary
 
