@@ -710,7 +710,7 @@ function VibestudioMobileHostBootstrap() {
                         ) : null}
                         {source.units.map((unit) => (
                           <View
-                            key={`${source.origin.originKey}:${unit.name}`}
+                            key={unit.identityKey}
                             style={styles.unitRow}
                           >
                             <Text style={styles.unitRowName}>{unit.name}</Text>

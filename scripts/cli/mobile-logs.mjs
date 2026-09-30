@@ -3,6 +3,7 @@
 
 import { spawn } from "node:child_process";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
+import { bootedIosSimulator } from "./lib/mobile-ios.mjs";
 
 function parseArgs(argv) {
   const options = {
@@ -40,12 +41,12 @@ function printHelp() {
 
 Usage:
   vibestudio mobile logs [--platform android]
-  vibestudio mobile logs --platform ios
+  vibestudio mobile logs --platform ios [--device <simulator-udid>]
   vibestudio mobile logs --device <adb-serial>
 
 Options:
   --platform <name>  android or ios. Defaults to android.
-  --device <serial>  Target a specific adb device.
+  --device <id>      Target a specific adb device or booted iOS simulator.
   --package <id>     App package to inspect. Defaults to app.vibestudio.mobile.internal.
   --help             Show this help message.
 `);
@@ -128,17 +129,14 @@ async function main() {
     if (process.platform !== "darwin") {
       throw new Error("iOS logs require macOS. Use Console.app for hardware-device logs.");
     }
-    if (options.device) {
-      throw new Error(
-        "iOS hardware-device logs are not streamed by this CLI; use Console.app with the device selected."
-      );
-    }
-    console.log("[mobile-logs] Streaming iOS simulator logs for Vibestudio. Press Ctrl-C to stop.");
+    const devices = await runCapture("xcrun", ["simctl", "list", "devices", "available", "--json"]);
+    const simulatorId = bootedIosSimulator(devices.stdout, options.device);
+    console.log(`[mobile-logs] Streaming Vibestudio logs from simulator ${simulatorId}. Press Ctrl-C to stop.`);
     finishStream(
       await streamOwned("xcrun", [
         "simctl",
         "spawn",
-        "booted",
+        simulatorId,
         "log",
         "stream",
         "--style",

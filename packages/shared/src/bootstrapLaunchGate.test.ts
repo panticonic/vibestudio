@@ -342,6 +342,18 @@ describe("more than one source", () => {
     ]);
   });
 
+  it("preserves distinct reviewed identities when program titles repeat", () => {
+    const source = launchGateSources([
+      part({ repoPath: "extensions/local-models", title: "local-models", origin: acme }),
+      part({ repoPath: "workers/local-models", title: "local-models", origin: acme }),
+    ])[0]!;
+    expect(source.units.map((unit) => unit.name)).toEqual(["local-models", "local-models"]);
+    expect(source.units.map((unit) => unit.identityKey)).toEqual([
+      "extensions/local-models@ev",
+      "workers/local-models@ev",
+    ]);
+  });
+
   it("counts the base as the workspace's own source, so one added extension does not lead", () => {
     // 16 programs from our build and one extension from elsewhere: the added
     // extension is named in the list, but it is not what this workspace is.
