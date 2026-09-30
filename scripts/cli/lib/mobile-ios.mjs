@@ -21,3 +21,11 @@ export function bootedIosSimulator(raw, deviceId) {
   if (!booted[0].udid) throw new Error("The booted iOS simulator has no UDID.");
   return booted[0].udid;
 }
+
+// The selected platform determines both the SDK and the built-product directory.
+// A simulator's explicit UDID is still a simulator, not a physical device.
+export function iosBuildTarget({ simulator, device }, simulatorId) {
+  return simulator
+    ? { sdk: "iphonesimulator", destination: `platform=iOS Simulator,id=${simulatorId}` }
+    : { sdk: "iphoneos", destination: device ? `id=${device}` : "generic/platform=iOS" };
+}

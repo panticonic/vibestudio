@@ -22,6 +22,11 @@ installs, and launches on that simulator's UDID:
 node scripts/cli/mobile-install.mjs --platform ios --simulator --launch
 ```
 
+When multiple simulators are booted, add `--device <simulator-udid>` to select
+one explicitly. `mobile dev --platform ios --device <simulator-udid>` forwards
+the same selection for its Debug build. SDK selection and the built-product
+directory follow `--simulator`, including when a UDID is supplied.
+
 The installer runs `pod install` before each build to reconcile native
 dependencies with the installed JavaScript packages and `Podfile.lock`.
 Keep the CocoaPods lockfile and workspace in source control. Use the repository's

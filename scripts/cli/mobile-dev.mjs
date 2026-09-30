@@ -55,7 +55,7 @@ export function mobileDevInstallArgs({ platform, device, noLaunch }) {
     "--platform",
     platform,
     ...(platform === "android" ? ["--from-source"] : ["--simulator", "--configuration", "Debug"]),
-    ...(platform === "android" && device ? ["--device", device] : []),
+    ...(device ? ["--device", device] : []),
     ...(!noLaunch && platform === "ios" ? ["--launch"] : []),
   ];
 }
@@ -134,7 +134,7 @@ Usage:
 Runner options:
   --platform <name> android or ios. Defaults to android.
   --avd <name>      Start this AVD if no device is connected
-  --device <serial> Use a specific adb device serial
+  --device <id>     Use an Android serial or iOS simulator UDID
   --reset-app       Clear app data before launch
   --no-metro        Do not start Metro
   --no-install      Do not build/install the Android app

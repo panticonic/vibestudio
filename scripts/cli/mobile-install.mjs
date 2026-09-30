@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
 import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
-import { bootedIosSimulator } from "./lib/mobile-ios.mjs";
+import { bootedIosSimulator, iosBuildTarget } from "./lib/mobile-ios.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
@@ -216,18 +216,7 @@ function adbArgs(device, args) {
   return device ? ["-s", device, ...args] : args;
 }
 
-function iosDestination(options, simulatorId) {
-  if (options.device) return ["-destination", `id=${options.device}`];
-  if (options.simulator) return ["-destination", `platform=iOS Simulator,id=${simulatorId}`];
-  return ["-destination", "generic/platform=iOS"];
-}
-
-function iosSdk(options) {
-  return options.device || !options.simulator ? "iphoneos" : "iphonesimulator";
-}
-
-function iosAppPath(options) {
-  const sdk = iosSdk(options);
+function iosAppPath(options, sdk) {
   return path.join(
     iosDir,
     "build",
@@ -255,6 +244,7 @@ async function installIos(options) {
         options.device
       )
     : null;
+  const target = iosBuildTarget(options, simulatorId);
   await ensurePods();
   const buildTarget = fs.existsSync(path.join(iosDir, "Vibestudio.xcworkspace"))
     ? ["-workspace", "Vibestudio.xcworkspace"]
@@ -275,14 +265,15 @@ async function installIos(options) {
       "-derivedDataPath",
       path.join(iosDir, "build"),
       "-sdk",
-      iosSdk(options),
-      ...iosDestination(options, simulatorId),
+      target.sdk,
+      "-destination",
+      target.destination,
       ...signingArgs,
       "build",
     ],
     { cwd: iosDir }
   );
-  const appPath = iosAppPath(options);
+  const appPath = iosAppPath(options, target.sdk);
   if (!fs.existsSync(appPath)) throw new Error(`iOS build did not produce ${appPath}`);
   if (options.simulator) {
     await run("xcrun", ["simctl", "bootstatus", simulatorId, "-b"]);

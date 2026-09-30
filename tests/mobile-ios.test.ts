@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bootedIosSimulator } from "../scripts/cli/lib/mobile-ios.mjs";
+import { bootedIosSimulator, iosBuildTarget } from "../scripts/cli/lib/mobile-ios.mjs";
 
 const ios = "com.apple.CoreSimulator.SimRuntime.iOS-18-0";
 const phone = { udid: "phone-udid", name: "iPhone 15", state: "Booted", isAvailable: true };
@@ -48,5 +48,21 @@ describe("iOS install target", () => {
     expect(() =>
       bootedIosSimulator(inventory({ [ios]: [phone, { ...phone, udid: "second" }] }))
     ).toThrow("Multiple iOS simulators");
+  });
+});
+
+describe("iOS SDK and product selection", () => {
+  it("keeps an explicit simulator UDID on the simulator SDK", () => {
+    expect(iosBuildTarget({ simulator: true, device: "sim-udid" }, "sim-udid")).toEqual({
+      sdk: "iphonesimulator",
+      destination: "platform=iOS Simulator,id=sim-udid",
+    });
+  });
+  it("uses the physical SDK for a connected phone and a generic archive target", () => {
+    expect(iosBuildTarget({ device: "phone-udid" })).toEqual({
+      sdk: "iphoneos",
+      destination: "id=phone-udid",
+    });
+    expect(iosBuildTarget({})).toEqual({ sdk: "iphoneos", destination: "generic/platform=iOS" });
   });
 });
