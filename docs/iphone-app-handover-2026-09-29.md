@@ -5,10 +5,12 @@ System approval, streamed mobile activation, real workspace panel rendering,
 navigation, message submission, model output, and server restart recovery have
 been exercised on the isolated iPhone. Computer Use works with the screen awake.
 Native nullable-value and WebView script/message ownership repairs are published;
-Hosted CI now passes all 13 native tests together. Panel canvases remain edge to
+Hosted CI passes the earlier 13 native tests together; the Fabric lifecycle
+repair passes all 15 native tests locally and repeated live Debug reloads. Panel canvases remain edge to
 edge; safe spacing is panel-owned, with optional measured viewport insets and
 corner hints. Touch composer/settings repairs are pushed to Base and System;
-combined live keyboard/rotation acceptance is in progress. Physical
+Live portrait/landscape software-keyboard acceptance passes, including a typed
+draft shrinking with the panel and returning to portrait. Physical
 hardware and distribution accounts remain unavailable. Read the latest checkpoint
 below; earlier sections are historical.
 
@@ -855,3 +857,93 @@ publication worktrees were removed; the retired owned visibility instance state
 was removed with the sealed-tree cleanup helper after checking ownership and
 absence of running processes. The final ephemeral server, native log stream and
 caffeinate were stopped and awaited, and the owned simulator was shut down.
+
+## Closing the two documented simulator gaps — 2026-09-30, 15:42 Berlin
+
+Source fixes are published; final native UI acceptance follows below.
+
+- Root `0683d4d82` repairs the Fabric queued-start race in the installed RN
+  dependency patch. The old implementation checked Registered before queuing
+  the attachment, permitting a second start before the asynchronous handler
+  changed to Running. The surface now owns that pending transition under its
+  lifecycle mutex. Stop/reset cancel its generation, and detach captures the
+  actual presenter/view owner rather than a later replacement. The original
+  attachment assertion remains intact; startup work remains off the main queue.
+- A deterministic app-hosted native regression reproduced the same assertion
+  on the old dependency by requesting two starts before the main queue drained.
+  The patched build passed **all 15 native tests**, including duplicate start
+  and cancellation of a start before attachment. Private evidence is
+  `fabric-start-baseline-retry.log` and `fabric-fixed-final.xcresult` in the
+  existing private verification directory. The hosted 13-case CI run above
+  predates this repair; do not describe it as hosted 15-case evidence.
+- System `c0a8b0b` (published with merge `c55de3a`) keeps a single 44-pixel
+  native control row in short windows, omitting only the workspace caption.
+  Portrait restores the caption; panel controls and drawer remain available.
+- Base `8aff269` queries the full-height chat layout's actual panel height. A
+  short panel uses a 44-pixel one-line composer band and smaller internal card
+  spacing; taller panels retain their normal band. Intrinsically sized surfaces
+  retain inline-size containment. This preserves the native input accessory
+  instead of removing its keyboard navigation controls to hide the overlap.
+- Six AppBar tests and 22 chat unit tests pass. A real-browser test verifies the
+  actual ChatInput draft and send control fit within a 70-pixel panel and expand
+  again with the panel without losing the draft. System/mobile and Base
+  composition typechecks pass. Browser failure screenshots now go into a
+  host-owned cache directory; checkout hygiene passes.
+
+The owned `iphone-20260930-closedgaps` fixture is activating the new source
+through ordinary template bootstrap. No installed workspace files were edited
+in place, no new account-access grant was accepted, and no model prompt was sent
+for this verification. Final keyboard/reload outcomes and cleanup follow below.
+
+### Source completion and live reload evidence — 2026-09-30, 16:23 Berlin
+
+The first live landscape check exposed a retained textarea measurement after
+typing in portrait. Base `f31e178` (published with merge `54e0807`) now observes
+the owning chat panel and schedules the same content measurement used on input.
+Measuring from zero avoids preserving the intrinsic two-row height. The browser
+regression now types in a tall panel, shrinks it to 70px, verifies contraction to
+the compact 44px band, then expands while preserving the draft. That regression,
+22 chat unit tests, Base composition/integration typechecks and template hygiene
+pass. This does not add React state updates for measured heights.
+
+The patched Debug app survived two ordinary Metro `/reload` requests with the
+same native process (46437), recovered its workspace panel, and logged no Fabric
+attachment assertion. This is separate from the all-15 native test result above.
+The deterministic old-code reproduction still provides the negative control.
+
+The initial fresh fixture encountered an authority vocabulary mismatch after
+a concurrent Base publication change. Fast-forwarding the host to `28e559e28`
+brought in its already-published companion authority repair. A new ephemeral
+`iphone-20260930-finalviewport` fixture then paired and activated normally,
+without editing installed source or weakening approval checks. Its streamed
+mobile artifact is `53cc4bc5cffab110d9c41ee6cc7c8c3f2e8482934b3812cd02512d59a5c6fa97`.
+Final live landscape evidence and cleanup follow below.
+
+### Final acceptance and cleanup — 2026-09-30, 16:27 Berlin
+
+**Both documented simulator defects are closed.** In the fresh System workspace,
+a draft was typed in portrait, the full software keyboard was opened, and the
+device rotated into landscape with the keyboard still visible. The settled
+landscape screenshot shows the entire textarea border and both Send controls
+above the native input accessory: textarea approximately y306–337, accessory
+begins at y342 in the 1100×800 Device Hub window. The draft remained unchanged
+after rotating back to portrait, where the composer expanded again. The native
+workspace caption returned in portrait and the control row remained available
+in landscape. The keyboard accessory remains intact; no app-owned safety strip
+was added. The draft was never submitted and no account-use approval was granted.
+The current Personal template automatically created an onboarding prompt; the
+acceptance exercise itself used the empty System conversation.
+
+Published repairs: host `0683d4d82`, System `c0a8b0b`/`c55de3a`, and Base
+`8aff269` plus `f31e178`/`54e0807`. Local validation is all 15 native tests,
+two live Debug reloads without process replacement/crash, six AppBar tests,
+22 chat tests, the real Chromium height-transition regression, composition/mobile
+typechecks, and template-checkout hygiene. Hosted CI's earlier 13-case evidence
+is unchanged; physical hardware and distribution-account acceptance remain
+external requirements, not simulator defects closed by this work.
+
+Cleanup completed: keyboard capture restored off; the final server, Metro and
+native log stream terminated and awaited; the owned simulator shut down. Both
+final owned server process sets are absent, and their ephemeral state roots were
+removed by their supervisors. No test server, inspector connection or native
+build process from this verification remains active.

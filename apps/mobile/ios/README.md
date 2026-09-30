@@ -39,7 +39,10 @@ dependencies with the installed JavaScript packages and `Podfile.lock`.
 Keep the CocoaPods lockfile and workspace in source control. Use the repository's
 pinned pnpm version when updating JavaScript dependencies; React Native 0.79.7
 has a dependency patch upgrading its iOS fmt dependency to 12.1.0 for the
-Xcode 27 compiler. The app uses `SceneDelegate` to own the window and creates
+Xcode 27 compiler. The same patch owns queued Fabric surface starts through
+stop/reset so Debug runtime reloads cannot attach a root view twice. Native
+regressions cover duplicate starts and cancellation before main-queue attachment.
+The app uses `SceneDelegate` to own the window and creates
 React Native through its factory. Firebase Messaging has a dependency patch to
 find root views through connected scenes and receive scene foreground events;
 its upstream implementation still assumes a window on the application delegate.

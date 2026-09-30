@@ -306,3 +306,27 @@ There is no separate native safety strip. Landscape software-keyboard accessory
 overlap remains open, as does the separate Debug reload assertion. Owned test
 resources were stopped and awaited, simulator keyboard capture was restored,
 and the owned simulator and retired fixture state were cleaned up.
+
+### Landscape keyboard and Debug reload closure (2026-09-30)
+
+The two simulator defects above are repaired and accepted in a fresh workspace.
+System keeps one native control row in short windows. Base sizes the composer
+from its panel height and remeasures textarea content when that panel changes
+size, allowing a typed portrait draft to contract above the landscape keyboard.
+The full input border and Send controls remain visible above the unmodified
+native input accessory; returning to portrait preserves the draft and restores
+the normal height. The app continues to expose an edge-to-edge panel canvas.
+
+The React Native dependency patch owns pending Fabric surface starts under the
+lifecycle mutex, so duplicate queued starts cannot attach twice. Stop/reset
+invalidates queued work and detaches the captured view/presenter owner. An
+app-hosted regression reproduced the original assertion before the fix; all
+15 native tests pass with it. Two live Debug reloads also recovered the workspace
+panel with the same native process and no attachment assertion.
+
+Source repairs are pushed to host, System and Base main. Focused browser, chat,
+AppBar, composition/mobile and checkout-hygiene checks pass. Owned verification
+processes and ephemeral fixture state were cleaned up. Physical-device, signing,
+APNs/Firebase and distribution-account acceptance still require the unavailable
+external hardware/accounts. The earlier hosted 13-case CI result is not evidence
+for the new two-case Fabric regression.
