@@ -37,10 +37,15 @@ export const inventorModelScript = {
         {
           tool: "eval",
           arguments: {
-            code: `import { launchAgentIntoChannel, createConversationClient } from '@workspace/runtime'; if(typeof launchAgentIntoChannel !== 'function' || typeof createConversationClient !== 'function') throw new Error('Portable agent helpers unavailable'); import { createProjects } from '@workspace-skills/workspace-dev'; return await createProjects([{projectType:'project',name:'impossible-inventions',title:'Impossible Inventions',icon:'🌙'}]);`,
+            code: `import { launchAgentIntoChannel, createConversationClient } from '@workspace/runtime'; if(typeof launchAgentIntoChannel !== 'function' || typeof createConversationClient !== 'function') throw new Error('Portable agent helpers unavailable'); import { prepareProjects } from '@workspace-skills/workspace-dev'; return await prepareProjects([{projectType:'project',name:'impossible-inventions',title:'Impossible Inventions',icon:'🌙'}]);`,
           },
         },
         { tool: "write", arguments: { path: "{{directory}}/index.html", content: invention } },
+        {
+          tool: "vcs",
+          arguments: { operation: "commit", message: "Create the Moon Permit Office" },
+        },
+        { tool: "vcs", arguments: { operation: "push" } },
       ],
       reply: "The Moon Permit Office is ready. Petition the moon for a most improbable permit.",
     },

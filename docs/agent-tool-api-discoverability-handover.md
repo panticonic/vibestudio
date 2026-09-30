@@ -1,6 +1,14 @@
 # Agent tool and API discoverability handover
 
 Status: implemented 2026-08-14 (all four work packages; host + external Base).
+Lifecycle update (2026-09-30): the one-shot creation/publication APIs have been
+removed. `prepareProjects` and `prepareApplication` prepare context candidates
+from explicitly authored authority policies; they never commit, publish, or
+infer permissions. Review the candidate and authority, verify it, then use the
+ordinary VCS commit/push workflow. Current recipes live in Base's
+`skills/workspace-dev/PROJECTS.md` and `WORKFLOW.md`. The August account below
+is historical; the acceptance suite now exercises these preparation APIs.
+
 Notable outcomes beyond the plan text:
 
 - The one validation formatter lives in `typedServiceClient.ts`
