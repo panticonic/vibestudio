@@ -436,6 +436,7 @@ export const assets: string = logo + photo;`
             source: "tsc",
             severity: "error",
             file: "panels/hello/unsafe-index.ts",
+            compilerCode: 2322,
           }),
         ])
       );

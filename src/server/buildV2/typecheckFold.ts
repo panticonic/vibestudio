@@ -58,6 +58,7 @@ function toBuildDiagnostic(
     endLine: d.endLine,
     endColumn: d.endColumn,
     message: d.message,
+    compilerCode: d.code,
   };
 }
 

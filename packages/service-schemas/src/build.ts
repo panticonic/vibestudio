@@ -454,6 +454,8 @@ export const buildDiagnosticSchema = z
     endLine: z.number().int().nonnegative().optional(),
     endColumn: z.number().int().nonnegative().optional(),
     message: z.string(),
+    /** Original compiler diagnostic identity (for example TypeScript TS2532). */
+    compilerCode: z.number().int().nonnegative().optional(),
     lineText: z.string().optional(),
     suggestion: z.string().optional(),
     repair: agentDiagnosticRepairSchema.optional(),
