@@ -159,7 +159,6 @@ simulator were stopped; retained ephemeral state was removed after ownership
 verification. See the latest handover checkpoint for the observed shutdown
 signal defect and remaining deployment gaps.
 
-
 ### Source gap closure: 2026-09-30
 
 The preceding window/shutdown/deployment source-gap checkpoint is historical.
@@ -205,7 +204,6 @@ self-installation. Do not add a hidden review mode or a second runtime to disgui
 execution. If approval cannot accommodate the design, a product-level execution
 model decision is required; missing signing credentials are a separate blocker.
 
-
 ### Expanded native verification
 
 All five native XCTest cases passed on iPhone 18 Pro / iOS 27: Iroh retirement
@@ -219,7 +217,6 @@ The owned server, Metro, console sessions, builds/tests, and simulator were
 retired and awaited; all eight tracked server processes and its temporary root
 are gone. Recreate an isolated instance and fresh invitation for interactive
 continuation. The open acceptance items above remain open.
-
 
 ### Interactive rendering checkpoint
 
@@ -253,3 +250,23 @@ selection/create/delete validation and all nine native tests passed; a hosted
 run has not been observed. This coverage is separate from full workspace smoke.
 Warm pairing from a running managed app and cancel/reopen retry have now been
 observed. Interactive panel/message and restart acceptance remain open.
+
+### Native live acceptance — 2026-09-30
+
+The native null bridge and WebView handler/script lifecycle fixes (`8edac9bdf`,
+`8ec386b28`) now permit real workspace panels to render. Eleven native cases
+passed together; both new WebKit regressions passed after the script inventory
+ownership repair. The isolated iPhone navigated to chat, submitted a message,
+applied one-use account approvals, and displayed **iPhone verification complete.**
+Server restart recovery retained that conversation. Lookup and fetch each prompted
+for credential approval; waiting on the second approval consumed the model stream
+progress timeout. That admission flow remains an investigation item.
+
+System `bd6ad2c` centralizes native modal orientations and `c4b7114` makes the
+workspace screen resize above the iOS keyboard. Both composition/mobile typechecks
+and 97 relevant sheet tests passed across focused runs. Live verification uses a
+fresh isolated snapshot because a persistent restart does not reread templates.
+The refreshed bundle's keyboard/rotation verification is still in progress.
+Hosted iOS CI was manually dispatched as run `36706691764`; successful ordinary
+push runs skipped that job. Device provisioning and distribution remain unavailable.
+See the latest handover checkpoint for exact evidence and owned-resource cleanup.

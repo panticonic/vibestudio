@@ -273,7 +273,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           type: "exposure",
           entries: [...exposurePolicies.values()],
         })
-      ).catch((error) => console.error("RPC exposure publication failed", error));
+      ).catch((error) => {
+        // Exposure publication is retried when the transport reconnects. A
+        // temporary outage must not raise a fatal development error overlay.
+        console.warn("RPC exposure publication failed; retrying on reconnect", error);
+      });
   }
   function declareExposure(
     name: string,
