@@ -82,7 +82,9 @@ retirement. It verifies that a pending native accept ends on invalidation, the
 retired module is released, and a replacement runtime can reuse the persistent
 identity. The same target verifies OAuth cancellation and cleanup of interrupted
 bundle, asset, and browser-import transfers while preserving committed files.
-Run it on an available simulator:
+It also verifies scene-owned status-bar updates and WebView URL routing: only
+file URLs use WebKit’s file loader; blank, data, HTTPS, and panel URLs use normal
+requests. Run it on an available simulator:
 
 ```bash
 cd apps/mobile/ios

@@ -154,3 +154,23 @@ index 1f6bbfd697a4e0b0aef2db344386b786839a1969..8576781d256d98285f9c77a0bfebbbbf
  - (void)goForward;
  - (void)goBack;
  - (void)reload;
+diff --git a/apple/RNCWebViewImpl.m b/apple/RNCWebViewImpl.m
+--- a/apple/RNCWebViewImpl.m
++++ b/apple/RNCWebViewImpl.m
+@@ -874,12 +874,12 @@
+       [webView loadHTMLString:@"" baseURL:nil];
+       return;
+     }
+-    if (request.URL.host) {
+-      [webView loadRequest:request];
+-    }
+-    else {
++    if (request.URL.isFileURL) {
+       NSURL* readAccessUrl = allowingReadAccessToURL ? [RCTConvert NSURL:allowingReadAccessToURL] : request.URL;
+       [webView loadFileURL:request.URL allowingReadAccessToURL:readAccessUrl];
+     }
++    else {
++      [webView loadRequest:request];
++    }
+   }];
+ }

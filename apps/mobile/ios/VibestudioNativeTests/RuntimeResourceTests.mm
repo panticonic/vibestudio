@@ -1,6 +1,48 @@
 #import <XCTest/XCTest.h>
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <React/RCTBridgeModule.h>
+#import <react-native-webview/RNCWebViewImpl.h>
+
+@interface RoutingWebView : WKWebView
+@property (nonatomic, strong) NSURL *requestURL;
+@property (nonatomic, strong) NSURL *fileURL;
+@end
+@implementation RoutingWebView
+- (WKNavigation *)loadRequest:(NSURLRequest *)request { self.requestURL = request.URL; return nil; }
+- (WKNavigation *)loadFileURL:(NSURL *)URL allowingReadAccessToURL:(NSURL *)root { self.fileURL = URL; return nil; }
+@end
+
+@interface RNCWebViewImpl (SourceRoutingTest)
+- (void)visitSource;
+- (void)syncCookiesToWebView:(void (^)(void))completion;
+@end
+@interface SourceRoutingView : RNCWebViewImpl
+@end
+@implementation SourceRoutingView
+- (void)syncCookiesToWebView:(void (^)(void))completion { completion(); }
+@end
+
+@interface WebViewSourceRoutingTests : XCTestCase
+@end
+@implementation WebViewSourceRoutingTests
+- (void)testOnlyFileURLsUseTheFileLoader
+{
+  XCTestExpectation *checked = [self expectationWithDescription:@"WebKit receives the correct URL loader"];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    for (NSString *uri in @[@"about:blank", @"data:text/html,hello", @"https://example.com/", @"vibestudio-panel://panel/index.html", @"file:///tmp/panel.html"]) {
+      SourceRoutingView *view = [SourceRoutingView new];
+      RoutingWebView *webView = [RoutingWebView new];
+      [view setValue:webView forKey:@"_webView"];
+      view.source = @{@"uri": uri};
+      NSURL *url = [NSURL URLWithString:uri];
+      XCTAssertEqualObjects(url.isFileURL ? webView.fileURL : webView.requestURL, url);
+      XCTAssertNil(url.isFileURL ? webView.requestURL : webView.fileURL);
+    }
+    [checked fulfill];
+  });
+  [self waitForExpectations:@[checked] timeout:5];
+}
+@end
 
 @interface VibestudioAuthSession : NSObject
 - (void)invalidate;
@@ -104,6 +146,64 @@
   });
   [self waitForExpectations:@[cleaned] timeout:5];
   [NSFileManager.defaultManager removeItemAtPath:root error:nil];
+}
+
+@end
+
+#import <React/RCTStatusBarManager.h>
+#import <React/RCTUtils.h>
+#import <React-RCTAppDelegate/RCTDefaultReactNativeFactoryDelegate.h>
+
+@interface RCTStatusBarManager (NativeTestMethods)
+- (void)setStyle:(NSString *)style animated:(BOOL)animated;
+- (void)setHidden:(BOOL)hidden withAnimation:(NSString *)animation;
+@end
+
+@interface StatusBarLifecycleTests : XCTestCase
+@end
+
+@implementation StatusBarLifecycleTests
+
+- (void)testStatusBarModuleUpdatesTheSceneRootController
+{
+  XCTestExpectation *updated = [self expectationWithDescription:@"Status bar attributes reach the scene controller"];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    XCTAssertNotEqualObjects([NSBundle.mainBundle objectForInfoDictionaryKey:@"UIViewControllerBasedStatusBarAppearance"], @NO);
+    UIViewController *root = RCTKeyWindow().rootViewController;
+    XCTAssertTrue([root isKindOfClass:RCTStatusBarViewController.class]);
+    if (![root isKindOfClass:RCTStatusBarViewController.class]) { [updated fulfill]; return; }
+    RCTStatusBarViewController *controller = (RCTStatusBarViewController *)root;
+    UIStatusBarStyle originalStyle = controller.preferredStatusBarStyle;
+    BOOL originalHidden = controller.prefersStatusBarHidden;
+    UIStatusBarAnimation originalAnimation = controller.preferredStatusBarUpdateAnimation;
+    RCTStatusBarManager *manager = [RCTStatusBarManager new];
+    [manager setStyle:@"dark-content" animated:NO];
+    [manager setHidden:YES withAnimation:@"fade"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      XCTAssertEqual(controller.preferredStatusBarStyle, UIStatusBarStyleDarkContent);
+      XCTAssertTrue(controller.prefersStatusBarHidden);
+      XCTAssertEqual(controller.preferredStatusBarUpdateAnimation, UIStatusBarAnimationFade);
+      controller.reactStatusBarStyle = originalStyle;
+      controller.reactStatusBarHidden = originalHidden;
+      controller.reactStatusBarAnimation = originalAnimation;
+      [controller setNeedsStatusBarAppearanceUpdate];
+      [updated fulfill];
+    });
+  });
+  [self waitForExpectations:@[updated] timeout:5];
+}
+
+- (void)testReplacementFactoryStartsWithANewAppearanceOwner
+{
+  RCTDefaultReactNativeFactoryDelegate *factory = [RCTDefaultReactNativeFactoryDelegate new];
+  RCTStatusBarViewController *old = (RCTStatusBarViewController *)[factory createRootViewController];
+  XCTAssertTrue([old isKindOfClass:RCTStatusBarViewController.class]);
+  old.reactStatusBarHidden = YES;
+  old.reactStatusBarStyle = UIStatusBarStyleLightContent;
+  RCTStatusBarViewController *replacement = (RCTStatusBarViewController *)[factory createRootViewController];
+  XCTAssertNotEqual(old, replacement);
+  XCTAssertFalse(replacement.prefersStatusBarHidden);
+  XCTAssertEqual(replacement.preferredStatusBarStyle, UIStatusBarStyleDefault);
 }
 
 @end

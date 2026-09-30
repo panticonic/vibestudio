@@ -1,3 +1,24 @@
+diff --git a/Libraries/AppDelegate/RCTDefaultReactNativeFactoryDelegate.mm b/Libraries/AppDelegate/RCTDefaultReactNativeFactoryDelegate.mm
+index 3c03cc3c1169edae93de6e9ee90f1e369de8536d..a9b4a57382f9c20158e830206501c9c32b57699e 100644
+--- a/Libraries/AppDelegate/RCTDefaultReactNativeFactoryDelegate.mm
++++ b/Libraries/AppDelegate/RCTDefaultReactNativeFactoryDelegate.mm
+@@ -7,6 +7,7 @@
+ 
+ #import "RCTDefaultReactNativeFactoryDelegate.h"
+ #import <ReactCommon/RCTHost.h>
++#import <React/RCTStatusBarManager.h>
+ #import "RCTAppSetupUtils.h"
+ #import "RCTDependencyProvider.h"
+ #if USE_HERMES
+@@ -30,7 +31,7 @@
+ 
+ - (UIViewController *)createRootViewController
+ {
+-  return [UIViewController new];
++  return [RCTStatusBarViewController new];
+ }
+ 
+ - (RCTBridge *)createBridgeWithDelegate:(id<RCTBridgeDelegate>)delegate launchOptions:(NSDictionary *)launchOptions
 diff --git a/Libraries/Blob/React-RCTBlob.podspec b/Libraries/Blob/React-RCTBlob.podspec
 index 9d758c174cf0ad55e81bae9d3b4f8caf6fdf673b..6dfb3ab9dbf2152ee599d9f61993e658935bafa7 100644
 --- a/Libraries/Blob/React-RCTBlob.podspec
@@ -85,6 +106,83 @@ index b2de00b58515bde76433b21baee03ad8f46d34cb..bc5f01f639c0b1a73739386a8bafe997
  }
  
  - (void)show
+diff --git a/React/CoreModules/RCTStatusBarManager.h b/React/CoreModules/RCTStatusBarManager.h
+index ff1e02e0d679c9cd32009b8c16a354274d3b54e7..5f6b1593b72874a38d599ae8047e7646e8c594e5 100644
+--- a/React/CoreModules/RCTStatusBarManager.h
++++ b/React/CoreModules/RCTStatusBarManager.h
+@@ -20,3 +20,10 @@
+ @interface RCTStatusBarManager : RCTEventEmitter
+ 
+ @end
++
++/** The root controller owns UIKit's scene-based status-bar appearance. */
++@interface RCTStatusBarViewController : UIViewController
++@property(nonatomic, assign) UIStatusBarStyle reactStatusBarStyle;
++@property(nonatomic, assign) BOOL reactStatusBarHidden;
++@property(nonatomic, assign) UIStatusBarAnimation reactStatusBarAnimation;
++@end
+diff --git a/React/CoreModules/RCTStatusBarManager.mm b/React/CoreModules/RCTStatusBarManager.mm
+index 5762334cecb0c53a8e8bd2ea56c022c6c3507047..cb61e130dcbaeed0e7fc90b5e5f174fc40022a7d 100644
+--- a/React/CoreModules/RCTStatusBarManager.mm
++++ b/React/CoreModules/RCTStatusBarManager.mm
+@@ -47,6 +47,24 @@ RCT_ENUM_CONVERTER(
+ 
+ @end
+ 
++@implementation RCTStatusBarViewController
++
++- (UIStatusBarStyle)preferredStatusBarStyle { return self.reactStatusBarStyle; }
++- (BOOL)prefersStatusBarHidden { return self.reactStatusBarHidden; }
++- (UIStatusBarAnimation)preferredStatusBarUpdateAnimation { return self.reactStatusBarAnimation; }
++
++@end
++
++static RCTStatusBarViewController *RCTStatusBarController(void)
++{
++  UIViewController *controller = RCTKeyWindow().rootViewController;
++  if ([controller isKindOfClass:RCTStatusBarViewController.class]) {
++    return (RCTStatusBarViewController *)controller;
++  }
++  RCTLogError(@"Controller-based status bars require RCTStatusBarViewController as the React Native root controller");
++  return nil;
++}
++
+ @interface RCTStatusBarManager () <NativeStatusBarManagerIOSSpec>
+ @end
+ 
+@@ -137,8 +155,13 @@ RCT_EXPORT_METHOD(setStyle : (NSString *)style animated : (BOOL)animated)
+   dispatch_async(dispatch_get_main_queue(), ^{
+     UIStatusBarStyle statusBarStyle = [RCTConvert UIStatusBarStyle:style];
+     if (RCTViewControllerBasedStatusBarAppearance()) {
+-      RCTLogError(@"RCTStatusBarManager module requires that the \
+-                UIViewControllerBasedStatusBarAppearance key in the Info.plist is set to NO");
++      RCTStatusBarViewController *controller = RCTStatusBarController();
++      controller.reactStatusBarStyle = statusBarStyle;
++      if (animated) {
++        [UIView animateWithDuration:0.35 animations:^{ [controller setNeedsStatusBarAppearanceUpdate]; }];
++      } else {
++        [controller setNeedsStatusBarAppearanceUpdate];
++      }
+     } else {
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+@@ -153,8 +176,14 @@ RCT_EXPORT_METHOD(setHidden : (BOOL)hidden withAnimation : (NSString *)withAnima
+   dispatch_async(dispatch_get_main_queue(), ^{
+     UIStatusBarAnimation animation = [RCTConvert UIStatusBarAnimation:withAnimation];
+     if (RCTViewControllerBasedStatusBarAppearance()) {
+-      RCTLogError(@"RCTStatusBarManager module requires that the \
+-                UIViewControllerBasedStatusBarAppearance key in the Info.plist is set to NO");
++      RCTStatusBarViewController *controller = RCTStatusBarController();
++      controller.reactStatusBarHidden = hidden;
++      controller.reactStatusBarAnimation = animation;
++      if (animation == UIStatusBarAnimationNone) {
++        [controller setNeedsStatusBarAppearanceUpdate];
++      } else {
++        [UIView animateWithDuration:0.35 animations:^{ [controller setNeedsStatusBarAppearanceUpdate]; }];
++      }
+     } else {
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 diff --git a/React/CoreModules/React-CoreModules.podspec b/React/CoreModules/React-CoreModules.podspec
 index 486e7f9d38465176e093cb6683e39bfb542930c5..7c47dd394bc69deb4950274cb37809e8268626df 100644
 --- a/React/CoreModules/React-CoreModules.podspec
