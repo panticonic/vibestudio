@@ -1,13 +1,14 @@
 # iPhone app handover — 2026-09-29
 
-**Current status (2026-09-30):** Signed Release and Debug simulator installation,
-bootstrap launch, Metro connection, and pairing through workspace trust review
-passed. The previously recorded version/discovery, simulator doctor, supervisor
-shutdown, and Iroh runtime lifetime defects are fixed and published. Native
-XCTest verifies Iroh retirement. Streamed workspace activation and recovery
-remain unverified: activation confirmation is pending and native window capture
-has again returned `cgWindowNotFound`. Physical-device and distribution accounts
-are unavailable. Read the latest checkpoint below; earlier sections are historical.
+**Current status (2026-09-30):** Signed Release/Debug simulator installation,
+bootstrap pairing, explicit System trust approval, streamed bundle activation,
+and saved-credential reconnection have run on the isolated iPhone. Computer Use
+works with the screen awake. Approval-row identity, simulator log selection,
+scene status-bar ownership, WebView URL routing, and provider-input storage fixes
+are committed and pushed. The registry lock inversion repair is published as
+`7ea12683d`; all nine native tests passed after recovering the simulator from
+the machine restart. Interactive workspace acceptance is still incomplete. Physical-device and distribution accounts remain unavailable. Read the
+latest checkpoint below; earlier sections are historical.
 
 ## Original stopping point: 2026-09-29
 
@@ -549,3 +550,75 @@ remains unsupported. Physical signing, camera/permissions, real OAuth/APNs,
 associated-domain delivery, and TestFlight installation need the unavailable
 phone and accounts. The integration plan records the reviewed distribution
 architecture assessment; no beta URL or release approval exists.
+
+
+### Interactive continuation and native rendering repairs: 2026-09-30
+
+The user disabled screen lock for four hours and explicitly approved Start for
+System on `iphone-20260930-0918`. Native screenshots and interaction became
+available through Device Hub. That supports a screen/session-state explanation
+for the earlier capture failure, without establishing screen lock as its sole
+cause. Routine Computer Use is authorized; the recorded System grant is no
+longer pending.
+
+Published changes:
+
+- `d462dd678`: review rows preserve canonical `InstallReviewPart.identityKey`,
+  avoiding duplicate React keys for a worker and extension both named
+  `local-models`. All 28 launch-gate tests passed. `mobile logs --platform ios
+  --device <simulator-udid>` now selects that exact booted simulator.
+- `ffc909f99`: provider input leases live at the declared workspace
+  `build-provider-inputs` anchor, admitted read-only to the native runtime.
+  The previous `.provider-inputs` directory lived among immutable build records;
+  GC classified it as an unreconstructible build and refused its epoch commit.
+  No collector name exception was added. All 13 focused provider/runtime/app
+  build/layout tests passed, including live-input inventory separation,
+  read-only isolation, source/cache denial, and lease cleanup.
+- `62aa9238c`: React Native’s scene root owns status-bar style/visibility and
+  animations; the app keeps controller-based appearance. This fixes the legacy
+  status-bar red box without an Info.plist bypass. WebView now routes only
+  actual file URLs through `loadFileURL`; `about:blank` previously crashed
+  streamed activation. Blank/data/HTTPS/panel schemes use normal requests.
+  Existing versioned patches and their locked hashes own both changes.
+
+All eight app-hosted native tests passed against the patched Debug native host:
+`/tmp/vibestudio-ios-native-eight-20260930.log` and
+`/tmp/vibestudio-ios-native-eight-20260930.xcresult`. These tests cover Iroh,
+OAuth, transient file cleanup, scene appearance, and WebKit loader selection.
+They do not establish interactive panel, message, or recovery acceptance.
+
+The app then reached its managed login route, restored its credential, and
+connected to System and Personal, but froze on “Opening your workspaces…”.
+A two-second native sample captured the same wait on every sample: the main
+animation thread awaited the descriptor-registry shared lock; JavaScript held
+that registry’s exclusive lock while synchronously waiting for UIKit to
+initialize a legacy view manager. The private evidence is
+`/tmp/vibestudio-iphone-loading-sample-20260930.txt`. This matches
+[React Native issue 53128](https://github.com/react/react-native/issues/53128).
+The repair constructs the descriptor outside the inventory lock and locks only
+publication. The concurrent-reader regression and all eight existing native cases passed
+after reboot. Published as `7ea12683d`, including the dependency patch hash.
+
+### Machine restart recovery: 2026-09-30
+
+The machine restart terminated the previous ephemeral server, Metro, log stream,
+app, and build processes. Its ephemeral root was gone; its stale registry entry
+was removed after verifying ownership and process absence. The old `/tmp`
+evidence paths above no longer exist; the observations remain historical.
+
+The simulator runtime asset survived but its registration and discovery helpers
+retained stale mount paths. Re-registering the preserved Apple runtime asset and
+refreshing the idle discovery services restored the original simulator without
+clearing its app data. The native build-for-testing succeeded, then all nine
+app-hosted native tests passed with zero failures. Private evidence now survives
+reboots under `~/.config/vibestudio/iphone-verification/20260930-reboot/`:
+`registry-build-rerun.log`, `native-nine-retry.log`, and
+`native-nine-retry.xcresult`. The first post-reboot test launch was canceled and
+awaited; the retry completed successfully after discovery recovery.
+
+Continuation uses the separately owned persistent instance
+`iphone-20260930-reboot`, Metro, the original simulator, and a temporary
+`caffeinate` helper. Persistent state permits an actual stop/restart reconnect
+check, unlike destroying an ephemeral root. The app has launched; interactive
+acceptance is pending. Stop and await these exact resources at verification end.
+Do not stop the unrelated `authority-preparation-0930` server or user apps.

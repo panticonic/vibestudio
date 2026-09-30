@@ -219,3 +219,20 @@ The owned server, Metro, console sessions, builds/tests, and simulator were
 retired and awaited; all eight tracked server processes and its temporary root
 are gone. Recreate an isolated instance and fresh invitation for interactive
 continuation. The open acceptance items above remain open.
+
+
+### Interactive rendering checkpoint
+
+With the screen awake, Device Hub capture and interaction worked and the user
+approved the isolated System workspace. Streamed activation reached the managed
+app. Published native repairs retain scene-owned status-bar appearance and send
+only actual file URLs to WebKit’s file loader; blank/data/HTTPS/panel requests
+use the normal loader. All nine app-hosted native tests passed on iOS 27 after
+recovering runtime registration and discovery following the machine restart.
+
+Interactive acceptance remains open. A native sample identified a descriptor
+registry/UIKit lock inversion while the app displayed “Opening your
+workspaces…”. Construction outside the registry publication lock is published
+as `7ea12683d` and passes the concurrent-reader native regression. Do not mark panel use, messages, keyboard,
+cache recovery, or reconnect complete until the repaired app visibly performs
+those flows. The handover records source commits and private evidence paths.
