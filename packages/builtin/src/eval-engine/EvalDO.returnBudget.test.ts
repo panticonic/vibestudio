@@ -70,6 +70,9 @@ describe("eval return budget", () => {
     expect(envelope["measuredAs"]).toBe("json-indent-2");
     expect(envelope["originalChars"]).toBeGreaterThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
     expect(envelope["scopeKey"]).toBe("$lastLargeReturn");
+    expect(envelope["scopeValueType"]).toBe("string");
+    expect(envelope["recoveryInstruction"]).toContain("JSON.parse(scope.$lastLargeReturn)");
+    expect(envelope["recoveryInstruction"]).toContain("retrieve a smaller result from the source");
     expect(typeof envelope["preview"]).toBe("string");
   });
   it("stores large image bytes as an owned artifact before applying the JSON budget", async () => {
