@@ -306,7 +306,7 @@ Reporting is an agent-led API workflow. Keep System reporting settings and histo
 Agents assemble reports conversationally using the typed draft APIs, with substantial evidence-linked narrative. `prepare` freezes sanitized bytes. `send` pauses agent callers for an exact one-time host approval showing what will be shared. Only acceptance queues the signed bundle; denial, cancellation, or edits prevent submission. There is no user-filled report form. Saved-only and proactive drafts remain local until the user wants to share them.
 
 One first-start dialog offers **Enable automatic reports** and **Keep automatic
-reports off** equally for device and connected-server reporting. The unit audit
+reports off** equally, with a two-sentence explanation and one shared reporting choice. A saved choice initializes an undecided connected capture store without a second prompt, including after headless setup or reconnect. Settings exposes one control. The unit audit
 waits for this decision. Subsequent unit audits show the saved preference as
 the default of an inline reporting option; accepting saves explicit edits,
 while cancellation saves nothing. Existing different device/server choices

@@ -75,16 +75,9 @@ credential-use review. No bearer entered the workspace or evaluation code.
 
 ## Headless server consent
 
-A desktop connection to an independently hosted server uses one combined
-first-start prompt for device and current-user server reporting. The unit audit
-waits for that decision, then shows the saved choice as its default. Subsequent
-audits keep the reporting option inline; there is no second server dialog.
-The preference is shared across workspaces. Accepting an explicit audit edit
-updates that preference; cancelling saves nothing. Different saved device and
-server choices remain mixed and untouched unless edited. Settings still exposes
-both scopes independently. Reconnect reloads server consent without adding a
-standalone prompt. Agents cannot answer the reporting choice. Trusted CLI setup
-can also record the server choice before a desktop connects.
+Users see one reporting choice, not separate device and server controls. App/browser and workspace/agent capture still have installation/user-scoped stores internally. A saved choice initializes an undecided connected capture store without another prompt, including after headless setup or reconnect. Only when neither has a saved choice does the two-sentence first-start prompt appear.
+
+Settings has one shared control; subsequent unit audits show the previous choice inline. An explicit edit updates both connected stores, while cancelling an audit saves nothing. Existing mixed preferences are preserved until explicitly edited. Propagation failures retain the saved decision and offer retry rather than another consent question. Agents cannot answer the reporting choice.
 
 ## Product release boundary
 
@@ -92,10 +85,10 @@ Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
 On 2026-09-30 ordinary template inspection, review, and publication produced
 Base `v0.3.59` at `00ede7f7b669422a3f71b171b75a979e16f82353` and System
-`v0.3.72` at `46cee0e7fd27ae8a027cefe809560cd0728eac5d`. Their actual
+`v0.3.73` at `d82d9f0b4db34ad2574163e2d4a9e08a1bd3e29c`. Their actual
 publication receipts supply the packaged host pins. A main-branch push alone
 does not update those pins. Never substitute fabricated receipts or moving
-branch refs for that release boundary. System `v0.3.72` removes the report form in favor of agent conversations and retains one combined first-start consent prompt with saved defaults in subsequent unit audits. Base `v0.3.59` supplies the reporting skill and persisted-draft handoff. Its publication finalized after the normal
+branch refs for that release boundary. System `v0.3.73` provides agent-led reporting, one shared settings control, a two-sentence first-use explanation, and inherited saved consent without a second prompt. Base `v0.3.59` supplies the reporting skill and persisted-draft handoff. Its publication finalized after the normal
 workspace build/typecheck gate passed; the host pin was adopted from that
 publication receipt.
 
@@ -106,3 +99,5 @@ authoring workspaces and preserved concurrent upstream changes; rejected stale
 reviews were not published and no force push was used.
 
 The conversational reporting follow-up passed 41 focused host tests, 59 shell tests, host TypeScript, and Base plus System desktop/mobile projection typechecks. A real headless agent saved substantial narrative without submitting when asked to save only (`st_0ac7420b1a3f422897fc103d9b5d9102`), with zero failed tool calls. Submission tests verify targeted approval while automatic reporting is off, ownership/digest checks, denial, and edits or cancellation while approval is pending. Large narrative handoff preserves the full selected content and uses only a draft reference in the launch prompt.
+
+The simplified consent follow-up passed 61 reporting/audit tests and the System desktop/mobile composition typecheck. Coverage includes reusing both on and off server choices without another dialog, retrying inherited-choice persistence without a consent question, and changing both capture locations through the single settings control. System v0.3.73 completed the canonical protected publication build/typecheck gate; the packaged pin comes from its actual receipt.

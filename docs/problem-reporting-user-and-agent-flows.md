@@ -6,31 +6,13 @@ Status: implementation specification, 2026-09-29. Companion to
 
 ## 1. Mandatory first-use choice
 
-Use one shell-owned first-start dialog backed by the host consent API. It
-combines device and connected-server reporting in one decision and appears
-before the unit audit. A saved device decision suppresses subsequent separate
-prompts; undecided server reporting is then handled in the unit audit using the
-previous choice as its default. Persisting the first choice is required to
-dismiss the initial dialog. Either answer permits ordinary use.
+Use one shell-owned first-start dialog backed by the host consent API, before the unit audit. Users make one reporting choice covering app/browser capture and workspace/agent capture. If either already has a saved choice, carry it over to the undecided capture location without showing another consent prompt. Reconnect follows the same rule. Failed propagation offers retry without asking the question again.
 
-Suggested copy:
+The complete user-facing explanation is two sentences:
 
-> **Help improve vibestudio?**
->
-> You can automatically send small technical reports when vibestudio itself fails.
-> They include product versions, platform, error codes, product stack locations,
-> and a random installation identifier. They do not include your chats, files,
-> screenshots, raw logs, or agent-written reports.
->
-> You can change this in Settings → Problem reporting. You can also report a
-> specific problem at any time and review its contents before sending.
+> Share automatic error reports and anonymous usage statistics to help improve Vibestudio. Reports use a random device identifier; chat, code, and screenshots are excluded, and you can turn sharing off anytime.
 
-Actions: **Enable automatic reports** and **Keep automatic reports off**, with
-equal prominence and no preselected choice. Include a concise “What is sent?”
-expandable example and destination/retention policy. Off is a real successful
-choice, not a warning or degraded mode. Escape/backdrop does not silently pick
-on or off; normal app quit remains available. If the app quits undecided,
-sharing remains off and the choice returns on next first-use entry.
+Actions: **Enable automatic reports** and **Keep automatic reports off**, with equal prominence. There is no expanded technical disclosure block or separate server-reporting section. Either answer permits ordinary use; Escape/backdrop does not choose on or off, and quitting undecided leaves reporting off.
 
 Reporting requires no account, login, enrollment, or submission-key configuration. A local sharing choice remains usable offline; connection state is distinct from consent.
 
@@ -46,12 +28,7 @@ no writes. If those choices differ, display a mixed checkbox and preserve both
 unless the user edits it. The preference remains per installation/user across
 workspaces; the audit must clearly state this shared scope.
 
-Headless setup can still record consent through trusted CLI access. A first
-desktop connection uses the same combined initial prompt; it does not produce a
-second server dialog. If device consent already exists, the unit audit handles
-any undecided server choice using that saved default. Reconnect refreshes the
-canonical preference without opening another standalone reporting prompt.
-Agents and environment variables cannot answer the user's reporting choice.
+Headless setup can record the current user's choice through trusted CLI access. A desktop inherits that saved choice without another dialog. A saved desktop choice similarly initializes an undecided connected server. Agents and environment variables cannot invent a reporting choice.
 
 ## 2. Settings and reporting status
 
@@ -59,8 +36,8 @@ Add **Problem reporting** to existing settings, opening the user's current
 capture-installation settings rather than a workspace-wide shared preference.
 Show:
 
-- Automatic reports: On/Off; exact destination and applicable policy version.
-- “What is sent?” with the automatic field list and a representative bundle.
+- One **Share improvement information** control applying the choice to all connected capture locations.
+- The same two-sentence explanation used at first start.
 - Connection state separately: online, offline, paused, or waiting to retry; no user setup.
 - Current local queue counts, last receipt time, and capture/suppression counts.
 - **Report a problem**, **View my reports**, **Clear local report data**, and
@@ -73,13 +50,7 @@ failures and does not silently send historical local evidence. Local queue
 counts/status update after disconnect/reconnect from the canonical store;
 events are invalidation hints, not an alternate source of truth.
 
-The client cannot change another user's reporting choice. Connected-server
-consent is a separately labelled per-user setting and applies across that user's
-workspaces on the server. Device and server decisions never implicitly enable
-each other, and a saved server choice is not requested again for each workspace.
-Explain that
-local operational logs continue to exist for recovery; “Off” refers to external
-automatic sharing. Export/clear actions remain available while offline.
+The client cannot change another user's reporting choice. Capture stores remain scoped to the installation and authenticated user on the connected server; these are internal collection boundaries rather than separate user choices. One settings action updates both, and a saved choice initializes an undecided store. Legacy different choices remain untouched until an explicit edit, represented by the single mixed checkbox. The full collection, storage, and retention contract belongs in developer documentation rather than the consent dialog.
 
 ## 3. An obvious manual reporting path
 
