@@ -310,6 +310,12 @@ function validIndex(value: unknown): value is AuthorityDependencyIndex {
     index.complete === true &&
     index.consumerInputs instanceof Map &&
     index.providersByQuery instanceof Map &&
+    [...index.providersByQuery.values()].every(
+      (provider) =>
+        !!provider &&
+        typeof provider.providerUnit === "string" &&
+        typeof provider.resolutionDigest === "string"
+    ) &&
     index.consumersByQuery instanceof Map &&
     index.consumersByProviderUnit instanceof Map &&
     index.blockingConsumers instanceof Set &&

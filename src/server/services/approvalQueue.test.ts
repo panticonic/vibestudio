@@ -50,6 +50,39 @@ function unitInstallReviewRequest(
 }
 
 describe("approvalQueue", () => {
+  it("requires distinct one-shot consent for every display request", async () => {
+    const { queue } = createQueue();
+    const request = {
+      kind: "browser-permission" as const,
+      callerId: "panel:browser",
+      callerKind: "panel" as const,
+      repoPath: "",
+      effectiveVersion: "browser-site",
+      ownerUserId: "alice",
+      workspaceId: "workspace",
+      environmentKey: "environment",
+      origin: "https://example.com",
+      topLevelUrl: "https://example.com/",
+      capabilities: ["screen-capture" as const],
+      panelId: "panel:one",
+      deviceLabel: "Screen capture",
+    };
+    const first = queue.requestBrowserPermission!(request);
+    const second = queue.requestBrowserPermission!(request);
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(2);
+    await expect(queue.resolve(pending[0]!.approvalId, "always")).rejects.toThrow(
+      /does not accept/
+    );
+    await expect(queue.resolve(pending[0]!.approvalId, "session")).rejects.toThrow(
+      /does not accept/
+    );
+    await queue.resolve(pending[0]!.approvalId, "once");
+    await expect(first).resolves.toBe("once");
+    expect(queue.listPending()).toHaveLength(1);
+    await queue.resolve(pending[1]!.approvalId, "dismiss");
+    await expect(second).resolves.toBe("dismiss");
+  });
   it("accepts remembered identity consent only when the reviewed capability offers it", async () => {
     const { queue } = createQueue();
     const input = {

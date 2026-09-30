@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 
 export const INFRASTRUCTURE_CACHE_VERSION = 1;
@@ -265,6 +266,23 @@ export function buildInfrastructurePackages({
   log = console.log,
   toolchainDigest,
 } = {}) {
+  // Output discovery, replacement, and cache publication are one transaction.
+  // An OS-backed SQLite lock also releases on process death; PID files and
+  // stale-lock timers cannot provide that ownership guarantee.
+  const coordinationRoot = path.join(cwd, ".cache");
+  fs.mkdirSync(coordinationRoot, { recursive: true });
+  const coordination = new DatabaseSync(path.join(coordinationRoot, "infrastructure-build.sqlite"));
+  try {
+    coordination.exec("PRAGMA busy_timeout = 600000; BEGIN IMMEDIATE");
+    return buildInfrastructurePackagesLocked({ cwd, run, log, toolchainDigest });
+  } finally {
+    coordination.close();
+  }
+}
+
+function buildInfrastructurePackagesLocked({ cwd, run, log, toolchainDigest }) {
+  // Reinspect only after acquisition: a preceding builder may have satisfied
+  // the exact inputs while this caller was waiting.
   const plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest });
   if (plan.dirty.length === 0) {
     log(`[build] Reusing ${plan.states.length} verified infrastructure package builds.`);

@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildInfrastructurePackages,
@@ -64,6 +66,53 @@ afterEach(() => {
 });
 
 describe("infrastructure package cache", () => {
+  it("serializes independent builders and reuses the preceding exact output", async () => {
+    const cwd = fixture();
+    const moduleUrl = pathToFileURL(path.resolve("scripts/infrastructure-package-cache.mjs")).href;
+    const run = () =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `
+        import { buildInfrastructurePackages } from ${JSON.stringify(moduleUrl)};
+        import * as fs from 'node:fs';
+        import * as path from 'node:path';
+        const cwd = ${JSON.stringify(cwd)};
+        const result = buildInfrastructurePackages({cwd, toolchainDigest:'toolchain', log:()=>{}, run:()=>{
+          fs.appendFileSync(path.join(cwd,'executions'), 'build\\n');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,200);
+          for (const name of ['base','consumer']) {
+            const destination=path.join(cwd,'packages',name,'dist');
+            fs.mkdirSync(destination,{recursive:true});
+            fs.writeFileSync(path.join(destination,'index.js'),'verified output');
+          }
+        }});
+        console.log(JSON.stringify(result));
+      `,
+          ],
+          { stdio: ["ignore", "pipe", "pipe"] }
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("error", reject);
+        child.on("close", (code) => (code === 0 ? resolve(stdout) : reject(new Error(stderr))));
+      });
+    const results = (await Promise.all([run(), run()])).map((output) => JSON.parse(output));
+    expect(results.map((result) => result.built.length).sort()).toEqual([0, 2]);
+    expect(fs.readFileSync(path.join(cwd, "executions"), "utf8")).toBe("build\n");
+    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual(
+      []
+    );
+  });
   it("reuses only exact input and output bytes", () => {
     const cwd = fixture();
     const initial = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
@@ -96,6 +145,33 @@ describe("infrastructure package cache", () => {
       "@vibestudio/base",
       "@vibestudio/consumer",
     ]);
+  });
+
+  it("releases build ownership after a failed compiler without publishing a cache receipt", () => {
+    const cwd = fixture();
+    expect(() =>
+      buildInfrastructurePackages({
+        cwd,
+        toolchainDigest: "toolchain",
+        log: () => {},
+        run: () => {
+          throw new Error("compiler failed");
+        },
+      })
+    ).toThrow("compiler failed");
+    expect(
+      inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty
+    ).toHaveLength(2);
+    const recovered = buildInfrastructurePackages({
+      cwd,
+      toolchainDigest: "toolchain",
+      log: () => {},
+      run: () => {
+        for (const name of ["base", "consumer"])
+          write(cwd, `packages/${name}/dist/index.js`, "verified");
+      },
+    });
+    expect(recovered.built).toHaveLength(2);
   });
 
   it("fails closed for missing outputs and shared build-input changes", () => {

@@ -20,7 +20,7 @@ export interface AuthorityDependencyIndex {
       serviceQueries: ReadonlySet<string>;
     }
   >;
-  providersByQuery: ReadonlyMap<string, { providerUnit: string; catalogDigest: string }>;
+  providersByQuery: ReadonlyMap<string, { providerUnit: string; resolutionDigest: string }>;
   consumersByQuery: ReadonlyMap<string, ReadonlySet<string>>;
   consumersByProviderUnit: ReadonlyMap<string, ReadonlySet<string>>;
   blockingConsumers: ReadonlySet<string>;
@@ -101,7 +101,7 @@ async function authorityDependencyIndexFromConsumerQueries(input: {
   >();
   const consumersByQuery = new Map<string, Set<string>>();
   const consumersByProviderUnit = new Map<string, Set<string>>();
-  const providersByQuery = new Map<string, { providerUnit: string; catalogDigest: string }>();
+  const providersByQuery = new Map<string, { providerUnit: string; resolutionDigest: string }>();
   for (const consumer of input.consumers) {
     for (const query of consumer.serviceQueries) {
       const byQuery = consumersByQuery.get(query) ?? new Set<string>();
@@ -122,12 +122,17 @@ async function authorityDependencyIndexFromConsumerQueries(input: {
     // protocol aliases. Besides avoiding repeated catalog work, this prevents
     // aliases from observing different transient resolution outcomes.
     const resolution = await input.environment.resolveService(binding.name);
-    const catalogDigest =
-      resolution.kind === "resolved" ? resolution.service.catalog.digest : "invalid";
+    // A binding's target, principals and presentation are authority inputs too;
+    // provider code alone cannot certify that a consumer is unaffected.
+    const resolutionDigest = sha256Canonical({
+      binding,
+      resolution: resolution.kind,
+      catalogDigest: resolution.kind === "resolved" ? resolution.service.catalog.digest : "invalid",
+    });
     for (const query of keys) {
       providersByQuery.set(query, {
         providerUnit,
-        catalogDigest,
+        resolutionDigest,
       });
     }
     for (const query of keys) {
@@ -223,4 +228,23 @@ export function authorityConsumersForProviderChanges(
     for (const consumer of index.blockingConsumers) consumers.add(consumer);
   }
   return consumers;
+}
+
+/** Compare sealed query resolutions, including additions, removals and aliases. */
+export function changedAuthorityQueries(
+  before: AuthorityDependencyIndex,
+  after: AuthorityDependencyIndex
+): Set<string> {
+  return new Set(
+    [...new Set([...before.providersByQuery.keys(), ...after.providersByQuery.keys()])].filter(
+      (query) => {
+        const previous = before.providersByQuery.get(query);
+        const next = after.providersByQuery.get(query);
+        return (
+          previous?.providerUnit !== next?.providerUnit ||
+          previous?.resolutionDigest !== next?.resolutionDigest
+        );
+      }
+    )
+  );
 }

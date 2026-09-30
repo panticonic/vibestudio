@@ -1,3 +1,4 @@
+import { browserPermissionDecisions } from "@vibestudio/shared/approvals";
 import { createHash } from "node:crypto";
 import type { AuthorityGrant } from "@vibestudio/rpc";
 import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approvals";
@@ -84,6 +85,11 @@ export class BrowserPermissionGrantProjection {
     sessionEpoch: string,
     grants: BrowserPermissionGrant[]
   ): void {
+    if (
+      grants.some((grant) => grant.capability === "screen-capture" && grant.decision === "allow")
+    ) {
+      throw new Error("Screen capture permission cannot be remembered");
+    }
     const subject = userSubject(ownerUserId);
     for (const grant of grants) {
       this.revokeMatching(
@@ -234,7 +240,10 @@ export function createBrowserPermissionsService(deps: {
             ),
           };
         }
-        if (existing.every((grant) => grant?.decision === "allow")) {
+        if (
+          !capabilities.includes("screen-capture") &&
+          existing.every((grant) => grant?.decision === "allow")
+        ) {
           return {
             decision: "session" as const,
             granted: true,
@@ -264,6 +273,9 @@ export function createBrowserPermissionsService(deps: {
           deviceLabel: request.deviceLabel,
           signal: ctx.signal,
         });
+        if (!browserPermissionDecisions(capabilities).includes(decision)) {
+          throw new Error(`Browser permission does not accept decision '${decision}'`);
+        }
         const granted = decision === "once" || decision === "session" || decision === "always";
         if (decision === "session" || decision === "always" || decision === "block") {
           deps.grantStore.remember(
@@ -321,6 +333,7 @@ function parseBrowserGrant(grant: AuthorityGrant): ParsedBrowserGrant | null {
   }
   const capability = grant.capability.slice(CAPABILITY_PREFIX.length);
   if (!isCapability(capability)) return null;
+  if (capability === "screen-capture" && grant.effect !== "deny") return null;
   const encoded = grant.resource.key.slice(RESOURCE_PREFIX.length).split(":");
   if (encoded.length !== 3) return null;
   try {
@@ -366,6 +379,7 @@ function isCapability(value: unknown): value is BrowserPermissionCapability {
   return [
     "camera",
     "microphone",
+    "screen-capture",
     "geolocation",
     "notifications",
     "downloads",

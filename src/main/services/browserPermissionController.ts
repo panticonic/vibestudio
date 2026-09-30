@@ -1,3 +1,4 @@
+import { requestDeviceMediaAccess } from "./deviceMediaAccess.js";
 import { scopedNativePartition } from "../nativeStorageScope.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -42,6 +43,7 @@ const SENSITIVE_PERMISSIONS = new Set([
   "geolocation",
   "notifications",
   "media",
+  "display-capture",
   "clipboard-read",
   "clipboard-sanitized-write",
 ]);
@@ -78,6 +80,7 @@ export class BrowserPermissionController {
         | "getViewInfo"
       > | null;
       isTargetUnderAutomation(targetId: string): boolean;
+      requestDeviceMediaAccess?: typeof requestDeviceMediaAccess;
     }
   ) {
     this.client = createTypedServiceClient(
@@ -150,6 +153,7 @@ export class BrowserPermissionController {
   isGranted(origin: string, capability: BrowserPermissionCapability): boolean {
     const normalized = browserSecurityOrigin(origin, "notification");
     return Boolean(
+      capability !== "screen-capture" &&
       normalized.kind === "tuple" &&
       this.grants.get(grantKey(normalized.serialized, capability))?.decision === "allow"
     );
@@ -203,6 +207,7 @@ export class BrowserPermissionController {
     // user-activation path. A Copy action must not require read capability.
     if (permission === "clipboard-sanitized-write") return true;
     if (isContentOverlay || !panelId) return false;
+    if (permission === "display-capture") return false; // Every native request needs consent.
     if (deniedPeripheralCapability(capabilities)) return false;
     if (this.hasApprovedUnitCapability(contents, capabilities, origin.serialized)) return true;
     if (!this.mayRequest(contents, capabilities, origin.serialized)) return false;
@@ -252,6 +257,7 @@ export class BrowserPermissionController {
       topLevelOrigin.kind !== "tuple" ||
       origin.serialized !== topLevelOrigin.serialized ||
       capabilities.length === 0 ||
+      (permission === "display-capture" && details.isMainFrame === false) ||
       (panelId != null && this.isAutomationTainted(contents, panelId))
     ) {
       this.notifyDenied(
@@ -286,28 +292,100 @@ export class BrowserPermissionController {
       this.notifyDenied(
         panelId,
         [osDenied],
-        `${capabilityLabel(osDenied)} access is disabled in system privacy settings.`
+        `${capabilityLabel(osDenied)} access is disabled. Open System Settings → Privacy & Security → ${capabilityLabel(osDenied)}, enable Vibestudio, then retry.`
       );
       finish(false);
       return;
     }
-    if (this.hasApprovedUnitCapability(contents, capabilities, origin.serialized)) {
-      finish(true);
-      return;
-    }
-    if (!this.mayRequest(contents, capabilities, origin.serialized)) {
+    const unitApproved = this.hasApprovedUnitCapability(contents, capabilities, origin.serialized);
+    if (!unitApproved && !this.mayRequest(contents, capabilities, origin.serialized)) {
       this.notifyDenied(panelId, capabilities, "This page did not declare the requested access.");
       finish(false);
       return;
     }
 
-    void this.requestOriginCapabilities(
-      contents,
-      panelId,
-      topLevelUrl,
-      origin.serialized,
-      capabilities
-    ).then(finish);
+    if (permission !== "media" && permission !== "display-capture") {
+      if (unitApproved) finish(true);
+      else
+        void this.requestOriginCapabilities(
+          contents,
+          panelId,
+          topLevelUrl,
+          origin.serialized,
+          capabilities
+        ).then(finish);
+      return;
+    }
+
+    // Keep the complete approval + OS-consent operation bound to this document,
+    // including reloads to the same URL while a macOS prompt is open.
+    let cancelled = false;
+    const cancel = () => {
+      cancelled = true;
+      finish(false);
+    };
+    const onNavigation = (
+      _event: Electron.Event,
+      _url: string,
+      inPlace: boolean,
+      main: boolean
+    ) => {
+      if (main && !inPlace) cancel();
+    };
+    contents.on("did-start-navigation", onNavigation);
+    contents.once("destroyed", cancel);
+    void (async () => {
+      try {
+        const granted =
+          unitApproved && !capabilities.includes("screen-capture")
+            ? true
+            : await this.requestOriginCapabilities(
+                contents,
+                panelId,
+                topLevelUrl,
+                origin.serialized,
+                capabilities
+              );
+        if (
+          !granted ||
+          cancelled ||
+          this.stopped ||
+          contents.isDestroyed() ||
+          this.isAutomationTainted(contents, panelId)
+        )
+          return finish(false);
+        if (
+          !(await (this.deps.requestDeviceMediaAccess ?? requestDeviceMediaAccess)(capabilities))
+        ) {
+          this.notifyDenied(
+            panelId,
+            capabilities,
+            "Device access is disabled. Open System Settings → Privacy & Security, enable Vibestudio for the camera or microphone, then retry."
+          );
+          return finish(false);
+        }
+        finish(
+          !cancelled &&
+            !this.stopped &&
+            !contents.isDestroyed() &&
+            contents.getURL() === topLevelUrl &&
+            !this.isAutomationTainted(contents, panelId)
+        );
+      } catch (error) {
+        if (!cancelled)
+          this.notifyDenied(
+            panelId,
+            capabilities,
+            error instanceof Error ? error.message : String(error)
+          );
+        finish(false);
+      } finally {
+        if (!contents.isDestroyed()) {
+          contents.off("did-start-navigation", onNavigation);
+          contents.off("destroyed", cancel);
+        }
+      }
+    })();
   };
 
   /**
@@ -352,10 +430,10 @@ export class BrowserPermissionController {
     const onNavigation = (
       _event: Electron.Event,
       _url: string,
-      _isInPlace: boolean,
+      isInPlace: boolean,
       isMainFrame: boolean
     ) => {
-      if (isMainFrame) cancel();
+      if (isMainFrame && !isInPlace) cancel();
     };
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", cancel);
@@ -527,6 +605,7 @@ export function capabilitiesForRequest(
   permission: string,
   details: PermissionRequest
 ): BrowserPermissionCapability[] {
+  if (permission === "display-capture") return ["screen-capture"];
   if (permission === "geolocation" || permission === "notifications") return [permission];
   if (permission === "clipboard-read" || permission === "clipboard-sanitized-write") {
     return ["clipboard"];
@@ -544,6 +623,7 @@ export function capabilitiesForCheck(
   permission: string,
   details: PermissionCheckHandlerHandlerDetails
 ): BrowserPermissionCapability[] {
+  if (permission === "display-capture") return ["screen-capture"];
   if (permission === "geolocation" || permission === "notifications") return [permission];
   if (permission === "clipboard-read" || permission === "clipboard-sanitized-write") {
     return ["clipboard"];
@@ -588,6 +668,8 @@ function capabilityLabel(capability: BrowserPermissionCapability): string {
       return "Camera";
     case "microphone":
       return "Microphone";
+    case "screen-capture":
+      return "Screen capture";
     case "geolocation":
       return "Location";
     case "notifications":

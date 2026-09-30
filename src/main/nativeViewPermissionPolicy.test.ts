@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy";
 
 describe("native permission fallback", () => {
+  it("does not treat window-management as display-capture authority", () => {
+    const manager = {
+      isContentOverlayWebContentsId: () => false,
+      findViewIdByWebContentsId: () => "app",
+      getViewInfo: () => ({ type: "app", capabilities: ["window-management"] }),
+    };
+    expect(nativeViewMayUsePermission(manager as never, 42, "display-capture")).toBe(false);
+    expect(nativeViewMayUsePermission(manager as never, 42, "pointerLock")).toBe(true);
+  });
   function views(overlay = true) {
     return {
       isContentOverlayWebContentsId: (id: number) => overlay && id === 42,

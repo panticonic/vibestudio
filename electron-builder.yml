@@ -84,6 +84,7 @@ mac:
   icon: build-resources/icon.icns
   extendInfo:
     NSCameraUsageDescription: "Allow websites you approve in Vibestudio to use the camera."
+    NSAudioCaptureUsageDescription: "Allow websites you approve in Vibestudio to share system audio."
     NSMicrophoneUsageDescription: "Allow websites you approve in Vibestudio to use the microphone."
     NSLocationWhenInUseUsageDescription: "Allow websites you approve in Vibestudio to use your location."
 

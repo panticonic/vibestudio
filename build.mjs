@@ -512,6 +512,7 @@ const preloadConfigs = [
   "autofillPreload",
   "autofillOverlayPreload",
   "browserPrivacyPreload",
+  "displayCapturePreload",
   "shellOverlayPreload",
   "contentOverlayPreload",
 ].map(createPreloadConfig);
@@ -613,6 +614,7 @@ const bootstrapConfig = {
 function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
+  fs.copyFileSync("src/main/displayCapture.html", "dist/displayCapture.html");
   // sql.js resolves its default WASM payload beside the executing bundle.
   // Both server artifacts bundle the JavaScript loader into dist/, so retain
   // that package-relative contract by placing the matching runtime there too.

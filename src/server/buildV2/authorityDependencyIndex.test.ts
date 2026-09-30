@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   authorityDependencyIndexFromDeclarations,
   authorityDependencyIndexFromFacts,
+  changedAuthorityQueries,
 } from "./authorityDependencyIndex.js";
 
 describe("authority dependency index completeness", () => {
@@ -110,10 +111,66 @@ describe("authority dependency index completeness", () => {
           query,
           {
             providerUnit: "workers/workspace-source",
-            catalogDigest: "catalog:workspace-source",
+            resolutionDigest: expect.any(String),
           },
         ])
       )
+    );
+    const retargetedBinding = {
+      ...binding,
+      target: { ...binding.target, defaultObjectKey: "another-workspace" },
+    };
+    const retargeted = await authorityDependencyIndexFromFacts({
+      stateHash: "state:retargeted",
+      epoch: result.epoch,
+      consumers: [],
+      environment: {
+        stateHash: "state:retargeted",
+        digest: "environment:retargeted",
+        services: [retargetedBinding],
+        async resolveService(query) {
+          const previous = await resolveService(query);
+          return { ...previous, service: { ...previous.service, binding: retargetedBinding } };
+        },
+      },
+    });
+    expect(changedAuthorityQueries(result, retargeted)).toEqual(
+      new Set([binding.name, ...binding.protocols])
+    );
+  });
+
+  it("selects only changed query resolutions, including new and removed aliases", async () => {
+    const empty = await authorityDependencyIndexFromFacts({
+      stateHash: "state:empty",
+      epoch: { analyzerVersion: "a", rpcSchemaVersion: "s" },
+      consumers: [],
+      environment: {
+        stateHash: "state:empty",
+        digest: "empty",
+        services: [],
+        async resolveService(query) {
+          return { kind: "missing", query };
+        },
+      },
+    });
+    const before = {
+      ...empty,
+      providersByQuery: new Map([
+        ["unchanged", { providerUnit: "workers/common", resolutionDigest: "same" }],
+        ["removed", { providerUnit: "workers/old", resolutionDigest: "old" }],
+        ["retargeted", { providerUnit: "workers/common", resolutionDigest: "old-target" }],
+      ]),
+    };
+    const after = {
+      ...empty,
+      providersByQuery: new Map([
+        ["unchanged", { providerUnit: "workers/common", resolutionDigest: "same" }],
+        ["added", { providerUnit: "workers/new", resolutionDigest: "new" }],
+        ["retargeted", { providerUnit: "workers/common", resolutionDigest: "new-target" }],
+      ]),
+    };
+    expect(changedAuthorityQueries(before, after)).toEqual(
+      new Set(["removed", "retargeted", "added"])
     );
   });
 });

@@ -92,6 +92,10 @@ import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
+import {
+  newlyReferencedWorkerSources,
+  workspaceWorkerClassReferences,
+} from "./workspaceWorkerClassReferences.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   assertWorkspaceHostLaunchBinding,
@@ -2886,31 +2890,20 @@ async function main() {
         const candidateDecls = buildWorkspaceDeclarations(candidateConfig);
         const buildSystem = assertPresent(buildSystemInstance);
         try {
-          const classesBySource = new Map<string, Set<string>>();
-          const addClass = (source: string, className: string): void => {
-            let classes = classesBySource.get(source);
-            if (!classes) classesBySource.set(source, (classes = new Set()));
-            classes.add(className);
-          };
-          for (const singleton of candidateDecls.singletons.all()) {
-            addClass(singleton.source, singleton.className);
-          }
-          for (const service of candidateDecls.services) {
-            if (service.durableObject) addClass(service.source, service.durableObject.className);
-          }
-          for (const route of candidateDecls.routes) {
-            if (route.durableObject) addClass(route.source, route.durableObject.className);
-          }
+          const classesBySource = workspaceWorkerClassReferences(candidateDecls);
           const unitNames = await buildSystem.listAffectedBuildUnits(
             stateHash,
             changedPaths,
             signal
           );
           // A manifest-only change can expose a previously undeclared class
-          // without changing its worker files. Probe every referenced source
-          // against the exact candidate state in that case.
+          // without changing its worker files. Check new source/class pairs;
+          // unchanged references do not invalidate their published schema proof.
           if (changedPaths.some((changed) => changed.startsWith("meta/"))) {
-            for (const source of classesBySource.keys()) {
+            for (const source of newlyReferencedWorkerSources(
+              workspaceWorkerClassReferences(workspaceDecls),
+              classesBySource
+            )) {
               if (!unitNames.includes(source)) unitNames.push(source);
             }
           }

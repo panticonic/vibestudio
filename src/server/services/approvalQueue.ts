@@ -6,6 +6,7 @@
  * privileged setup prompts all share this user-decision rendezvous point.
  */
 
+import { browserPermissionDecisions } from "@vibestudio/shared/approvals";
 import { randomUUID } from "node:crypto";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
@@ -1129,6 +1130,11 @@ export function createApprovalQueue(deps: {
     if (req.kind === "browser-permission") {
       if (req.requestedByUserId && req.requestedByUserId !== req.ownerUserId)
         throw new Error("Browser approval owner and requester disagree");
+      // Each native display request needs its own explicit consent. Coalescing
+      // could authorize an unrelated legacy full-desktop capture with one click.
+      if (req.capabilities.includes("screen-capture")) {
+        return canonicalKey(["browser-display-request", randomUUID()]);
+      }
       return canonicalKey([
         "browser-permission",
         req.ownerUserId,
@@ -1985,7 +1991,7 @@ export function createApprovalQueue(deps: {
       }
       if (
         entry.approval.kind === "browser-permission" &&
-        !["once", "session", "always", "block", "dismiss"].includes(decision)
+        !browserPermissionDecisions(entry.approval.capabilities).includes(decision)
       ) {
         throw new Error(`Browser permission approval does not accept decision '${decision}'`);
       }
