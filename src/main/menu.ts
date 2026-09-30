@@ -1,5 +1,5 @@
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
-import { app, dialog, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
+import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
 import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
@@ -80,34 +80,12 @@ async function archiveFocusedPanel(mainWindow: Electron.BaseWindow | null): Prom
   const workspace = resolveMenuWorkspace();
   const focusedId = workspace?.registry.getFocusedPanelId();
   if (focusedId && workspace) {
-    const panel = workspace.registry.getPanel(focusedId);
-    const descendantCount = panel ? countPanelDescendants(panel) : 0;
-    if (descendantCount > 0) {
-      const result = await dialog.showMessageBox({
-        type: "warning",
-        title: "Close panel tree?",
-        message: `Close “${panel?.title ?? "this panel"}” and ${descendantCount} child panel${descendantCount === 1 ? "" : "s"}?`,
-        detail: "All panels below it will also be archived.",
-        buttons: ["Cancel", "Close panels"],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      });
-      if (result.response !== 1) return;
-    }
     await workspace.orchestrator.closePanel(focusedId);
   } else {
     // No focused panel: the app-menu entry falls back to closing the window.
     // The hamburger has no window handle and simply does nothing.
     mainWindow?.close();
   }
-}
-
-function countPanelDescendants(panel: { children: Array<{ children: unknown[] }> }): number {
-  return panel.children.reduce(
-    (count, child) => count + 1 + countPanelDescendants(child as never),
-    0
-  );
 }
 
 function reloadFocusedPanel(force = false): void {

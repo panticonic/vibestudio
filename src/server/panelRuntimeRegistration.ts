@@ -151,7 +151,9 @@ export interface CommonDeps {
    * changes (any client). The panel-tree bridge uses it to re-sync its in-memory
    * mirror and re-broadcast `panel-tree-invalidated` so every client converges.
    */
-  registerSlotStateListener?: (listener: () => void) => () => void;
+  registerSlotStateListener?: (
+    listener: (change?: import("./services/workspaceStateService.js").SlotStateChange) => void
+  ) => () => void;
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
@@ -168,7 +170,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     const eventService = deps.eventService;
     const registerSlotStateListener = deps.registerSlotStateListener;
     let invalidationQueued = false;
+    const removedSlotIds = new Set<string>();
     const publishPanelTreeInvalidation = async (): Promise<void> => {
+      const removed = [...removedSlotIds];
+      removedSlotIds.clear();
       const snapshot = (await deps.dispatcher.dispatch(
         { caller: createHostCaller("server") },
         "workspace-state",
@@ -184,11 +189,16 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         reset: true,
         groups: [],
         changedSlotIds: [],
-        removedSlotIds: [],
+        removedSlotIds: removed,
       };
       eventService.emit("panel-tree-invalidated", event);
     };
-    const schedulePanelTreeInvalidation = () => {
+    const schedulePanelTreeInvalidation = (
+      change?: import("./services/workspaceStateService.js").SlotStateChange
+    ) => {
+      if (change?.kind === "closed") {
+        for (const slotId of change.slotIds) removedSlotIds.add(slotId);
+      }
       if (invalidationQueued) return;
       invalidationQueued = true;
       queueMicrotask(() => {

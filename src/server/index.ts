@@ -6777,7 +6777,7 @@ async function main() {
     }),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     approvalQueue,
-    registerSlotStateListener: (listener: () => void) => {
+    registerSlotStateListener: (listener: (change?: SlotStateChange) => void) => {
       slotStateListeners.add(listener);
       return () => slotStateListeners.delete(listener);
     },

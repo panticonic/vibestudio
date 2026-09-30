@@ -337,7 +337,20 @@ export class PanelTreeCache {
   }
 
   invalidate(event: PanelTreeInvalidation): PanelTreeGroup[] {
-    if (event.revision <= this.revision) return [];
+    // Exact removals remain authoritative when an overlapping query has
+    // already advanced our revision. Retain coherent pages during refresh,
+    // but never retain a slot the server has explicitly closed.
+    const removed = new Set(event.removedSlotIds);
+    for (const group of this.groups.values()) {
+      group.nodes = group.nodes.filter((node) => !removed.has(node.slotId));
+    }
+    for (const [slotId, path] of this.paths) {
+      if (path.value.nodes.some((node) => removed.has(node.slotId))) this.paths.delete(slotId);
+    }
+    if (event.revision <= this.revision) {
+      if (removed.size > 0) this.emit();
+      return [];
+    }
     const missedRevision = this.revision !== 0 && event.revision !== this.revision + 1;
     this.revision = event.revision;
     this.generation += 1;
