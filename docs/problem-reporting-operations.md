@@ -92,11 +92,10 @@ Source development instances use the current configured Base and System
 checkouts. Packaged hosts use `build-resources/workspace-template-release.json`.
 On 2026-09-30 ordinary template inspection, review, and publication produced
 Base `v0.3.58` at `9343aa2e4a88da9f50af9e1072a2eee6cafec283` and System
-`v0.3.69` at `71d4e175dd746c65993c218ee5a116a71020b022`. Their actual
+`v0.3.70` at `33ab644152659b2230bda51b2fefede526fbb2d4`. Their actual
 publication receipts supply the packaged host pins. A main-branch push alone
 does not update those pins. Never substitute fabricated receipts or moving
-branch refs for that release boundary. System `v0.3.69` includes connected
-headless-server first-use consent. Its publication finalized after the normal
+branch refs for that release boundary. System `v0.3.70` includes one combined first-start consent prompt and saved reporting defaults in subsequent unit audits. Its publication finalized after the normal
 workspace build/typecheck gate passed; the host pin was adopted from that
 publication receipt.
 

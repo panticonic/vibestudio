@@ -487,6 +487,7 @@ Authority principals: `code`, `host`, `user`
 | `problemReports.incidents` | Read up to 100 owned local incidents; grouping indicates similarity, not shared causality. |
 | `problemReports.transport` | Trusted native reporting uploader only: forward an exact approved bundle/status/deletion through the existing host credential broker. No secret is returned. |
 | `problemReports.importPrepared` | Copy an explicitly selected frozen report prepared on the connected server into a new local review report. It is a snapshot with provenance, never an editable mirror or automatic submission. |
+| `problemReports.forConversation` | Make a selected owned draft available where the reporting agent runs. Returns its agent-side ID and revision, preserving full narrative and evidence without embedding them in a launch prompt. Never submits or changes consent. |
 | `problemReports.collect` | Collect explicitly selected bounded runtime or server-log evidence into a revision-checked manual draft. Partial, denied, and expired sources remain visible. |
 | `problemReports.serverConsent` | Trusted desktop UI: read this user's independent reporting choice on the connected server, whether locally or remotely hosted. The choice applies across that user's workspaces on that server. Null means there is no separate connected-server choice. |
 | `problemReports.decideServer` | Trusted desktop UI: explicitly change this user's independent reporting choice on the connected server, whether locally or remotely hosted. This never changes the device choice or another user's choice; agents cannot consent. |
@@ -496,7 +497,7 @@ Authority principals: `code`, `host`, `user`
 | `problemReports.get` | Read an owned report draft. |
 | `problemReports.update` | Revision-checked replacement of a manual draft including selected agent narrative and evidence. The host assigns revisions and submission IDs. |
 | `problemReports.prepare` | Sanitize and freeze an exact revision for preview/download. Returns exact canonical bytes and digest. Never sends. |
-| `problemReports.send` | Trusted human shell/CLI only: approve exactly the reviewed frozen revision/digest for upload. |
+| `problemReports.send` | Request submission of an exact prepared revision/digest. Agents wait for a targeted one-time human approval; denial or a changed draft sends nothing. Trusted human callers approve directly. Never changes automatic reporting consent. |
 | `problemReports.history` | Bounded owned report history; no secrets or bundle bytes. |
 | `problemReports.cancel` | Cancel pending delivery of an owned report; accepted reports require remote deletion. |
 | `problemReports.resume` | Trusted human shell/CLI only: resume a paused owned submission after reporting access is restored. |

@@ -60,7 +60,7 @@ export type ShellSurfaceDescriptor =
       /** Pre-filled compose text. The user still presses send. */
       prompt?: string;
     }
-  | { kind: "problem-report"; prepared?: { reportId: string; revision: number; digest: string } }
+  | { kind: "problem-report" }
   | { kind: "about"; page: string }
   | { kind: "panel-command"; panelId: string; commandId: string };
 
@@ -126,7 +126,7 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     settings: ["kind", "section", "workspaceId"],
     "workspace-chooser": ["kind", "template", "sourceUrl"],
     "command-agent": ["kind", "panelId", "mode", "prompt"],
-    "problem-report": ["kind", "prepared"],
+    "problem-report": ["kind"],
     about: ["kind", "page"],
     "panel-command": ["kind", "panelId", "commandId"],
   };
@@ -199,32 +199,8 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
         ...(prompt !== undefined ? { prompt: prompt as string } : {}),
       };
     }
-    case "problem-report": {
-      const prepared = record["prepared"];
-      if (prepared === undefined) return { kind: "problem-report" };
-      if (!prepared || typeof prepared !== "object" || Array.isArray(prepared))
-        throw new Error("Prepared report reference required");
-      const value = prepared as Record<string, unknown>;
-      if (
-        Object.keys(value).some((key) => !["reportId", "revision", "digest"].includes(key)) ||
-        typeof value["reportId"] !== "string" ||
-        !/^[a-f0-9-]{36}$/.test(value["reportId"]) ||
-        typeof value["revision"] !== "number" ||
-        !Number.isSafeInteger(value["revision"]) ||
-        value["revision"] < 1 ||
-        typeof value["digest"] !== "string" ||
-        !/^[a-f0-9]{64}$/.test(value["digest"])
-      )
-        throw new Error("Invalid prepared report reference");
-      return {
-        kind: "problem-report",
-        prepared: {
-          reportId: value["reportId"],
-          revision: value["revision"],
-          digest: value["digest"],
-        },
-      };
-    }
+    case "problem-report":
+      return { kind: "problem-report" };
     case "about": {
       const page = record["page"];
       if (typeof page !== "string" || !PAGE_RE.test(page) || page.length > 64) {
@@ -264,7 +240,6 @@ function encodeParams(descriptor: ShellSurfaceDescriptor): string {
       if (descriptor.prompt !== undefined) pairs.push(["prompt", descriptor.prompt]);
       break;
     case "problem-report":
-      if (descriptor.prepared) pairs.push(["prepared", JSON.stringify(descriptor.prepared)]);
       break;
     case "about":
       pairs.push(["page", descriptor.page]);

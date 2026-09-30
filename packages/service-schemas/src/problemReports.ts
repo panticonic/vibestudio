@@ -122,6 +122,14 @@ export const problemReportsMethods = defineServiceMethods({
     returns: report,
     access: { sensitivity: "write" },
   },
+  forConversation: {
+    ...local,
+    description:
+      "Make a selected owned draft available where the reporting agent runs. Returns its agent-side ID and revision, preserving full narrative and evidence without embedding them in a launch prompt. Never submits or changes consent.",
+    args: z.tuple([id, z.number().int().positive()]),
+    returns: z.object({ reportId: id, revision: z.number().int().positive() }),
+    access: { sensitivity: "write" },
+  },
   collect: {
     ...local,
     description:
@@ -213,7 +221,7 @@ export const problemReportsMethods = defineServiceMethods({
   send: {
     ...local,
     description:
-      "Trusted human shell/CLI only: approve exactly the reviewed frozen revision/digest for upload.",
+      "Request submission of an exact prepared revision/digest. Agents wait for a targeted one-time human approval; denial or a changed draft sends nothing. Trusted human callers approve directly. Never changes automatic reporting consent.",
     args: z.tuple([id, z.number().int().positive(), z.string().regex(/^[a-f0-9]{64}$/)]),
     returns: z.object({ queued: z.literal(true) }),
     access: { sensitivity: "write" },

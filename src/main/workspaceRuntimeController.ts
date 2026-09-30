@@ -1,3 +1,4 @@
+import { reportDraftContent } from "@vibestudio/service-schemas/problemReportBundle";
 import {
   observeMainProcessErrors,
   readRetainedMainProcessErrors,
@@ -257,6 +258,15 @@ export function createDesktopWorkspaceRuntime(deps: {
   container.registerRpc(
     createProblemReportsService({
       store: reportingStore,
+      forwardDraft: async (value) => {
+        const draft = await reportingRemote.create(value.problem);
+        const updated = await reportingRemote.update(
+          draft.id,
+          draft.revision,
+          reportDraftContent(value)
+        );
+        return { reportId: draft.id, revision: updated.revision };
+      },
       usage: reportingUsage,
       connectedServer: {
         consent: () => reportingRemote.consent(),

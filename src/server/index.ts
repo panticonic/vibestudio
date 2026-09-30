@@ -1,3 +1,4 @@
+import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
 /**
  * vibestudio-server — the standalone Vibestudio server entry point.
  *
@@ -3602,6 +3603,58 @@ async function main() {
     });
 
     const reportingService = createProblemReportsService({
+      approveSend: async (ctx, report, digest) => {
+        const decision = await approvalQueue.request({
+          kind: "capability",
+          capability: "problemReports.send",
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind === "do" ? "do" : "system",
+          repoPath: "",
+          effectiveVersion: "",
+          requestedByUserId: ctx.caller.subject!.userId,
+          title: "Send this problem report to Vibestudio?",
+          description:
+            "Share the report below with Vibestudio developers to help investigate this problem. This sends only this report and does not enable automatic reporting. No login is needed. Reports are signed and linked by this machine's public key.",
+          resource: { type: "report", label: "Destination", value: REPORT_POLICY.destination },
+          details: [
+            { label: "What happened", value: report.problem.symptom ?? report.problem.kind },
+            { label: "Expected", value: report.problem.expected ?? "Not specified" },
+            ...report.narrative.map((section) => ({
+              label: `${section.section} · ${section.claims}`,
+              value: section.markdown,
+            })),
+            {
+              label: "Selected diagnostics and metadata",
+              value: JSON.stringify(
+                {
+                  ...report,
+                  narrative: undefined,
+                  attachments: report.attachments.map(
+                    ({ base64: _body, ...attachment }) => attachment
+                  ),
+                },
+                null,
+                2
+              ),
+            },
+            {
+              label: "Attachments",
+              value: report.attachments.length
+                ? "The listed files' full contents will be shared, including any sensitive content not removed by sanitization."
+                : "None",
+            },
+            { label: "Exact revision", value: `${report.reportRevision} · SHA-256 ${digest}` },
+            {
+              label: "Retention",
+              value: "90 days unless pinned for investigation; provider backup retention applies.",
+            },
+          ],
+          allowedDecisions: ["once", "deny"],
+          dedupKey: `${report.reportId}:${report.reportRevision}:${digest}`,
+          signal: ctx.signal,
+        });
+        return decision === "once";
+      },
       store,
       usage,
       usageTransport: (ctx, transmission) =>

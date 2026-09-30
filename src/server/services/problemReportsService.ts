@@ -27,11 +27,19 @@ function owner(ctx: ServiceContext): string {
 function human(ctx: ServiceContext): void {
   // Verified transport identity, not the agent's claimed initiator or a draft flag.
   if (!["shell"].includes(ctx.caller.runtime.kind))
-    throw new Error("Use the trusted reporting UI or CLI; agents cannot consent or send");
+    throw new Error(
+      "Use the trusted reporting UI or CLI; agents cannot grant consent or bypass submission approval"
+    );
   owner(ctx);
 }
 export function createProblemReportsService(deps: {
   store: ProblemReportingStore;
+  forwardDraft?: (value: ProblemReportBundle) => Promise<{ reportId: string; revision: number }>;
+  approveSend?: (
+    ctx: ServiceContext,
+    report: ProblemReportBundle,
+    digest: string
+  ) => Promise<boolean>;
   usage?: UsageAnalytics;
   connectedServer?: {
     consent: () => Promise<ReturnType<ProblemReportingStore["consent"]>>;
@@ -142,6 +150,11 @@ export function createProblemReportsService(deps: {
           `${reference.reportId}:${reference.revision}:${reference.digest}`,
           value
         );
+      },
+      forConversation: async (ctx, [id, revision]) => {
+        const report = store.get(owner(ctx), workspaceId, id);
+        if (report.revision !== revision) throw new Error("Report changed; refresh selection");
+        return deps.forwardDraft ? deps.forwardDraft(report.value) : { reportId: id, revision };
       },
       collect: async (ctx, [id, revision, selections]) => {
         const current = store.get(owner(ctx), workspaceId, id);
@@ -298,8 +311,19 @@ export function createProblemReportsService(deps: {
         deps.usage?.record(owner(ctx), "report-preview");
         return result;
       },
-      send: (ctx, [id, revision, digest]) => {
-        checkHuman(ctx);
+      send: async (ctx, [id, revision, digest]) => {
+        const report = store.get(owner(ctx), workspaceId, id);
+        if (report.revision !== revision) throw new Error("Report changed; prepare again");
+        const frozen = store.submission(owner(ctx), workspaceId, report.value.submissionId);
+        if (frozen["digest"] !== digest || frozen["state"] !== "prepared")
+          throw new Error("Exact prepared report unavailable");
+        const isHuman = deps.isHuman ? deps.isHuman(ctx) : ctx.caller.runtime.kind === "shell";
+        if (!isHuman) {
+          if (!deps.approveSend) throw new Error("Human reporting approval unavailable");
+          if (!(await deps.approveSend(ctx, report.value, digest)))
+            throw new Error("Report submission was not approved");
+          ctx.signal?.throwIfAborted();
+        }
         store.queue(owner(ctx), workspaceId, id, revision, digest);
         deps.usage?.record(owner(ctx), "report-queued");
         deps.wake?.();

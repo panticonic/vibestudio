@@ -1,3 +1,4 @@
+import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
 import { DisplayCapturePicker } from "./services/displayCapturePicker.js";
@@ -776,10 +777,8 @@ function dispatchShellSurface(
       });
       return;
     case "problem-report":
-      eventService.emit("open-settings", {
-        section: "problem-reporting",
-        ...(workspaceId ? { workspaceId } : {}),
-        ...(target.prepared ? { preparedReport: target.prepared } : {}),
+      workspaceEvents?.emit("open-command-agent", {
+        prompt: problemReportingConversation(),
       });
       return;
     case "workspace-chooser":

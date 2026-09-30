@@ -310,7 +310,6 @@ export interface EventPayloads {
   "open-settings": {
     section: SettingsSection;
     workspaceId?: string;
-    preparedReport?: { reportId: string; revision: number; digest: string };
   };
   /**
    * Open the command overlay over the focused panel. One event for one key: the
