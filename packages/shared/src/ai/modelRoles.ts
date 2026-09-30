@@ -42,7 +42,7 @@ export interface ResolvedModelSpec {
 
 /**
  * Default model assignments for each role
- * Default reasoning and coding models: Claude Opus 5.5 and GPT-6 Sol.
+ * Default reasoning and coding models: Claude Opus 5.5 and GPT-6.1 Sol.
  */
 const DEFAULT_MODELS: Record<StandardModelRole, ResolvedModelSpec> = {
   smart: {
@@ -51,9 +51,9 @@ const DEFAULT_MODELS: Record<StandardModelRole, ResolvedModelSpec> = {
     model: "claude-opus-5-5",
   },
   coding: {
-    modelId: "openai-codex:gpt-6-sol",
+    modelId: "openai-codex:gpt-6.1-sol",
     provider: "openai-codex",
-    model: "gpt-6-sol",
+    model: "gpt-6.1-sol",
   },
   fast: {
     modelId: "groq:llama-3.3-70b-versatile",

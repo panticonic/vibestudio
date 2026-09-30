@@ -19,7 +19,7 @@ describe("ModelRoleResolver", () => {
   it("resolves default models when no config is provided", () => {
     const resolver = new ModelRoleResolver();
     expect(resolver.resolve("smart")).toBe("anthropic:claude-opus-5-5");
-    expect(resolver.resolve("coding")).toBe("openai-codex:gpt-6-sol");
+    expect(resolver.resolve("coding")).toBe("openai-codex:gpt-6.1-sol");
     expect(resolver.resolve("fast")).toBe("groq:llama-3.3-70b-versatile");
     expect(resolver.resolve("cheap")).toBe("groq:llama-3.1-8b-instant");
   });
@@ -78,7 +78,7 @@ describe("ModelRoleResolver", () => {
     const roles = resolver.getAllRoles();
     expect(roles).toEqual({
       smart: "anthropic:claude-opus-5-5",
-      coding: "openai-codex:gpt-6-sol",
+      coding: "openai-codex:gpt-6.1-sol",
       fast: "groq:llama-3.3-70b-versatile",
       cheap: "groq:llama-3.1-8b-instant",
     });
