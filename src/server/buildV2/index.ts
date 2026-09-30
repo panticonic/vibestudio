@@ -85,6 +85,7 @@ import {
   authorityDependencyIndexFromDeclarations,
   authorityDependencyIndexFromFacts,
   authorityConsumersForProviderChanges,
+  changedAuthorityQueries,
   type AuthorityDependencyIndex,
 } from "./authorityDependencyIndex.js";
 import { AuthorityIndexManager } from "./authorityIndexManager.js";
@@ -2869,16 +2870,24 @@ export async function initBuildSystemV2(
             )
             .map((node) => node.relativePath)
         );
-        const changedQueries = new Set<string>();
+        const publishedIndex = authorityIndexManager.publishedBaseline(authorityEpoch);
+        const exactPublishedIndex =
+          publishedIndex?.stateHash === currentState().stateHash ? publishedIndex : null;
+        const changedQueries = exactPublishedIndex
+          ? changedAuthorityQueries(exactPublishedIndex, candidateIndex)
+          : new Set<string>();
         const removedProvider = [...publishedProviderUnits].some(
           (provider) => !candidateProviderUnits.has(provider)
         );
         if (
-          removedProvider ||
-          changedPaths.some(
-            (changed) =>
-              changed === "meta" || changed === "meta/vibestudio.yml" || changed.startsWith("meta/")
-          )
+          !exactPublishedIndex &&
+          (removedProvider ||
+            changedPaths.some(
+              (changed) =>
+                changed === "meta" ||
+                changed === "meta/vibestudio.yml" ||
+                changed.startsWith("meta/")
+            ))
         ) {
           // A removed provider has no candidate provider mapping. Recheck all
           // surviving service consumers; this remains bounded by the exact
@@ -2886,7 +2895,11 @@ export async function initBuildSystemV2(
           for (const query of candidateIndex.consumersByQuery.keys()) changedQueries.add(query);
         }
         const authorityConsumers = authorityConsumersForProviderChanges(
-          [candidateIndex, candidateAuthorityAttestations!],
+          [
+            candidateIndex,
+            candidateAuthorityAttestations!,
+            ...(exactPublishedIndex ? [exactPublishedIndex] : []),
+          ],
           new Set([...candidateProviderUnits, ...publishedProviderUnits]),
           changedQueries
         );
