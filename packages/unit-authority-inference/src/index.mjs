@@ -431,13 +431,21 @@ export function inferWorkspacePackageReferences(source, workspacePackageNames) {
  */
 export function inferHostedRuntimeCapabilities(source, hostCapabilities) {
   const capabilities = new Set();
-  for (const [facade, service] of Object.entries(HOSTED_RUNTIME_FACADES)) {
-    const pattern = new RegExp(
-      `\\b${facade}\\s*\\.\\s*([A-Za-z_$][\\w$]*(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*)\\s*\\(`,
-      "g"
-    );
-    for (const match of source.matchAll(pattern)) {
-      const methodPath = match[1].replace(/\\s+/g, "");
+  const visit = (node) => {
+    if (!ts.isCallExpression(node)) return;
+    // Only a call rooted at the public runtime binding is consumer intent.
+    // Comments, strings, and client.webhooks are not workspace webhook calls.
+    const parts = [];
+    let receiver = node.expression;
+    while (ts.isPropertyAccessExpression(receiver)) {
+      parts.unshift(receiver.name.text);
+      receiver = receiver.expression;
+    }
+    if (!ts.isIdentifier(receiver) || parts.length === 0) return;
+    const facade = receiver.text;
+    const service = HOSTED_RUNTIME_FACADES[facade];
+    if (service) {
+      const methodPath = parts.join(".");
       const facadeCall = `${facade}.${methodPath}`;
       const serviceMethods = HOSTED_RUNTIME_DERIVED_METHODS[facadeCall] ?? [
         `${service}.${methodPath}`,
@@ -447,7 +455,8 @@ export function inferHostedRuntimeCapabilities(source, hostCapabilities) {
         if (hostCapabilities.has(capability)) capabilities.add(capability);
       }
     }
-  }
+  };
+  for (const sourceFile of sourceFilesFor(source)) walkNodes(sourceFile, visit);
   return capabilities;
 }
 

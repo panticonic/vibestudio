@@ -27,7 +27,10 @@ function* shippedUnitDirectories() {
       if (!fs.existsSync(directory)) continue;
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (entry.isDirectory()) {
-          yield { name: `${template}/${root}/${entry.name}`, directory: path.join(directory, entry.name) };
+          yield {
+            name: `${template}/${root}/${entry.name}`,
+            directory: path.join(directory, entry.name),
+          };
         }
       }
     }
@@ -123,10 +126,10 @@ describe("inferTypedServiceClientCapabilities", () => {
       new Set([...host, "service:autofill.passwords.list"])
     );
 
-    assert.deepEqual([...inferred], [
-      "service:autofill.confirmSave",
-      "service:autofill.passwords.list",
-    ]);
+    assert.deepEqual(
+      [...inferred],
+      ["service:autofill.confirmSave", "service:autofill.passwords.list"]
+    );
   });
 
   it("walks deeply generated executable syntax without consuming the JavaScript stack", () => {
@@ -146,6 +149,26 @@ describe("inferTypedServiceClientCapabilities", () => {
 });
 
 describe("hosted runtime service-backed methods", () => {
+  it("ignores SDK examples and methods on another client's webhook namespace", () => {
+    const host = new Set(["service:webhookIngress.rotateSecret"]);
+    assert.deepEqual(
+      [
+        ...inferHostedRuntimeCapabilities(
+          `
+        /** await client.webhooks.rotateSecret('whe_123'); */
+        const example = "webhooks.rotateSecret('whe_123')";
+        await client.webhooks.rotateSecret('whe_123');
+      `,
+          host
+        ),
+      ],
+      []
+    );
+    assert.deepEqual(
+      [...inferHostedRuntimeCapabilities(`await webhooks.rotateSecret('subscription');`, host)],
+      ["service:webhookIngress.rotateSecret"]
+    );
+  });
   it("maps native browser-data methods to the Electron-resident service", () => {
     const host = new Set([
       "service:browserEnvironment.listDownloads",

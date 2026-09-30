@@ -249,13 +249,10 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
     return INSTALL_REVIEW_CATEGORY[approval.mode];
   }
 
+  if (approval.capability === "workspace.publish") {
+    return HOST_APPROVAL_COPY.categories.workspaceSource;
+  }
   if (approval.capability === "git.publish") {
-    const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
-      "workspace-source-change:"
-    );
-    if (isWorkspaceSourceChange) {
-      return HOST_APPROVAL_COPY.categories.workspaceSource;
-    }
     return approval.resource?.value === "meta"
       ? HOST_APPROVAL_COPY.categories.configEdit
       : HOST_APPROVAL_COPY.categories.writeRequest;
@@ -491,25 +488,22 @@ const CAPABILITY_ACTION_HANDLERS: Record<
   string,
   (approval: PendingCapabilityApproval) => ApprovalActionCopy | null
 > = {
+  "workspace.publish"(approval) {
+    const destination = approval.resource?.value ?? "this workspace";
+    return {
+      once: HOST_APPROVAL_COPY.actions.workspaceSource.once,
+      session: {
+        label: HOST_APPROVAL_COPY.actions.workspaceSource.sessionLabel,
+        description: `Allow updates to ${destination} until you close Vibestudio.`,
+      },
+      version: {
+        label: trustVersionLabel(approval),
+        description: `Allow ${trustSubject(approval)} to update ${destination}.`,
+      },
+      denyDescription: HOST_APPROVAL_COPY.actions.workspaceSource.deny,
+    };
+  },
   "git.publish"(approval) {
-    const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
-      "workspace-source-change:"
-    );
-    if (isWorkspaceSourceChange) {
-      const destination = approval.resource?.value ?? "this workspace";
-      return {
-        once: HOST_APPROVAL_COPY.actions.workspaceSource.once,
-        session: {
-          label: HOST_APPROVAL_COPY.actions.workspaceSource.sessionLabel,
-          description: `Allow updates to ${destination} until you close Vibestudio.`,
-        },
-        version: {
-          label: trustVersionLabel(approval),
-          description: `Allow ${trustSubject(approval)} to update ${destination}.`,
-        },
-        denyDescription: HOST_APPROVAL_COPY.actions.workspaceSource.deny,
-      };
-    }
     const isMeta = approval.resource?.value === "meta";
     return {
       once: isMeta
@@ -992,13 +986,15 @@ const CAPABILITY_COPY_HANDLERS: Record<
   },
   "git.publish"(approval) {
     const destination = approval.resource?.value ?? "this repository";
-    if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
-      return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(destination);
-    }
     if (destination === "meta") {
       return HOST_APPROVAL_COPY.headlines.workspaceConfigEdit;
     }
     return HOST_APPROVAL_COPY.headlines.repositoryWrite(destination);
+  },
+  "workspace.publish"(approval) {
+    return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(
+      approval.resource?.value ?? "this workspace"
+    );
   },
   "git.remotes.manage"(approval) {
     const destination = approval.resource?.value ?? "this repository";

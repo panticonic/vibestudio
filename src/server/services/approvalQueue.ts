@@ -1266,6 +1266,7 @@ export function createApprovalQueue(deps: {
         : undefined;
       if (
         req.capability === "git.publish" ||
+        req.capability === "workspace.publish" ||
         req.capability === "workspace-project-import" ||
         req.capability === "git.remotes.manage"
       ) {

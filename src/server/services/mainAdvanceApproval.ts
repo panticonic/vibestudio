@@ -31,9 +31,9 @@ import type {
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 
-const GIT_PUBLISH_CAPABILITY = "git.publish";
-// Deliberately DISTINCT from the write capability: a generic
-// `git.publish` grant must NEVER silently authorize a
+const WORKSPACE_PUBLISH_CAPABILITY = "workspace.publish";
+// Deliberately DISTINCT from the write capability: a workspace
+// publication grant must NEVER silently authorize a
 // destructive whole-repo deletion. The per-repo resource key (below) further
 // ensures approving the deletion of one repo never covers another.
 const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
@@ -873,7 +873,7 @@ export function createMainAdvanceApprovalGate(deps: {
       }
       await authorizeProtectedPublication(deps, candidate.caller, {
         ...(candidate.signal ? { signal: candidate.signal } : {}),
-        capability: GIT_PUBLISH_CAPABILITY,
+        capability: WORKSPACE_PUBLISH_CAPABILITY,
         resourceKey: "workspace-source-change:main",
         tier: "gated",
         args: [candidate.previousEventId, candidate.publishedEventId],
@@ -980,7 +980,7 @@ async function approveWorkspaceMainAdvance(
       : `${candidate.repoPaths.length} workspace repositories`;
   await authorizeProtectedPublication(deps, candidate.caller, {
     ...(candidate.signal ? { signal: candidate.signal } : {}),
-    capability: GIT_PUBLISH_CAPABILITY,
+    capability: WORKSPACE_PUBLISH_CAPABILITY,
     resourceKey,
     tier: "gated",
     args: [

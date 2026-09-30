@@ -292,7 +292,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "capability",
-        capability: "git.publish",
+        capability: "workspace.publish",
         grantResourceKey: "workspace-source-change:panels/spectrolite:main",
         title: "Update workspace source",
         resource: {

@@ -53,6 +53,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "open-external", notability: "headline" },
   { key: "external.open", notability: "headline" },
   { key: "git.publish", notability: "headline" },
+  { key: "workspace.publish", notability: "headline" },
   { key: "website.publish", notability: "headline" },
   { key: "git.remotes.manage", notability: "headline" },
   { key: "git.project.import", notability: "headline" },

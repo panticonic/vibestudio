@@ -103,7 +103,7 @@ describe("createMainAdvanceApprovalGate", () => {
         }),
       }),
       expect.objectContaining({
-        capability: "git.publish",
+        capability: "workspace.publish",
         resourceKey: "workspace-source-change:publication:publication:next",
       })
     );
@@ -133,7 +133,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        capability: "git.publish",
+        capability: "workspace.publish",
         resourceKey: "workspace-source-change:publication:publication:next",
         challenge: expect.objectContaining({
           installReview: expect.objectContaining({
@@ -297,7 +297,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        capability: "git.publish",
+        capability: "workspace.publish",
         challenge: expect.objectContaining({
           dedupKey: "workspace-semantic-advance:event:after",
           title: "Advance workspace history",
@@ -394,7 +394,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
-  it("forwards the diff-review payload onto the git.publish prompt", async () => {
+  it("forwards the diff-review payload onto the workspace.publish prompt", async () => {
     const deps = gateDeps({ decision: "once" });
     const gate = createMainAdvanceApprovalGate(deps);
     const signal = new AbortController().signal;
