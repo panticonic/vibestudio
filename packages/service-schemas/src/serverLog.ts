@@ -53,6 +53,8 @@ const ServerLogEnvelopeSchema = z.object({
 export const ServerLogQuerySchema = z.object({
   /** Only records with seq > sinceSeq (streaming catch-up cursor). */
   sinceSeq: z.number().int().optional(),
+  /** Freeze an exact per-boot upper sequence boundary. */
+  untilSeq: z.number().int().nonnegative().optional(),
   /** Epoch-ms lower bound (inclusive). */
   since: z.number().optional(),
   /** Epoch-ms upper bound (inclusive). */
@@ -78,7 +80,11 @@ const ServerLogStatsSchema = z.object({
 
 export const serverLogMethods = defineServiceMethods({
   query: {
-    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",
@@ -109,7 +115,11 @@ export const serverLogMethods = defineServiceMethods({
     ],
   },
   tail: {
-    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",
@@ -136,7 +146,11 @@ export const serverLogMethods = defineServiceMethods({
     examples: [{ args: [200] }],
   },
   stats: {
-    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",

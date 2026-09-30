@@ -16,7 +16,13 @@
  * universal-link documents are stateless (env-derived) so they are served here.
  */
 
-import { RelayRegistry, type Env } from "./registry";
+import { RelayRegistry, type Env as RelayEnv } from "./registry";
+import {
+  handleProblemReports,
+  sweepProblemReports,
+  type ReportingBindings,
+} from "./problemReports";
+type Env = RelayEnv & ReportingBindings;
 import {
   handleApexLanding,
   handlePanelLanding,
@@ -51,8 +57,13 @@ function relayStub(env: Env): DurableObjectStub {
 }
 
 export default {
+  scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(sweepProblemReports(env));
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/v1/problem-reports" || url.pathname.startsWith("/v1/problem-reports/"))
+      return handleProblemReports(request, env);
 
     if (request.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/health")) {
       return json({ ok: true });

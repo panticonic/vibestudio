@@ -77,7 +77,8 @@ function loadOrCreateAesKey(): Buffer {
   const keyPath = getKeyFilePath();
   try {
     const buf = fsSync.readFileSync(keyPath);
-    if (buf.length === 32) return buf;
+    if (buf.length !== 32) throw new Error("Corrupt encrypted store key");
+    return buf;
   } catch (err) {
     if (!isNotFoundError(err)) throw err;
   }
@@ -93,7 +94,20 @@ function loadOrCreateAesKey(): Buffer {
   }
 
   const key = crypto.randomBytes(32);
-  fsSync.writeFileSync(keyPath, key, { mode: 0o600 });
+  const temporary = `${keyPath}.${crypto.randomUUID()}.tmp`;
+  try {
+    fsSync.writeFileSync(temporary, key, { mode: 0o600, flag: "wx" });
+    try {
+      fsSync.linkSync(temporary, keyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = fsSync.readFileSync(keyPath);
+      if (existing.length !== 32) throw new Error("Corrupt encrypted store key");
+      return existing;
+    }
+  } finally {
+    fsSync.rmSync(temporary, { force: true });
+  }
   if (process.platform !== "win32") {
     try {
       fsSync.chmodSync(keyPath, 0o600);
@@ -126,10 +140,9 @@ function aesDecrypt(envelope: EncryptedEnvelope): string {
 }
 
 function encryptJson(plaintext: string): EncryptedEnvelope {
-  const ss = tryGetSafeStorage();
-  if (ss) {
-    return { v: "v1-electron", ct: ss.encryptString(plaintext).toString("base64") };
-  }
+  // Profile secrets are shared by Electron and standalone Node hosts. New records
+  // must use one backend readable by both, independent of which process wrote first.
+  // The profile key and records are protected by the existing owner-only file permissions.
   return aesEncrypt(plaintext);
 }
 
@@ -173,6 +186,22 @@ export abstract class EncryptedJsonStore<TRecord> {
     recordId: string,
     record: TRecord
   ): Promise<void> {
+    await this.persistRecord(namespaceId, recordId, record, "replace");
+  }
+  /** Atomically publish one encrypted record, without replacing a concurrent winner. */
+  protected async createRecord(
+    namespaceId: string,
+    recordId: string,
+    record: TRecord
+  ): Promise<boolean> {
+    return this.persistRecord(namespaceId, recordId, record, "create");
+  }
+  private async persistRecord(
+    namespaceId: string,
+    recordId: string,
+    record: TRecord,
+    mode: "create" | "replace"
+  ): Promise<boolean> {
     assertValidStoreIdentifier("namespaceId", namespaceId);
     assertValidStoreIdentifier("recordId", recordId);
 
@@ -195,14 +224,24 @@ export abstract class EncryptedJsonStore<TRecord> {
       handle = null;
 
       await fs.chmod(tempPath, 0o600);
-      await fs.rename(tempPath, targetPath);
+      if (mode === "create") {
+        try {
+          await fs.link(tempPath, targetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+          throw error;
+        }
+      } else await fs.rename(tempPath, targetPath);
       await fs.chmod(targetPath, 0o600);
+      return true;
     } catch (error) {
       if (handle) {
         await handle.close().catch(() => undefined);
       }
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
       throw error;
+    } finally {
+      await fs.rm(tempPath, { force: true });
     }
   }
 

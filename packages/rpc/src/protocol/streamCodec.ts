@@ -1,3 +1,4 @@
+import { attachRpcDiagnosticId } from "../errors.js";
 import type { RpcErrorData, RpcErrorKind } from "../types.js";
 import { RemoteRpcError } from "../errors.js";
 
@@ -29,6 +30,7 @@ export interface ErrorFramePayload {
   code?: string;
   errorKind: RpcErrorKind;
   errorData?: RpcErrorData;
+  diagnosticId?: string;
 }
 
 const textEncoder = new TextEncoder();
@@ -413,6 +415,7 @@ export async function decodeFramedStream(
         parsed.code,
         parsed.errorData
       );
+      if (parsed.diagnosticId) attachRpcDiagnosticId(error, parsed.diagnosticId);
       if (headSeen) errorBody(error);
       else rejectHead(error);
     }

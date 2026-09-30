@@ -16,6 +16,7 @@ import {
   stampEnvelopeCaller,
   rpcErrorDataOf,
   rpcErrorKindOf,
+  rpcDiagnosticIdOf,
   RpcBoundaryError,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
@@ -791,6 +792,28 @@ export class IpcDispatcher {
       const startedAt = performance.now();
       let outcome: "ok" | "error" = "ok";
 
+      const forwardServerCall = async (call: () => Promise<unknown>) => {
+        try {
+          return await call();
+        } catch (error) {
+          // Observe the executed server boundary, never a pre-dispatch authorization refusal.
+          runtime.dispatcher.observeFailure(
+            {
+              caller: localVerifiedCaller(
+                callerId,
+                callerKind,
+                this.deps.getCodeIdentityForCaller?.(callerId) ?? null
+              ),
+              requestId: req.requestId,
+            },
+            service,
+            method,
+            error
+          );
+          throw error;
+        }
+      };
+
       try {
         let result: unknown;
         if (runtime.dispatcher.hasService(service)) {
@@ -824,7 +847,9 @@ export class IpcDispatcher {
             // principals — they reach the server on the admin connection.
             // Hosted workspace chrome is an `app` and takes the app branch
             // below; there is no longer a shell→app panelTree proxy.
-            result = await callServer(runtime.serverClient, service, method, req.args, callOptions);
+            result = await forwardServerCall(() =>
+              callServer(runtime.serverClient, service, method, req.args, callOptions)
+            );
           } else if (callerKind === "app") {
             try {
               this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
@@ -838,13 +863,15 @@ export class IpcDispatcher {
                 cause
               );
             }
-            result = await callServerAs(
-              runtime.serverClient,
-              { callerId: runtimeId, callerKind },
-              service,
-              method,
-              req.args,
-              callOptions
+            result = await forwardServerCall(() =>
+              callServerAs(
+                runtime.serverClient,
+                { callerId: runtimeId, callerKind },
+                service,
+                method,
+                req.args,
+                callOptions
+              )
             );
           } else {
             throw new Error(`Server RPC relay is not available for ${callerKind} callers`);
@@ -870,6 +897,7 @@ export class IpcDispatcher {
         );
       } catch (err) {
         outcome = "error";
+        const diagnosticId = rpcDiagnosticIdOf(err);
         const error = err instanceof Error ? err.message : String(err);
         const errorCode = (err as { code?: string })?.code;
         this.sendResponse(
@@ -880,6 +908,7 @@ export class IpcDispatcher {
             requestId: req.requestId,
             error,
             errorKind: rpcErrorKindOf(err, "internal"),
+            ...(diagnosticId ? { diagnosticId } : {}),
             ...(errorCode ? { errorCode } : {}),
             ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
           },

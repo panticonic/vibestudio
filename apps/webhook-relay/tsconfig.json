@@ -1,5 +1,8 @@
 {
   "extends": "../../tsconfig.workers.json",
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src", "worker-configuration.d.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "compilerOptions": {
+    "skipLibCheck": true
+  }
 }

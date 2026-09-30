@@ -2,6 +2,14 @@ name = "vibestudio-webhook-relay"
 main = "src/index.ts"
 compatibility_date = "2024-11-15"
 
+# Counters retain aggregate data only; do not persist per-request invocation metadata.
+[observability.logs]
+enabled = true
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+
 [assets]
 directory = "../../dist/apex-website-assets"
 
@@ -42,3 +50,47 @@ class_name = "RelayRegistry"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RelayRegistry"]
+
+# Reporting has private, independent storage; it never uses RelayRegistry.
+[[d1_databases]]
+binding = "REPORT_DB"
+database_name = "natlang-problem-reports"
+database_id = "d9b68f52-c075-4a51-93a9-314f0a552a8a"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "REPORT_BUNDLES"
+bucket_name = "vibestudio-problem-report-bundles"
+
+[triggers]
+crons = ["17 * * * *"]
+
+[[ratelimits]]
+name = "REPORT_SUBMIT_LIMIT"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "REPORT_READ_LIMIT"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "REPORT_MUTATION_LIMIT"
+namespace_id = "1004"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "REPORT_RECEIPT_LIMIT"
+namespace_id = "1005"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "REPORT_AUTH_FAILURE_LIMIT"
+namespace_id = "1006"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "REPORT_USAGE_LIMIT"
+namespace_id = "1007"
+simple = { limit = 120, period = 60 }

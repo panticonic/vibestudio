@@ -182,3 +182,5 @@ export type { WorkspaceProvider, RuntimeConnectionInfo } from "./provider.js";
 export { runtimeConnectionInfoFromBootstrap } from "./provider.js";
 
 export { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
+
+export { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "./errors.js";

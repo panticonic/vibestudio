@@ -1,6 +1,6 @@
 import { GitClient, type FsPromisesLike } from "@vibestudio/git";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { EgressProxy, GitCredentialSelection, HostGitHttpOperation } from "./egressProxy.js";
+import type { EgressProxy, GitCredentialSelection, HostHttpOperation } from "./egressProxy.js";
 
 export interface GitHttpRequest {
   url: string;
@@ -31,7 +31,7 @@ export class GitCredentialSelectionRequiredError extends Error {
 export function createHostGitReadClient(input: {
   egress: Pick<EgressProxy, "forwardGitHttp">;
   caller: VerifiedCaller;
-  operation(request: GitHttpRequest): HostGitHttpOperation;
+  operation(request: GitHttpRequest): HostHttpOperation;
   credential: GitCredentialSelection;
   /** Retried only after an anonymous request is rejected by the remote. */
   fallbackCredential?: GitCredentialSelection;

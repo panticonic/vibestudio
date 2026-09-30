@@ -1,3 +1,16 @@
+import {
+  observeMainProcessErrors,
+  readRetainedMainProcessErrors,
+} from "./mainProcessErrorLedger.js";
+import { collectedPacket } from "../server/problemReporting/collection.js";
+import { createHash } from "node:crypto";
+import { getCentralDataPath } from "@vibestudio/env-paths";
+import { ProblemReportingStore } from "../server/problemReporting/store.js";
+import { ReportCapture } from "../server/problemReporting/capture.js";
+import { UsageAnalytics } from "../server/problemReporting/usage.js";
+import { ReportDelivery } from "../server/problemReporting/delivery.js";
+import { createProblemReportsService } from "../server/services/problemReportsService.js";
+import { problemReportsMethods } from "@vibestudio/service-schemas/problemReports";
 import { app, session } from "electron";
 import { BrowserDownloadManager } from "./services/browserDownloadManager.js";
 import {
@@ -129,6 +142,210 @@ export function createDesktopWorkspaceRuntime(deps: {
   const dispatcher = deps.dispatcher ?? new ServiceDispatcher();
   dispatcher.setAuthorityResolver(deps.authorize);
   const container = new ServiceContainer(dispatcher);
+  const reportingStore = new ProblemReportingStore(
+    path.join(
+      getCentralDataPath(),
+      "problem-reporting",
+      "clients",
+      createHash("sha256").update(connection.nativeStorageScope).digest("hex")
+    )
+  );
+  const reportingRemote = createTypedServiceClient(
+    "problemReports",
+    problemReportsMethods,
+    (service, method, args) => connection.serverClient.call(service, method, args)
+  );
+  const reportingDelivery = new ReportDelivery(reportingStore, {
+    forwardHostFetch: async (params) => {
+      params.signal.throwIfAborted();
+      const action =
+        params.method === "POST" ? "upload" : params.method === "DELETE" ? "delete" : "status";
+      const result = problemReportsMethods.transport.returns.parse(
+        await connection.serverClient.call(
+          "problemReports",
+          "transport",
+          [
+            {
+              action,
+              submissionId: params.operation.resourceKey,
+              digest: params.operation.preparedStateDigest,
+              receiptSecret: params.headers!["x-report-receipt-secret"]!,
+              publicKey: params.headers?.["x-report-public-key"],
+              signature: params.headers?.["x-report-signature"],
+              bytes: typeof params.body === "string" ? params.body : undefined,
+            },
+          ],
+          { signal: params.signal }
+        )
+      );
+      return {
+        status: result.status,
+        statusText: "",
+        headerPairs: result.headerPairs,
+        finalUrl: params.url,
+        body: new TextEncoder().encode(result.body),
+      };
+    },
+  });
+  const reportingUsage = new UsageAnalytics(reportingStore, async (transmission, signal) => {
+    signal.throwIfAborted();
+    await connection.serverClient.call("problemReports", "usageTransport", [transmission], {
+      signal,
+    });
+  });
+  const reportingCapture = new ReportCapture(
+    reportingStore,
+    workspaceId,
+    () => reportingDelivery.wake(),
+    {
+      runtime: "desktop",
+      owner: () => reportingStore.localIdentity()?.userId ?? null,
+      productVersion: app.getVersion(),
+    }
+  );
+  dispatcher.setFailureObserver((failure) => reportingCapture.serviceFailure(failure));
+  dispatcher.setSuccessObserver((outcome) => {
+    if (outcome.service === "app" || outcome.service === "view")
+      reportingUsage.serviceCompleted(
+        outcome,
+        () => reportingStore.localIdentity()?.userId ?? null
+      );
+  });
+  const stopMainCapture = observeMainProcessErrors((record) => {
+    const owner = reportingStore.localIdentity()?.userId;
+    if (owner)
+      reportingCapture.observe(
+        owner,
+        {
+          category: "startup",
+          component: "main",
+          operation: record.kind,
+          code: null,
+          kind: "internal",
+          frames: [],
+          externalFramesOmitted: 0,
+        },
+        record.origin,
+        new Date(record.timestamp).toISOString()
+      );
+  });
+  let reportingSubject: Promise<{ userId: string; handle: string }> | null = null;
+  const resolveReportingSubject = () =>
+    (reportingSubject ??= (async () => {
+      if (!connection.serverClient.isConnected()) {
+        const persisted = reportingStore.localIdentity();
+        if (!persisted) throw new Error("Local reporting identity is not available yet");
+        return persisted;
+      }
+      const { accountProfileSchema } = await import("@vibestudio/service-schemas/account");
+      const profile = accountProfileSchema.parse(
+        await connection.serverClient.call("account", "getProfile", [])
+      );
+      if (profile.revoked) throw new Error("Account is revoked");
+      const subject = { userId: profile.userId, handle: profile.handle };
+      reportingStore.setLocalIdentity(subject);
+      return subject;
+    })()
+      .then((subject) => {
+        reportingUsage.startup(subject.userId);
+        return subject;
+      })
+      .catch((error) => {
+        reportingSubject = null;
+        throw error;
+      }));
+  container.registerRpc(
+    createProblemReportsService({
+      store: reportingStore,
+      usage: reportingUsage,
+      ownedServer:
+        connection.serverOwnership === "desktop-local"
+          ? {
+              consent: () => reportingRemote.consent(),
+              decide: (revision, state) => reportingRemote.decide(revision, state),
+            }
+          : undefined,
+      workspaceId,
+      redact: (text) => text,
+      prepareRedactor: async () => {
+        const { CredentialStore } = await import("@vibestudio/credential-client/store");
+        const { registeredSecretRedactor } = await import("../server/problemReporting/sanitize.js");
+        return registeredSecretRedactor(await new CredentialStore().list());
+      },
+      environment: {
+        productVersion: app.getVersion(),
+        buildVersion: null,
+        templateVersion: null,
+        platform: ["linux", "darwin", "win32"].includes(process.platform)
+          ? (process.platform as "linux" | "darwin" | "win32")
+          : "unknown",
+        architecture: process.arch === "x64" || process.arch === "arm64" ? process.arch : "unknown",
+        runtime: "desktop",
+      },
+      wake: () => reportingDelivery.wake(),
+      abort: () => reportingDelivery.abortActive(),
+      resolveSubject: resolveReportingSubject,
+      transport: (_ctx, input) => reportingRemote.transport(input),
+      collect: (_ctx, selection) => {
+        if (selection.source === "startup") {
+          const contents = window.viewManager?.getWebContents(_ctx.caller.runtime.id);
+          const shell = window.viewManager?.getHostedShellWebContents();
+          if (_ctx.caller.runtime.kind !== "shell" && (!contents || contents.id !== shell?.id))
+            throw Object.assign(new Error("Select device diagnostics in trusted reporting UI"), {
+              errorKind: "access",
+            });
+          return {
+            source: "startup",
+            coordinate: "main-diagnostics",
+            collect: async () => {
+              const all = readRetainedMainProcessErrors();
+              const records = all.slice(-20);
+              return {
+                value: records,
+                retained: records.length,
+                omitted: Math.max(0, all.length - records.length),
+                coordinate: JSON.stringify({ origins: records.map((record) => record.origin) }),
+              };
+            },
+          };
+        }
+        return {
+          source: selection.source,
+          coordinate:
+            selection.source === "runtime"
+              ? JSON.stringify(selection.entity)
+              : `server-log:${connection.workspaceId}`,
+          collect: async (signal) => {
+            const value = await connection.serverClient.call(
+              selection.source === "runtime" ? "runtime" : "serverLog",
+              selection.source === "runtime" ? "supervision.health" : "query",
+              selection.source === "runtime"
+                ? [selection.entity, { limit: 50, errorLimit: 50 }]
+                : [{ limit: 100, tag: selection.tag, until: Date.now() }],
+              { signal }
+            );
+            return collectedPacket(selection.source, value);
+          },
+        };
+      },
+      importPrepared: async (reference) => {
+        const prepared = await reportingRemote.prepare(reference.reportId, reference.revision);
+        if (prepared.digest !== reference.digest)
+          throw new Error("Prepared report changed; review the current revision");
+        const { decodeReport } = await import("@vibestudio/service-schemas/problemReportBundle");
+        const bundle = await decodeReport(new TextEncoder().encode(prepared.bytes));
+        if (bundle.intent !== "manual-problem")
+          throw new Error("Only selected manual reports can be imported for review");
+        return bundle;
+      },
+      isHuman: (ctx) =>
+        ctx.caller.runtime.kind === "shell" ||
+        (ctx.caller.runtime.kind === "app" &&
+          window.viewManager?.getWebContents(ctx.caller.runtime.id)?.id ===
+            window.viewManager?.getHostedShellWebContents()?.id),
+    })
+  );
+  reportingDelivery.wake();
   let cdp: CdpHostProvider | null = null;
   let downloads: BrowserDownloadManager | null = null;
   const nativeViews = () => {
@@ -275,6 +492,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   const stopRecovery = connection.serverClient.onRecovery(recover);
   const stopStatus = connection.serverClient.onConnectionStatusChange((status) => {
     if (closed) return;
+    if (status === "connected") reportingDelivery.wake();
     if (status !== "connected") {
       semanticRecoveryEpoch += 1;
       recoveryPending = true;
@@ -313,6 +531,15 @@ export function createDesktopWorkspaceRuntime(deps: {
     () => flushPanelLog(),
   ].map((run) => ({ done: false, run }));
   const ownerCleanup: CleanupStep[] = [
+    async () => {
+      stopMainCapture();
+      dispatcher.setFailureObserver(undefined);
+      dispatcher.setSuccessObserver(undefined);
+      reportingCapture.stop();
+      await reportingUsage.stop();
+      await reportingDelivery.stop();
+      reportingStore.close();
+    },
     () => controller.core.shutdown(),
     () => window.detachWorkspace(workspaceId),
   ].map((run) => ({ done: false, run }));
@@ -375,6 +602,28 @@ export function createDesktopWorkspaceRuntime(deps: {
     if (!panel) return;
     const source = getPanelSource(panel);
     if (source.startsWith("browser:")) return;
+    if (entry.source === "lifecycle" && entry.level === "error") {
+      const owner = reportingStore.localIdentity()?.userId;
+      if (owner)
+        reportingCapture.observe(
+          owner,
+          {
+            category: "runtime",
+            component: "renderer",
+            operation: ["render-process-gone", "unresponsive", "did-fail-load"].includes(
+              entry.message
+            )
+              ? entry.message
+              : "panel.lifecycle",
+            code: null,
+            kind: entry.message === "render-process-gone" ? "internal" : "application",
+            frames: [],
+            externalFramesOmitted: 0,
+          },
+          undefined,
+          new Date(entry.timestamp).toISOString()
+        );
+    }
     const unitSource = source.split(/[?#]/)[0];
     if (!unitSource) return;
     panelLogQueue.push({

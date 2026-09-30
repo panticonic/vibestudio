@@ -153,6 +153,43 @@ function makeDispatcher(opts: {
 }
 
 describe("IpcDispatcher", () => {
+  it("observes forwarded server failures once and preserves their diagnostic identity for the UI", async () => {
+    const shell = makeWebContents(21);
+    const observed = vi.fn();
+    makeDispatcher({
+      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+      call: vi.fn(async () => {
+        throw new Error("Unexpected host failure");
+      }),
+      configureDispatcher: (dispatcher) => dispatcher.setFailureObserver(observed),
+    });
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: shell } as never,
+      rpcEnvelope("shell", "shell", {
+        type: "request",
+        requestId: "req-reporting-forwarded",
+        fromId: "shell",
+        method: "runtime.test",
+        args: [],
+      } satisfies RpcMessage) as never
+    );
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[0]).toMatchObject({
+      service: "runtime",
+      method: "test",
+      diagnosticId: expect.any(String),
+    });
+    await vi.waitFor(() =>
+      expectSentRpcMessage(shell, "shell", {
+        type: "response",
+        requestId: "req-reporting-forwarded",
+        error: "Unexpected host failure",
+        errorKind: "internal",
+        diagnosticId: observed.mock.calls[0]?.[0].diagnosticId,
+      })
+    );
+  });
+
   it("preserves application workspace addressing on the source principal's server RPC", async () => {
     const contents = makeWebContents(41);
     const { serverClient } = makeDispatcher({
@@ -1011,6 +1048,7 @@ describe("IpcDispatcher", () => {
         errorKind: "internal",
         errorCode: "EREVIEWPENDING",
         errorData,
+        diagnosticId: expect.any(String),
       });
     });
   });

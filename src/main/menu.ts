@@ -534,6 +534,10 @@ export function buildHamburgerMenuTemplate(
     },
     { type: "separator" },
     {
+      label: "Report a problem",
+      click: () => emitMenuEvent("open-settings", { section: "problem-reporting" }),
+    },
+    {
       label: "About Vibestudio",
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.ABOUT }),
     },
@@ -813,6 +817,10 @@ export function setupMenu(
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS });
           },
+        },
+        {
+          label: "Report a problem",
+          click: () => emitMenuEvent("open-settings", { section: "problem-reporting" }),
         },
         {
           label: "About Vibestudio",

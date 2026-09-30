@@ -1,0 +1,38 @@
+{
+  "name": "@workspace-workers/error-reports",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "vibestudio": {
+    "title": "Error reports",
+    "icon": "🛠️",
+    "kind": "worker",
+    "entry": "index.ts",
+    "durable": {
+      "classes": [
+        {
+          "className": "ErrorReportsDO"
+        }
+      ]
+    },
+    "authority": {
+      "provides": [],
+      "requests": [
+        {
+          "capability": "credential.use",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@vibestudio/credential-client": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}

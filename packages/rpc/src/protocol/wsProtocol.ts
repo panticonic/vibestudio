@@ -138,6 +138,7 @@ export interface WsRoutedEventErrorMessage {
   event: string;
   error: string;
   errorKind: RpcErrorKind;
+  diagnosticId?: string;
   errorCode?: string;
 }
 
@@ -148,6 +149,7 @@ export interface WsRoutedResponseErrorMessage {
   requestId: string;
   error: string;
   errorKind: RpcErrorKind;
+  diagnosticId?: string;
   errorCode?: string;
   errorData?: unknown;
 }

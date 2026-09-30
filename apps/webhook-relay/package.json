@@ -7,7 +7,7 @@
     "predeploy": "node build-website-assets.mjs",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "typecheck:cloudflare": "tsc --noEmit",
+    "typecheck:cloudflare": "wrangler types worker-configuration.d.ts --include-runtime=false --check && tsc --noEmit",
     "test": "cd ../.. && vitest run apps/webhook-relay/src"
   },
   "devDependencies": {

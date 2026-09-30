@@ -13,9 +13,8 @@ export function isAuthorityDecisionDenied(error: unknown): boolean {
 /** True for a structured authority refusal that cannot be repaired by retrying. */
 export function isTerminalAuthorityFailure(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const reasonCode = (
-    error as { errorData?: { authorityFailure?: { reasonCode?: unknown } } }
-  ).errorData?.authorityFailure?.reasonCode;
+  const reasonCode = (error as { errorData?: { authorityFailure?: { reasonCode?: unknown } } })
+    .errorData?.authorityFailure?.reasonCode;
   return reasonCode === "user-denied" || reasonCode === "receiver-rejected";
 }
 
@@ -137,4 +136,24 @@ export function rpcErrorKindOf(
     default:
       return fallback;
   }
+}
+
+/** Product observation identity is separate from application-owned errorData.
+ * A WeakMap keeps even frozen domain exceptions untouched; wire owners serialize this identity explicitly.
+ */
+const diagnosticOrigins = new WeakMap<object, string>();
+export function rpcDiagnosticIdOf(error: unknown): string | undefined {
+  const visited = new Set<object>();
+  while (error && typeof error === "object" && !visited.has(error)) {
+    visited.add(error);
+    const value = diagnosticOrigins.get(error);
+    if (value) return value;
+    error = (error as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+export function attachRpcDiagnosticId(error: unknown, id: string): void {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) return;
+  if (error && typeof error === "object" && !rpcDiagnosticIdOf(error))
+    diagnosticOrigins.set(error, id);
 }

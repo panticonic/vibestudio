@@ -3555,6 +3555,182 @@ async function main() {
     getServiceDefinition: () => hostTerminalService,
   });
 
+  // Installation-owned reporting state is shared by workspace children, never template source.
+  {
+    const { getCentralDataPath } = await import("@vibestudio/env-paths");
+    const { ProblemReportingStore } = await import("./problemReporting/store.js");
+    const { ReportDelivery } = await import("./problemReporting/delivery.js");
+    const { ReportCapture } = await import("./problemReporting/capture.js");
+    const { collectedPacket } = await import("./problemReporting/collection.js");
+    const { createProblemReportsService } = await import("./services/problemReportsService.js");
+    const store = new ProblemReportingStore(
+      path.join(getCentralDataPath(), "problem-reporting", "server")
+    );
+    const { UsageAnalytics, sendUsageTransmission } = await import("./problemReporting/usage.js");
+    const sendUsage = (
+      subject: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller["subject"],
+      transmission: import("@vibestudio/service-schemas/usageAnalytics").UsagePing,
+      signal: AbortSignal
+    ) => sendUsageTransmission(egressProxy, subject, transmission, signal);
+    const usage = new UsageAnalytics(store, async (transmission, signal, owner) => {
+      const subject = store.ownerSubject(owner);
+      if (!subject) throw new Error("Local usage owner unavailable");
+      await sendUsage({ userId: subject.owner, handle: subject.handle }, transmission, signal);
+    });
+    const delivery = new ReportDelivery(store, egressProxy);
+    const capture = new ReportCapture(store, entryWorkspaceId, () => delivery.wake(), {
+      productVersion: serverVersion,
+    });
+    dispatcher.setFailureObserver((failure) => capture.serviceFailure(failure));
+    dispatcher.setSuccessObserver((outcome) => {
+      if (outcome.service === "runtime") usage.serviceCompleted(outcome);
+    });
+    // Runtime lifecycle owns the event; console prose is never promoted into an automatic exception.
+    const stopRuntimeCapture = runtimeDiagnostics.observe((record) => {
+      if (record.level !== "error" || record.source !== "lifecycle") return;
+      const owner =
+        identityDb.getPrivateWorkspaceOwner(entryWorkspaceId)?.userId ??
+        userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt)?.id;
+      if (!owner) return;
+      const isBuild = record.fields?.["buildEvent"] === "build-error";
+      capture.observe(
+        owner,
+        {
+          category: isBuild ? "build" : "runtime",
+          component: isBuild ? "build" : record.kind === "panel" ? "renderer" : "workerd",
+          operation: isBuild ? "build.compile" : "runtime.lifecycle",
+          code: null,
+          kind: "application",
+          frames: [],
+          externalFramesOmitted: 0,
+        },
+        undefined,
+        new Date(record.timestamp).toISOString()
+      );
+    });
+
+    const reportingService = createProblemReportsService({
+      store,
+      usage,
+      usageTransport: (ctx, transmission) =>
+        sendUsage(ctx.caller.subject, transmission, ctx.signal ?? AbortSignal.timeout(10000)),
+      workspaceId: entryWorkspaceId,
+      redact: (text) => serverLogStore.redactText(text),
+      prepareRedactor: async () => {
+        const { registeredSecretRedactor } = await import("./problemReporting/sanitize.js");
+        return registeredSecretRedactor(await credentialStore.list(), (text) =>
+          serverLogStore.redactText(text)
+        );
+      },
+      environment: {
+        productVersion: serverVersion,
+        buildVersion: null,
+        templateVersion: null,
+        platform: ["linux", "darwin", "win32"].includes(process.platform)
+          ? (process.platform as "linux" | "darwin" | "win32")
+          : "unknown",
+        architecture: process.arch === "x64" || process.arch === "arm64" ? process.arch : "unknown",
+        runtime: "server",
+      },
+      wake: () => delivery.wake(),
+      abort: () => delivery.abortActive(),
+      collect: (ctx, selection) => {
+        if (selection.source === "startup")
+          throw new Error(
+            "Device startup diagnostics are local to the trusted desktop reporting UI"
+          );
+        const untilSeq = serverLogStore.latestSeq();
+        return {
+          source: selection.source,
+          coordinate:
+            selection.source === "runtime"
+              ? JSON.stringify(selection.entity)
+              : `server:${serverBootId}:${serverLogStore.latestSeq()}`,
+          collect: async (signal) => {
+            const value = await dispatcher.dispatch(
+              { ...ctx, signal },
+              selection.source === "runtime" ? "runtime" : "serverLog",
+              selection.source === "runtime" ? "supervision.health" : "query",
+              selection.source === "runtime"
+                ? [selection.entity, { limit: 50, errorLimit: 50 }]
+                : [{ limit: 100, tag: selection.tag, untilSeq }]
+            );
+            return collectedPacket(selection.source, value);
+          },
+        };
+      },
+      transport: async (ctx, input) => {
+        const { REPORT_POLICY, REPORT_MEDIA_TYPE, reportDigest, decodeReport } =
+          await import("@vibestudio/service-schemas/problemReportBundle");
+        if (input.action === "upload") {
+          if (
+            !input.bytes ||
+            !input.publicKey ||
+            !input.signature ||
+            (await reportDigest(input.bytes)) !== input.digest
+          )
+            throw new Error("Report transport integrity mismatch");
+          const bundle = await decodeReport(new TextEncoder().encode(input.bytes));
+          if (bundle.submissionId !== input.submissionId)
+            throw new Error("Report transport identity mismatch");
+        }
+        const owner = callerAccountUserId(ctx.caller);
+        if (!owner) throw new Error("Reporting owner required");
+        serverLogStore.addSecret(input.receiptSecret);
+        const result = await egressProxy.forwardHostFetch({
+          caller: createHostCaller("problem-report-upload", "server", ctx.caller.subject),
+          operation: {
+            service: "problemReports",
+            method: "transport",
+            resourceKey: input.submissionId,
+            preparedStateDigest: input.digest,
+          },
+          method: input.action === "upload" ? "POST" : input.action === "delete" ? "DELETE" : "GET",
+          url:
+            input.action === "upload"
+              ? REPORT_POLICY.destination
+              : `${REPORT_POLICY.destination}/submissions/${input.submissionId}${input.action === "status" ? "/status" : ""}`,
+          credentialId: null,
+          headers: {
+            "x-report-receipt-secret": input.receiptSecret,
+            ...(input.action === "upload"
+              ? {
+                  "content-type": REPORT_MEDIA_TYPE,
+                  "x-report-submission-id": input.submissionId,
+                  "x-report-digest": input.digest,
+                  "x-report-public-key": input.publicKey!,
+                  "x-report-signature": input.signature!,
+                }
+              : {}),
+          },
+          body: input.action === "upload" ? input.bytes : undefined,
+          signal: ctx.signal ?? AbortSignal.timeout(30000),
+          responseByteLimit: 16 * 1024,
+        });
+        return {
+          status: result.status,
+          headerPairs: result.headerPairs,
+          body: new TextDecoder().decode(result.body),
+        };
+      },
+    });
+    container.registerManaged({
+      name: "problemReports",
+      start: async () => reportingService,
+      stop: async () => {
+        stopRuntimeCapture();
+        dispatcher.setFailureObserver(undefined);
+        dispatcher.setSuccessObserver(undefined);
+        capture.stop();
+        await usage.stop();
+        await delivery.stop();
+        store.close();
+      },
+      getServiceDefinition: () => reportingService,
+    });
+    delivery.wake();
+  }
+
   // ── serverLog service (host log inspection + live tail) ──
   {
     const { createServerLogService } = await import("./services/serverLogService.js");

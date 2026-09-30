@@ -84,6 +84,7 @@ export interface RpcResponseError {
   errorCode?: string;
   /** Structured service-domain failure data; callers must not parse `error`. */
   errorData?: RpcErrorData;
+  diagnosticId?: string;
   /** Original stack, when available. Intended for diagnostics, not control flow. */
   errorStack?: string;
 }
@@ -173,7 +174,11 @@ export interface RpcRequestCancel {
 /** A complete receiver-owned declaration, scoped to its authenticated live transport. */
 export interface RpcExposure {
   type: "exposure";
-  entries: Array<{ name: string; kind: "method" | "stream" | "event"; website: WebsiteMethodPolicy }>;
+  entries: Array<{
+    name: string;
+    kind: "method" | "stream" | "event";
+    website: WebsiteMethodPolicy;
+  }>;
 }
 
 export type RpcMessage =
@@ -305,6 +310,7 @@ export type StreamingMethodFrame =
       code?: string;
       errorKind: RpcErrorKind;
       errorData?: RpcErrorData;
+      diagnosticId?: string;
     };
 
 export type StreamingMethodHandler = (
@@ -587,8 +593,15 @@ export interface RpcClient {
     handler: RpcContextHandler<TArgs, TReturn>,
     website: WebsiteMethodPolicy
   ): void;
-  exposeAll(methods: RpcContextMethods, website: Readonly<Record<string, WebsiteMethodPolicy>>): void;
-  exposeStreaming(method: string, handler: RpcContextStreamingHandler, website: WebsiteMethodPolicy): void;
+  exposeAll(
+    methods: RpcContextMethods,
+    website: Readonly<Record<string, WebsiteMethodPolicy>>
+  ): void;
+  exposeStreaming(
+    method: string,
+    handler: RpcContextStreamingHandler,
+    website: WebsiteMethodPolicy
+  ): void;
   call<T = unknown>(
     targetId: string,
     method: string,
@@ -614,7 +627,11 @@ export interface RpcClient {
     options?: RpcStreamOptions
   ): Promise<DecodedFramedStream>;
   emit(targetId: string, event: string, payload: unknown, options?: RpcCallOptions): Promise<void>;
-  on(event: string, listener: (event: RpcEventContext) => void, website: WebsiteMethodPolicy): () => void;
+  on(
+    event: string,
+    listener: (event: RpcEventContext) => void,
+    website: WebsiteMethodPolicy
+  ): () => void;
   peer<
     TMethods extends MethodMap = MethodMap,
     TEvents extends EventMap = EventMap,
