@@ -100,11 +100,20 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-  app: { setBadgeCount: mocks.setBadgeCount },
+  app: { setBadgeCount: mocks.setBadgeCount, getPath: () => "/user-data" },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   nativeImage: {},
   BaseWindow: mocks.BaseWindow,
   nativeTheme: { shouldUseDarkColors: false },
+}));
+
+vi.mock("./desktopWindowState.js", () => ({
+  DesktopWindowState: class {
+    initialBounds() {
+      return { width: 1440, height: 900 };
+    }
+    attach() {}
+  },
 }));
 
 vi.mock("./viewManager.js", () => ({ ViewManager: mocks.ViewManager }));
@@ -177,7 +186,7 @@ describe("ApplicationWindowController window lifetime", () => {
     harness.controller.create();
 
     expect(mocks.BaseWindow).toHaveBeenCalledWith(
-      expect.objectContaining({ width: 1280, height: 800 })
+      expect.objectContaining({ width: 1440, height: 900 })
     );
   });
 

@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { installProcessSignalShutdown } from "./processSignalShutdown.js";
+import { installProcessSignalShutdown, installSystemShutdown } from "./processSignalShutdown.js";
 
 describe("installProcessSignalShutdown", () => {
   it("enters canonical Electron quit once for termination signals", () => {
@@ -31,5 +31,15 @@ describe("installProcessSignalShutdown", () => {
     target.emit("message", { type: "vibestudio:dev-shutdown", signal: "SIGINT" });
 
     expect(quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("installSystemShutdown", () => {
+  it("delays OS shutdown and enters unattended quit synchronously", () => {
+    const target = new EventEmitter();
+    const order: string[] = [];
+    installSystemShutdown(target, () => order.push("quit"));
+    target.emit("shutdown", { preventDefault: () => order.push("delay") });
+    expect(order).toEqual(["delay", "quit"]);
   });
 });

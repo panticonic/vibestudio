@@ -29,3 +29,11 @@ export function installProcessSignalShutdown(target: ProcessSignalTarget, quit: 
     }
   });
 }
+
+/** Enter the same unattended quit path before macOS/Linux ends the session. */
+export function installSystemShutdown(target: NodeJS.EventEmitter, quit: () => void): void {
+  target.on("shutdown", (event: { preventDefault(): void }) => {
+    event.preventDefault();
+    quit();
+  });
+}

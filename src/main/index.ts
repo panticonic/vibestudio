@@ -188,7 +188,7 @@ import {
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
 import { ordinaryQuitServerDecision } from "./quitServerPolicy.js";
-import { installProcessSignalShutdown } from "./processSignalShutdown.js";
+import { installProcessSignalShutdown, installSystemShutdown } from "./processSignalShutdown.js";
 import type { StartupConnectionProgress } from "../startupConnectionProgress.js";
 import { getLocalHubLogPath } from "./hubProcessManager.js";
 import {
@@ -545,8 +545,8 @@ function relaunchWithIntent(opts: RelaunchOptions = {}): void {
   app.quit();
 }
 installRelaunchHandler(relaunchWithIntent);
-installProcessSignalShutdown(process, () => {
-  // Signals and development-runner stop requests are unattended lifecycle
+function requestUnattendedQuit(): void {
+  // OS shutdown, signals, and development-runner stop requests are unattended lifecycle
   // commands, not interactive window closes. Stop the owned hub explicitly so
   // a disposable developer instance cannot leak behind a prompt nobody can
   // answer. Preserve stronger update/relaunch intents if one is already active.
@@ -554,7 +554,8 @@ installProcessSignalShutdown(process, () => {
     quitIntent = { kind: "ordinary", serverDecision: "stop" };
   }
   app.quit();
-});
+}
+installProcessSignalShutdown(process, requestUnattendedQuit);
 
 const applicationWindow = new ApplicationWindowController({
   openPanelLocation: sendIncomingPanelLocation,
@@ -1833,6 +1834,7 @@ app.on("ready", async () => {
       client.nudge();
     }
   };
+  installSystemShutdown(powerMonitor, requestUnattendedQuit);
   powerMonitor.on("resume", () => {
     nudgeServerLiveness("system resume");
   });
@@ -3259,6 +3261,9 @@ app.on("before-quit", (event) => {
         "or stop it now. You can change this any time.",
       checkboxLabel: "Remember my choice",
     });
+    // A system shutdown can supersede an already-open ordinary quit dialog.
+    if (quitIntent.kind !== "ordinary" || quitIntent.serverDecision !== null || isCleaningUp)
+      return;
     const keep = response === 0;
     if (checkboxChecked) centralData.setKeepServerOnQuit(keep);
     quitIntent = { kind: "ordinary", serverDecision: keep ? "keep" : "stop" };
