@@ -127,3 +127,20 @@ result has not yet been inspected. Repair and verify warm-link delivery before
 marking pairing accepted. The isolated test server and owned simulator were
 stopped and awaited before publication; their tracked processes and temporary
 instance state were removed.
+
+### Pairing lifecycle repair: 2026-09-30
+
+Cold and warm scene links now start the bootstrap through one native factory
+creation path, carrying the URL or browsing activity in standard launch options.
+The outgoing root view is released, the legacy bridge invalidated, and the old
+factory released before its replacement is created. The warm link no longer
+gets emitted to a runtime that is then discarded. The signed Release rebuild
+and normal installation succeeded (`/tmp/vibestudio-ios-warm-link-fix-20260930.log`),
+and opening a link in the already-running simulator visibly showed the pairing
+review with Pair/Cancel buttons. Pairing itself still awaits completion.
+
+The user confirmed that a physical phone, developer signing, Firebase/APNs, and
+App Store Connect access are unavailable now. TestFlight's 90-day build expiry
+is acceptable for beta distribution. Assess the streamed executable workspace
+bundle design against Apple's review requirements before relying on TestFlight
+or App Store approval. Continue independent simulator acceptance work.

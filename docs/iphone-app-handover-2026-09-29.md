@@ -2,7 +2,8 @@
 
 **Current status (2026-09-30):** Signed Release builds and simulator bootstrap
 launch, rotation, and foreground recovery passed. End-to-end pairing remains
-unverified, and warm pairing links lose their pending request on reload. Read
+unverified. Warm pairing-link delivery has since been repaired and the visible
+review screen verified; credential creation and activation still need testing. Read
 the latest checkpoint below for continuation; earlier sections preserve the
 original handover.
 
@@ -367,3 +368,29 @@ native build/preparation process remains owned by this task. Temporary pairing
 credentials remain outside the repository. Implementation and documentation are
 being committed separately; this publication does not establish end-to-end
 iPhone acceptance.
+
+### Warm-link fix checkpoint
+
+The signed Release native rebuild and normal install/launch succeeded using
+`/tmp/vibestudio-ios-warm-link-fix-20260930.log`. SceneDelegate now passes warm
+pairing links as standard launch options when replacing the React Native runtime;
+AppDelegate releases the outgoing root/factory and invalidates a legacy bridge.
+A link opened while the app was running visibly reached Connect this device?
+with Pair/Cancel. The earlier warm-link defect is repaired at the review-screen
+boundary; actual pairing and workspace activation remain to be verified.
+
+The new owned ephemeral test server is `iphone-20260930-0210` (terminal session
+35181), with root
+`/var/folders/yg/ggxmwbzx3jxgs3xrp8wkh44m0000gp/T/vibestudio-iphone-20260930-0210-uCG8bK`.
+Its log is `/tmp/vibestudio-iphone-server-20260930-0210.log`, and the same owned
+simulator is booted. A private, unconsumed invite exists in
+`/tmp/vibestudio-iphone-pair-20260930-0210.json`. The user approved pairing this simulator with the test server, and Pair was
+clicked. The app now shows Connecting securely to your workspace; inspect the
+result and continue activation/recovery tests.
+
+Physical-phone and distribution credentials are unavailable, as confirmed by
+the user. They are open to workable deployment approaches, prefer workspace
+guidance, and accept TestFlight's 90-day expiry. Reuse the existing desktop phone
+provisioning service and System-owned phone setup flow, rather than creating
+a second installer. Reviewed distribution needs a separate assessment of the
+streamed executable bundle design against Apple's review requirements.

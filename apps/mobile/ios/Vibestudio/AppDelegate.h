@@ -5,5 +5,6 @@
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong, readonly) RCTReactNativeFactory *reactNativeFactory;
 @property(nonatomic, copy, readonly) NSDictionary *launchOptions;
-- (void)prepareInitialURL:(NSURL *)url;
+- (BOOL)prepareInitialURL:(NSURL *)url;
+- (void)startReactNativeInWindow:(UIWindow *)window launchOptions:(NSDictionary *)launchOptions;
 @end

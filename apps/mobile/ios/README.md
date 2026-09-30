@@ -68,8 +68,9 @@ to track the remaining simulator and physical-device verification.
 
 The native host handles `vibestudio://connect` and
 `https://vibestudio.app/p#...` pairing links, clears any active OTA bundle,
-and requests a reload of the shipped bootstrap. Warm-link delivery currently
-loses the pending request during this reload; see the acceptance checklist.
+and starts the shipped bootstrap with the URL as a standard launch input. Cold
+and warm pairing links share this runtime creation path, so the request survives
+replacing a loaded workspace runtime. OAuth URLs continue to use Linking events.
 
 iOS OAuth uses `VibestudioAuthSession` (`ASWebAuthenticationSession`) with
 `vibestudio://oauth/callback/<provider>` callbacks. Those OAuth-shaped URLs are

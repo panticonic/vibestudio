@@ -1,6 +1,5 @@
 #import "SceneDelegate.h"
 #import "AppDelegate.h"
-#import <RCTReactNativeFactory.h>
 
 @implementation SceneDelegate
 
@@ -26,14 +25,18 @@
     break;
   }
   self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-  [appDelegate.reactNativeFactory startReactNativeWithModuleName:@"Vibestudio"
-      inWindow:self.window initialProperties:@{} launchOptions:launchOptions];
+  [appDelegate startReactNativeInWindow:self.window launchOptions:launchOptions];
 }
 
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts
 {
   AppDelegate *appDelegate = (AppDelegate *)UIApplication.sharedApplication.delegate;
   for (UIOpenURLContext *context in URLContexts) {
+    if ([appDelegate prepareInitialURL:context.URL]) {
+      [appDelegate startReactNativeInWindow:self.window
+          launchOptions:@{UIApplicationLaunchOptionsURLKey: context.URL}];
+      return;
+    }
     NSMutableDictionary *options = [NSMutableDictionary new];
     if (context.options.sourceApplication) options[UIApplicationOpenURLOptionsSourceApplicationKey] = context.options.sourceApplication;
     if (context.options.annotation) options[UIApplicationOpenURLOptionsAnnotationKey] = context.options.annotation;
@@ -45,6 +48,15 @@
 - (void)scene:(UIScene *)scene continueUserActivity:(NSUserActivity *)userActivity
 {
   AppDelegate *appDelegate = (AppDelegate *)UIApplication.sharedApplication.delegate;
+  if ([appDelegate prepareInitialURL:userActivity.webpageURL]) {
+    [appDelegate startReactNativeInWindow:self.window launchOptions:@{
+      UIApplicationLaunchOptionsUserActivityDictionaryKey: @{
+        UIApplicationLaunchOptionsUserActivityTypeKey: userActivity.activityType,
+        @"UIApplicationLaunchOptionsUserActivityKey": userActivity,
+      },
+    }];
+    return;
+  }
   [appDelegate application:UIApplication.sharedApplication continueUserActivity:userActivity
       restorationHandler:^(NSArray<id<UIUserActivityRestoring>> *objects) {}];
 }
