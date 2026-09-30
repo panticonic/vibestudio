@@ -30,7 +30,7 @@ export interface DevInstanceSupervisorOptions {
     timeoutMs?: number;
     onReady(value: unknown): Promise<void>;
   };
-  /** CLI adapter behavior. Embedded owners normally leave this false. */
+  /** CLI adapter behavior. Call close() after owned state cleanup to release it. */
   forwardParentSignals?: boolean;
   /** Grace period before the exact owned process group is killed. */
   stopTimeoutMs?: number;
@@ -79,15 +79,16 @@ async function waitForReady(
   }
 }
 
-function forwardSignals(child: ChildProcess): () => void {
+function forwardSignals(requestStop: (signal: NodeJS.Signals) => Promise<number>): () => void {
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     const handler = () => {
-      // Forward to the owned leader first. That leader owns the graceful
-      // lifecycle of its descendants (for example, the Electron runner asks
-      // the app to enter app.quit()). Explicit stop() and timeout escalation
-      // still target the entire detached group.
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      // Every cancellation request joins the same owned retirement. Package
+      // runners may forward a terminal signal more than once; those deliveries
+      // must not create competing force-stop operations inside the child.
+      void requestStop(signal).catch((error: unknown) => {
+        console.error("[DevInstanceSupervisor] requested shutdown failed", error);
+      });
     };
     handlers.set(signal, handler);
     process.on(signal, handler);
@@ -158,9 +159,6 @@ export class DevInstanceSupervisor {
     const spawnFailure = new Promise<never>((_resolve, reject) => {
       child.once("error", reject);
     });
-    if (this.options.forwardParentSignals) {
-      this.stopForwarding = forwardSignals(child);
-    }
     try {
       if (child.pid === undefined) throw new Error("DevInstanceSupervisor child has no PID");
       this.ownedGroup = OwnedProcessGroup.create(child, {
@@ -168,6 +166,9 @@ export class DevInstanceSupervisor {
         requestGracefulStop: (signal) => child.kill(signal),
       });
       this.ownedIdentity = this.ownedGroup.identity;
+      if (this.options.forwardParentSignals) {
+        this.stopForwarding = forwardSignals((signal) => this.stop(signal));
+      }
       if (this.ownedIdentity) {
         this.registeredGroups = createOwnedProcessGroupReceiver(
           child,
@@ -194,10 +195,15 @@ export class DevInstanceSupervisor {
       try {
         await this.stop("SIGTERM");
       } catch (cleanupError) {
-        console.warn(
-          "[DevInstanceSupervisor] child cleanup after start failure also failed",
-          cleanupError
+        throw Object.assign(
+          new AggregateError(
+            [error, cleanupError],
+            "Developer instance startup and resource retirement failed"
+          ),
+          { code: "EOWNERSHIP" }
         );
+      } finally {
+        this.releaseSignalForwarding();
       }
       throw error;
     }
@@ -206,8 +212,6 @@ export class DevInstanceSupervisor {
   wait(): Promise<number> {
     if (!this.exit) throw new Error("DevInstanceSupervisor has not started");
     return this.exit.finally(async () => {
-      this.stopForwarding?.();
-      this.stopForwarding = null;
       // Join the exact original group and every acknowledged detached group
       // before the instance owner is permitted to remove its storage.
       const results = await Promise.allSettled([
@@ -229,5 +233,19 @@ export class DevInstanceSupervisor {
     if (!this.child || !this.exit) return 0;
     await this.ownedGroup?.retire(signal);
     return this.wait();
+  }
+
+  /** End the CLI ownership scope after its process and persistent state retire. */
+  async close(): Promise<void> {
+    try {
+      await this.stop();
+    } finally {
+      this.releaseSignalForwarding();
+    }
+  }
+
+  private releaseSignalForwarding(): void {
+    this.stopForwarding?.();
+    this.stopForwarding = null;
   }
 }

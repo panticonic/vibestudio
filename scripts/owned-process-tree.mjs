@@ -187,9 +187,11 @@ export async function terminateOwnedProcessTree(
 }
 
 function signalGroup(pid, signal) {
+  if (!processGroupAlive(pid)) return;
   try {
     process.kill(-pid, signal);
   } catch (error) {
+    if (!processGroupAlive(pid)) return;
     if (error?.code !== "ESRCH") throw error;
   }
 }
@@ -260,7 +262,7 @@ function ownedProcessGroups(rootPid, platform) {
   const groups = new Set([rootPid]);
   for (const pid of owned) {
     const entry = table.get(pid);
-    if (entry) groups.add(entry.pgid);
+    if (entry && entry.state !== "Z" && entry.pgid > 0) groups.add(entry.pgid);
   }
   // Never signal the group we are ourselves in. A child spawned without
   // `detached` stays in its parent's process group, so its pgid is *ours*;

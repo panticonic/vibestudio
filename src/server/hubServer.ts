@@ -2866,31 +2866,11 @@ export async function reapWorkspaceChildProcessGroup(
   while (alive(pid as number)) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
-/** Signal the workspace runtime and every process it owns. */
-export function signalWorkspaceChildTree(
-  child: ChildProcess,
-  signal: NodeJS.Signals,
-  deps: ProcessSignalDeps = {}
-): boolean {
-  const platform = deps.platform ?? process.platform;
-  const killProcess = deps.killProcess ?? process.kill;
-  if (platform !== "win32" && Number.isInteger(child.pid) && (child.pid ?? 0) > 0) {
-    try {
-      killProcess(-(child.pid as number), signal);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-  }
-  return child.kill(signal);
-}
-
 /**
  * Request ordered workspace shutdown and wait for the OS exit event. The first
  * signal goes only to the workspace server because it owns workerd and service
- * drain ordering. A repeated hub signal separately calls
- * signalWorkspaceChildTree(SIGKILL). There is deliberately no elapsed-time
- * cutoff between those explicit lifecycle actions.
+ * drain ordering. The process supervisor owns escalation and joins every
+ * registered descendant before removing instance state.
  */
 export async function terminateWorkspaceChild(
   child: ChildProcess,
@@ -3337,12 +3317,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
 
   const onShutdownSignal = (signal: NodeJS.Signals): void => {
     if (state?.shuttingDown) {
-      console.error(
-        `[Hub] Received ${signal} during shutdown; force-stopping workspace process trees`
-      );
-      for (const child of workspaceChildren()) {
-        signalWorkspaceChildTree(child, "SIGKILL");
-      }
+      console.log(`[Hub] Received ${signal}; ordered shutdown is already in progress`);
       return;
     }
     console.log(`[Hub] Received ${signal}; starting ordered shutdown`);

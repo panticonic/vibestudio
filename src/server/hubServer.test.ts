@@ -36,7 +36,6 @@ import {
   isHubControlHttpPath,
   selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
-  signalWorkspaceChildTree,
   terminateWorkspaceChild,
   waitForWorkspaceReadyFile,
   type HubRuntimeState,
@@ -247,33 +246,6 @@ describe("workspace child process-tree ownership", () => {
     await terminateWorkspaceChild(child, { reap: async () => undefined });
 
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
-  it("signals the complete POSIX runtime group for explicit forced shutdown", () => {
-    const child = fakeChild();
-    const killProcess = vi.fn((): true => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return true;
-    });
-
-    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
-      true
-    );
-    expect(killProcess).toHaveBeenCalledWith(-4321, "SIGKILL");
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the child handle when no POSIX process group exists", () => {
-    const child = fakeChild();
-    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
-    const killProcess = vi.fn((): true => {
-      throw missing;
-    });
-
-    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
-      true
-    );
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("attempts cleanup of the exact detached child process group", async () => {

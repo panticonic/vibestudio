@@ -29,6 +29,132 @@ afterEach(() => {
 
 describe("DevInstanceSupervisor", () => {
   it.skipIf(process.platform === "win32")(
+    "coalesces repeated CLI signals into one ordered child retirement",
+    async () => {
+      const root = temporaryRoot();
+      const ready = path.join(root, "ready");
+      const countFile = path.join(root, "signal-count");
+      const service = path.join(root, "service.mjs");
+      const ownerEntry = path.join(root, "owner.mjs");
+      fs.writeFileSync(
+        service,
+        `
+        import fs from 'node:fs';
+        let signals = 0;
+        const stop = () => {
+          fs.writeFileSync(process.argv[3], String(++signals));
+          setTimeout(() => process.exit(0), 300);
+        };
+        process.on('SIGINT', stop); process.on('SIGTERM', stop);
+        fs.writeFileSync(process.argv[2], 'ready');
+        setInterval(() => {}, 1000);
+      `
+      );
+      fs.writeFileSync(
+        ownerEntry,
+        `
+        import { DevInstanceSupervisor } from ${JSON.stringify(new URL("./devInstanceSupervisor.ts", import.meta.url).href)};
+        const owner = new DevInstanceSupervisor({ sourceRoot: process.argv[2], command: process.execPath,
+          args: [process.argv[3], process.argv[4], process.argv[5]], env: process.env, stdio: 'ignore', forwardParentSignals: true });
+        try { await owner.start(); await owner.wait(); } finally { await owner.close(); }
+      `
+      );
+      const owner = spawn(
+        process.execPath,
+        [
+          "--import",
+          createRequire(import.meta.url).resolve("tsx"),
+          ownerEntry,
+          root,
+          service,
+          ready,
+          countFile,
+        ],
+        { detached: true, stdio: "ignore" }
+      );
+      const identity = captureOwnedProcessIdentity(owner.pid!);
+      const exit = new Promise<number | null>((resolve) => owner.once("exit", resolve));
+      try {
+        await expect.poll(() => fs.existsSync(ready)).toBe(true);
+        owner.kill("SIGINT");
+        await expect.poll(() => fs.existsSync(countFile)).toBe(true);
+        owner.kill("SIGINT");
+        owner.kill("SIGTERM");
+        expect(await exit).toBe(0);
+        expect(fs.readFileSync(countFile, "utf8")).toBe("1");
+      } finally {
+        await terminateOwnedProcessTree(owner.pid!, { identity, termTimeoutMs: 100 });
+      }
+    }
+  );
+  it.skipIf(process.platform === "win32")(
+    "keeps the CLI signal owner alive through post-retirement state cleanup",
+    async () => {
+      const root = temporaryRoot();
+      const ready = path.join(root, "ready.json");
+      const cleanupStarted = path.join(root, "cleanup-started");
+      const cleanupDone = path.join(root, "cleanup-done");
+      const service = path.join(root, "service.mjs");
+      const ownerEntry = path.join(root, "owner.mjs");
+      fs.writeFileSync(
+        service,
+        `
+        import fs from 'node:fs';
+        process.on('SIGTERM', () => process.exit(0));
+        fs.writeFileSync(process.argv[2], '{}');
+        setInterval(() => {}, 1000);
+      `
+      );
+      fs.writeFileSync(
+        ownerEntry,
+        `
+        import fs from 'node:fs';
+        import { DevInstanceSupervisor } from ${JSON.stringify(new URL("./devInstanceSupervisor.ts", import.meta.url).href)};
+        const owner = new DevInstanceSupervisor({ sourceRoot: process.argv[2], command: process.execPath,
+          args: [process.argv[3], process.argv[4]], env: process.env, stdio: 'ignore', forwardParentSignals: true });
+        try {
+          await owner.start();
+          await owner.wait();
+        } finally {
+          fs.writeFileSync(process.argv[5], 'retiring-state');
+          await new Promise(resolve => setTimeout(resolve, 300));
+          fs.writeFileSync(process.argv[6], 'removed-state');
+          await owner.close();
+        }
+      `
+      );
+      const owner = spawn(
+        process.execPath,
+        [
+          "--import",
+          createRequire(import.meta.url).resolve("tsx"),
+          ownerEntry,
+          root,
+          service,
+          ready,
+          cleanupStarted,
+          cleanupDone,
+        ],
+        { detached: true, stdio: "ignore" }
+      );
+      const identity = captureOwnedProcessIdentity(owner.pid!);
+      const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+        owner.once("exit", (code, signal) => resolve({ code, signal }))
+      );
+      try {
+        await expect.poll(() => fs.existsSync(ready)).toBe(true);
+        owner.kill("SIGTERM");
+        await expect.poll(() => fs.existsSync(cleanupStarted)).toBe(true);
+        // pnpm/tsx can deliver another signal after the child has already exited.
+        owner.kill("SIGTERM");
+        expect(await exit).toEqual({ code: 0, signal: null });
+        expect(fs.readFileSync(cleanupDone, "utf8")).toBe("removed-state");
+      } finally {
+        await terminateOwnedProcessTree(owner.pid!, { identity, termTimeoutMs: 100 });
+      }
+    }
+  );
+  it.skipIf(process.platform === "win32")(
     "joins a registered detached group after abrupt child death",
     async () => {
       const root = temporaryRoot();
