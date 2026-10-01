@@ -1121,6 +1121,29 @@ describe("hub RPC pairing surfacing (§5)", () => {
     }
   });
 
+  it("lists workspace members with the read operation's own arguments", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    state.membershipStore.add(rootUserId, runtime.workspaceId, rootUserId, "admin");
+    const respond = vi.fn();
+    try {
+      await executeHubControl(
+        state,
+        { userId: rootUserId, handle: "root", role: "root" },
+        "listWorkspaceMembers",
+        [{ workspace: runtime.name }],
+        respond
+      );
+      expect(respond).toHaveBeenCalledWith({
+        workspace: runtime.name,
+        workspaceId: runtime.workspaceId,
+        members: [expect.objectContaining({ userId: rootUserId, role: "admin" })],
+      });
+    } finally {
+      state.identityDb.close();
+    }
+  });
+
   it("publishes an owner-projected full catalog after membership removal", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);

@@ -1,3 +1,4 @@
+import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
@@ -2273,7 +2274,8 @@ app.on("ready", async () => {
         >,
       ]);
       const membership = members.find((entry) => entry.workspaceId === id);
-      if (!membership) throw new Error("Workspace access was removed");
+      if (!membership)
+        throw new RpcBoundaryError("Workspace access was removed", "transport", "CONNECTION_LOST");
       const { createDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
       const runtime = createDesktopWorkspaceRuntime({
         connection: workspaceConnection,
@@ -2314,7 +2316,11 @@ app.on("ready", async () => {
       await runtime.start();
       if (desktopWorkspaceRuntimes.get(id) !== opening) {
         await runtime.close();
-        throw new Error("Workspace access was removed during startup");
+        throw new RpcBoundaryError(
+          "Workspace access was removed during startup",
+          "transport",
+          "CONNECTION_LOST"
+        );
       }
       openNativeControllers.set(id, runtime);
       if (membership.privateRole === "personal") {
@@ -2654,7 +2660,11 @@ app.on("ready", async () => {
           destination.kind === "workspace" &&
           !workspaces.some((entry) => entry.workspaceId === destination.workspaceId)
         ) {
-          throw new Error("You no longer have access to this workspace");
+          throw new RpcBoundaryError(
+            "You no longer have access to this workspace",
+            "transport",
+            "CONNECTION_LOST"
+          );
         }
         const workspace =
           destination.kind === "workspace"
@@ -2689,7 +2699,11 @@ app.on("ready", async () => {
           destination.kind === "workspace" &&
           !currentMembers.some((entry) => entry.workspaceId === destination.workspaceId)
         )
-          throw new Error("Workspace access was removed during startup");
+          throw new RpcBoundaryError(
+            "Workspace access was removed during startup",
+            "transport",
+            "CONNECTION_LOST"
+          );
         return target;
       },
       dispatcher,
@@ -2826,6 +2840,12 @@ app.on("ready", async () => {
     let catalogTail = Promise.resolve();
     const stopCatalog = catalogEvents.on("hub:workspace-catalog-changed", ({ workspaces }) => {
       workspaceCatalogOrder = workspaces.map((entry) => entry.workspaceId);
+      const chromeWorkspaceId = serverSession?.workspaceId;
+      if (chromeWorkspaceId) {
+        activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "hub:workspace-catalog-changed", {
+          workspaces,
+        });
+      }
       const reconcile = async () => {
         if (catalogClosed) return;
         await conn.workspaceSessions.reconcile(
@@ -2852,9 +2872,11 @@ app.on("ready", async () => {
         console.error("Workspace membership cleanup failed:", error);
       });
     });
+    const stopCatalogRecovery = conn.hubControlClient.onRecovery(() => catalogEvents.recover());
     closeWorkspaceCatalogWatch = async () => {
       catalogClosed = true;
       stopCatalog();
+      stopCatalogRecovery();
       await catalogEvents.unsubscribeAll();
       await catalogTail;
     };

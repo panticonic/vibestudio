@@ -16,6 +16,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.security.KeyStore
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -26,7 +31,10 @@ import javax.crypto.spec.GCMParameterSpec
 
 class VibestudioIrohModule(context: ReactApplicationContext) :
     ReactContextBaseJavaModule(context) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val owner = SupervisorJob()
+    private val scope = CoroutineScope(owner + Dispatchers.IO)
+    private val lifecycleLock = Any()
+    @Volatile private var active = true
     private val endpoints = ConcurrentHashMap<String, Endpoint>()
     private val endpointIdentities = ConcurrentHashMap<String, String>()
     private val connections = ConcurrentHashMap<String, Connection>()
@@ -37,6 +45,40 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     private val preferences = context.getSharedPreferences("vibestudio-iroh-identities", Context.MODE_PRIVATE)
 
     override fun getName() = "VibestudioIroh"
+
+    override fun invalidate() {
+        val retired = synchronized(lifecycleLock) {
+            if (!active) return
+            active = false
+            val owned = connections.values.toList()
+            connections.clear()
+            sends.clear()
+            receives.clear()
+            sendConnections.clear()
+            receiveConnections.clear()
+            owned
+        }
+        // Invalidation is the authoritative end of this React Native runtime.
+        // Join its native calls before a replacement can bind the same identity.
+        runBlocking(Dispatchers.IO) {
+            retired.forEach { connection ->
+                try { connection.close(0, byteArrayOf()) }
+                catch (error: Throwable) { Log.e(TAG, "Runtime connection retirement failed", error) }
+            }
+            owner.cancelAndJoin()
+            val ownedEndpoints = synchronized(lifecycleLock) {
+                endpoints.values.toList().also {
+                    endpoints.clear()
+                    endpointIdentities.clear()
+                }
+            }
+            ownedEndpoints.forEach { endpoint ->
+                try { endpoint.shutdown(); endpoint.close() }
+                catch (error: Throwable) { Log.e(TAG, "Runtime endpoint retirement failed", error) }
+            }
+        }
+        super.invalidate()
+    }
 
     @ReactMethod
     fun createIdentity(promise: Promise) = launch(promise) {
@@ -80,8 +122,17 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
                 protocols = null,
             ))
             val handle = UUID.randomUUID().toString()
-            endpoints[handle] = endpoint
-            endpointIdentities[handle] = identityId
+            val adopted = synchronized(lifecycleLock) {
+                if (!active) false else {
+                    endpoints[handle] = endpoint
+                    endpointIdentities[handle] = identityId
+                    true
+                }
+            }
+            if (!adopted) {
+                withContext(NonCancellable) { endpoint.shutdown(); endpoint.close() }
+                throw IllegalStateException("Iroh runtime has been invalidated")
+            }
             Arguments.createMap().apply {
                 putString("endpointHandle", handle)
                 putString("endpointId", endpoint.id().toString())
@@ -91,10 +142,15 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
 
     @ReactMethod
     fun shutdownEndpoint(handle: String, promise: Promise) = launch(promise) {
-        endpointIdentities.remove(handle)
-        endpoints.remove(handle)?.let { endpoint ->
-            endpoint.shutdown()
-            endpoint.close()
+        endpoints[handle]?.let { endpoint ->
+            withContext(NonCancellable) {
+                endpoint.shutdown()
+                endpoint.close()
+                synchronized(lifecycleLock) {
+                    endpoints.remove(handle, endpoint)
+                    endpointIdentities.remove(handle)
+                }
+            }
         }
         null
     }
@@ -152,10 +208,10 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
 
     @ReactMethod
     fun closeConnection(handle: String, code: String, reason: String) {
-        connections.remove(handle)?.let { connection ->
-            removeStreams(handle)
-            connection.close(code.toLong(), Base64.decode(reason, Base64.NO_WRAP))
+        val connection = synchronized(lifecycleLock) {
+            connections.remove(handle)?.also { removeStreams(handle) }
         }
+        connection?.close(code.toLong(), Base64.decode(reason, Base64.NO_WRAP))
     }
 
     @ReactMethod fun connectionClosed(handle: String, promise: Promise) = launch(promise) {
@@ -170,20 +226,38 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
         connection.setMaxConcurrentBiStreams(32_768u)
         connection.setMaxConcurrentUniStreams(0u)
         val handle = UUID.randomUUID().toString()
-        connections[handle] = connection
+        synchronized(lifecycleLock) {
+            if (!active) {
+                connection.close(0, byteArrayOf())
+                throw IllegalStateException("Iroh runtime has been invalidated")
+            }
+            connections[handle] = connection
+        }
         putString("connectionHandle", handle)
         putString("peerEndpointId", connection.remoteId().toString())
     }
 
-    private fun streamResult(stream: BiStream, connectionHandle: String) = Arguments.createMap().apply {
-        val sendHandle = UUID.randomUUID().toString()
-        val receiveHandle = UUID.randomUUID().toString()
-        sends[sendHandle] = stream.send()
-        receives[receiveHandle] = stream.recv()
-        sendConnections[sendHandle] = connectionHandle
-        receiveConnections[receiveHandle] = connectionHandle
-        putString("sendHandle", sendHandle)
-        putString("receiveHandle", receiveHandle)
+    private suspend fun streamResult(stream: BiStream, connectionHandle: String): Any {
+        val result = synchronized(lifecycleLock) {
+            if (!active || !connections.containsKey(connectionHandle)) null else {
+                Arguments.createMap().apply {
+                    val sendHandle = UUID.randomUUID().toString()
+                    val receiveHandle = UUID.randomUUID().toString()
+                    sends[sendHandle] = stream.send()
+                    receives[receiveHandle] = stream.recv()
+                    sendConnections[sendHandle] = connectionHandle
+                    receiveConnections[receiveHandle] = connectionHandle
+                    putString("sendHandle", sendHandle)
+                    putString("receiveHandle", receiveHandle)
+                }
+            }
+        }
+        if (result != null) return result
+        withContext(NonCancellable) {
+            stream.send().reset(0u)
+            stream.recv().stop(0u)
+        }
+        throw IllegalStateException("Iroh runtime has been invalidated")
     }
 
     private fun requireEndpoint(handle: String) = endpoints[handle]
@@ -214,10 +288,21 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     }
 
     private fun launch(promise: Promise, block: suspend () -> Any?) {
-        scope.launch {
-            try { promise.resolve(block()) }
+        val settled = AtomicBoolean(false)
+        val operation = scope.launch {
+            try {
+                check(active) { "Iroh runtime has been invalidated" }
+                val result = block()
+                check(active) { "Iroh runtime has been invalidated" }
+                if (settled.compareAndSet(false, true)) promise.resolve(result)
+            }
             catch (error: Throwable) {
                 Log.e(TAG, "Native Iroh operation failed", error)
+                if (settled.compareAndSet(false, true)) promise.reject("IROH_NATIVE", error.message, error)
+            }
+        }
+        operation.invokeOnCompletion { error ->
+            if (error != null && settled.compareAndSet(false, true)) {
                 promise.reject("IROH_NATIVE", error.message, error)
             }
         }

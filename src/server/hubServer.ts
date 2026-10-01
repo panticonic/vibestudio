@@ -1662,7 +1662,7 @@ export async function executeHubControl(
     return;
   }
   if (method === "deleteWorkspace") {
-    const opts = hubControlMethods.createWorkspace.args.parse(args)[0];
+    const opts = hubControlMethods.deleteWorkspace.args.parse(args)[0];
     const name = normalizeWorkspaceName(opts["workspace"]);
     const workspaceId = requireWorkspaceAdmin(state, subject, name);
     const active = state.runtimes.get(name);
@@ -1765,7 +1765,7 @@ export async function executeHubControl(
     return;
   }
   if (method === "listWorkspaceMembers") {
-    const opts = hubControlMethods.createWorkspace.args.parse(args)[0];
+    const opts = hubControlMethods.listWorkspaceMembers.args.parse(args)[0];
     const name = normalizeWorkspaceName(opts["workspace"]);
     const workspaceId = requireMemberWorkspaceId(state, subject, name);
     const storedMembers = state.membershipStore.listMembers(workspaceId);

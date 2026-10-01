@@ -173,6 +173,22 @@ describe("desktop workspace session ownership", () => {
     await directory.close();
   });
 
+  it("closes the owned connection even when native retirement fails", async () => {
+    const project = session("project");
+    const directory = new WorkspaceSessionDirectory(session("personal"), async () => project);
+    await directory.get("project");
+    const failure = new Error("Native retirement failed");
+    await expect(
+      directory.reconcile(new Set(["personal"]), async () => {
+        throw failure;
+      })
+    ).rejects.toMatchObject({ errors: [failure] });
+    expect(project.close).toHaveBeenCalledOnce();
+    await expect(directory.get("project")).rejects.toThrow("closing");
+    await directory.reconcile(new Set(["personal"]));
+    await directory.close();
+  });
+
   it("reports cleanup failures and does not abandon other owned sessions", async () => {
     const personal = session("personal");
     personal.close.mockRejectedValue(new Error("Still attached"));

@@ -84,17 +84,16 @@ jobs:
             --version "${{ inputs.version || '0.0.0-ci' }}" \
             --scope "${{ inputs.scope || '@panticonic' }}"
 
-      # Only a natively-executable target can run the cancellation regression.
-      # Cross-built artifacts are validated when they reach a matching host.
-      - name: Verify endpoint and stream cancellation
-        if: matrix.platform == 'linux-x64-gnu' || matrix.platform == 'darwin-arm64' || matrix.platform == 'win32-x64-msvc'
+      # Every matrix runner executes its target natively, including ARM64.
+      - name: Verify endpoint, stream, and dial cancellation
         shell: bash
         env:
           NAPI_RS_NATIVE_LIBRARY_PATH: ${{ runner.temp }}/iroh-${{ matrix.platform }}/package/iroh.${{ matrix.platform }}.node
         run: |
           node --test \
             "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/endpoint.mjs" \
-            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/stream-cancellation.mjs"
+            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/stream-cancellation.mjs" \
+            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/dial-cancellation.mjs"
 
       - name: Upload the platform package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

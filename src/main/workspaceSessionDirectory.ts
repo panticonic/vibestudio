@@ -1,3 +1,5 @@
+import { RpcBoundaryError } from "@vibestudio/rpc/errors";
+
 /** A connection belongs to one workspace for its entire lifetime. */
 export interface OwnedWorkspaceSession {
   readonly workspaceId: string;
@@ -38,10 +40,14 @@ export class WorkspaceSessionDirectory<T extends OwnedWorkspaceSession> {
     if (!workspaceId.trim()) return Promise.reject(new Error("Workspace ID is required"));
     if (this.closing) return Promise.reject(new Error("Desktop workspace sessions are closing"));
     if (this.retiring.has(workspaceId)) {
-      return Promise.reject(new Error("This workspace session is closing"));
+      return Promise.reject(
+        new RpcBoundaryError("This workspace session is closing", "transport", "CONNECTION_LOST")
+      );
     }
     if (this.admittedWorkspaceIds && !this.admittedWorkspaceIds.has(workspaceId)) {
-      return Promise.reject(new Error("Workspace access was removed"));
+      return Promise.reject(
+        new RpcBoundaryError("Workspace access was removed", "transport", "CONNECTION_LOST")
+      );
     }
     const existing = this.sessions.get(workspaceId);
     if (existing) return existing.ready;
@@ -54,7 +60,11 @@ export class WorkspaceSessionDirectory<T extends OwnedWorkspaceSession> {
         throw new Error("Workspace connection returned a different workspace identity");
       }
       if (this.admittedWorkspaceIds && !this.admittedWorkspaceIds.has(workspaceId)) {
-        throw new Error("Workspace access was removed during connection");
+        throw new RpcBoundaryError(
+          "Workspace access was removed during connection",
+          "transport",
+          "CONNECTION_LOST"
+        );
       }
       return session;
     });
@@ -82,14 +92,26 @@ export class WorkspaceSessionDirectory<T extends OwnedWorkspaceSession> {
     const session = this.sessions.get(workspaceId);
     if (!session) return Promise.resolve();
     const retirement = Promise.resolve().then(async () => {
-      await beforeRelease(workspaceId);
+      const errors: unknown[] = [];
+      try {
+        await beforeRelease(workspaceId);
+      } catch (error) {
+        errors.push(error);
+      }
       let value: T;
       try {
         value = await session.connection;
       } catch {
+        if (errors.length) throw errors[0];
         return;
       }
-      await value.close();
+      try {
+        await value.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "Workspace retirement failed");
     });
     const owned = { operation: retirement, failed: false };
     this.retiring.set(workspaceId, owned);

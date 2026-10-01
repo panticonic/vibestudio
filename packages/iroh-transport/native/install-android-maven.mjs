@@ -10,6 +10,7 @@
  * once the version is present.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +33,11 @@ try {
   if (!response.ok) {
     throw new Error(`${IROH_ANDROID_REPAIR.archiveUrl} returned ${response.status}`);
   }
-  writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (createHash("sha256").update(bytes).digest("hex") !== IROH_ANDROID_REPAIR.archiveSha256) {
+    throw new Error("Published Iroh Android archive digest mismatch");
+  }
+  writeFileSync(archive, bytes);
   mkdirSync(repository, { recursive: true });
   // The archive is rooted at computer/iroh, holding the iroh JAR the AAR
   // depends on alongside iroh-android itself.
@@ -42,4 +47,6 @@ try {
 }
 
 if (!existsSync(marker)) throw new Error(`Archive did not contain ${marker}`);
-console.log(`installed computer.iroh:iroh-android:${IROH_ANDROID_REPAIR.version} into ${repository}`);
+console.log(
+  `installed computer.iroh:iroh-android:${IROH_ANDROID_REPAIR.version} into ${repository}`
+);

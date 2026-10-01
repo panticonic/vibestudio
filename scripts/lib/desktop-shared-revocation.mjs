@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
+import { tsImport } from "tsx/esm/api";
+
+const { capabilityPatternCovers } = await tsImport(
+  "@vibestudio/shared/authorityManifest",
+  import.meta.url
+);
 
 export async function until(read, label, deadline) {
   while (Date.now() < deadline) {
@@ -267,6 +272,10 @@ export async function runSharedMemberRevocation({
   ]);
   const memberApp = await launchMember(invitation.pairing.deepLink);
   const member = await chromePage(memberApp, deadline);
+  const startupCatalog = await nativeRpc(member, { kind: "hub" }, "hubControl.listWorkspaces", []);
+  const memberSystem = startupCatalog.find((entry) => entry.privateRole === "system");
+  if (!memberSystem) throw new Error("Paired member is missing System");
+  await prepareWorkspace(memberApp, memberSystem);
   const memberWorkspace = await prepareWorkspace(memberApp, workspace);
   const ownerCatalog = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaces", []);
   const memberCatalog = await nativeRpc(member, { kind: "hub" }, "hubControl.listWorkspaces", []);
@@ -314,7 +323,7 @@ export async function runSharedMemberRevocation({
       })}`
     );
   const panel = await memberApp.evaluate(
-    async ({ workspaceId, parentId }) => {
+    async (_electron, { workspaceId, parentId }) => {
       const testApi = globalThis.__testApi;
       if (!testApi) throw new Error("Native test API is unavailable");
       const workspaceApi = await testApi.forWorkspace(workspaceId);
@@ -409,52 +418,39 @@ export async function runSharedMemberRevocation({
       userId: invitation.user.userId,
     },
   ];
-  let removalChallenge;
-  try {
-    await nativeRpc(owner, { kind: "hub" }, "hubControl.removeWorkspaceMember", removalArgs);
-  } catch (error) {
-    removalChallenge = error;
-  }
-  if (!removalChallenge || removalChallenge.code !== "EACQUIRE") {
-    throw new Error(
-      `Removing a workspace member did not require explicit owner approval: ${removalChallenge?.message ?? "call succeeded"}`
-    );
-  }
-  const removalAcquisition = removalChallenge.errorData?.acquisition;
-  console.log(
-    `[desktop-smoke] Member-removal authority challenge: code=${removalChallenge.code}; pending=${String(removalAcquisition?.pending === true)}`
+  let removalOutcome;
+  const removalRequest = nativeRpc(
+    owner,
+    { kind: "hub" },
+    "hubControl.removeWorkspaceMember",
+    removalArgs,
+    Math.max(1, deadline - Date.now())
+  ).then(
+    (result) => (removalOutcome = { result }),
+    (error) => (removalOutcome = { error })
   );
-  if (!removalAcquisition || removalAcquisition.pending !== true) {
-    throw new Error(
-      "The member-removal authority challenge was not entered into an approval queue"
-    );
-  }
   const removalPending = await until(
     async () => {
-      const workspaces = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaces", []);
-      for (const candidate of workspaces) {
-        const rows = await nativeRpc(
-          owner,
-          { kind: "workspace", workspaceId: candidate.workspaceId },
-          "shellApproval.listPending",
-          []
+      if (removalOutcome) {
+        throw new Error(
+          `Member removal settled before owner approval: ${removalOutcome.error?.message ?? JSON.stringify(removalOutcome.result)}`
         );
-        const pending = rows.find(
-          (entry) => entry.kind === "capability" && entry.title === "Remove a workspace member"
-        );
-        if (pending) return { pending, workspaceId: candidate.workspaceId };
       }
-      return null;
+      const rows = await nativeRpc(owner, { kind: "hub" }, "shellApproval.listPending", []);
+      return rows.find(
+        (entry) => entry.kind === "capability" && entry.title === "Remove a workspace member"
+      );
     },
     "waiting for the owner's member-removal approval",
     deadline
   );
+  await owner.locator('[aria-label="Open System"]').click();
   console.log(
-    `[desktop-smoke] Located member-removal approval ${removalPending.pending.approvalId} in workspace ${removalPending.workspaceId}`
+    `[desktop-smoke] Located member-removal approval ${removalPending.approvalId} in hub chrome`
   );
   const removalCard = await until(
     async () => {
-      const displayed = await visibleCard(ownerApp, removalPending.pending.approvalId);
+      const displayed = await visibleCard(ownerApp, removalPending.approvalId);
       if (displayed) return displayed;
       for (const page of ownerApp.context().pages()) {
         if (page.isClosed()) continue;
@@ -480,12 +476,9 @@ export async function runSharedMemberRevocation({
     "recording the owner's member-removal approval",
     deadline
   );
-  const removal = await nativeRpc(
-    owner,
-    { kind: "hub" },
-    "hubControl.removeWorkspaceMember",
-    removalArgs
-  );
+  await removalRequest;
+  if (removalOutcome.error) throw removalOutcome.error;
+  const removal = removalOutcome.result;
   if (!removal.removed || removal.closedSessions < 1)
     throw new Error("Membership removal did not retire the live member session");
 
@@ -553,7 +546,7 @@ export async function runSharedMemberRevocation({
     workspaceId: workspace.workspaceId,
     memberUserId: invitation.user.userId,
     approvalId: pending.approvalId,
-    removalApprovalWorkspaceId: removalPending.workspaceId,
+    removalApprovalDestination: "hub",
     visibleBeforeRevocation: true,
     ordinaryMember: true,
     uniquePrivatePairs: true,

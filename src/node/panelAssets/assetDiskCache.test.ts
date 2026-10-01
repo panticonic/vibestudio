@@ -6,6 +6,11 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, open: vi.fn(original.open) };
+});
+
 function streamOf(bytes: Uint8Array | string): ReadableStream<Uint8Array> {
   const buf = typeof bytes === "string" ? Buffer.from(bytes) : bytes;
   return new ReadableStream<Uint8Array>({
@@ -149,6 +154,89 @@ describe("AssetDiskCache", () => {
     if (hit.kind === "asset")
       expect((await fsp.readFile(hit.asset.bodyPath)).toString()).toBe("first response");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves streamed bytes when positioned reads restore the shared file cursor", async () => {
+    const cache = await newCache();
+    const originalOpen = (
+      await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    ).open;
+    let cursor = 0;
+    let reads = 0;
+    let writes = 0;
+    let readStarted!: () => void;
+    let releaseRead!: () => void;
+    let secondWritten!: () => void;
+    const started = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const written = new Promise<void>((resolve) => {
+      secondWritten = resolve;
+    });
+    const open = vi.mocked(fsp.open).mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (args[1] !== "wx+") return handle;
+      const write = handle.write.bind(handle);
+      const read = handle.read.bind(handle);
+      handle.write = (async (buffer: Buffer, offset: number, length: number, position?: number) => {
+        const result = await write(buffer, offset, length, position ?? cursor);
+        if (position == null) cursor += result.bytesWritten;
+        if (++writes === 2) secondWritten();
+        return result;
+      }) as typeof handle.write;
+      handle.read = (async (buffer: Buffer, offset: number, length: number, position: number) => {
+        // Windows libuv saves and restores the shared cursor around positioned reads.
+        const saved = cursor;
+        const result = await read(buffer, offset, length, position);
+        if (++reads === 1) {
+          readStarted();
+          await released;
+          cursor = saved;
+        }
+        return result;
+      }) as typeof handle.read;
+      return handle;
+    });
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await cache.serve("/cursor.js", async () =>
+        immutableResponse("unused", {
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              source = controller;
+            },
+          }),
+        })
+      );
+      if (response.kind !== "passthrough") throw new Error("Expected a live download");
+      reader = response.response.body!.getReader();
+      source.enqueue(Buffer.from("first---"));
+      const first = reader.read();
+      await started;
+      source.enqueue(Buffer.from("second--"));
+      await written;
+      releaseRead();
+      const chunks = [Buffer.from((await first).value!)];
+      source.enqueue(Buffer.from("third---"));
+      source.close();
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        chunks.push(Buffer.from(next.value));
+      }
+      expect(Buffer.concat(chunks).toString()).toBe("first---second--third---");
+      const hit = await cache.get("/cursor.js");
+      expect(hit && (await fsp.readFile(hit.bodyPath)).toString()).toBe("first---second--third---");
+    } finally {
+      releaseRead();
+      await reader?.cancel().catch(() => undefined);
+      await cache.close();
+      open.mockImplementation(originalOpen);
+    }
   });
 
   it("lets demand join a prewarm download and read its prefix before EOF", async () => {

@@ -808,6 +808,10 @@ async function collectShellSnapshots(app, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_
       for (const contents of webContents.getAllWebContents()) {
         if (contents.isDestroyed()) continue;
         const url = contents.getURL();
+        if (!url) {
+          snapshots.push({ id: contents.id, url, pendingNavigation: true });
+          continue;
+        }
         try {
           const dom = await Promise.race([
             contents.executeJavaScript(
@@ -865,7 +869,10 @@ async function clickDesktopButton(app, label) {
         const label = new RegExp(labelSource, "i");
         const candidates = [];
         for (const contents of webContents.getAllWebContents()) {
-          if (contents.isDestroyed()) continue;
+          // Prepared panel views have no document until their launch is approved.
+          // executeJavaScript on such a view waits for its first navigation,
+          // which would strand the click that must approve that very launch.
+          if (contents.isDestroyed() || !contents.getURL()) continue;
           try {
             const priority = await contents.executeJavaScript(
               `(() => {
@@ -992,7 +999,7 @@ async function waitForChromeResult(app, expression, label, timeoutMs) {
   throw new Error(`Timed out ${label}`);
 }
 
-async function selectWorkspace(app, name, timeoutMs) {
+async function selectWorkspace(app, name, timeoutMs, signal) {
   const label = `Open ${name}`;
   const target = JSON.stringify(label);
   const clickExpression = `(() => {
@@ -1020,6 +1027,7 @@ async function selectWorkspace(app, name, timeoutMs) {
   // worth re-attempting whatever went wrong with the last one. Nothing is
   // hidden either way: the last failure is reported if the deadline passes.
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
       if (await evaluateHostedChrome(app, focusExpression, `waiting for ${name} workspace focus`)) {
         return;
@@ -1028,6 +1036,7 @@ async function selectWorkspace(app, name, timeoutMs) {
         (await evaluateHostedChrome(app, clickExpression, `selecting ${name}`)) || everClicked;
       lastFailure = null;
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       lastFailure = error;
     }
     await sleep(250);
@@ -2595,12 +2604,23 @@ async function main(ownerSignal) {
           return member;
         },
         prepareWorkspace: async (app, workspace) => {
+          const workspaceLabel = await waitForChromeResult(
+            app,
+            `(() => {
+              const section = [...document.querySelectorAll('.workspace-section')]
+                .find((entry) => entry.dataset.workspaceId === ${JSON.stringify(workspace.workspaceId)});
+              const label = section?.querySelector('.workspace-section-select')?.getAttribute('aria-label');
+              return label?.startsWith('Open ') ? label.slice(5) : null;
+            })()`,
+            `reading the rendered label for workspace ${workspace.workspaceId}`,
+            Math.max(1000, deadlineMs - Date.now())
+          );
           const page = await chromePage(app, deadlineMs);
           await nativeRpc(page, { kind: "hub" }, "hubControl.routeWorkspace", [
             { workspaceId: workspace.workspaceId },
           ]);
-          await selectWorkspace(app, workspace.name, Math.max(1000, deadlineMs - Date.now()));
           while (Date.now() < deadlineMs) {
+            ownerSignal.throwIfAborted();
             const state = await nativeRpc(
               page,
               { kind: "workspace", workspaceId: workspace.workspaceId },
@@ -2608,16 +2628,21 @@ async function main(ownerSignal) {
               []
             );
             if (state.status === "resolved" || state.status === "not-required") {
+              await selectWorkspace(app, workspaceLabel, Math.max(1000, deadlineMs - Date.now()), ownerSignal);
               await waitForShellOverlayCleared(app, Math.max(1000, deadlineMs - Date.now()));
               const panelIds = await workspaceTreeIds(
                 app,
-                workspace.name,
+                workspaceLabel,
                 Math.max(1000, deadlineMs - Date.now())
               );
               return { panelId: panelIds[0] };
             }
             if (state.status === "failed") throw new Error(state.error);
             await clickDesktopButton(app, /^Add to workspace$/i);
+            await clickDesktopButton(
+              app,
+              new RegExp(`^Open ${workspaceLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
+            );
             await sleep(750);
           }
           throw new Error(

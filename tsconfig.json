@@ -55,7 +55,9 @@
       "@vibestudio/identity/*": ["./packages/identity/src/*"],
       "@vibestudio/trajectory-identity": ["./packages/trajectory-identity/src/index.ts"],
       "@vibestudio/process-adapter": ["./packages/process-adapter/src/index.ts"],
-      "@vibestudio/process-adapter/native-launch": ["./packages/process-adapter/src/isolation/native-launch.ts"],
+      "@vibestudio/process-adapter/native-launch": [
+        "./packages/process-adapter/src/isolation/native-launch.ts"
+      ],
       "@vibestudio/rpc": ["./packages/rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["./packages/rpc/src/*"],
       "@vibestudio/service-schemas/bindings/*": ["./packages/service-schemas/src/bindings/*"],
@@ -64,6 +66,7 @@
       "@vibestudio/service-schemas/*": ["./packages/service-schemas/src/*"],
       "@vibestudio/shell-core/*": ["./packages/shell-core/src/*"],
       "@vibestudio/shared/*": ["./packages/shared/src/*"],
+      "@vibestudio/svelte-type-source": ["./packages/svelte-type-source/src/index.ts"],
       "@vibestudio/sqlite": ["./packages/sqlite/src/index.ts"],
       "@vibestudio/typecheck": ["./packages/typecheck/src/index.ts"],
       "@vibestudio/typecheck/workspace": ["./packages/typecheck/src/lib/workspace-packages.ts"],

@@ -11,4 +11,5 @@ export const IROH_ANDROID_REPAIR = Object.freeze({
   coordinate: "computer.iroh:iroh-android",
   archiveUrl:
     "https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/iroh-android-maven-1.1.0-cancel.2.tar.gz",
+  archiveSha256: "3729d88a6f314e5b2656302117110c038e33cc174c02e9afb44b7dca7e8c7645",
 });

@@ -356,10 +356,13 @@ class AssetPopulation {
           if (next.done) break;
           let offset = 0;
           while (offset < next.value.byteLength) {
+            // Readers and the producer share this handle. Positioned reads on
+            // Windows restore its cursor, so writes must also name their offset.
             const { bytesWritten } = await this.writer.write(
               next.value,
               offset,
-              next.value.byteLength - offset
+              next.value.byteLength - offset,
+              this.written + offset
             );
             if (bytesWritten === 0) throw new Error("Asset cache write made no progress");
             offset += bytesWritten;

@@ -207,6 +207,22 @@ export async function buildAndroidApp(options) {
     variant === "release"
       ? path.join(root, "app", "build", "outputs", "apk", "release", "app-release.apk")
       : internalAndroidApkPath(options.appRoot);
+  // The reviewed native release is distributed as a Maven archive rather than
+  // through Maven Central. Acquire it as part of the source build, so a clean
+  // machine resolves the same pinned binding as an already prepared machine.
+  await runNativeCommand(
+    process.execPath,
+    [
+      path.join(
+        options.appRoot,
+        "packages",
+        "iroh-transport",
+        "native",
+        "install-android-maven.mjs"
+      ),
+    ],
+    { cwd: options.appRoot, env: options.env, stdio: options.stdio, errorCode: "EBUILD" }
+  );
   await runNativeCommand(
     path.join(root, "gradlew"),
     [

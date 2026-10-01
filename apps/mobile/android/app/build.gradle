@@ -87,6 +87,7 @@ android {
         applicationId "app.vibestudio.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         versionCode 1
         // React Native's plugin intentionally skips application-level ABI
         // filtering on the old architecture. Keep its canonical architecture
@@ -148,6 +149,8 @@ android {
 }
 
 dependencies {
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+    androidTestImplementation "androidx.test:runner:1.6.2"
     implementation project(":react-native-webview")
     implementation "androidx.webkit:webkit:1.14.0"
     // React Native framework
