@@ -557,13 +557,25 @@ export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
       parsedArgs.pop();
     }
   } catch (error) {
-    throw schemaFailure(
+    // Refinements/transforms may throw an operational error rather than a
+    // validation result. Preserve that original failure and its owner.
+    if (!error || typeof error !== "object" || !("issues" in error) || !Array.isArray(error.issues))
+      throw error;
+    const validation = describeArgsValidationError(error as z.ZodError, definition);
+    const failure = schemaFailure(
       service,
       method,
       "arguments",
       error,
       expectedCallShape(service, method, definition)
     );
+    failure.message += ` ${validation.summary}.`;
+    // The same payload used by receiver validation survives RPC serialization;
+    // Error.cause alone is local and cannot inform the waiting remote caller.
+    Object.assign(failure, {
+      errorData: invalidArgumentsErrorData(service, method, validation.issues),
+    });
+    throw failure;
   }
   const result = await call(service, method, parsedArgs);
   if (!definition.returns) return result;

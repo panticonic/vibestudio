@@ -5342,8 +5342,20 @@ describe("RpcServer caller identity", () => {
   )(
     "inherits an extension task without a trajectory for $type calls with $binding membership",
     async ({ type, binding }) => {
+      const policy: import("@vibestudio/rpc").AgentExecutionTestPolicy = {
+        policyId: "test:extension:case:review",
+        kind: "case",
+        orchestratorPolicyId: "test:extension",
+        case: {
+          testId: "review",
+          agent: { model: "openai-codex:gpt-6.1-sol", approvalLevel: 2, fallback: "disabled" },
+          authority: [],
+          unexpectedPrompts: "fail",
+        },
+      };
       const initiator = {
         ...createVerifiedCaller("eval:review", "do"),
+        testPolicy: policy,
         ...(binding === "task"
           ? { taskAuthority: "task:review" as const }
           : {
@@ -5381,6 +5393,8 @@ describe("RpcServer caller identity", () => {
       });
       expect(contexts).toHaveLength(1);
       expect(contexts[0]?.caller.taskAuthority).toBe("task:review");
+      expect(contexts[0]?.caller.testPolicy).toEqual(policy);
+      expect(client.caller.testPolicy).toBeUndefined();
       expect(contexts[0]?.caller.runtime).toEqual(client.caller.runtime);
       expect(contexts[0]?.caller.executionSession).toBeUndefined();
       expect(contexts[0]?.causalParent).toBeUndefined();
@@ -5395,6 +5409,7 @@ describe("RpcServer caller identity", () => {
       });
       expect(contexts).toHaveLength(2);
       expect(contexts[1]?.caller.taskAuthority).toBeUndefined();
+      expect(contexts[1]?.caller.testPolicy).toBeUndefined();
     }
   );
 

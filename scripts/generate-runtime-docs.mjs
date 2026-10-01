@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
+import { runtimeClientCatalog } from "./lib/runtime-client-catalog.mjs";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -106,7 +107,11 @@ function updateDoc(root, relativePath, replacements, checkOnly) {
 
 async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOnly) {
   const schemaPath = path.join(repoRoot, "packages/service-schemas/src", schemaFile);
-  const catalogPath = path.join(repoRoot, "packages/service-schemas/src/runtime/generated", catalogFile);
+  const catalogPath = path.join(
+    repoRoot,
+    "packages/service-schemas/src/runtime/generated",
+    catalogFile
+  );
   const module = await tsImport(schemaPath, import.meta.url);
   const methods = module[exportName];
   if (!methods || typeof methods !== "object") {
@@ -154,15 +159,45 @@ function writeRuntimeCatalog(catalogPath, catalogFile, catalog, checkOnly) {
 const checkOnly = process.argv.includes("--check");
 
 await updateRuntimeCatalog("workspaceSource.ts", "gadMethods", "gadRuntimeCatalog.json", checkOnly);
-await updateRuntimeCatalog("templates.ts", "templatesMethods", "templatesRuntimeCatalog.json", checkOnly);
+await updateRuntimeCatalog(
+  "templates.ts",
+  "templatesMethods",
+  "templatesRuntimeCatalog.json",
+  checkOnly
+);
 
 const resolutionModule = await tsImport(
-  path.join(repoRoot, "packages/workspace-contracts/src/workspaceConfigSchema.ts"), import.meta.url
+  path.join(repoRoot, "packages/workspace-contracts/src/workspaceConfigSchema.ts"),
+  import.meta.url
 );
 writeRuntimeCatalog(
-  path.join(repoRoot, "packages/service-schemas/src/runtime/generated/workspaceServiceResolution.json"),
+  path.join(
+    repoRoot,
+    "packages/service-schemas/src/runtime/generated/workspaceServiceResolution.json"
+  ),
   "workspaceServiceResolution.json",
   convertZodToJsonSchema(resolutionModule.ResolvedWorkspaceServiceSchema, { target: "openApi3" }),
+  checkOnly
+);
+
+writeRuntimeCatalog(
+  path.join(
+    repoRoot,
+    "packages/service-schemas/src/runtime/generated/browserDataRuntimeCatalog.json"
+  ),
+  "browserDataRuntimeCatalog.json",
+  runtimeClientCatalog({
+    root: repoRoot,
+    files: [
+      "packages/browser-data/src/client/browserDataClient.ts",
+      "packages/browser-data/src/types.ts",
+      "packages/browser-data/src/environment.ts",
+      "packages/browser-data/src/storage/types.ts",
+    ],
+    interfaceName: "BrowserDataClient",
+    namespace: "browserData",
+    moduleName: "@vibestudio/browser-data/client",
+  }),
   checkOnly
 );
 

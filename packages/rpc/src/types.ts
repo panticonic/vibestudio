@@ -570,6 +570,9 @@ export interface RpcClientConfig {
    * scoped clients and peers are borrowed views and cannot retire the owner.
    */
   lifetime?: AbortSignal;
+  /** Cancellation of the currently executing invocation, captured per outbound
+   * request. Cancels nested work without retiring a shared runtime endpoint. */
+  invocationSignal?: () => AbortSignal | null | undefined;
   /**
    * Optional default deadline for the response HEAD and subsequent body-frame
    * silence. Omitted or `null` means unbounded; callers that own a bounded

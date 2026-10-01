@@ -799,6 +799,13 @@ export class EvalDO extends DurableObjectBase {
           state: "waiting",
         });
       }
+      if (
+        targetId === "main" &&
+        ["fs.readFile", "fs.readdir", "fs.open"].includes(method) &&
+        typeof args[0] === "string"
+      ) {
+        operationJournal.append({ type: "fs.read", method, path: args[0] });
+      }
       try {
         const result = await base.call<T>(targetId, method, args, mergeOptions(options));
         if (targetId === "main" && method === "build.getPerformanceProfile") {
@@ -3879,6 +3886,7 @@ export class EvalDO extends DurableObjectBase {
     // Imported modules and retained page handles cannot own an earlier cell.
     const panelRuntime = support.createPanelRuntime({
       rpc: activeRpc,
+      operationSignal: () => this.requireActiveEvalExecution().signal,
       contextId: execution.contextId,
       recordOperation: (entry: Record<string, unknown>) =>
         this.requireActiveEvalExecution().operationJournal.append(entry),

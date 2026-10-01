@@ -152,20 +152,28 @@ describe("createRpcClient", () => {
     });
     let approved = false;
     const invocations: unknown[][] = [];
-    server.expose("protected.run", async ({ args }) => {
-      invocations.push(args);
-      if (!approved) {
-        throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
-          acquisition: { acquisitionId: "acq:exact", ownerRuntimeId: "code:worker" },
-        });
-      }
-      return "done";
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    server.expose("authority.awaitDecision", async ({ args }) => {
-      expect(args).toEqual([{ acquisitionId: "acq:exact" }]);
-      approved = true;
-      return { state: "decided" };
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    server.expose(
+      "protected.run",
+      async ({ args }) => {
+        invocations.push(args);
+        if (!approved) {
+          throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+            acquisition: { acquisitionId: "acq:exact", ownerRuntimeId: "code:worker" },
+          });
+        }
+        return "done";
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+    server.expose(
+      "authority.awaitDecision",
+      async ({ args }) => {
+        expect(args).toEqual([{ acquisitionId: "acq:exact" }]);
+        approved = true;
+        return { state: "decided" };
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     await expect(caller.call("main", "protected.run", ["same", 1])).resolves.toBe("done");
     expect(invocations).toEqual([
@@ -197,12 +205,19 @@ describe("createRpcClient", () => {
         });
       return "done";
     });
-    server.expose("protected.run", operation, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    server.expose("authority.awaitDecision", async ({ args }) => {
-      expect(args).toEqual([{ acquisitionId: "acq:remote" }]);
-      approved = true;
-      return { state: "decided" };
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    server.expose("protected.run", operation, {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
+    server.expose(
+      "authority.awaitDecision",
+      async ({ args }) => {
+        expect(args).toEqual([{ acquisitionId: "acq:remote" }]);
+        approved = true;
+        return { state: "decided" };
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     await expect(
       caller.call("main", "protected.run", [], {
         destination: { kind: "workspace", workspaceId: "workspace:b" },
@@ -234,12 +249,19 @@ describe("createRpcClient", () => {
       transport: inProcessTransport("main", network),
     });
     const wait = vi.fn();
-    server.expose("protected.run", async () => {
-      throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
-        acquisition: { acquisitionId: "acq:durable", ownerRuntimeId: "code:worker" },
-      });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    server.expose("authority.awaitDecision", wait, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    server.expose(
+      "protected.run",
+      async () => {
+        throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+          acquisition: { acquisitionId: "acq:durable", ownerRuntimeId: "code:worker" },
+        });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+    server.expose("authority.awaitDecision", wait, {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
 
     await expect(
       caller.call("main", "protected.run", ["exact"], { authorityAcquisition: "return" })
@@ -273,19 +295,27 @@ describe("createRpcClient", () => {
       release = resolve;
     });
     let approved = false;
-    server.expose("protected.run", async () => {
-      if (!approved) {
-        throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
-          acquisition: { acquisitionId: "acq:slow", ownerRuntimeId: "code:worker" },
-        });
-      }
-      return "done";
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    server.expose("authority.awaitDecision", async () => {
-      await decision;
-      approved = true;
-      return { state: "decided" };
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    server.expose(
+      "protected.run",
+      async () => {
+        if (!approved) {
+          throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+            acquisition: { acquisitionId: "acq:slow", ownerRuntimeId: "code:worker" },
+          });
+        }
+        return "done";
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+    server.expose(
+      "authority.awaitDecision",
+      async () => {
+        await decision;
+        approved = true;
+        return { state: "decided" };
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const pending = caller.call("main", "protected.run", [], { timeoutMs: 1 });
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -307,12 +337,19 @@ describe("createRpcClient", () => {
       transport: inProcessTransport("main", network),
     });
     const wait = vi.fn();
-    server.expose("protected.run", async () => {
-      throw new RpcBoundaryError("inner approval required", "access", "EACQUIRE", undefined, {
-        acquisition: { acquisitionId: "acq:inner", ownerRuntimeId: "code:inner" },
-      });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    server.expose("authority.awaitDecision", wait, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    server.expose(
+      "protected.run",
+      async () => {
+        throw new RpcBoundaryError("inner approval required", "access", "EACQUIRE", undefined, {
+          acquisition: { acquisitionId: "acq:inner", ownerRuntimeId: "code:inner" },
+        });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+    server.expose("authority.awaitDecision", wait, {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
 
     await expect(caller.call("main", "protected.run", [])).rejects.toMatchObject({
       code: "EACQUIRE",
@@ -381,11 +418,24 @@ describe("createRpcClient", () => {
         workspaceId: "workspace:destination",
         transport: network.transport("worker", "workspace:destination"),
       });
-      receiver.expose("read", () => "result", {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-      receiver.exposeStreaming("readStream", async (_request, sink) => {
-        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
-        await sink({ kind: "end", bytesIn: 0 });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      receiver.expose("read", () => "result", {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      });
+      receiver.exposeStreaming(
+        "readStream",
+        async (_request, sink) => {
+          await sink({
+            kind: "head",
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "",
+          });
+          await sink({ kind: "end", bytesIn: 0 });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
       const parent = {
         kind: "trajectory-invocation" as const,
         logId: "trajectory:automation",
@@ -427,12 +477,16 @@ describe("createRpcClient", () => {
     const send = vi.spyOn(transport, "send");
     const rpc = createRpcClient({ selfId: "self", callerKind: "worker", transport });
 
-    rpc.expose("add", (req) => {
-      const [a, b] = req.args as [number, number];
-      expect(req.caller).toEqual({ callerId: "self", callerKind: "worker" });
-      expect(req.origin).toEqual({ callerId: "self", callerKind: "worker" });
-      return a + b;
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    rpc.expose(
+      "add",
+      (req) => {
+        const [a, b] = req.args as [number, number];
+        expect(req.caller).toEqual({ callerId: "self", callerKind: "worker" });
+        expect(req.origin).toEqual({ callerId: "self", callerKind: "worker" });
+        return a + b;
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     await expect(rpc.call("self", "add", [2, 5])).resolves.toBe(7);
     expect(send).not.toHaveBeenCalled();
@@ -454,23 +508,34 @@ describe("createRpcClient", () => {
         transport: network.transport("service", workspaceId),
       });
       const events: unknown[] = [];
-      rpc.expose("identify", ({ caller: inboundCaller }) => ({
-        workspaceId,
-        callerWorkspaceId: inboundCaller.workspaceId,
-      }), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-      rpc.exposeStreaming("identify-stream", async ({ caller: inboundCaller }, sink) => {
-        const bytes = new TextEncoder().encode(`${workspaceId}<-${inboundCaller.workspaceId}`);
-        await sink({
-          kind: "head",
-          status: 200,
-          statusText: "OK",
-          headerPairs: [],
-          finalUrl: "",
-        });
-        await sink({ kind: "chunk", bytes });
-        await sink({ kind: "end", bytesIn: bytes.byteLength });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-      rpc.on("notice", ({ payload }) => events.push(payload), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      rpc.expose(
+        "identify",
+        ({ caller: inboundCaller }) => ({
+          workspaceId,
+          callerWorkspaceId: inboundCaller.workspaceId,
+        }),
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
+      rpc.exposeStreaming(
+        "identify-stream",
+        async ({ caller: inboundCaller }, sink) => {
+          const bytes = new TextEncoder().encode(`${workspaceId}<-${inboundCaller.workspaceId}`);
+          await sink({
+            kind: "head",
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "",
+          });
+          await sink({ kind: "chunk", bytes });
+          await sink({ kind: "end", bytesIn: bytes.byteLength });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
+      rpc.on("notice", ({ payload }) => events.push(payload), {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      });
       return { workspaceId, rpc, events };
     });
 
@@ -515,7 +580,10 @@ describe("createRpcClient", () => {
     expect(services.map(({ events }) => events)).toEqual([[], ["for-b"], ["for-c"]]);
 
     const peerEvents: string[] = [];
-    workspaceB.on("reply", ({ payload }) => peerEvents.push(payload), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    workspaceB.on("reply", ({ payload }) => peerEvents.push(payload), {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
     await services[1]!.rpc.emit("caller", "reply", "from-b", {
       destination: { kind: "workspace", workspaceId: "workspace:a" },
     });
@@ -558,20 +626,24 @@ describe("createRpcClient", () => {
     const unaryStarted = new Promise<void>((resolve) => {
       unaryEntered = resolve;
     });
-    callee.expose("wait", async ({ signal }) => {
-      unaryEntered();
-      await new Promise<void>((resolve) =>
-        signal.addEventListener(
-          "abort",
-          () => {
-            unaryAbort = true;
-            resolve();
-          },
-          { once: true }
-        )
-      );
-      return null;
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.expose(
+      "wait",
+      async ({ signal }) => {
+        unaryEntered();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              unaryAbort = true;
+              resolve();
+            },
+            { once: true }
+          )
+        );
+        return null;
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const unaryController = new AbortController();
     const unary = caller.call("service", "wait", [], {
@@ -584,25 +656,29 @@ describe("createRpcClient", () => {
     await vi.waitFor(() => expect(unaryAbort).toBe(true));
 
     let streamAbort = false;
-    callee.exposeStreaming("wait-stream", async ({ signal }, sink) => {
-      await sink({
-        kind: "head",
-        status: 200,
-        statusText: "OK",
-        headerPairs: [],
-        finalUrl: "",
-      });
-      await new Promise<void>((resolve) =>
-        signal.addEventListener(
-          "abort",
-          () => {
-            streamAbort = true;
-            resolve();
-          },
-          { once: true }
-        )
-      );
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.exposeStreaming(
+      "wait-stream",
+      async ({ signal }, sink) => {
+        await sink({
+          kind: "head",
+          status: 200,
+          statusText: "OK",
+          headerPairs: [],
+          finalUrl: "",
+        });
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              streamAbort = true;
+              resolve();
+            },
+            { once: true }
+          )
+        );
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     const streamed = await caller.stream("service", "wait-stream", [], {
       destination: { kind: "workspace", workspaceId: "workspace:b" },
     });
@@ -653,7 +729,10 @@ describe("createRpcClient", () => {
     });
 
     const wrongRoute = vi.fn();
-    rpc.on("wrong-route", wrongRoute, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    rpc.on("wrong-route", wrongRoute, {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
     receive({
       from: "service",
       target: "caller",
@@ -756,12 +835,16 @@ describe("createRpcClient", () => {
     });
     let seenCaller: unknown;
     let seenOrigin: unknown;
-    rpc.expose("inspect", (request) => {
-      seenCaller = request.caller;
-      seenOrigin = request.origin;
-      request.rpc.emit("worker:next", "observed", null);
-      return "ok";
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    rpc.expose(
+      "inspect",
+      (request) => {
+        seenCaller = request.caller;
+        seenOrigin = request.origin;
+        request.rpc.emit("worker:next", "observed", null);
+        return "ok";
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const attested = {
       callerId: "do:source:Example:key",
@@ -805,67 +888,123 @@ describe("createRpcClient", () => {
     expect(JSON.stringify(forwarded)).not.toContain("must-not-reach-user-code");
   });
 
-  it("propagates unary call cancellation to the callee request signal", async () => {
-    const network = createInProcessNetwork();
-    const caller = createRpcClient({
-      selfId: "caller",
-      transport: inProcessTransport("caller", network),
-    });
-    const callee = createRpcClient({
-      selfId: "callee",
-      transport: inProcessTransport("callee", network),
-    });
-    let entered!: () => void;
-    const handlerEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let observedAbort = false;
-    callee.expose("wait", async (request) => {
-      entered();
-      await new Promise<void>((resolve) => {
-        request.signal.addEventListener(
-          "abort",
-          () => {
-            observedAbort = true;
-            resolve();
-          },
-          { once: true }
-        );
+  it.each(["invocation", "explicit"] as const)(
+    "combines %s streaming cancellation with the invocation lifetime",
+    async (mode) => {
+      const invocation = new AbortController();
+      const explicit = new AbortController();
+      const lifetime = new AbortController();
+      const transport = controllableTransport();
+      const caller = createRpcClient({
+        selfId: "caller",
+        lifetime: lifetime.signal,
+        transport: transport.transport,
+        invocationSignal: () => invocation.signal,
       });
-      return null;
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      const pending = caller.stream("callee", "wait", [], { signal: explicit.signal });
+      const rejection = expect(pending).rejects.toThrow(/aborted/i);
+      await vi.waitFor(() =>
+        expect(transport.sent.some((e) => e.message.type === "stream-request")).toBe(true)
+      );
+      (mode === "invocation" ? invocation : explicit).abort();
+      await rejection;
+      await vi.waitFor(() =>
+        expect(transport.sent.some((e) => e.message.type === "stream-cancel")).toBe(true)
+      );
+      lifetime.abort();
+    }
+  );
 
-    const controller = new AbortController();
-    const pending = caller.call("callee", "wait", [], { signal: controller.signal });
-    await handlerEntered;
-    controller.abort();
+  it.each(["explicit", "invocation"] as const)(
+    "propagates %s unary cancellation to the callee request signal",
+    async (mode) => {
+      const controller = new AbortController();
+      let invocationSignal = mode === "invocation" ? controller.signal : undefined;
+      const lifetime = new AbortController();
+      const network = createInProcessNetwork();
+      const caller = createRpcClient({
+        selfId: "caller",
+        lifetime: lifetime.signal,
+        invocationSignal: () => invocationSignal,
+        transport: inProcessTransport("caller", network),
+      });
+      const callee = createRpcClient({
+        selfId: "callee",
+        lifetime: lifetime.signal,
+        transport: inProcessTransport("callee", network),
+      });
+      let entered!: () => void;
+      const handlerEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let observedAbort = false;
+      callee.expose(
+        "wait",
+        async (request) => {
+          entered();
+          await new Promise<void>((resolve) => {
+            request.signal.addEventListener(
+              "abort",
+              () => {
+                observedAbort = true;
+                resolve();
+              },
+              { once: true }
+            );
+          });
+          return null;
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
 
-    await expect(pending).rejects.toThrow(/aborted/);
-    await vi.waitFor(() => expect(observedAbort).toBe(true));
-  });
+      const pending = caller.call(
+        "callee",
+        "wait",
+        [],
+        mode === "explicit" ? { signal: controller.signal } : undefined
+      );
+      await handlerEntered;
+      controller.abort();
+
+      await expect(pending).rejects.toThrow(/aborted/);
+      await vi.waitFor(() => expect(observedAbort).toBe(true));
+      invocationSignal = undefined;
+      callee.expose("echo", () => "still connected", { kind: "closed", reason: "Internal test" });
+      await expect(caller.call("callee", "echo", [])).resolves.toBe("still connected");
+      lifetime.abort();
+    }
+  );
 
   it("preserves structured error categories across unary and streaming calls", async () => {
     const network = createInProcessNetwork();
     const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
     const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-    b.expose("deny", () => {
-      throw new RpcBoundaryError("not allowed", "access", "EACCES", undefined, {
-        code: "Unauthorized",
-        operation: "test",
-        message: "not allowed",
-      });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    b.exposeStreaming("deny-stream", async (_request, sink) => {
-      await sink({
-        kind: "error",
-        status: 403,
-        message: "not allowed",
-        code: "EACCES",
-        errorKind: "access",
-        errorData: { code: "Unauthorized", operation: "test", message: "not allowed" },
-      });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    b.expose(
+      "deny",
+      () => {
+        throw new RpcBoundaryError("not allowed", "access", "EACCES", undefined, {
+          code: "Unauthorized",
+          operation: "test",
+          message: "not allowed",
+        });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+    b.exposeStreaming(
+      "deny-stream",
+      async (_request, sink) => {
+        await sink({
+          kind: "error",
+          status: 403,
+          message: "not allowed",
+          code: "EACCES",
+          errorKind: "access",
+          errorData: { code: "Unauthorized", operation: "test", message: "not allowed" },
+        });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     await expect(a.call("b", "deny", [])).rejects.toMatchObject({
       name: "RemoteRpcError",
@@ -905,16 +1044,24 @@ describe("createRpcClient", () => {
     let seenDoCaller: unknown;
     let seenDoOrigin: unknown;
 
-    durableObject.expose("save", (req) => {
-      seenDoCaller = req.caller;
-      seenDoOrigin = req.origin;
-      return req.args[0];
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    durableObject.expose(
+      "save",
+      (req) => {
+        seenDoCaller = req.caller;
+        seenDoOrigin = req.origin;
+        return req.args[0];
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
-    worker.expose("forward", async (req) => {
-      seenWorkerCaller = req.caller;
-      return req.rpc.call("do:notes:Bucket:key", "save", req.args);
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    worker.expose(
+      "forward",
+      async (req) => {
+        seenWorkerCaller = req.caller;
+        return req.rpc.call("do:notes:Bucket:key", "save", req.args);
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     await expect(panel.call("worker:1", "forward", [{ ok: true }])).resolves.toEqual({ ok: true });
     expect(seenWorkerCaller).toEqual({ callerId: "panel:1", callerKind: "panel" });
@@ -941,7 +1088,10 @@ describe("createRpcClient", () => {
     });
     const listener = vi.fn();
 
-    a.peer("b").on("ready", listener, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    a.peer("b").on("ready", listener, {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
     await c.emit("a", "ready", { from: "c" });
     await b.emit("a", "ready", { from: "b" });
 
@@ -971,10 +1121,14 @@ describe("createRpcClient", () => {
       },
     });
 
-    b.expose("sum", (req) => {
-      const [x, y] = req.args as [number, number];
-      return x + y;
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    b.expose(
+      "sum",
+      (req) => {
+        const [x, y] = req.args as [number, number];
+        return x + y;
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const peer = a.peer("b").withContract(contract, "caller");
     await expect(peer.call.sum(10, 32)).resolves.toBe(42);
@@ -999,8 +1153,14 @@ describe("createRpcClient", () => {
       callerKind: "worker",
       transport: inProcessTransport("c", network),
     });
-    c.expose("ping", () => "pong", {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
-    b.expose("forward", (request) => request.rpc.call("c", "ping", []), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    c.expose("ping", () => "pong", {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
+    b.expose("forward", (request) => request.rpc.call("c", "ping", []), {
+      kind: "eligible",
+      rationale: "This test explicitly permits website receiver entry.",
+    });
 
     await expect(b.peer("c").call["ping"]!()).resolves.toBe("pong");
     await expect(a.call("b", "forward", [])).resolves.toBe("pong");
@@ -1025,7 +1185,10 @@ describe("createRpcClient", () => {
       const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
       const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-      b.expose("ping", () => "pong", {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      b.expose("ping", () => "pong", {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      });
 
       await expect(a.call("b", "ping", [])).resolves.toBe("pong");
     } finally {
@@ -1073,17 +1236,21 @@ describe("createRpcClient", () => {
     const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
     const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-    b.exposeStreaming("download", async (_req, sink) => {
-      await sink({
-        kind: "head",
-        status: 200,
-        statusText: "OK",
-        headerPairs: [["content-type", "text/plain"]],
-        finalUrl: "https://example.test/file",
-      });
-      await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
-      await sink({ kind: "end", bytesIn: 5 });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    b.exposeStreaming(
+      "download",
+      async (_req, sink) => {
+        await sink({
+          kind: "head",
+          status: 200,
+          statusText: "OK",
+          headerPairs: [["content-type", "text/plain"]],
+          finalUrl: "https://example.test/file",
+        });
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
+        await sink({ kind: "end", bytesIn: 5 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const response = await a.stream("b", "download", []);
     expect(response.status).toBe(200);
@@ -1096,17 +1263,21 @@ describe("createRpcClient", () => {
     const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
     const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-    b.exposeStreaming("download", async (_req, sink) => {
-      await sink({
-        kind: "head",
-        status: 200,
-        statusText: "OK",
-        headerPairs: [["content-type", "text/plain"]],
-        finalUrl: "https://example.test/file",
-      });
-      await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
-      await sink({ kind: "end", bytesIn: 5 });
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    b.exposeStreaming(
+      "download",
+      async (_req, sink) => {
+        await sink({
+          kind: "head",
+          status: 200,
+          statusText: "OK",
+          headerPairs: [["content-type", "text/plain"]],
+          finalUrl: "https://example.test/file",
+        });
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
+        await sink({ kind: "end", bytesIn: 5 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
 
     const response = await a.streamReadable("b", "download", []);
     expect(response).toMatchObject({
@@ -1124,16 +1295,20 @@ describe("createRpcClient", () => {
       const network = createInProcessNetwork();
       const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
       const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
-      b.exposeStreaming("empty", async (_request, sink) => {
-        await sink({
-          kind: "head",
-          status,
-          statusText: "",
-          headerPairs: [],
-          finalUrl: "https://example.test/empty",
-        });
-        await sink({ kind: "end", bytesIn: 0 });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      b.exposeStreaming(
+        "empty",
+        async (_request, sink) => {
+          await sink({
+            kind: "head",
+            status,
+            statusText: "",
+            headerPairs: [],
+            finalUrl: "https://example.test/empty",
+          });
+          await sink({ kind: "end", bytesIn: 0 });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
       const response = await a.stream("b", "empty", []);
       expect(response.status).toBe(status);
       expect(response.body).toBeNull();
@@ -1155,18 +1330,22 @@ describe("createRpcClient", () => {
       });
       const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-      b.exposeStreaming("subscription", async (_req, sink) => {
-        await sink({
-          kind: "head",
-          status: 200,
-          statusText: "OK",
-          headerPairs: [],
-          finalUrl: "",
-        });
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        await sink({ kind: "chunk", bytes: new TextEncoder().encode("later") });
-        await sink({ kind: "end", bytesIn: 5 });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      b.exposeStreaming(
+        "subscription",
+        async (_req, sink) => {
+          await sink({
+            kind: "head",
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "",
+          });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await sink({ kind: "chunk", bytes: new TextEncoder().encode("later") });
+          await sink({ kind: "end", bytesIn: 5 });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
 
       const response = await a.stream("b", "subscription", [], { bodyIdleTimeoutMs: null });
       const body = response.text();
@@ -1184,13 +1363,23 @@ describe("createRpcClient", () => {
       const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
       const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-      b.exposeStreaming("slow", async (_req, sink) => {
-        await new Promise((resolve) => setTimeout(resolve, 100_000));
-        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
-        await new Promise((resolve) => setTimeout(resolve, 100_000));
-        await sink({ kind: "chunk", bytes: new TextEncoder().encode("eventually") });
-        await sink({ kind: "end", bytesIn: 10 });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      b.exposeStreaming(
+        "slow",
+        async (_req, sink) => {
+          await new Promise((resolve) => setTimeout(resolve, 100_000));
+          await sink({
+            kind: "head",
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "",
+          });
+          await new Promise((resolve) => setTimeout(resolve, 100_000));
+          await sink({ kind: "chunk", bytes: new TextEncoder().encode("eventually") });
+          await sink({ kind: "end", bytesIn: 10 });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
 
       const responsePromise = a.stream("b", "slow", []);
       await vi.advanceTimersByTimeAsync(100_000);
@@ -1215,19 +1404,29 @@ describe("createRpcClient", () => {
       });
       const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
 
-      b.exposeStreaming("stalled", async (req, sink) => {
-        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
-        await new Promise<void>((resolve) => {
-          req.signal.addEventListener(
-            "abort",
-            () => {
-              handlerAborted = true;
-              resolve();
-            },
-            { once: true }
-          );
-        });
-      }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      b.exposeStreaming(
+        "stalled",
+        async (req, sink) => {
+          await sink({
+            kind: "head",
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "",
+          });
+          await new Promise<void>((resolve) => {
+            req.signal.addEventListener(
+              "abort",
+              () => {
+                handlerAborted = true;
+                resolve();
+              },
+              { once: true }
+            );
+          });
+        },
+        { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+      );
 
       const response = await a.stream("b", "stalled", []);
       const read = response.body!.getReader().read();
@@ -1603,7 +1802,12 @@ describe("createRpcClient lifetime ownership", () => {
     lifetime.abort();
     await expect(pending).rejects.toThrow(/retired/);
     await expect(rpc.call("main", "late", [])).rejects.toThrow(/retired/);
-    expect(() => rpc.on("late", () => {}, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."})).toThrow(/retired/);
+    expect(() =>
+      rpc.on("late", () => {}, {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      })
+    ).toThrow(/retired/);
     expect({ messageHandler, statusHandler, recoveryHandler }).toEqual({
       messageHandler: null,
       statusHandler: null,
@@ -1707,10 +1911,14 @@ describe("createRpcClient lifetime ownership", () => {
       selfId: "callee",
       transport: inProcessTransport("callee", network),
     });
-    callee.exposeStreaming("body", async (_request, sink) => {
-      await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
-      await new Promise(() => {});
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.exposeStreaming(
+      "body",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await new Promise(() => {});
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     const response = await caller.stream("callee", "body", []);
     const read = response.body!.getReader().read();
     lifetime.abort();
@@ -1733,10 +1941,14 @@ describe("createRpcClient lifetime ownership", () => {
       transport: network.transport("callee", "workspace:one"),
       lifetime: lifetime.signal,
     });
-    callee.expose("ignored-abort", ({ signal }) => {
-      handlerSignal = signal;
-      return new Promise<string>((resolve) => (finish = resolve));
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.expose(
+      "ignored-abort",
+      ({ signal }) => {
+        handlerSignal = signal;
+        return new Promise<string>((resolve) => (finish = resolve));
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     const pending = caller.call("callee", "ignored-abort", []);
     await flushMicrotasks();
     lifetime.abort();
@@ -1767,10 +1979,14 @@ describe("createRpcClient lifetime ownership", () => {
       },
     });
     let invoked = false;
-    callee.expose("queued", () => {
-      invoked = true;
-      return "late";
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.expose(
+      "queued",
+      () => {
+        invoked = true;
+        return "late";
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     receive({
       from: "caller",
       target: "callee",
@@ -1806,11 +2022,15 @@ describe("createRpcClient lifetime ownership", () => {
       transport: network.transport("callee", "workspace:one"),
       lifetime: lifetime.signal,
     });
-    callee.exposeStreaming("ended", async (_request, sink) => {
-      await sink({ kind: "head", status: 204, statusText: "", headerPairs: [], finalUrl: "" });
-      await sink({ kind: "end", bytesIn: 0 });
-      await new Promise<void>((resolve) => (finish = resolve));
-    }, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+    callee.exposeStreaming(
+      "ended",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 204, statusText: "", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+        await new Promise<void>((resolve) => (finish = resolve));
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
     const response = await caller.stream("callee", "ended", []);
     expect(await response.text()).toBe("");
     lifetime.abort();
@@ -1831,25 +2051,59 @@ it("retains host-minted invocation ancestry in borrowed handler clients without 
   const network = createInProcessNetwork();
   const sent: import("./types.js").RpcEnvelope[] = [];
   const receiverTransport = inProcessTransport("receiver", network);
-  const receiver = createRpcClient({ selfId: "receiver", callerKind: "worker", transport: {
-    ...receiverTransport, send: envelope => { sent.push(envelope); return receiverTransport.send(envelope); },
-  } });
-  const host = createRpcClient({ selfId: "server", callerKind: "server", transport: inProcessTransport("server", network) });
-  const policy = { kind: "eligible", rationale: "Explicit invocation propagation fixture." } as const;
-  host.expose("effect", request => ({ caller: request.caller, origin: request.origin }), policy);
-  receiver.expose("bounded", request => {
-    expect(request.caller.callerId).toBe("website");
-    expect(request).not.toHaveProperty("authorityParentNonce");
-    return request.rpc.peer<{ effect: () => unknown }>("server").call.effect();
-  }, policy);
+  const receiver = createRpcClient({
+    selfId: "receiver",
+    callerKind: "worker",
+    transport: {
+      ...receiverTransport,
+      send: (envelope) => {
+        sent.push(envelope);
+        return receiverTransport.send(envelope);
+      },
+    },
+  });
+  const host = createRpcClient({
+    selfId: "server",
+    callerKind: "server",
+    transport: inProcessTransport("server", network),
+  });
+  const policy = {
+    kind: "eligible",
+    rationale: "Explicit invocation propagation fixture.",
+  } as const;
+  host.expose("effect", (request) => ({ caller: request.caller, origin: request.origin }), policy);
+  receiver.expose(
+    "bounded",
+    (request) => {
+      expect(request.caller.callerId).toBe("website");
+      expect(request).not.toHaveProperty("authorityParentNonce");
+      return request.rpc.peer<{ effect: () => unknown }>("server").call.effect();
+    },
+    policy
+  );
   const website = { callerId: "website", callerKind: "panel" as const, workspaceId: "workspace" };
-  const result = await host.call("receiver", "bounded", [], bindInvocationParent({}, {
-    nonce: "host-minted-live-invocation", caller: website, provenance: [website],
-  }));
-  expect(result).toEqual({ caller: { callerId: "receiver", callerKind: "worker" }, origin: website });
-  const inherited = sent.find(envelope => envelope.message.type === "request")!;
+  const result = await host.call(
+    "receiver",
+    "bounded",
+    [],
+    bindInvocationParent(
+      {},
+      {
+        nonce: "host-minted-live-invocation",
+        caller: website,
+        provenance: [website],
+      }
+    )
+  );
+  expect(result).toEqual({
+    caller: { callerId: "receiver", callerKind: "worker" },
+    origin: website,
+  });
+  const inherited = sent.find((envelope) => envelope.message.type === "request")!;
   expect(inherited.message).toHaveProperty("authorityParentNonce", "host-minted-live-invocation");
   sent.length = 0;
   await receiver.call("server", "effect", []);
-  expect(sent.find(envelope => envelope.message.type === "request")!.message).not.toHaveProperty("authorityParentNonce");
+  expect(sent.find((envelope) => envelope.message.type === "request")!.message).not.toHaveProperty(
+    "authorityParentNonce"
+  );
 });

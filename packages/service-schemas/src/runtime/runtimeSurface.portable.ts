@@ -22,6 +22,7 @@ import {
   valueEntry,
   type RuntimeSurfaceEntry,
 } from "@vibestudio/shared/runtimeSurface";
+import browserDataRuntimeCatalog from "./generated/browserDataRuntimeCatalog.json";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
 import templatesRuntimeCatalog from "./generated/templatesRuntimeCatalog.json";
 import workspaceServiceResolutionSchema from "./generated/workspaceServiceResolution.json";
@@ -299,57 +300,7 @@ export const CREDENTIALS_MEMBERS = [
   "forAudience",
 ];
 
-export const BROWSER_DATA_MEMBERS = [
-  "getBrowserEnvironment",
-  "listImportHosts",
-  "listImportAcquisitionOptions",
-  "beginImportAcquisition",
-  "releaseImportSource",
-  "listImportSources",
-  "previewImport",
-  "previewSensitiveImport",
-  "startImport",
-  "startSensitiveImport",
-  "observeSensitiveImport",
-  "cancelSensitiveImport",
-  "openBrowserPrivacyManager",
-  "cancelImport",
-  "getImportJob",
-  "listImportJobs",
-  "listOpenTabs",
-  "openTabsAsPanels",
-  "getSitePreferences",
-  "setSiteZoom",
-  "getBookmarks",
-  "addBookmark",
-  "updateBookmark",
-  "deleteBookmark",
-  "moveBookmark",
-  "searchBookmarks",
-  "getHistory",
-  "deleteHistoryEntry",
-  "deleteHistoryRange",
-  "clearAllHistory",
-  "searchHistory",
-  "searchHistoryForAutocomplete",
-  "recordHistoryVisit",
-  "updateHistoryTitle",
-  "getSearchEngines",
-  "setDefaultEngine",
-  "saveSearchEngine",
-  "getSearchSuggestions",
-  "listDownloads",
-  "listDownloadRecords",
-  "upsertDownloadRecord",
-  "pauseDownload",
-  "resumeDownload",
-  "cancelDownload",
-  "openDownload",
-  "revealDownload",
-  "putPageFavicon",
-  "getPageFavicon",
-  "exportBookmarks",
-];
+export const BROWSER_DATA_MEMBERS = Object.keys(browserDataRuntimeCatalog);
 
 export const GIT_MEMBERS = [...GIT_INTEROP_METHOD_NAMES];
 
@@ -724,7 +675,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   openExternal: callableEntry(
     "externalOpen",
     "openExternal",
-    "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
+    'Call `await openExternal(url, options?)` from the initialized panel, plain-worker, or eval runtime to open the system browser. A Durable Object uses its own `this.rpc.call("main", "externalOpen.openExternal", [url, options])`. The call owns the approval prompt and resumes after the user decides.'
   ),
   createPanelSlot: valueEntry(
     "Commit a workspace or browser panel slot and promptly return its durable handle without focusing or waiting for activation, build, or application boot. Server reconciliation owns code activation after commit and recovers it across transient failure or restart. Pass a stable operationId when a workflow may retry: the same operation then resolves to the same durable slot. The returned handle can be observed for current lifecycle state.",
@@ -757,7 +708,9 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   browserData: namespaceEntry(
     BROWSER_DATA_MEMBERS,
-    "Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export."
+    "Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export.",
+    undefined,
+    browserDataRuntimeCatalog
   ),
   git: namespaceEntry(
     GIT_MEMBERS,
@@ -813,7 +766,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS, undefined, undefined, PANEL_TREE_METHOD_CATALOG),
   services: valueEntry(
-    "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The same client is available in panels, workers, Durable Objects, and eval."
+    "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The client contract is shared by panels, workers, Durable Objects, and eval; Durable Objects bind clients to their own instance RPC."
   ),
   hosts: valueEntry("Portable owner-scoped attached-host access for development sessions."),
   runtime: valueEntry(

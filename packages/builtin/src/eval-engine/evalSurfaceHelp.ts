@@ -128,8 +128,9 @@ export interface InjectedSurfaceMethodDescription {
   name: string;
   surface: "injected-runtime-method";
   description?: string;
-  call: string;
-  parameters: Array<{ name: string; type: string }>;
+  signature?: string;
+  call?: string;
+  parameters?: Array<{ name: string; type: string }>;
   returns?: string;
   examples?: Array<{ call: string; returns?: unknown; note?: string }>;
   access?: unknown;
@@ -270,14 +271,21 @@ export function describeEvalMethod(
     ...(typeof source["description"] === "string"
       ? { description: source["description"] as string }
       : {}),
-    call: `await ${qualifiedName}(${parameterNames.join(", ")})`,
-    parameters: args.map((type, index) => ({ name: parameterNames[index]!, type })),
+    ...(typeof source["signature"] === "string" ? { signature: source["signature"] } : {}),
+    ...(source["argsSchema"]
+      ? {
+          call: `await ${qualifiedName}(${parameterNames.join(", ")})`,
+          parameters: args.map((type, index) => ({ name: parameterNames[index]!, type })),
+        }
+      : {}),
     ...(source["returnsSchema"] ? { returns: schemaType(source["returnsSchema"]) } : {}),
     ...(examples.length > 0 ? { examples } : {}),
     ...("access" in source ? { access: source["access"] } : {}),
     ...("errors" in source ? { errors: source["errors"] } : {}),
     ...("seeAlso" in source ? { seeAlso: source["seeAlso"] } : {}),
-    note: "Compact exact types for the injected call. Use the docs service only when machine-readable JSON Schema is needed.",
+    note: source["argsSchema"]
+      ? "Compact exact types for the injected call. Use the docs service only when machine-readable JSON Schema is needed."
+      : "No argument schema is available. Use the public signature and referenced source types; missing metadata does not mean the method takes no arguments.",
   };
 }
 

@@ -16,7 +16,10 @@ describe("help('docs.search') via the canonical serializer", () => {
 
     const description = describeEvalMethod("docs.search", wire);
     expect(description.call).toBe("await docs.search(query, options)");
-    expect(description.parameters.map((parameter) => parameter.name)).toEqual(["query", "options"]);
+    expect(description.parameters!.map((parameter) => parameter.name)).toEqual([
+      "query",
+      "options",
+    ]);
     expect(description.examples?.[0]).toEqual({
       call: 'await docs.search("store a blob and get a digest", {"limit":5})',
     });

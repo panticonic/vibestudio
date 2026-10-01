@@ -28,8 +28,8 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     );
     expect(method.call).toBe("await templates.inspectAuthoring(input)");
     expect(method.parameters).toHaveLength(1);
-    expect(method.parameters[0]!.type).toContain("parts");
-    expect(method.parameters[0]!.type).toContain("string");
+    expect(method.parameters![0]!.type).toContain("parts");
+    expect(method.parameters![0]!.type).toContain("string");
     expect(method.returns).toContain("fingerprint");
   });
 
@@ -311,7 +311,7 @@ describe("describeEvalMethod", () => {
       argsSchema: { type: "array", items: [{ type: "string" }, { type: "number" }] },
     });
     expect(twoArgs.call).toBe("await svc.op(arg0, arg1)");
-    expect(twoArgs.parameters.map((parameter) => parameter.name)).toEqual(["arg0", "arg1"]);
+    expect(twoArgs.parameters!.map((parameter) => parameter.name)).toEqual(["arg0", "arg1"]);
     expect(twoArgs).not.toHaveProperty("examples");
   });
 
@@ -342,7 +342,7 @@ describe("describeEvalMethod", () => {
       argumentNames: ["query", null, "enabled"],
     });
     expect(result.call).toBe("await svc.op(query, arg1, enabled)");
-    expect(result.parameters.map((parameter) => parameter.name)).toEqual([
+    expect(result.parameters!.map((parameter) => parameter.name)).toEqual([
       "query",
       "arg1",
       "enabled",
@@ -369,6 +369,27 @@ describe("invalidHelpArgumentResponse", () => {
       note:
         "Pass the binding name as a string. For a live object's enumerable methods, " +
         "Object.keys(workers) also works.",
+    });
+  });
+});
+
+describe("runtime methods without argument schemas", () => {
+  it("does not invent a zero-argument invocation from missing metadata", () => {
+    const described = describeEvalMethod("browserData.openTabsAsPanels", {
+      signature:
+        "browserData.openTabsAsPanels(request: OpenTabsAsPanelsRequest): Promise<OpenTabsAsPanelsResult>",
+    });
+    expect(described).not.toHaveProperty("call");
+    expect(described).not.toHaveProperty("parameters");
+    expect(described.signature).toContain("request: OpenTabsAsPanelsRequest");
+    expect(described.note).toContain("missing metadata");
+  });
+  it("retains a genuinely zero-argument schema", () => {
+    expect(
+      describeEvalMethod("service.list", { argsSchema: { type: "array", items: [] } })
+    ).toMatchObject({
+      call: "await service.list()",
+      parameters: [],
     });
   });
 });
