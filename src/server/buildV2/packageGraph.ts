@@ -10,6 +10,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { PackageManifest } from "@vibestudio/shared/types";
+import { validateUnitIconDeclaration } from "@vibestudio/shared/unitManifest";
 import {
   BUILDABLE_UNIT_DIRS,
   expectedBuildUnitName,
@@ -381,6 +382,11 @@ function packageManifestContractError(
     return `package.json name must be ${JSON.stringify(expectedName)} for ${relativePath}`;
   }
   const manifest = pkg.vibestudio as Record<string, unknown> | undefined;
+  try {
+    validateUnitIconDeclaration(manifest?.["icon"]);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
   const presentBlocks = LOCATION_SPECIFIC_BLOCKS.filter(
     (block) => manifest?.[block] !== undefined && manifest[block] !== null
   );

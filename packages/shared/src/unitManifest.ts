@@ -226,6 +226,16 @@ export class UnitManifestError extends Error {
   }
 }
 
+/** Validate the common icon field before authoring or consuming unit metadata. */
+export function validateUnitIconDeclaration(icon: unknown): asserts icon is string | undefined {
+  if (icon !== undefined && typeof icon !== "string") {
+    throw new UnitManifestError(
+      'vibestudio.icon must be a string (for example "lucide:columns-3", an emoji, or "./assets/icon.svg")',
+      "MANIFEST_ICON"
+    );
+  }
+}
+
 export interface UnitManifestValidationOptions {
   /** Display name used in error messages, typically the package name. */
   unitName: string;
@@ -588,6 +598,7 @@ export function validateUnitManifest(
   options: UnitManifestValidationOptions
 ): void {
   const record = assertRecord(manifest, descriptor.label, options);
+  validateUnitIconDeclaration(record["icon"]);
   assertNoForeignLocationConfig(record, descriptor, options);
   validateInlineSourcemap(record, descriptor, options);
 
