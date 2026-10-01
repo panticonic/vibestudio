@@ -27,14 +27,14 @@ Equivalent exports are `googleSetupJourney` from `@workspace-panels/welcome/test
 
 ## Verification boundary
 
-Verification uses an isolated host worktree at published main `86ae727ca` plus these host changes, and isolated template source worktrees containing only this tranche. This keeps concurrent, unrelated host and Base schema migrations out of the result. The shared checkout's complete dirty tree is not claimed to pass.
+Verification uses an isolated host worktree at published host main `e5c33a06e` and Base main `073a27b` plus these changes, and isolated template source worktrees containing only this tranche. This keeps concurrent, unrelated host and Base schema migrations out of the result. The shared checkout's complete dirty tree is not claimed to pass.
 
 External templates remain source inputs: all dependency installation, builds, tests and compiler state run through host-owned projections. Browser checks cover 320, 390 and 1280 pixel layouts and actual keyboard/focus interactions. Live Google account consent, external email delivery, physical mobile devices and assistive-technology sessions are outside this tranche's verification.
 
 ## Acceptance evidence
 
 - Host runtime and immutable task authority: 139 focused tests passed; `pnpm check:commit` passed, including host type checks, lint, formatting and boundary gates.
-- Base: 69 CDP worker tests and 19 chat sandbox/module contract tests passed.
+- Base: 83 CDP worker tests passed after integrating the published native browser APIs; 19 chat sandbox/module contract tests passed.
 - Spectrolite: 68 editor, save, navigation, vault and supporting unit tests passed. The installed journey passed, including native keyboard input, durable content, navigation, reopen, actual renderer reload and 320/390/1280 pixel layouts. Final document cleanup no longer reports an unsolicited normalization write.
 - Browser acceptance: 25 cases passed across shared feedback, Personal onboarding, System adblock, story first use, Google setup/Gmail composition, News reader and Spectrolite suggestion focus.
 - Story recovery hooks: eight tests passed. The installed Grimoire journey passed with actual model conversations, scene generation, simulation progress and reload.
