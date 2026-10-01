@@ -8,7 +8,10 @@ import {
   HOST_AUTHORITY_METHODS,
   HOST_METHOD_MANIFEST_DEPENDENCIES,
 } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
-import { inferUnitTransportCapabilities } from "@vibestudio/unit-authority-inference";
+import {
+  hasHostMethodLiteral,
+  inferUnitTransportCapabilities,
+} from "@vibestudio/unit-authority-inference";
 import {
   authorityRequestCoversEffect,
   userlandHandleResourcePrefix,
@@ -81,11 +84,6 @@ function semanticCapabilities(transportCapabilities: ReadonlySet<string>): Set<s
   return result;
 }
 
-const HOST_METHOD_LITERAL_TOKENS = [...hostCapabilities].flatMap((capability) => {
-  const method = capability.slice("service:".length);
-  return [`"${method}"`, `'${method}'`, `\`${method}\``];
-});
-
 // Every recognition rule in unit-authority-inference has one of these finite
 // textual anchors. Checking the anchors before constructing its native
 // TypeScript syntax project is lossless and avoids reparsing megabytes of
@@ -105,7 +103,7 @@ const TRANSPORT_FACADE_PATTERN =
 function mayContainTransportSyntax(source: string): boolean {
   if (TRANSPORT_SYNTAX_ANCHORS.some((anchor) => source.includes(anchor))) return true;
   if (TRANSPORT_FACADE_PATTERN.test(source)) return true;
-  return HOST_METHOD_LITERAL_TOKENS.some((token) => source.includes(token));
+  return hasHostMethodLiteral(source, hostCapabilities);
 }
 
 function sourceClosure(

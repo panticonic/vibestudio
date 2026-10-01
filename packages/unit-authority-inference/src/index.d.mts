@@ -12,6 +12,11 @@ export function inferWorkspacePackageReferences(
   workspacePackageNames: Iterable<string>
 ): Set<string>;
 
+export function hasHostMethodLiteral(
+  source: string,
+  hostCapabilities: ReadonlySet<string>
+): boolean;
+
 export function inferUnitTransportCapabilities(
   source: string,
   options: {

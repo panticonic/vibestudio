@@ -10,6 +10,7 @@ import {
   inferHostedRuntimeCapabilities,
   inferTypedServiceClientCapabilities,
   inferUnitTransportCapabilities,
+  hasHostMethodLiteral,
   inferWorkspaceServiceCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
@@ -350,6 +351,37 @@ describe("declared host-method capability dependencies", () => {
       }
     );
     assert.deepEqual([...inferred], ["context.boundary"]);
+  });
+
+  it("retains exact raw host literals across quote styles and overlapping delimiters", () => {
+    const host = new Set(["service:files.read", "service:files.write", "service:a.b-c"]);
+    for (const source of [
+      '"files.read"',
+      "'files.write'",
+      "`a.b-c`",
+      '"prefix "files.read" suffix"',
+      "// 'files.read' inside a comment",
+      '"files.readExtra"',
+      '"filesXread"',
+      "\"files.read' mismatched quotes",
+      '"unrelated""files.write"',
+      "no host calls here",
+    ]) {
+      const expected = [...host].filter((capability) =>
+        ['"', "'", "`"].some((quote) => source.includes(`${quote}${capability.slice(8)}${quote}`))
+      );
+      assert.equal(hasHostMethodLiteral(source, host), expected.length > 0, source);
+      assert.deepEqual(
+        [
+          ...inferUnitTransportCapabilities(source, {
+            hostCapabilities: host,
+            serviceMethods: new Map(),
+          }),
+        ],
+        ["context.boundary", ...expected],
+        source
+      );
+    }
   });
 
   it("adds code prerequisites transitively to inferred unit authority", () => {

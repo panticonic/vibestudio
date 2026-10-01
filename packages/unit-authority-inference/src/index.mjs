@@ -531,6 +531,22 @@ export function inferExtensionContextCapabilities(source, hostCapabilities) {
   return capabilities;
 }
 
+// Look ahead rather than consuming quotes: a closing quote can also begin a
+// raw method literal, and the original substring contract includes that match.
+function* hostMethodLiterals(source) {
+  for (const match of source.matchAll(/(?=(["'`])([^"'`\r\n]+)\1)/g)) {
+    yield `service:${match[2]}`;
+  }
+}
+
+/** Whether source names an exact quoted method from the reviewed host catalog. */
+export function hasHostMethodLiteral(source, hostCapabilities) {
+  for (const capability of hostMethodLiterals(source)) {
+    if (hostCapabilities.has(capability)) return true;
+  }
+  return false;
+}
+
 /**
  * Infer the transport-level authority effects visible in one executable module
  * closure. Callers map `service:<service>.<method>` through the reviewed host
@@ -550,15 +566,9 @@ export function inferUnitTransportCapabilities(
   for (const capability of inferHostedRuntimeCapabilities(source, hostCapabilities)) {
     capabilities.add(capability);
   }
+  const literals = new Set(hostMethodLiterals(source));
   for (const capability of hostCapabilities) {
-    const method = capability.slice("service:".length);
-    if (
-      source.includes(`"${method}"`) ||
-      source.includes(`'${method}'`) ||
-      source.includes(`\`${method}\``)
-    ) {
-      capabilities.add(capability);
-    }
+    if (literals.has(capability)) capabilities.add(capability);
   }
   // These three recognizers require a native TypeScript syntax project. Their
   // public constructors/selectors are finite grammar anchors, so unrelated

@@ -768,6 +768,11 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
       return { hostView, workspaceInstallApprovals };
     }
 
+    // The first-run reporting dialog owns the shell overlay until the user
+    // chooses a preference. Resolve it through the ordinary product action in
+    // this isolated profile before waiting for workspace presentation.
+    await clickDesktopButton(app, /^Keep automatic reports off$/i);
+
     // A fresh remote workspace deliberately asks once before admitting the
     // template's apps, panels, and services. Exercise that real consent step
     // so this smoke proves the post-pair workspace is usable, rather than
@@ -1313,6 +1318,21 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
       if (layout.privateOwnerBands !== 0)
         throw new Error("Private workspaces should show one panel tree without owner bands");
       const page = await chromePage(app, deadline);
+      // A mounted panel can precede workspace admission. Wait on the owning
+      // review's lifecycle before testing services that require that admission;
+      // the loop above resolves the visible review through its normal UI.
+      const creationReview = await nativeRpc(
+        page,
+        { kind: "workspace", workspaceId },
+        "shellApproval.getWorkspaceCreationReviewState",
+        []
+      );
+      if (creationReview.status === "failed" || creationReview.status === "unresolved")
+        throw new Error(`Personal workspace admission failed: ${JSON.stringify(creationReview)}`);
+      if (creationReview.status !== "resolved" && creationReview.status !== "not-required") {
+        await sleep(250);
+        continue;
+      }
       const snapshot = await nativeRpc(
         page,
         { kind: "workspace", workspaceId },
@@ -2114,6 +2134,7 @@ async function main(ownerSignal) {
       console.log("[desktop-smoke] Templates: canonical pinned production release");
     }
     if (options.local) {
+      const localLaunchStartedAt = performance.now();
       const sourceEnvironment = Object.fromEntries(
         Object.entries(serverEnv).filter(([key]) =>
           [
@@ -2179,6 +2200,9 @@ async function main(ownerSignal) {
         personal.workspaceId,
         "panels/chat",
         deadlineMs
+      );
+      console.log(
+        `[desktop-smoke] Local launch to onboarding readiness: ${Math.round(performance.now() - localLaunchStartedAt)}ms`
       );
       const initialIds = await workspaceTreeIds(
         electronApp,
