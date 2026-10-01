@@ -3879,6 +3879,7 @@ export class EvalDO extends DurableObjectBase {
     // Imported modules and retained page handles cannot own an earlier cell.
     const panelRuntime = support.createPanelRuntime({
       rpc: activeRpc,
+      contextId: execution.contextId,
       recordOperation: (entry: Record<string, unknown>) =>
         this.requireActiveEvalExecution().operationJournal.append(entry),
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
