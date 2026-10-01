@@ -1197,6 +1197,38 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(taskAuthorities.resolveRuntime(second.id, entityCache)).toBeNull();
   });
 
+  it("reopens a shared live identity without transferring its task authority, including concurrent creation", async () => {
+    const { service, taskAuthorities, entityCache } = await buildDeps();
+    const firstTask = "task:first-owner" as const;
+    const secondTask = "task:second-viewer" as const;
+    for (const [runtimeId, taskAuthority] of [
+      ["eval:first", firstTask],
+      ["eval:second", secondTask],
+    ] as const) {
+      taskAuthorities.bindExecution({
+        ...createTestExecutionSession({
+          runtimeId,
+          agentBinding: { entityId: runtimeId, channelId: runtimeId + ":channel" },
+        }),
+        taskAuthority,
+      });
+    }
+    const spec = doCreateSpec({ key: "shared-reader", contextId: "ctx-test" });
+    const firstCaller = { ...panelCaller("panel:first-viewer"), taskAuthority: firstTask };
+    const secondCaller = { ...panelCaller("panel:second-viewer"), taskAuthority: secondTask };
+    const [first, second] = (await Promise.all([
+      service.handler({ caller: firstCaller }, "createEntity", [spec]),
+      service.handler({ caller: secondCaller }, "createEntity", [spec]),
+    ])) as [{ id: string }, { id: string }];
+    expect(second.id).toBe(first.id);
+    expect(taskAuthorities.resolveRuntime(first.id, entityCache)).toBe(firstTask);
+    const reopened = (await service.handler({ caller: secondCaller }, "createEntity", [spec])) as {
+      id: string;
+    };
+    expect(reopened.id).toBe(first.id);
+    expect(taskAuthorities.resolveRuntime(reopened.id, entityCache)).toBe(firstTask);
+  });
+
   it("snapshots the verified creator task onto a new runtime", async () => {
     const { service, taskAuthorities, entityCache } = await buildDeps();
     const taskAuthority = "task:closure-one" as const;

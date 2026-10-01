@@ -1064,7 +1064,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // server supervisor before this caller resumes. Snapshot the authenticated
     // task now, at the creation boundary, so that asynchronous activation
     // cannot replace the initiating task with the server principal.
-    inheritTaskAuthority(canonicalId, actors, contextId);
     if (spec.execution.surface === "external" && !isOpenPanelBrowserUrl(spec.execution.url)) {
       throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
     }
@@ -1077,6 +1076,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ),
         existing.executionAuthority
       );
+    // Reopening a stable live identity refreshes its incarnation; it does not
+    // create another runtime or transfer the original task's authority.
+    // The owning creation queue also preserves this distinction for concurrent callers.
+    const createsRuntime = existing?.status !== "active";
+    if (createsRuntime) inheritTaskAuthority(canonicalId, actors, contextId);
 
     // Entity identity columns are write-once, so re-attaching an inert session
     // without an explicit context must reuse its original context coordinate.
@@ -1191,7 +1195,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ),
     };
     const record = await store.activate(activateInput);
-    inheritTaskAuthority(record.id, actors, contextId);
+    if (createsRuntime) inheritTaskAuthority(record.id, actors, contextId);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
     }
