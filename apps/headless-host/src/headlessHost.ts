@@ -1,3 +1,5 @@
+import { HeadlessBrowserDownloads } from "./browserDownloads.js";
+import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserAutomation";
 /**
  * HeadlessHost — orchestrator. Startup order matters:
  *   rpc connect → panelRuntime.registerClient → event watch →
@@ -50,6 +52,7 @@ export class HeadlessHost implements PanelHost {
   private browser: LaunchedChromium | null = null;
   private cdp: CdpConnection | null = null;
   private pages: PageHost | null = null;
+  private downloads: HeadlessBrowserDownloads | null = null;
   private bridge: CdpHostBridgeClient | null = null;
   private fetchHost: ChromiumFetchHost | null = null;
   private readonly consoleHistory = new ConsoleHistoryStore();
@@ -239,11 +242,42 @@ export class HeadlessHost implements PanelHost {
     this.cdp = await CdpConnection.connect(this.browser.wsEndpoint);
     const cookieProjector = new BrowserCookieProjector(this.cdp, this.connection!.rpc);
     this.fetchHost = new ChromiumFetchHost(this.cdp, cookieProjector);
-    this.pages = new PageHost(this.cdp, this.consoleHistory, (browserContextId, url) =>
-      cookieProjector.prepare(browserContextId, url).catch((error) => {
-        log.warn(`browser cookies were unavailable for a headless panel: ${String(error)}`);
-      })
+    this.downloads = new HeadlessBrowserDownloads(this.cdp, {
+      ownerForFrame: (frameId) => this.pages?.ownerForFrame(frameId),
+      approve: (panelId, url, signal) =>
+        this.approveBrowserCapability(panelId, url, "downloads", signal),
+      activity: (panelId, payload) =>
+        this.bridge?.sendEvent(panelId, "Vibestudio.download", payload),
+    });
+    await this.downloads.start(this.browser.profileDir);
+    this.pages = new PageHost(
+      this.cdp,
+      this.consoleHistory,
+      (browserContextId, url) =>
+        cookieProjector.prepare(browserContextId, url).catch((error) => {
+          log.warn(`browser cookies were unavailable for a headless panel: ${String(error)}`);
+        }),
+      {
+        configureContext: (id) => this.downloads!.configureContext(id),
+        popup: async (panelId, url) => {
+          const owner = this.pages!.ownerForPanel(panelId);
+          if (!(await this.approveBrowserCapability(panelId, owner.url, "popups", owner.signal)))
+            throw new Error("Popup permission denied");
+          const popup = await this.connection!.rpc.call<{ id: string }>(
+            "main",
+            "panel.createPanel",
+            [panelId, `browser:${url}`, { focus: false, placement: "child" }],
+            { signal: owner.signal }
+          );
+          this.bridge?.sendEvent(panelId, "Vibestudio.popup", {
+            popup: { panelId: popup.id, url },
+          });
+        },
+        popupFailed: (panelId, error) =>
+          this.bridge?.sendEvent(panelId, "Vibestudio.popup", { error: error.message }),
+      }
     );
+    await this.pages.initializeBrowserActivities();
     this.pages.onViewChanged((slotId) => {
       void this.reportPageObservation(slotId);
     });
@@ -304,6 +338,8 @@ export class HeadlessHost implements PanelHost {
   private async retireBrowser(): Promise<void> {
     const browser = this.browser;
     this.browser = null;
+    if (this.downloads) await this.downloads.stop();
+    this.downloads = null;
     this.cdp?.close();
     this.cdp = null;
     this.pages = null;
@@ -359,7 +395,8 @@ export class HeadlessHost implements PanelHost {
             action as "navigate" | "reload" | "goBack" | "goForward" | "stop",
             url
           ),
-        hostCommand: (targetId, action, args) => this.handleHostCommand(targetId, action, args),
+        hostCommand: (targetId, action, args, signal) =>
+          this.handleHostCommand(targetId, action, args, signal),
         hostOperation: (action, args) => this.handleHostOperation(action, args),
         detach: (targetId) => this.pages!.detachRelay(targetId),
         registerRejected: (targetId, reason) => {
@@ -385,12 +422,41 @@ export class HeadlessHost implements PanelHost {
     return firstAuthenticated;
   }
 
+  private async approveBrowserCapability(
+    panelId: string,
+    url: string,
+    capability: "downloads" | "popups",
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const origin = new URL(url).origin;
+    const result = await this.connection!.rpc.call<{ granted: boolean }>(
+      "main",
+      "browserPermissions.request",
+      [
+        {
+          panelId,
+          sessionEpoch: this.config.clientSessionId,
+          origin,
+          topLevelUrl: url,
+          capabilities: [capability],
+          deviceLabel: this.config.label,
+        },
+      ],
+      { signal }
+    );
+    return result.granted;
+  }
+
   private async handleHostCommand(
     slotId: string,
     action: string,
-    args: unknown[]
+    args: unknown[],
+    signal: AbortSignal
   ): Promise<unknown> {
     switch (action) {
+      case "browserOperation":
+        if (!this.downloads) throw new Error("Download provider unavailable");
+        return this.downloads.operation(slotId, args[0] as BrowserAutomationRequest, signal);
       case "panelObservation": {
         const panelSlotId = asPanelSlotId(slotId);
         if (!this.tracker.heldLease(panelSlotId)) {

@@ -73,6 +73,7 @@ interface CdpHostLike {
   registerTarget(panelId: string, contentsId: number): void;
   unregisterTarget(panelId: string, contentsId: number): void;
   cleanupPanelAccess(panelId: string): void;
+  emitBrowserActivity?(panelId: string, activity: "popup" | "download", payload: unknown): void;
 }
 
 interface PanelOrchestratorLike {
@@ -997,31 +998,41 @@ export class PanelView implements PanelViewLike {
       options.translateManagedLinks || tryParsePanelLocationLink(url)
         ? this.parseManagedPanelUrl(url)
         : null;
-    if (parsed) {
-      void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
-        this.handlePanelLinkError(panelId, err, url)
-      );
-      return;
-    }
     const policy = classifyPanelUrl(url);
-    if (policy.disposition !== "browser-panel" && policy.disposition !== "external") {
-      this.handlePanelLinkError(
-        panelId,
-        new Error(policy.reason ?? "This link type is not supported"),
-        url
-      );
-      return;
-    }
-    const open = (): Promise<void> =>
-      policy.disposition === "browser-panel"
-        ? this.openBrowserLink(panelId, url, options.disposition)
-        : this.openExternalLink(url);
+    const open = async (): Promise<void> => {
+      if (parsed) {
+        await this.handleManagedLink(panelId, parsed, url, "child");
+        return;
+      }
+      if (policy.disposition === "browser-panel") {
+        await this.openBrowserLink(panelId, url, options.disposition);
+        return;
+      }
+      if (policy.disposition === "external") {
+        await this.openExternalLink(url);
+        if (options.requirePopupPermission)
+          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
+            error: "Link opened externally; no browser panel was created",
+          });
+        return;
+      }
+      throw new Error(policy.reason ?? "This link type is not supported");
+    };
     const permitted = options.requirePopupPermission
       ? this.allowPopup(panelId, contents)
       : Promise.resolve(true);
     void permitted
-      .then((allowed) => (allowed ? open() : undefined))
-      .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
+      .then((allowed) => {
+        if (!allowed) throw new Error("Popup permission denied");
+        return open();
+      })
+      .catch((err: unknown) => {
+        if (options.requirePopupPermission)
+          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        this.handlePanelLinkError(panelId, err, url);
+      });
   }
 
   private setupLinkInterception(
@@ -1205,6 +1216,9 @@ export class PanelView implements PanelViewLike {
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+    this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
+      popup: { panelId: result.id, url },
+    });
   }
 
   private async handleManagedLink(
@@ -1248,6 +1262,9 @@ export class PanelView implements PanelViewLike {
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+    this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
+      popup: { panelId: result.id, url },
+    });
   }
 
   private async navigateManagedLink(

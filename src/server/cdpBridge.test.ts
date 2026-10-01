@@ -456,6 +456,43 @@ describe("CdpBridge authentication", () => {
     });
   });
 
+  it("joins cancelled host work and preserves the caller's original reason", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProvider(harness, "desktop-host");
+    const owner = new AbortController();
+    let settled = false;
+    const work = harness.bridge.sendHostCommand(
+      "panel:tree/browser-1",
+      "browserOperation",
+      [],
+      owner.signal
+    );
+    void work.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    const command = await waitForJson(provider);
+    const cancelled = waitForJson(provider);
+    const reason = new Error("explicit operation cancellation");
+    owner.abort(reason);
+    expect(await cancelled).toMatchObject({ type: "host:cancel", requestId: command["requestId"] });
+    expect(settled).toBe(false);
+    const rejected = expect(work).rejects.toBe(reason);
+    provider.send(
+      JSON.stringify({
+        type: "host:error",
+        targetId: "panel:tree/browser-1",
+        requestId: command["requestId"],
+        error: "native cleanup complete",
+      })
+    );
+    await rejected;
+  });
+
   it("rejects model-aware host commands if the provider disconnects after target unregister", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
@@ -522,6 +559,23 @@ describe("CdpBridge authentication", () => {
       title: "Previous",
     });
   });
+
+  it.each(["{", "null"])(
+    "settles pending commands when a provider sends invalid protocol frame %s",
+    async (frame) => {
+      const harness = await createHarness();
+      const provider = await connectHostProvider(harness, "desktop-host");
+      const pending = harness.bridge.sendHostCommand("panel:tree/browser-1", "openDevTools", [
+        "right",
+      ]);
+      const rejected = expect(pending).rejects.toThrow("CDP host provider protocol failure");
+      await waitForJson(provider);
+      const closed = waitForClose(provider);
+      provider.send(frame);
+      await rejected;
+      expect((await closed).code).toBe(1002);
+    }
+  );
 
   it("rejects pending host control commands when the provider disconnects", async () => {
     const harness = await createHarness();

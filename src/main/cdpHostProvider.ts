@@ -124,7 +124,12 @@ export interface CdpHostProviderOptions {
   /** Ceiling for the doubling, so a long outage settles into a slow poll. */
   maxReconnectDelayMs?: number;
   diagnosticsStore?: RuntimeDiagnosticsStore;
-  onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
+  onHostCommand?: (
+    targetId: string,
+    action: string,
+    args: unknown[],
+    signal: AbortSignal
+  ) => unknown | Promise<unknown>;
   /**
    * Forward a panel diagnostic to the server so it lands in the per-unit
    * diagnostics store (queryable via runtime supervision). Invoked
@@ -149,6 +154,8 @@ interface ProviderMessage {
 }
 
 export class CdpHostProvider {
+  private readonly hostCommands = new Map<string, { targetId: string; owner: AbortController }>();
+
   private readonly targets = new Map<string, number>();
   /** Registrations already sent on the current provider socket. */
   private readonly sentRegistrations = new Map<string, number>();
@@ -232,9 +239,12 @@ export class CdpHostProvider {
         log.warn(
           `CDP host provider message failed: ${error instanceof Error ? error.message : String(error)}`
         );
+        socket.close(1002, "Invalid CDP host command");
       });
     });
     socket.on("close", () => {
+      for (const { owner } of this.hostCommands.values())
+        owner.abort(new Error("CDP host provider disconnected"));
       if (this.socket !== socket) return;
       this.socket = null;
       this.authenticated = false;
@@ -254,6 +264,8 @@ export class CdpHostProvider {
   }
 
   stop(): void {
+    for (const { owner } of this.hostCommands.values())
+      owner.abort(new Error("CDP host provider stopped"));
     this.running = false;
     this.clearReconnectTimer();
     this.reconnectAttempts = 0;
@@ -277,6 +289,8 @@ export class CdpHostProvider {
 
   unregisterTarget(targetId: string, webContentsId: number): void {
     if (this.targets.get(targetId) !== webContentsId) return;
+    for (const command of this.hostCommands.values())
+      if (command.targetId === targetId) command.owner.abort(new Error("CDP target unregistered"));
     this.targets.delete(targetId);
     this.sentRegistrations.delete(targetId);
     this.releaseAutomationSurface(targetId);
@@ -462,6 +476,8 @@ export class CdpHostProvider {
 
   private async handleSocketMessage(data: Buffer | string): Promise<void> {
     const message = JSON.parse(data.toString()) as ProviderMessage;
+    if (!message || typeof message !== "object" || typeof message.type !== "string")
+      throw new Error("Invalid CDP host command envelope");
     await this.handleProviderMessage(message);
   }
 
@@ -508,6 +524,12 @@ export class CdpHostProvider {
       case "nav:command":
         await this.handleNavCommand(message);
         return;
+      case "host:cancel":
+        if (message.requestId)
+          this.hostCommands
+            .get(message.requestId)
+            ?.owner.abort(new Error("Host command cancelled by its caller"));
+        break;
       case "host:command":
         await this.handleHostCommand(message);
         return;
@@ -560,16 +582,22 @@ export class CdpHostProvider {
     }
   }
 
+  emitBrowserActivity(targetId: string, activity: "popup" | "download", payload: unknown): void {
+    this.send({ type: "cdp:event", targetId, method: `Vibestudio.${activity}`, params: payload });
+  }
+
   private async handleHostCommand(message: ProviderMessage): Promise<void> {
     const { targetId, requestId, action } = message;
     if (!targetId || !requestId || !action) return;
+    const owner = new AbortController();
+    this.hostCommands.set(requestId, { targetId, owner });
     try {
       const args = Array.isArray(message.args) ? message.args : [];
       const builtInResult = await this.tryHandleBuiltInHostCommand(targetId, action, args);
       let result = builtInResult;
       if (builtInResult === HOST_COMMAND_NOT_BUILT_IN) {
         if (!this.options.onHostCommand) throw new Error(`Unknown host command: ${action}`);
-        result = await this.options.onHostCommand(targetId, action, args);
+        result = await this.options.onHostCommand(targetId, action, args, owner.signal);
       }
       this.send({ type: "host:result", targetId, requestId, result });
     } catch (error) {
@@ -579,6 +607,8 @@ export class CdpHostProvider {
         requestId,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      this.hostCommands.delete(requestId);
     }
   }
 
@@ -781,7 +811,8 @@ export class CdpHostProvider {
 
   private async handleCdpCommand(message: ProviderMessage): Promise<void> {
     const { targetId, requestId, method } = message;
-    if (!targetId || !requestId || !method) return;
+    if (!targetId || !requestId || !method)
+      throw new Error("CDP command lacks its target, request identity or method");
     try {
       await this.automationSurfaceReady.get(targetId);
       // Both protocol and host screenshots share native geometry ownership

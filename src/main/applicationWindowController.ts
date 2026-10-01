@@ -35,6 +35,7 @@ interface CdpRegistrationAdapter {
   unregisterTarget(panelId: string, contentsId: number): void;
   cleanupPanelAccess(panelId: string): void;
   isTargetUnderAutomation(targetId: string): boolean;
+  emitBrowserActivity?(panelId: string, activity: "popup" | "download", payload: unknown): void;
 }
 
 export interface WorkspaceWindowServices {

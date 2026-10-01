@@ -115,6 +115,20 @@ describe("CdpHostProvider", () => {
     vi.useRealTimers();
   });
 
+  it.each(["{", "null"])(
+    "closes a broken provider protocol instead of dropping frame %s",
+    async (frame) => {
+      const { provider, socket } = createHarness();
+      provider.start();
+      socket.emit("open");
+      socket.emit("message", frame);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(socket.readyState).toBe(WebSocket.CLOSED);
+      provider.stop();
+    }
+  );
+
   it("tracks live automation control independently of debugger commands", async () => {
     const { provider, setAutomationSurfaceActive } = createHarness();
 
@@ -1016,7 +1030,12 @@ describe("CdpHostProvider", () => {
       args: [],
     });
 
-    expect(onHostCommand).toHaveBeenCalledWith("panel-1", "rebuildPanel", []);
+    expect(onHostCommand).toHaveBeenCalledWith(
+      "panel-1",
+      "rebuildPanel",
+      [],
+      expect.any(AbortSignal)
+    );
     expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
       type: "host:result",
       targetId: "panel-1",

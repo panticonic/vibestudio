@@ -47,6 +47,7 @@ interface PanelPage {
   relaySessionId: string | null;
   panelUrl: string;
   lastUsedAt: number;
+  browserOwner?: AbortController;
 }
 
 export interface LoadPanelInput {
@@ -81,6 +82,8 @@ export class PageHost {
   private readonly relayRetirements = new WeakMap<PanelPage, Promise<void>>();
   private readonly retiringRelays = new WeakSet<PanelPage>();
   private readonly retiringPages = new WeakSet<PanelPage>();
+  private readonly frames = new Map<string, string>();
+  private readonly windowRequests = new Map<string, string[]>();
   private readonly contextsById = new Map<string, string>(); // contextId → browserContextId
   private readonly relayEventListeners = new Set<
     (slotId: string, method: string, params: unknown, sessionId?: string) => void
@@ -91,7 +94,12 @@ export class PageHost {
   constructor(
     private readonly cdp: CdpConnection,
     private readonly consoleHistory: ConsoleHistoryStore,
-    private readonly beforeNavigate?: (browserContextId: string, url: string) => Promise<void>
+    private readonly beforeNavigate?: (browserContextId: string, url: string) => Promise<void>,
+    private readonly browserActivities?: {
+      configureContext?(id: string): Promise<void>;
+      popup?(panelId: string, url: string): Promise<void>;
+      popupFailed?(panelId: string, error: Error): void;
+    }
   ) {
     cdp.onEvent((event) => this.routeEvent(event));
   }
@@ -136,6 +144,7 @@ export class PageHost {
     const result = (await this.cdp.send("Target.createBrowserContext", {
       disposeOnDetach: false,
     })) as { browserContextId: string };
+    await this.browserActivities?.configureContext?.(result.browserContextId);
     this.contextsById.set(contextId, result.browserContextId);
     return result.browserContextId;
   }
@@ -162,6 +171,7 @@ export class PageHost {
       relaySessionId: null,
       panelUrl: input.panelUrl,
       lastUsedAt: Date.now(),
+      browserOwner: new AbortController(),
     };
     this.pages.set(input.slotId, page);
 
@@ -268,18 +278,25 @@ export class PageHost {
     this.rejectDocumentReady(slotId, `panel ${slotId} unloaded before document readiness`);
     const page = this.pages.get(slotId);
     if (!page) return;
+    page.browserOwner?.abort(new Error("Panel unloaded"));
     this.retiringPages.add(page);
     await this.detachRelay(slotId);
     try {
-      const closed = await this.cdp.send("Target.closeTarget", { targetId: page.targetId }) as { success: boolean };
+      const closed = (await this.cdp.send("Target.closeTarget", { targetId: page.targetId })) as {
+        success: boolean;
+      };
       if (!closed.success) throw new Error(`Chromium did not close owned target ${page.targetId}`);
     } catch (cause) {
       // A target may already have closed independently. Observe the native
       // target table instead of discarding ownership on an arbitrary error.
-      const current = await this.cdp.send("Target.getTargets") as { targetInfos: Array<{ targetId: string }> };
+      const current = (await this.cdp.send("Target.getTargets")) as {
+        targetInfos: Array<{ targetId: string }>;
+      };
       if (current.targetInfos.some((target) => target.targetId === page.targetId)) throw cause;
     }
     this.pages.delete(slotId);
+    this.windowRequests.delete(slotId);
+    for (const [frameId, owner] of this.frames) if (owner === slotId) this.frames.delete(frameId);
     this.cdp.releaseSession(page.mgmtSessionId);
     this.cdp.releaseSlotSessions(slotId);
     this.consoleHistory.clear(slotId);
@@ -299,7 +316,10 @@ export class PageHost {
     this.contextsById.delete(contextId);
   }
 
-  async reconcileContextOwners(liveContextIds: readonly string[], observedContextIds: readonly string[]): Promise<void> {
+  async reconcileContextOwners(
+    liveContextIds: readonly string[],
+    observedContextIds: readonly string[]
+  ): Promise<void> {
     const live = new Set(liveContextIds);
     for (const contextId of observedContextIds) {
       if (!live.has(contextId)) await this.retireContext(contextId);
@@ -513,6 +533,8 @@ export class PageHost {
     const page = this.requirePage(slotId);
     page.lastUsedAt = Date.now();
     if (sessionId) {
+      if (this.cdp.ownerOf(sessionId) !== slotId)
+        throw new Error("CDP child session does not belong to this panel");
       // Explicit session routing (nested sessions the client attached).
       return this.cdp.send(method, params, sessionId);
     }
@@ -529,22 +551,24 @@ export class PageHost {
     const attachment = this.relayAttachments.get(page);
     if (!attachment && !page.relaySessionId) return Promise.resolve();
     this.retiringRelays.add(page);
-    const retiring = Promise.resolve().then(async () => {
-      const sessionId = attachment ? await attachment.catch(() => null) : page.relaySessionId;
-      if (sessionId) {
-        await this.cdp.send("Target.detachFromTarget", { sessionId }).catch((error) => {
-          // Native detachment can precede the command (for example when the
-          // target closes independently). Its event is equally authoritative.
-          if (page.relaySessionId === sessionId) throw error;
-        });
-        this.cdp.releaseSession(sessionId);
-        page.relaySessionId = null;
-      }
-      this.relayAttachments.delete(page);
-      this.retiringRelays.delete(page);
-    }).finally(() => {
-      this.relayRetirements.delete(page);
-    });
+    const retiring = Promise.resolve()
+      .then(async () => {
+        const sessionId = attachment ? await attachment.catch(() => null) : page.relaySessionId;
+        if (sessionId) {
+          await this.cdp.send("Target.detachFromTarget", { sessionId }).catch((error) => {
+            // Native detachment can precede the command (for example when the
+            // target closes independently). Its event is equally authoritative.
+            if (page.relaySessionId === sessionId) throw error;
+          });
+          this.cdp.releaseSession(sessionId);
+          page.relaySessionId = null;
+        }
+        this.relayAttachments.delete(page);
+        this.retiringRelays.delete(page);
+      })
+      .finally(() => {
+        this.relayRetirements.delete(page);
+      });
     this.relayRetirements.set(page, retiring);
     return retiring;
   }
@@ -554,25 +578,29 @@ export class PageHost {
     if (this.retiringPages.has(page) || this.pages.get(page.slotId) !== page) {
       throw new Error(`panel ${page.slotId} is retiring`);
     }
-    if (this.retiringRelays.has(page)) throw new Error(`panel ${page.slotId} relay retirement is unconfirmed`);
+    if (this.retiringRelays.has(page))
+      throw new Error(`panel ${page.slotId} relay retirement is unconfirmed`);
     if (page.relaySessionId) return page.relaySessionId;
     let attachment = this.relayAttachments.get(page);
     if (!attachment) {
       // Domain initialization sends commands concurrently. They must all own
       // the same native session: each attachment has independent domain and
       // dialog state, even though it addresses the same target.
-      attachment = this.cdp.send("Target.attachToTarget", {
-        targetId: page.targetId,
-        flatten: true,
-      }).then((result) => {
-        const { sessionId } = result as { sessionId: string };
-        page.relaySessionId = sessionId;
-        this.cdp.claimSession(sessionId, page.slotId);
-        return sessionId;
-      }).catch((error) => {
-        this.relayAttachments.delete(page);
-        throw error;
-      });
+      attachment = this.cdp
+        .send("Target.attachToTarget", {
+          targetId: page.targetId,
+          flatten: true,
+        })
+        .then((result) => {
+          const { sessionId } = result as { sessionId: string };
+          page.relaySessionId = sessionId;
+          this.cdp.claimSession(sessionId, page.slotId);
+          return sessionId;
+        })
+        .catch((error) => {
+          this.relayAttachments.delete(page);
+          throw error;
+        });
       this.relayAttachments.set(page, attachment);
     }
     const sessionId = await attachment;
@@ -584,11 +612,54 @@ export class PageHost {
 
   private requirePage(slotId: string): PanelPage {
     const page = this.pages.get(slotId);
-    if (!page || this.retiringPages.has(page)) throw new Error(`no active page hosted for panel ${slotId}`);
+    if (!page || this.retiringPages.has(page))
+      throw new Error(`no active page hosted for panel ${slotId}`);
     return page;
   }
 
   private routeEvent(event: { method: string; params: unknown; sessionId?: string }): void {
+    if (
+      !event.sessionId &&
+      event.method === "Target.attachedToTarget" &&
+      this.browserActivities?.popup
+    ) {
+      const payload = event.params as {
+        sessionId: string;
+        waitingForDebugger: boolean;
+        targetInfo: { type: string; targetId: string; openerId?: string; url: string };
+      };
+      const target = payload.targetInfo;
+      if (target.type !== "page" || !payload.waitingForDebugger) return;
+      const opener = [...this.pages.values()].find((page) => page.targetId === target.openerId);
+      if (!opener) {
+        // Ordinary host-created pages are already owned by their creator.
+        void this.cdp
+          .send("Runtime.runIfWaitingForDebugger", {}, payload.sessionId)
+          .then(() => this.cdp.send("Target.detachFromTarget", { sessionId: payload.sessionId }))
+          .catch((error) => log.warn(`Could not release native page startup: ${String(error)}`));
+        return;
+      }
+      const requests = this.windowRequests.get(opener.slotId);
+      const url = requests?.shift() ?? target.url;
+      if (!requests?.length) this.windowRequests.delete(opener.slotId);
+      // Suppress popup scripts before releasing native startup: Chromium must
+      // finish window creation to settle the opener's Input command. Retire
+      // that native target, then create the durable replacement after approval.
+      void this.cdp
+        .send("Emulation.setScriptExecutionDisabled", { value: true }, payload.sessionId)
+        .then(() => this.cdp.send("Runtime.runIfWaitingForDebugger", {}, payload.sessionId))
+        .then(() => this.cdp.send("Target.closeTarget", { targetId: target.targetId }))
+        .then(async () => {
+          await this.browserActivities!.popup!(opener.slotId, url);
+        })
+        .catch((error) =>
+          this.browserActivities?.popupFailed?.(
+            opener.slotId,
+            error instanceof Error ? error : new Error(String(error))
+          )
+        );
+      return;
+    }
     if (event.method === "Target.detachedFromTarget") {
       const detached = (event.params as { sessionId?: string } | undefined)?.sessionId;
       for (const page of this.pages.values()) {
@@ -611,9 +682,41 @@ export class PageHost {
     // session events keep their sessionId.
     const page = this.pages.get(owner);
     const isRoot = page?.relaySessionId === event.sessionId;
+    if (event.method === "Page.frameNavigated")
+      this.frames.set((event.params as { frame: { id: string } }).frame.id, owner);
+    if (
+      event.method === "Page.frameDetached" &&
+      (event.params as { reason?: string }).reason !== "swap"
+    )
+      this.frames.delete((event.params as { frameId: string }).frameId);
     for (const listener of this.relayEventListeners) {
       listener(owner, event.method, event.params, isRoot ? undefined : event.sessionId);
     }
+  }
+
+  async initializeBrowserActivities(): Promise<void> {
+    if (this.browserActivities?.popup)
+      await this.cdp.send("Target.setAutoAttach", {
+        autoAttach: true,
+        waitForDebuggerOnStart: true,
+        flatten: true,
+        filter: [{ type: "page", exclude: false }, { exclude: true }],
+      });
+  }
+
+  ownerForPanel(panelId: string): { url: string; signal?: AbortSignal } {
+    const page = this.requirePage(panelId);
+    return { url: page.panelUrl, signal: page.browserOwner?.signal };
+  }
+
+  ownerForFrame(
+    frameId: string
+  ): { panelId: string; url: string; signal?: AbortSignal } | undefined {
+    const panelId = this.frames.get(frameId),
+      page = panelId ? this.pages.get(panelId) : undefined;
+    return page
+      ? { panelId: page.slotId, url: page.panelUrl, signal: page.browserOwner?.signal }
+      : undefined;
   }
 
   private handleMgmtEvent(
@@ -621,6 +724,29 @@ export class PageHost {
     event: { method: string; params: unknown; sessionId?: string }
   ): void {
     switch (event.method) {
+      case "Page.frameNavigated": {
+        const frame = (event.params as { frame: { id: string; parentId?: string; url: string } })
+          .frame;
+        this.frames.set(frame.id, slotId);
+        if (!frame.parentId) {
+          const page = this.pages.get(slotId);
+          if (page) {
+            page.browserOwner?.abort(new Error("Panel document navigated"));
+            page.browserOwner = new AbortController();
+            page.panelUrl = frame.url;
+          }
+        }
+        return;
+      }
+      case "Page.frameDetached":
+        this.frames.delete((event.params as { frameId: string }).frameId);
+        return;
+      case "Page.windowOpen": {
+        const requests = this.windowRequests.get(slotId) ?? [];
+        requests.push((event.params as { url: string }).url);
+        this.windowRequests.set(slotId, requests);
+        return;
+      }
       case "Page.domContentEventFired":
         this.documentReadyWaiters.get(slotId)?.resolve();
         this.emitViewChanged(slotId);

@@ -328,7 +328,12 @@ describe("CdpHostBridgeClient", () => {
       args: [],
     });
     expect(await server.next()).toMatchObject({ type: "host:result", requestId: "r3" });
-    expect(h.hostCommand).toHaveBeenCalledWith("panel-1", "accessibilityTree", []);
+    expect(h.hostCommand).toHaveBeenCalledWith(
+      "panel-1",
+      "accessibilityTree",
+      [],
+      expect.any(AbortSignal)
+    );
 
     server.send({
       type: "host:operation",

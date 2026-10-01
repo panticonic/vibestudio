@@ -455,6 +455,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             await ensureCdpTargetReady(panelId);
             return bridge.sendTargetCommand(panelId, requesterEntityId, "stop", []);
           },
+          browserOperation: async (panelId, request, signal) => {
+            await ensureCdpTargetReady(panelId);
+            return bridge.sendHostCommand(panelId, "browserOperation", [request], signal);
+          },
           consoleHistory: async (panelId, _requesterEntityId, options) => {
             await ensureCdpTargetReady(panelId);
             return bridge.sendHostCommand(panelId, "consoleHistory", [options ?? {}]) as Promise<

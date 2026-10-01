@@ -167,7 +167,7 @@ describe("PanelView plain panel links", () => {
       expect(event.preventDefault).toHaveBeenCalledOnce();
       expect(openPanelLocation).toHaveBeenLastCalledWith({ ...location, disposition: "root" });
       windowOpen({ url });
-      expect(openPanelLocation).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(openPanelLocation).toHaveBeenCalledTimes(2));
       expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
       expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
     }
@@ -638,10 +638,12 @@ describe("PanelView plain panel links", () => {
 
     expect(openExternal).not.toHaveBeenCalled();
     expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
-    expect(sendPanelEvent).toHaveBeenCalledWith(
-      panelId,
-      "runtime:child-creation-error",
-      expect.objectContaining({ url: "file:///etc/passwd" })
+    await vi.waitFor(() =>
+      expect(sendPanelEvent).toHaveBeenCalledWith(
+        panelId,
+        "runtime:child-creation-error",
+        expect.objectContaining({ url: "file:///etc/passwd" })
+      )
     );
   });
 
