@@ -96,6 +96,34 @@ describe("development template checkpoint", () => {
     expect(git(target, ["show", "HEAD:tracked.txt"])).toBe("committed");
   });
 
+  it("fetches the captured tree without retaining unrelated history or tags", async () => {
+    const checkout = repository();
+    const oldCommit = git(checkout, ["rev-parse", "HEAD"]);
+    git(checkout, ["tag", "old-release"]);
+    fs.writeFileSync(path.join(checkout, "tracked.txt"), "current snapshot\n");
+    git(checkout, ["add", "tracked.txt"]);
+    git(checkout, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "-m",
+      "current",
+    ]);
+    const capturedCommit = git(checkout, ["rev-parse", "HEAD"]);
+    const target = `${checkout}-checkpoint`;
+    temporaryRoots.add(target);
+
+    await checkpointWorkspaceSource({ checkout, target });
+
+    expect(git(target, ["rev-parse", "HEAD"])).toBe(capturedCommit);
+    expect(git(target, ["show", "HEAD:tracked.txt"])).toBe("current snapshot");
+    expect(git(target, ["rev-list", "--count", "HEAD"])).toBe("1");
+    expect(git(target, ["tag", "--list"])).toBe("");
+    expect(() => git(target, ["cat-file", "-e", oldCommit])).toThrow();
+  });
+
   it("seals a clean checkout independently of later source edits", async () => {
     const checkout = repository();
     const target = `${checkout}-checkpoint`;

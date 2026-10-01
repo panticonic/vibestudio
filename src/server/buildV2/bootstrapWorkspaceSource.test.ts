@@ -62,6 +62,62 @@ describe("BootstrapWorkspaceSource execution identity", () => {
     );
   });
 
+  it("joins every owned mirror write before propagating its original failure", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
+    temporaryRoots.push(root);
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        fs.writeFile(path.join(root, `${index}.ts`), String(index))
+      )
+    );
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let observeSibling!: () => void;
+    const sibling = new Promise<void>((resolve) => {
+      observeSibling = resolve;
+    });
+    let observeFailure!: () => void;
+    const failure = new Promise<void>((resolve) => {
+      observeFailure = resolve;
+    });
+    const originalError = new Error("content mirror refused this source");
+    const putTree = vi.fn(async () => {});
+    const source = new BootstrapWorkspaceSource("workspace:test", root, {
+      putFile: async (bytes) => {
+        if (bytes.toString() === "0") {
+          await sibling;
+          observeFailure();
+          throw originalError;
+        }
+        observeSibling();
+        await held;
+        return { digest: createHash("sha256").update(bytes).digest("hex") };
+      },
+      putTree,
+    });
+    let settled = false;
+    const sealed = source.seal();
+    void sealed.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    try {
+      await failure;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      release();
+    }
+    await expect(sealed).rejects.toBe(originalError);
+    expect(putTree).not.toHaveBeenCalled();
+  });
+
   it("makes the sealed execution source reconstructible by content GC", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
     temporaryRoots.push(root);

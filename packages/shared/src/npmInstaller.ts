@@ -3,6 +3,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import {
   assertNativePrerequisites,
   compileNativeLaunch,
@@ -108,6 +110,10 @@ async function runNpmInstallInSlot(
         : {}),
     };
     const npmCli = runtime.npmCli;
+    const manifest = ignoreScripts
+      ? fs.readFileSync(path.join(installRoot, "package.json"), "utf8")
+      : null;
+    const registryCache = path.join(getSharedDerivedDataPath(), "npm-registry-downloads");
     // Private-registry credentials require an explicit future API; ambient host
     // npm profiles are not an installation authority. No user
     // npmrc, ambient NODE_OPTIONS, credentials or profile cache enter this domain.
@@ -124,10 +130,15 @@ async function runNpmInstallInSlot(
     require(cli);
   `;
 
-    const installWithCache = async (installCacheDir: string): Promise<void> => {
+    let installDeadline = 0;
+    const invoke = async (
+      command: "install" | "ci",
+      installCacheDir: string,
+      lockOnly = false
+    ): Promise<void> => {
       const args = [
         npmCli,
-        "install",
+        command,
         "--no-audit",
         "--no-fund",
         // A closure is a declared set. Since npm 7 an unmet peer of a declared
@@ -143,6 +154,7 @@ async function runNpmInstallInSlot(
         installCacheDir,
       ];
       if (ignoreScripts) args.push("--ignore-scripts");
+      if (lockOnly) args.push("--package-lock-only");
       const launch = compileNativeLaunch({
         installation,
         containerId: `vibestudio-npm-${randomUUID()}`,
@@ -150,7 +162,11 @@ async function runNpmInstallInSlot(
         cwd: installRoot,
         guestEnvironment,
         readPaths: runtime.readPaths,
-        writePaths: [installRoot, stateRoot],
+        writePaths: [
+          installRoot,
+          stateRoot,
+          ...(command === "ci" && installCacheDir === registryCache ? [registryCache] : []),
+        ],
         network: "allow",
       });
       await assertNativePrerequisites({ installation, environment: launch.environment });
@@ -180,16 +196,46 @@ async function runNpmInstallInSlot(
         );
 
         if (timeout > 0) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            // npm installs its own SIGTERM handler and can remain alive while
-            // stalled sockets drain. A timed-out unattended build must actually
-            // release the cache key so the retry can make progress.
-            child.kill("SIGKILL");
-          }, timeout);
+          timeoutHandle = setTimeout(
+            () => {
+              timedOut = true;
+              // npm installs its own SIGTERM handler and can remain alive while
+              // stalled sockets drain. A timed-out unattended build must actually
+              // release the cache key so the retry can make progress.
+              child.kill("SIGKILL");
+            },
+            Math.max(0, installDeadline - Date.now())
+          );
           timeoutHandle.unref();
         }
       });
+    };
+
+    const installWithCache = async (
+      privateCache: string,
+      downloadCache = registryCache
+    ): Promise<void> => {
+      // Preserve the existing attempt budget across resolution and download.
+      installDeadline = Date.now() + timeout;
+      if (!ignoreScripts) return invoke("install", privateCache);
+
+      // Resolve in the private domain first: even --ignore-scripts does not
+      // prevent npm's Git fetcher from running dependency preparation code.
+      // Only a complete registry graph may enter the shared download domain.
+      await invoke("install", privateCache, true);
+      if (fs.readFileSync(path.join(installRoot, "package.json"), "utf8") !== manifest)
+        throw new Error("npm resolution changed the installation manifest");
+      const lockPath = path.join(installRoot, "package-lock.json");
+      if (!fs.lstatSync(lockPath).isFile())
+        throw new Error("npm dependency lockfile is not a regular file");
+      assertRegistryDependencyGraph(
+        JSON.parse(fs.readFileSync(lockPath, "utf8")),
+        createRequire(npmCli)("npm-package-arg").resolve
+      );
+      fs.mkdirSync(downloadCache, { recursive: true, mode: 0o700 });
+      // npm ci consumes the reviewed graph. With registry sources and scripts
+      // disabled, only npm's downloader writes this cache, never package code.
+      await invoke("ci", downloadCache);
     };
 
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -210,7 +256,7 @@ async function runNpmInstallInSlot(
             "[npmInstaller] npm cache corruption detected; retrying once with a clean cache"
           );
           try {
-            await installWithCache(recoveryCacheDir);
+            await installWithCache(recoveryCacheDir, recoveryCacheDir);
           } catch (recoveryError) {
             throw classifyNpmInstallError(recoveryError);
           }
@@ -232,9 +278,55 @@ async function runNpmInstallInSlot(
   }
 }
 
+function assertRegistryDependencyGraph(
+  lock: { lockfileVersion?: number; packages?: Record<string, Record<string, unknown>> },
+  parse: (
+    name: string,
+    spec: string
+  ) => { registry?: boolean; type?: string; subSpec?: { registry?: boolean } }
+): void {
+  if (lock.lockfileVersion !== 3 || !lock.packages?.[""])
+    throw new Error("npm resolution did not produce a complete dependency lockfile");
+  for (const [location, pkg] of Object.entries(lock.packages)) {
+    if (
+      location &&
+      (!location.startsWith("node_modules/") ||
+        location.includes("\\") ||
+        location.split("/").some((part) => !part || part === "." || part === ".."))
+    )
+      throw new Error(`Refusing npm dependency outside its installation: ${location}`);
+    if (pkg["link"]) throw new Error(`Refusing linked npm dependency: ${location}`);
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
+      for (const [name, spec] of Object.entries((pkg[field] ?? {}) as Record<string, string>)) {
+        const source = parse(name, spec);
+        if (!source.registry && !(source.type === "alias" && source.subSpec?.registry))
+          throw new Error(
+            `Refusing non-registry npm dependency ${name} in ${location || "root"}: ${spec}`
+          );
+      }
+    }
+    if (!location || (pkg["inBundle"] && pkg["resolved"] === undefined)) continue;
+    if (typeof pkg["resolved"] !== "string" || typeof pkg["integrity"] !== "string")
+      throw new Error(`npm dependency ${location} has no registry resolution and integrity`);
+    const source = new URL(pkg["resolved"]);
+    if (
+      source.protocol !== "https:" ||
+      source.hostname !== "registry.npmjs.org" ||
+      source.username ||
+      source.password
+    )
+      throw new Error(`Refusing non-registry npm dependency: ${location} (${pkg["resolved"]})`);
+  }
+}
+
 /**
- * Bound dependency installation concurrency. Each invocation owns a private
- * cache because package lifecycle code may write every admitted resource.
+ * Bound dependency installation concurrency. Resolution and lifecycle code
+ * own private caches; reviewed registry downloads reuse a profile cache.
  */
 export function runNpmInstall(
   cwd: string,

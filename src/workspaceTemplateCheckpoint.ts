@@ -102,16 +102,14 @@ export async function checkpointWorkspaceSource(input: {
   const target = path.resolve(input.target);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  // Transfer objects through Git's snapshot protocol instead of copying a
-  // live object directory (which can inherit borrowed alternates and race GC).
-  await execFileAsync("git", [
-    ...CHECKPOINT_GIT_CONFIG,
-    "clone",
-    "--no-local",
-    "--no-checkout",
-    sourceCheckout,
-    target,
-  ]);
+  // Transfer the captured commit through Git's snapshot protocol. A checkpoint
+  // owns its complete current tree, not the source repository's history, tags,
+  // or other branches. Fetching the exact commit also keeps a concurrent HEAD
+  // move from changing the snapshot requested above.
+  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+  await git(target, ["init", "--quiet"]);
+  await git(target, ["remote", "add", "origin", sourceCheckout]);
+  await git(target, ["fetch", "--no-tags", "--depth=1", "origin", commit]);
   await git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", commit]);
   for (const relativePath of changedPaths) copyWorktreePath(sourceCheckout, target, relativePath);
   await git(target, ["add", "-A"]);

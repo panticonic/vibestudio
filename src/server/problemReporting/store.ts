@@ -245,6 +245,12 @@ export class ProblemReportingStore {
   decide(owner: string, revision: number, state: "off" | "on", surface: "shell" | "cli"): Consent {
     return this.transaction(() => {
       const current = this.consent(owner);
+      // Consent records a desired sharing state. Several workspace shells can
+      // observe the same installation before its first choice is saved. Once
+      // that choice is established, the same decision is already satisfied;
+      // it must neither mint another revision nor fail a waiting shell. A
+      // different choice still requires the revision the human reviewed.
+      if (current.state === state) return current;
       if (current.revision !== revision)
         throw new ReportConflict("Consent changed; refresh your choice");
       this.db

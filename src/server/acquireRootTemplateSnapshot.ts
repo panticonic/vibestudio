@@ -138,10 +138,17 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
         // This is a transport adapter, not a second resolver. Copy the repository
         // database into the private atomic attempt, then apply the exact same
         // commit-tree and snapshot verification used by ordinary acquisition.
-        // Worktree dirt is harmless because readExactGitSnapshot reads the named
-        // commit tree rather than filesystem bytes.
+        // The worktree is not an input to that read. Keep only the Git database,
+        // so source files (including untracked build output) are neither copied
+        // nor retained in this reconstruction cache.
         const startedAt = performance.now();
-        await fs.cp(path.resolve(input.checkout), dir, { recursive: true });
+        const checkout = path.resolve(input.checkout);
+        const gitDir = path.join(checkout, ".git");
+        await fs.cp(checkout, dir, {
+          recursive: true,
+          filter: (source) =>
+            source === checkout || source === gitDir || source.startsWith(`${gitDir}${path.sep}`),
+        });
         const copiedAt = performance.now();
         const snapshot = await readExactGitSnapshot({
           git: input.git,

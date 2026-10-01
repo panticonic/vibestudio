@@ -178,7 +178,7 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
   }
 
   private async readSnapshot(mirror = false) {
-    const files: Array<{ path: string; contentHash: string; mode: number }> = [];
+    const sourceFiles: Array<{ path: string; absolutePath: string }> = [];
     const visit = async (directory: string, relativeDirectory: string): Promise<void> => {
       const entries = await fs.readdir(directory, { withFileTypes: true });
       entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -201,27 +201,50 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
             `Bootstrap workspace snapshot contains unsupported entry ${relativePath}`
           );
         }
-        const [content, stat] = await Promise.all([
-          fs.readFile(absolutePath),
-          fs.stat(absolutePath),
-        ]);
-        const contentHash = createHash("sha256").update(content).digest("hex");
-        if (mirror && this.contentMirror) {
-          const stored = await this.contentMirror.putFile(content);
-          if (stored.digest !== contentHash) {
-            throw new Error(
-              `Bootstrap workspace content mirror changed ${relativePath}: expected ${contentHash}, stored ${stored.digest}`
-            );
-          }
-        }
-        files.push({
-          path: relativePath,
-          contentHash,
-          mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
-        });
+        sourceFiles.push({ path: relativePath, absolutePath });
       }
     };
     await visit(this.sourceRoot, "");
+    const files = new Array<{ path: string; contentHash: string; mode: number }>(
+      sourceFiles.length
+    );
+    let cursor = 0;
+    let failure: { error: unknown } | undefined;
+    const results = await Promise.allSettled(
+      Array.from({ length: Math.min(16, sourceFiles.length) }, async () => {
+        while (!failure && cursor < sourceFiles.length) {
+          const index = cursor++;
+          const file = sourceFiles[index]!;
+          try {
+            const [content, stat] = await Promise.all([
+              fs.readFile(file.absolutePath),
+              fs.stat(file.absolutePath),
+            ]);
+            const contentHash = createHash("sha256").update(content).digest("hex");
+            if (mirror && this.contentMirror) {
+              const stored = await this.contentMirror.putFile(content);
+              if (stored.digest !== contentHash) {
+                throw new Error(
+                  `Bootstrap workspace content mirror changed ${file.path}: expected ${contentHash}, stored ${stored.digest}`
+                );
+              }
+            }
+            files[index] = {
+              path: file.path,
+              contentHash,
+              mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
+            };
+          } catch (error) {
+            failure ??= { error };
+            throw error;
+          }
+        }
+      })
+    );
+    // Settle all owned readers/writers before rejection permits bootstrap cleanup.
+    if (failure) throw failure.error;
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected?.status === "rejected") throw rejected.reason;
     const snapshot = buildWorktreeManifest(files);
     if (mirror && this.contentMirror) {
       await this.contentMirror.putTree(files, snapshot.stateHash);

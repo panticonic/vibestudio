@@ -90,6 +90,12 @@ describe("acquireRootTemplateSnapshot", () => {
     roots.push(statePath);
     const checkout = path.join(statePath, "unpublished-base");
     await fsp.mkdir(path.join(checkout, ".git"), { recursive: true });
+    await fsp.writeFile(path.join(checkout, ".git", "HEAD"), "ref: refs/heads/candidate\n");
+    await fsp.mkdir(path.join(checkout, "untracked-build-output"));
+    await fsp.writeFile(
+      path.join(checkout, "untracked-build-output", "bundle.js"),
+      "untracked bytes"
+    );
     const bytes = new TextEncoder().encode("systemEpoch: 59\n");
     const commit = "c".repeat(40);
     const snapshot = canonicalSnapshotDigest([
@@ -137,6 +143,15 @@ describe("acquireRootTemplateSnapshot", () => {
     });
     const acquired = await acquireRootTemplateSnapshot({ pin, git, sink });
 
+    const cachedCheckout = path.join(
+      process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!,
+      "root-templates",
+      canonicalTemplateNodeId(pin.url, pin.commit)
+    );
+    expect(await fsp.readdir(cachedCheckout)).toEqual([".git"]);
+    expect(await fsp.readFile(path.join(cachedCheckout, ".git", "HEAD"), "utf8")).toBe(
+      "ref: refs/heads/candidate\n"
+    );
     expect(acquired).toMatchObject({ commit, snapshot });
     expect(clone).not.toHaveBeenCalled();
   });

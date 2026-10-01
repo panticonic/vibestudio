@@ -2661,10 +2661,14 @@ function executableModulesFromMetafile(
 ): import("./buildStore.js").ExecutableModuleInput[] {
   if (!metafile) return [];
   const modules: import("./buildStore.js").ExecutableModuleInput[] = [];
-  const unitRoots = graph.allNodes().map((candidate) => ({
-    candidate,
-    root: `${path.resolve(sourceRoot, candidate.relativePath)}${path.sep}`,
-  }));
+  const unitRoots = graph
+    .allNodes()
+    .map((candidate) => ({
+      candidate,
+      root: `${path.resolve(sourceRoot, candidate.relativePath)}${path.sep}`,
+    }))
+    .sort((left, right) => right.root.length - left.root.length);
+  const packageManifests = new Map<string, { version: string; packageDigest: string } | null>();
   const firstPartyRoot = `${path.resolve(sourceRoot, node.relativePath)}${path.sep}`;
   const packageRootFor = (fileName: string): { name: string; root: string } | null => {
     const marker = `${path.sep}node_modules${path.sep}`;
@@ -2706,9 +2710,7 @@ function executableModulesFromMetafile(
     if (!format || !fs.existsSync(fileName)) continue;
     const source = fs.readFileSync(fileName, "utf8");
     const contentDigest = createHash("sha256").update(source, "utf8").digest("hex");
-    const unit = unitRoots
-      .filter(({ root }) => fileName.startsWith(root))
-      .sort((left, right) => right.root.length - left.root.length)[0]?.candidate;
+    const unit = unitRoots.find(({ root }) => fileName.startsWith(root))?.candidate;
     if (fileName.startsWith(firstPartyRoot)) {
       modules.push({
         moduleId: path.relative(sourceRoot, fileName).replace(/\\/gu, "/"),
@@ -2736,20 +2738,27 @@ function executableModulesFromMetafile(
     }
     const externalPackage = packageRootFor(fileName);
     if (!externalPackage) continue;
-    const packageJsonPath = path.join(externalPackage.root, "package.json");
-    let version = "unknown";
-    let packageDigest = "unknown";
-    try {
-      const packageJson = fs.readFileSync(packageJsonPath, "utf8");
-      const parsed = JSON.parse(packageJson) as { version?: unknown };
-      if (typeof parsed.version === "string") version = parsed.version;
-      packageDigest = createHash("sha256").update(packageJson, "utf8").digest("hex");
-    } catch {
-      // A source input without its package manifest is not enough provenance
-      // for dependency endowment routing; omit it and let the fold remain
-      // conservative about the missing executable closure.
-      continue;
+    let packageManifest = packageManifests.get(externalPackage.root);
+    if (packageManifest === undefined) {
+      try {
+        const packageJson = fs.readFileSync(
+          path.join(externalPackage.root, "package.json"),
+          "utf8"
+        );
+        const parsed = JSON.parse(packageJson) as { version?: unknown };
+        packageManifest = {
+          version: typeof parsed.version === "string" ? parsed.version : "unknown",
+          packageDigest: createHash("sha256").update(packageJson, "utf8").digest("hex"),
+        };
+      } catch {
+        // A source input without its package manifest is not enough provenance
+        // for dependency endowment routing; retain the conservative omission.
+        packageManifest = null;
+      }
+      packageManifests.set(externalPackage.root, packageManifest);
     }
+    if (!packageManifest) continue;
+    const { version, packageDigest } = packageManifest;
     modules.push({
       moduleId: `external:${externalPackage.name}/${path.relative(externalPackage.root, fileName).replace(/\\/gu, "/")}`,
       contentDigest,

@@ -358,3 +358,154 @@ active instance, `trello-import-20261001`, was left running. This resource evide
 does not by itself establish the cause of the earlier renderer termination.
 Future cold experiments should allocate their fresh caches on disk and remove
 owned caches after inspection rather than accumulate them on a RAM filesystem.
+
+### Cold critical-path follow-up
+
+This pass used host base `09c25ffec` in an isolated review worktree and eight clean
+source-template worktrees. Base was `b12cabd020c161b4cd15358417828fc6fd0c2486`,
+Personal `482d45f`, and System `b4e1896`. Development composition produced the same
+Personal and System checkpoint commits before and after
+(`ed0c83723d69f0d0d7efdb1f78458bd6eb7bcd0b` and
+`8674dae7bcd11dee3dca828aebe09fe457846395`). Every cold run began with fresh
+application state and unique empty derived/npm caches on disk. Installed host
+binaries and dependencies, OS caches, and registry/network infrastructure were
+retained. This measures completely cold application and derived state; it does
+not measure a fresh OS installation. An unrelated Trello import instance remained
+active and was neither reused nor stopped, so host contention was not controlled.
+
+The changes remove work at existing owners:
+
+- Development checkpoints fetch the captured commit and its complete tree,
+  without transferring unrelated history, branches, or tags. Dirty-file capture,
+  detached/linked checkout support, and private object ownership remain intact.
+- Root-template acquisition copies only Git metadata into its immutable Git
+  cache. The named-commit reader still verifies and materializes every required
+  source file; it does not need a second copy of the checkout's worktree.
+- Bootstrap sealing reads, hashes, and mirrors files with 16 bounded workers.
+  Indexed results preserve the source identity and order. A failure stops new
+  assignments, joins every started operation, and propagates the original error
+  before any tree publication.
+- Executable-module inventory computes package-root ordering once and reads each
+  external package manifest once per build. It retains all source contents,
+  module identities, package digests, required peers, and compiler checks.
+
+Native `readStartupProfile` and `profileBuild('panels/chat', {ref:
+'ctx:<contextId>', verifyCache: true})` were captured on separate owned managed
+instances, with the same source pins and profiling options. Structured host logs
+provided additional phase attribution after the startup profile was read.
+
+| Boundary                                    |   Control | Candidate before download-cache change |
+| ------------------------------------------- | --------: | -------------------------------------: |
+| Root-template preparation                   |  3,769 ms |                               2,580 ms |
+| Base Git metadata copy                      |    936 ms |                                  32 ms |
+| Prepared source → sealed bootstrap snapshot |  1,521 ms |                               1,167 ms |
+| Semantic snapshot import                    |  5,042 ms |                               4,322 ms |
+| Service container ready, host uptime        | 22,432 ms |                              18,957 ms |
+| Cold chat build during native profile       | 13,779 ms |                              12,292 ms |
+| Verified repeat chat build                  |    135 ms |                                 151 ms |
+
+Semantic import itself was not modified; its lower observation is not proof of
+an import-algorithm improvement. Chat retained the exact build key
+`3944d73130781f8aeb2b154706ba6ae586511bc5b9ab71e53c85ed5490548345`, source
+state `state:48cbcfa87c69f6e472eef7ae3ff58837585c4e2b6801488314a5814cf6e05ff7`,
+3,284 sealed executable modules, 17,615,055 source bytes, and a 2,027,599-byte
+initial emitted payload. Both verified repeats had no diagnostics. Three full
+checkpoint samples had medians of 4,629 ms before and 4,626 ms after: no checkpoint
+latency improvement was established, although obsolete history is no longer
+retained in each temporary checkpoint.
+
+The original reporting banner was reproduced with its now-visible error:
+`Consent changed; refresh your choice`. Personal and System can both read the
+installation's initial consent revision and then save the same preference.
+Reporting consent is now an idempotent desired-state operation: repeating the
+established On or Off choice returns the existing revision and pseudonym. A stale
+request to change the current choice still fails. Tests use two independent
+store handles to the same database and cover both choices, stale opposing writes,
+and user isolation. This repairs the admission race without automatic retries,
+suppressed failures, altered policy versions, or UI bypasses.
+
+### Registry downloads shared across dependency graphs
+
+Direct Git/local dependency specifiers were already rejected by the external
+build-dependency boundary. The installer now verifies transitive sources too.
+Script-disabled installs first resolve a complete lockfile in a private native
+execution domain. After checking that the requested manifest is unchanged, that
+package paths stay inside the installation, and that the complete graph uses
+registry sources, `npm ci --ignore-scripts` downloads it through a profile-owned
+npm cache. Registry aliases and peer ranges remain supported. Git/local links,
+Git dependency declarations including optional/peer declarations, and arbitrary
+remote tarball sources produce a concrete refusal before shared-cache access.
+Installs that run native lifecycle scripts retain their private cache. The
+existing installation attempt budget spans both phases. Cache-corruption recovery
+uses an independent private cache and leaves other owners' shared data intact.
+
+The real native installer was measured on two fresh installation directories,
+using the actual 20-package SDK closure followed by an overlapping 19-package
+closure with React removed. Both sides used a fresh derived root. This is an
+installer sharing experiment, not a panel or total-startup measurement.
+
+| Native npm operation                | Private-cache control | Shared registry downloads |
+| ----------------------------------- | --------------------: | ------------------------: |
+| First install, empty download cache |              8,071 ms |                  9,145 ms |
+| Second graph, empty node_modules    |              7,571 ms |                  6,533 ms |
+| Combined two-install interval       |             15,641 ms |                 15,677 ms |
+
+All 194 and 193 resolved package identities, versions, URLs, and integrity hashes
+matched respectively. The first install pays for a separate resolution process;
+the second benefits from shared downloads. These samples do not establish a
+combined cold-start gain. Completed dependency trees remain independently keyed,
+patched, verified, and reused through the existing immutable environment cache.
+There is no new trust distinction between Base, Personal, and System.
+
+### Desktop completion boundary and remaining costs
+
+| Fresh application + empty derived/download caches | Native shell startup | Local launch → onboarding | Command → onboarding |
+| ------------------------------------------------- | -------------------: | ------------------------: | -------------------: |
+| Control                                           |            27,904 ms |                 70,515 ms |            78,308 ms |
+| Candidate with consent fix                        |            30,758 ms |                137,512 ms |           145,312 ms |
+| Additional candidate diagnostic                   |            29,326 ms |                 76,694 ms |            83,936 ms |
+| Candidate including registry sharing              |            26,788 ms |                124,939 ms |           131,869 ms |
+
+The control, consent-fixed candidate, and registry-sharing candidate passed the
+complete desktop smoke. The additional diagnostic reached onboarding, then
+failed the smoke's full-width New-panel assertion on a wider X11 viewport where
+a half-width New pane was observed. It is retained as a failed complete
+smoke, not counted as a pass. The final fixture used a bounded window width and
+passed initial onboarding geometry, exactly one configured auto-submitted
+conversation, separately opened New/history, launcher search, Enter-to-Help,
+workspace icon decoding, clean renderer diagnostics, and owned cleanup.
+
+The final empty-cache New open/history interval was 5,142 ms. It includes a real
+first New build and native mounting, rather than only a warm renderer interaction.
+The earlier warm New-panel observations remain applicable; this pass did not
+change New's source or payload.
+
+In the two instrumented desktop observations, submitted-prompt → visible setup
+was approximately 17.2 and 78.3 seconds. In the latter, the Personal agent-worker
+build finished at 33.1 seconds of server uptime, well before setup appeared.
+Its native build profile was 12,039 ms versus 19,850 ms in the preceding diagnostic,
+with environment acquisition 10,291 ms versus 16,824 ms. These observations locate
+substantial remaining variance after worker compilation, but do not separate
+model time from tool/workflow time. No reliable total-onboarding improvement is
+claimed. Dependency resolution, first SDK/native installs, compiler validation,
+semantic admission, and agent workflow/model latency remain measurable costs.
+
+The focused original changes passed 138 tests. The installer changes passed 22
+focused tests plus a real native C++ lifecycle test that confirms host-file access
+is denied. The host commit gate checks types, lint, format, template hygiene,
+documentation, authority, and dependency boundaries. The exact managed
+`build-performance-profile` run before the download-cache addition passed in
+104,068 ms with zero tool failures (`st_fd85018fe86143979a4e41b8ae8f8e6e`).
+The final exact run after registry sharing also passed with zero failures and
+zero tool failures in 117,357 ms (`st_f4d82654e22d4ad1b3cade43282fc4cb`),
+after a successful managed doctor and native startup profile. The different
+agent durations do not establish an inference speedup. Both instances were
+stopped and their private scratch caches removed.
+
+Bounded private evidence is retained under
+`/home/werg/.cache/vibestudio-performance/2026-10-01-cold-critical/evidence`.
+Each experiment's processes, connections, derived caches, npm scratch, temporary
+state, and template checkpoints are retired before the next cold experiment.
+Review/template worktrees are removed after integration. No owned profiling
+instance is reported complete while still live, and unrelated instances remain
+untouched.

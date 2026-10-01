@@ -61,6 +61,39 @@ describe("installation-owned reporting", () => {
     expect(s.submission("alice", "ws", automatic.submissionId)["state"]).toBe("cancelled");
     expect(s.submission("alice", "ws", manual.submissionId)["state"]).toBe("queued");
   });
+  it.each(["on", "off"] as const)(
+    "converges concurrent installation choices to %s without revising the saved decision",
+    (state) => {
+      const directory = mkdtempSync(join(tmpdir(), "report-consent-"));
+      const first = new ProblemReportingStore(directory);
+      const second = new ProblemReportingStore(directory);
+      cleanup.push(
+        () => rmSync(directory, { recursive: true, force: true }),
+        () => first.close(),
+        () => second.close()
+      );
+      const firstReview = first.consent("alice");
+      const secondReview = second.consent("alice");
+      const saved = first.decide("alice", firstReview.revision, state, "shell");
+
+      expect(second.decide("alice", secondReview.revision, state, "shell")).toEqual(saved);
+      expect(first.decide("alice", saved.revision, state, "shell")).toEqual(saved);
+      expect(second.consent("alice")).toEqual(saved);
+      expect(saved.revision).toBe(1);
+      expect(second.consent("bob").state).toBe("undecided");
+    }
+  );
+
+  it("keeps a later sharing choice authoritative against stale opposing decisions", () => {
+    const s = store();
+    s.decide("alice", 0, "on", "shell");
+    const withdrawn = s.decide("alice", 1, "off", "shell");
+
+    expect(() => s.decide("alice", 0, "on", "shell")).toThrow("Consent changed");
+    expect(() => s.decide("alice", 1, "on", "shell")).toThrow("Consent changed");
+    expect(s.consent("alice")).toEqual(withdrawn);
+  });
+
   it("freezes identical preview/export/delivery bytes, protects receipts, and enforces owner/revision", () => {
     const s = store();
     const report = queued(s);

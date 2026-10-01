@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { compileNativeLaunch } from "@vibestudio/process-adapter/native-launch";
+import { getInstalledNodeRuntime } from "./runtimePaths.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Unit tests exercise real npm-shaped processes; native enforcement has its
@@ -32,6 +36,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -53,11 +58,76 @@ describe("runNpmInstall", () => {
       restoreEnv();
     }
 
-    const [args] = readAttempts(fixture.installDir);
+    const [args, installation] = readAttempts(fixture.installDir);
     expect(cacheArg(args!)).toMatch(/[\\/]workspace[\\/]cache$/);
     expect(cacheArg(args!)).not.toContain(sharedDerivedDataPath);
     expect(args).toContain("--ignore-scripts");
     expect(args).toContain("--legacy-peer-deps");
+    expect(args).toContain("--package-lock-only");
+    expect(installation![0]).toBe("ci");
+    expect(cacheArg(installation!)).toBe(
+      path.join(fixture.root, "derived", "npm-registry-downloads")
+    );
+    expect(installation).toContain("--ignore-scripts");
+    const launches = vi.mocked(compileNativeLaunch).mock.calls.slice(-2);
+    expect(launches[0]![0].writePaths).not.toContain(cacheArg(installation!));
+    expect(launches[1]![0].writePaths).toContain(cacheArg(installation!));
+  });
+
+  it.each([
+    { dependencies: { indirect: "github:example/indirect" } },
+    { optionalDependencies: { indirect: "git+https://github.com/example/indirect.git" } },
+    { dependencies: { indirect: "file:../private" } },
+    { resolved: "git+https://github.com/example/indirect.git" },
+    { resolved: "https://arbitrary.example/package.tgz" },
+    { link: true },
+    { peerDependencies: { indirect: "github:example/indirect" } },
+    { inBundle: true, resolved: "git+https://github.com/example/indirect.git" },
+  ])(
+    "rejects non-registry transitive sources before exposing the shared cache: %j",
+    async (packageMetadata) => {
+      const fixture = createFakeNpmFixture();
+      fs.writeFileSync(
+        path.join(fixture.installDir, "control.json"),
+        JSON.stringify({ packageMetadata })
+      );
+      await expect(runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot })).rejects.toThrow(
+        /Refusing/
+      );
+      expect(readAttempts(fixture.installDir)).toHaveLength(1);
+      expect(fs.existsSync(path.join(fixture.root, "derived"))).toBe(false);
+    }
+  );
+
+  it.each(["../other/node_modules/example", "node_modules/../../other", "node_modules\\..\\other"])(
+    "rejects dependency paths escaping the installation: %s",
+    async (packageLocation) => {
+      const fixture = createFakeNpmFixture();
+      fs.writeFileSync(
+        path.join(fixture.installDir, "control.json"),
+        JSON.stringify({ packageLocation })
+      );
+      await expect(runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot })).rejects.toThrow(
+        /outside its installation/
+      );
+      expect(readAttempts(fixture.installDir)).toHaveLength(1);
+      expect(fs.existsSync(path.join(fixture.root, "derived"))).toBe(false);
+    }
+  );
+
+  it("accepts registry aliases and peer version ranges in transitive metadata", async () => {
+    const fixture = createFakeNpmFixture();
+    fs.writeFileSync(
+      path.join(fixture.installDir, "control.json"),
+      JSON.stringify({
+        packageMetadata: {
+          dependencies: { alias: "npm:example@^1.0.0" },
+          peerDependencies: { react: "^18 || ^19" },
+        },
+      })
+    );
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
+    expect(readAttempts(fixture.installDir)[1]![0]).toBe("ci");
   });
 
   it("retries a corrupt cacache read once with a clean temporary cache", async () => {
@@ -86,6 +156,33 @@ describe("runNpmInstall", () => {
     expect(recoveryCache).toMatch(/vibestudio-npm-cache-recovery-/);
     expect(fs.existsSync(recoveryCache)).toBe(false);
     expect(attempts.every((args) => !args.includes("--ignore-scripts"))).toBe(true);
+    expect(
+      vi
+        .mocked(compileNativeLaunch)
+        .mock.calls.slice(-2)
+        .every(([launch]) =>
+          launch.writePaths?.every((target) => !target.includes("npm-registry-downloads"))
+        )
+    ).toBe(true);
+  });
+
+  it("recovers a corrupt shared download without deleting another install's cache", async () => {
+    const fixture = createFakeNpmFixture();
+    const cache = path.join(fixture.root, "derived", "npm-registry-downloads");
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(path.join(cache, "other-owner"), "retained");
+    fs.writeFileSync(
+      path.join(fixture.installDir, "control.json"),
+      JSON.stringify({ failSharedCache: true })
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
+    const attempts = readAttempts(fixture.installDir);
+    expect(attempts).toHaveLength(4);
+    expect(cacheArg(attempts[1]!)).toBe(cache);
+    expect(cacheArg(attempts[3]!)).toMatch(/vibestudio-npm-cache-recovery-/);
+    expect(fs.existsSync(cacheArg(attempts[3]!))).toBe(false);
+    expect(fs.readFileSync(path.join(cache, "other-owner"), "utf8")).toBe("retained");
   });
 
   it("does not retry ordinary npm failures", async () => {
@@ -174,7 +271,7 @@ describe("runNpmInstall", () => {
       restoreEnv();
     }
 
-    expect(readAttempts(fixture.installDir)).toHaveLength(2);
+    expect(readAttempts(fixture.installDir)).toHaveLength(3);
   });
 
   it("bounds concurrent installs with independent private caches", async () => {
@@ -193,7 +290,25 @@ describe("runNpmInstall", () => {
       restoreEnv();
     }
 
-    expect(readAttempts(second.installDir)).toHaveLength(1);
+    expect(readAttempts(second.installDir)).toHaveLength(2);
+    expect(cacheArg(readAttempts(first.installDir)[0]!)).not.toBe(
+      cacheArg(readAttempts(second.installDir)[0]!)
+    );
+    expect(cacheArg(readAttempts(first.installDir)[1]!)).toBe(
+      cacheArg(readAttempts(second.installDir)[1]!)
+    );
+  });
+
+  it("joins a killed download process and discards its partial tree before retrying", async () => {
+    const fixture = createFakeNpmFixture();
+    const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE: "1" });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 1000 });
+    } finally {
+      restoreEnv();
+    }
+    expect(readAttempts(fixture.installDir)).toHaveLength(4);
   });
 
   it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
@@ -213,18 +328,30 @@ describe("runNpmInstall", () => {
       restoreEnv();
     }
 
-    expect(readAttempts(fixture.installDir)).toHaveLength(2);
+    expect(readAttempts(fixture.installDir)).toHaveLength(3);
   });
 });
 
 function createFakeNpmFixture(): { root: string; appRoot: string; installDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-installer-test-"));
   tempDirs.push(root);
+  if (tempDirs.length === 1)
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
   const appRoot = path.join(root, "app");
   const npmRoot = path.join(appRoot, "node_modules", "npm");
   const installDir = path.join(root, "install");
   fs.mkdirSync(path.join(npmRoot, "bin"), { recursive: true });
   fs.mkdirSync(installDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(installDir, "package.json"),
+    JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { example: "1.0.0" } })
+  );
+  const parserRoot = path.join(npmRoot, "node_modules", "npm-package-arg");
+  fs.mkdirSync(parserRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(parserRoot, "index.js"),
+    `module.exports = require(${JSON.stringify(createRequire(getInstalledNodeRuntime(fileURLToPath(new URL("../../../", import.meta.url))).npmCli).resolve("npm-package-arg"))});`
+  );
   fs.writeFileSync(path.join(appRoot, "package.json"), JSON.stringify({ private: true }));
   fs.writeFileSync(
     path.join(npmRoot, "package.json"),
@@ -243,7 +370,7 @@ const control = JSON.parse(fs.readFileSync(path.join(process.cwd(), "control.jso
 const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
-if (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
+if ((control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) || (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE && args[0] === "ci" && attempts.length === 2)) {
   fs.mkdirSync(path.join(process.cwd(), "node_modules", "half-extracted"), { recursive: true });
   fs.writeFileSync(path.join(process.cwd(), "package-lock.json"), "partial lock");
   process.on("SIGTERM", () => {});
@@ -251,7 +378,7 @@ if (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
   return;
 }
 if (
-  control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE &&
+  (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE || control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE) && args[0] === "install" &&
   (fs.existsSync(path.join(process.cwd(), "node_modules")) ||
     fs.existsSync(path.join(process.cwd(), "package-lock.json")))
 ) {
@@ -264,7 +391,7 @@ if (control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE && attempts.length === 1) {
 }
 const cacheIndex = args.indexOf("--cache");
 const cacheDir = cacheIndex >= 0 ? args[cacheIndex + 1] : "";
-if (control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE && attempts.length === 1) {
+if ((control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE && attempts.length === 1) || (control.failSharedCache && args[0] === "ci" && attempts.length === 2)) {
   process.stderr.write(
     "npm error ENOENT: Invalid response body, stat '" +
       path.join(cacheDir, "_cacache", "content-v2", "sha512", "missing") +
@@ -275,6 +402,11 @@ if (control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE && attempts.length === 1) {
 if (control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR) {
   process.stderr.write(control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR + "\\n");
   process.exit(1);
+}
+if (args.includes("--package-lock-only")) {
+  const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const lock = {lockfileVersion:3,packages:{"":manifest,[control.packageLocation ?? "node_modules/example"]:{version:"1.0.0",resolved:"https://registry.npmjs.org/example/-/example-1.0.0.tgz",integrity:"sha512-example",...control.packageMetadata}}};
+  fs.writeFileSync("package-lock.json", JSON.stringify(lock));
 }
 if (control.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS) {
   setTimeout(() => {}, Number(control.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS));
