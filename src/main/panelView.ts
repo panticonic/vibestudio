@@ -1,3 +1,4 @@
+import type { BrowserPopup } from "@vibestudio/shared/panel/browserAutomation";
 import { scopedNativePartition } from "./nativeStorageScope.js";
 /**
  * PanelView — Electron-only view management service.
@@ -993,27 +994,19 @@ export class PanelView implements PanelViewLike {
       requirePopupPermission: boolean;
     }
   ): void {
-    if (this.handleShellSurfaceLink(panelId, url)) return;
     const parsed =
       options.translateManagedLinks || tryParsePanelLocationLink(url)
         ? this.parseManagedPanelUrl(url)
         : null;
     const policy = classifyPanelUrl(url);
-    const open = async (): Promise<void> => {
-      if (parsed) {
-        await this.handleManagedLink(panelId, parsed, url, "child");
-        return;
-      }
+    const open = async (): Promise<BrowserPopup | undefined> => {
+      if (this.handleShellSurfaceLink(panelId, url)) return;
+      if (parsed) return this.handleManagedLink(panelId, parsed, url, "child");
       if (policy.disposition === "browser-panel") {
-        await this.openBrowserLink(panelId, url, options.disposition);
-        return;
+        return this.openBrowserLink(panelId, url, options.disposition);
       }
       if (policy.disposition === "external") {
         await this.openExternalLink(url);
-        if (options.requirePopupPermission)
-          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
-            error: "Link opened externally; no browser panel was created",
-          });
         return;
       }
       throw new Error(policy.reason ?? "This link type is not supported");
@@ -1022,9 +1015,13 @@ export class PanelView implements PanelViewLike {
       ? this.allowPopup(panelId, contents)
       : Promise.resolve(true);
     void permitted
-      .then((allowed) => {
+      .then(async (allowed) => {
         if (!allowed) throw new Error("Popup permission denied");
-        return open();
+        const popup = await open();
+        if (options.requirePopupPermission && !popup)
+          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
+            error: "Link opened without creating a browser panel",
+          });
       })
       .catch((err: unknown) => {
         if (options.requirePopupPermission)
@@ -1203,7 +1200,7 @@ export class PanelView implements PanelViewLike {
     parsed: ParsedPanelUrl,
     url: string,
     disposition: Exclude<PanelDisposition, "current">
-  ): Promise<void> {
+  ): Promise<BrowserPopup> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const result = await this.panelOrchestrator.createPanel(
       sourceViewId,
@@ -1219,6 +1216,7 @@ export class PanelView implements PanelViewLike {
     this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
       popup: { panelId: result.id, url },
     });
+    return { panelId: result.id, url };
   }
 
   private async handleManagedLink(
@@ -1226,7 +1224,7 @@ export class PanelView implements PanelViewLike {
     parsed: ParsedPanelUrl,
     url: string,
     fallbackDisposition: PanelDisposition
-  ): Promise<void> {
+  ): Promise<BrowserPopup | undefined> {
     const location = tryParsePanelLocationLink(url);
     if (location?.workspace !== undefined) {
       // The destination owns its tree. Never carry a source panel or context
@@ -1240,7 +1238,7 @@ export class PanelView implements PanelViewLike {
       await this.navigateManagedLink(sourceViewId, parsed, url);
       return;
     }
-    await this.openManagedLink(
+    return this.openManagedLink(
       sourceViewId,
       parsed,
       url,
@@ -1252,7 +1250,7 @@ export class PanelView implements PanelViewLike {
     sourceViewId: string,
     url: string,
     disposition: Electron.HandlerDetails["disposition"] = "default"
-  ): Promise<void> {
+  ): Promise<BrowserPopup> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const background = disposition === "background-tab";
     const result = await this.panelOrchestrator.createBrowserUrlPanel(
@@ -1265,6 +1263,7 @@ export class PanelView implements PanelViewLike {
     this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
       popup: { panelId: result.id, url },
     });
+    return { panelId: result.id, url };
   }
 
   private async navigateManagedLink(

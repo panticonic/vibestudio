@@ -275,7 +275,7 @@ const panelCdpMethods = defineServiceMethods({
         "The owning provider observes popups and reads only its own panel download records",
     },
     description:
-      "Observe native popup/download lifecycle and read completed download bytes without exposing host filesystem paths.",
+      "Inspect, cancel, and read approved native downloads without exposing host filesystem paths.",
     args: z.tuple([
       z.string(),
       z.discriminatedUnion("operation", [

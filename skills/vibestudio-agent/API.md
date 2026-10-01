@@ -396,6 +396,7 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `panelCdp.getCdpEndpoint` | Return a single-use CDP WebSocket endpoint for an approved panel target. |
 | `panelCdp.stop` | Stop loading an approved panel target through its active CDP host. |
+| `panelCdp.browserOperation` | Inspect, cancel, and read approved native downloads without exposing host filesystem paths. |
 | `panelCdp.consoleHistory` | Read console history from an approved panel target's active CDP host. |
 | `panelCdp.evaluate` | Evaluate one expression in an approved panel target through its active CDP host. The expression runs under a bounded wrapper (8s) and the result is serialized to a string, so no CDP WebSocket client is needed for the common inspect-and-poke case. |
 | `panelCdp.reload` | Reload an approved panel target through its product lifecycle. |
