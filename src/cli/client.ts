@@ -40,6 +40,7 @@ import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
 import { channelCommands } from "./channelCommands.js";
+import { approvalCommands } from "./approvalCommands.js";
 import { contextCommands } from "./contextCommands.js";
 import { connectModelProvider } from "./modelConnect.js";
 import { createModelCommands } from "./modelCommands.js";
@@ -1019,6 +1020,7 @@ const commandRegistry: CliCommand[] = [
       connectModelProvider(requirePairedCredentials(), providerId, { manual: options.manual }),
   }),
   ...agentCommands,
+  ...approvalCommands,
   ...fsCommands,
   ...vcsCommands,
   ...templatesCommands,
@@ -1036,6 +1038,7 @@ const GROUP_ORDER = [
   "mobile",
   "model",
   "agent",
+  "approvals",
   "fs",
   "vcs",
   "templates",

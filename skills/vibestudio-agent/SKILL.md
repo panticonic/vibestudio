@@ -99,6 +99,36 @@ CLI eval has no chat binding; use `vibestudio channel send` when a workflow must
 post to a conversation. Linked-agent sessions cannot run eval. Read
 [EVAL.md](EVAL.md) for bindings, imports, cancellation, and persistent scope.
 
+## Handle workspace approvals
+
+The selected workspace's live approval queue includes requests triggered by
+desktop/mobile actions and background processes. It is independent of your
+attached eval/session scope:
+
+```bash
+vibestudio approvals list --json
+vibestudio approvals show <approval-id> --json
+vibestudio approvals watch --json
+vibestudio approvals resolve <approval-id> once
+```
+
+`watch` emits newline-delimited records: an acknowledgement, a complete current
+queue snapshot, then queue replacements and attributed resolutions. Use another
+CLI process to answer ready prompts. The server enforces account visibility and
+decision authority; private prompts belong to their initiating account and
+uninitiated workspace prompts belong to workspace administrators.
+
+Read the prompt's offered decisions and operation before choosing a response.
+Use `approvals review` for install/update reviews, `approvals rules` for selected
+chat permission rows, and `approvals submit --input` for protected field values.
+Do not pass secrets as shell arguments. Preparing prompts cannot yet be answered,
+and stale prompts may already have been resolved by another client. A decision
+resumes its waiting operation; observe that operation's result to establish
+completion. Unexpected watch termination fails visibly; a new watch starts with
+the current queue. See [the CLI approval reference](../../docs/cli.md#workspace-approvals)
+for response shapes and lifecycle behavior. Eval's `--approval-level` only
+automates capability approvals in that eval and its task descendants.
+
 ## Notify a connected user
 
 A paired direct session can show a transient notification in shell chrome:

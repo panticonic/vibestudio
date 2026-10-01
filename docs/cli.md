@@ -465,6 +465,93 @@ Remote reach is Iroh (pair by QR: Endpoint ID, explicit relays, and one-time cod
 see [transport-sessions.md](./architecture/transport-sessions.md) and
 [iroh-relay-operations.md](./iroh-relay-operations.md).
 
+## Workspace approvals
+
+The `approvals` commands operate on the selected workspace's live server queue.
+They include prompts triggered by actions in the desktop or mobile client and
+by background work. No `agent attach`, eval run, or matching caller/context is
+required. Pair the CLI under the account that can answer the prompts and select
+the workspace where the operation is waiting:
+
+```sh
+vibestudio remote pair "<pairing-link>"
+vibestudio remote select <workspace>
+vibestudio approvals list --json
+vibestudio approvals show <approval-id> --json
+vibestudio approvals watch --json
+```
+
+From this checkout, use `pnpm cli --instance NAME approvals ...` for a named
+developer instance. The commands preserve server authorization: private prompts
+are visible to their initiating account, and workspace prompts require workspace
+administrator access. Code callers still need the server's approval-reading,
+decision, or protected-input authority. A CLI command does not acquire those
+permissions merely by being named `approvals`.
+
+`list` returns the full pending array; `show` returns one full entry or fails if
+it is no longer pending or visible. Entries include their requester, operation,
+offered choices, review rows or input fields, and preparation state. An entry in
+`lifecycle.state: "preparing"` cannot be answered yet. For capability and
+credential requests, use the entry's `allowedDecisions` rather than assuming
+that every grant scope is available. Critical confirmations require an individual
+`once` decision.
+
+| Command                             | Response                                                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `approvals resolve ID DECISION`     | One offered decision, such as `once`, `task`, `version`, `deny`, or `dismiss`                            |
+| `approvals review ID RESPONSE_JSON` | Install/update review resolution: `decision` and exact `allowNow` selections, or `{"decision":"cancel"}` |
+| `approvals rules ID RESPONSE_JSON`  | Chat permissions: `{"decision":"accept","selected":["offered-row-key"]}`, or `{"decision":"cancel"}`     |
+| `approvals submit ID VALUES_JSON`   | Field-name/value object for `client-config`, `credential-input`, or `secret-input`                       |
+
+```sh
+vibestudio approvals resolve <approval-id> once
+vibestudio approvals resolve <approval-id> deny
+vibestudio approvals review <review-id> \
+  '{"decision":"install","allowNow":[{"identityKey":"offered-part-key","permissions":["offered-permission-key"]}]}'
+vibestudio approvals rules <rules-id> \
+  '{"decision":"accept","selected":["offered-row-key"]}'
+vibestudio approvals submit <input-id> --input < protected-values.json
+```
+
+For reviews, use `decision: "update"` for update mode, `"adopt-root"` for
+adopt-root mode, and `"install"` for the other review modes. `allowNow: []` accepts
+the reviewed change without standing permission
+clearance; omitting a selected part's `permissions` allows all its install-clearable
+rows. Use keys from `show`; the server rejects selections it did not offer.
+`review`, `rules`, and `submit` accept `--input` instead of positional JSON.
+Use stdin for protected values to avoid putting secrets in shell arguments.
+Submission results contain the approval id and decision, never the submitted
+values. A device-code prompt still requires completion at its displayed provider
+verification URL; a consent decision cannot supply that external authorization.
+
+`watch --json` emits newline-delimited records from the existing `events.watch`
+protocol:
+
+- `{"kind":"watching","events":[...],"epoch":"..."}` acknowledges the watch.
+- `{"kind":"snapshot","event":"shell-approval:pending-changed","sequence":0,"payload":{"pending":[...]}}`
+  supplies the complete current visible queue, including prompts already on screen.
+- `kind: "event"` records deliver `shell-approval:pending-changed` (a complete
+  replacement queue) and `shell-approval:resolved` (the decision and its attribution).
+
+The watcher uses one owned event stream without polling or a wait deadline.
+Ctrl-C/SIGTERM cancels it, joins stream consumption, and closes its client.
+Unexpected stream termination or an RPC failure exits non-zero and reports the
+error on stderr. Starting a new watch obtains a fresh current snapshot; it is
+not a replay of historical decisions.
+
+An external agent can keep `watch` running, inspect each ready prompt, and issue
+the appropriate response from another CLI process. Resolution uses the same
+server methods as the desktop approval bar: the waiting operation resumes and
+the other clients update. Concurrent decisions are arbitrated by the server;
+a stale response may fail because the prompt has already been answered. A
+successful decision response does not by itself prove the operation completed;
+observe the operation's own result or failure. Install reviews return the
+server's review receipt, including landing information when available.
+
+These commands do not automatically decide prompts. `eval run --approval-level
+1|2` is a separate convenience limited to that eval's capability requests and
+task descendants; it does not supervise independent desktop activity.
+
 ## Git Upstream
 
 The CLI exposes Git upstream workflows through `vibestudio vcs git ...`:
