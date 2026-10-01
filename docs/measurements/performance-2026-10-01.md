@@ -509,3 +509,12 @@ state, and template checkpoints are retired before the next cold experiment.
 Review/template worktrees are removed after integration. No owned profiling
 instance is reported complete while still live, and unrelated instances remain
 untouched.
+
+Integration also incorporated the concurrently published host commit `8d7fe25d0`
+and Base commit `c3f8599`. Those upstream changes include the generated runtime
+documentation row required by the integrated host gate; no duplicate Base patch
+was published. The integrated state passed 51 focused host tests, the complete
+host gate, and the Base composition typecheck through the host-owned projection.
+The timing comparisons above retain their original `b12cabd` source pin and were
+recorded before this integration; they are not a controlled performance comparison
+of the independent upstream template changes.

@@ -3,6 +3,10 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import semver from "semver";
 import {
+  buildUnitKindForPath,
+  packageManifestContractError,
+} from "../src/server/buildV2/packageGraph.js";
+import {
   parseTemplateManifestContent,
   validateTemplateSnapshotInventory,
 } from "@vibestudio/workspace/templateManifest";
@@ -86,6 +90,17 @@ export function validateTemplateRepository(
         units.map((unit) => `    - ${unit}`).join("\n") +
         `\nOr delete the paths if they are scratch files.`
     );
+  }
+  for (const unit of manifest.inventory.repositories) {
+    const kind = buildUnitKindForPath(unit);
+    const marker = `${unit}/package.json`;
+    if (!kind || kind === "template" || !files.includes(marker)) continue;
+    const error = packageManifestContractError(
+      unit,
+      kind,
+      fs.readFileSync(path.join(root, marker), "utf8")
+    );
+    if (error) throw new Error(`${marker}: ${error}`);
   }
   if (!options.bootOnly) validateExternalDependencySpecifiers(root, files);
 }

@@ -14,6 +14,7 @@ import {
 } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
@@ -69,6 +70,20 @@ export class EventsClient {
     const recover = () => this.queueRefresh();
     recoveryCoordinator?.registerResubscribeHandler("events-client", recover);
     recoveryCoordinator?.registerColdRecoverHandler("events-client", recover);
+  }
+
+  /** Typed stream admission for callers that own and display the wire records. */
+  static openWatch(
+    rpc: EventsRpc,
+    events: readonly EventName[],
+    watchId: string,
+    options: Parameters<RpcCaller["stream"]>[3],
+    serviceName = "events"
+  ) {
+    const args = eventsMethods.watch.args.parse([[...events], watchId]);
+    return typeof rpc.streamReadable === "function"
+      ? rpc.streamReadable("main", `${serviceName}.watch`, args, options)
+      : rpc.stream("main", `${serviceName}.watch`, args, options);
   }
 
   async subscribe(event: EventName): Promise<void> {
@@ -158,12 +173,13 @@ export class EventsClient {
     };
     const terminal = (async () => {
       try {
-        const args = [[...this.subscriptions].sort(), this.watchId];
-        const options = { signal: controller.signal, bodyIdleTimeoutMs: null };
-        const response =
-          typeof this.rpc.streamReadable === "function"
-            ? await this.rpc.streamReadable("main", `${this.serviceName}.watch`, args, options)
-            : await this.rpc.stream("main", `${this.serviceName}.watch`, args, options);
+        const response = await EventsClient.openWatch(
+          this.rpc,
+          [...this.subscriptions].sort(),
+          this.watchId,
+          { signal: controller.signal, bodyIdleTimeoutMs: null },
+          this.serviceName
+        );
         const { readEventWatchRecords } = await import("@vibestudio/service-schemas/events");
         for await (const record of readEventWatchRecords(response)) {
           if (record.kind === "watching") {

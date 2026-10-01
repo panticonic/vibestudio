@@ -77,7 +77,12 @@ export class BrowserDownloadManager {
 
   list(): BrowserDownloadRecord[] {
     return [...this.records.values()]
-      .map((record) => ({ ...record }))
+      .map((record) => ({
+        ...record,
+        canResume:
+          (record.state === "paused" || record.state === "interrupted") &&
+          (this.live.get(record.id)?.item.canResume() ?? false),
+      }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -250,6 +255,9 @@ export class BrowserDownloadManager {
     const records = (await this.history?.listDownloadRecords(this.deps.hostId)) ?? [];
     if (this.stopped) return;
     for (const record of records.slice(0, 500)) {
+      // Native ownership is authoritative while a transfer is alive. History
+      // can attach after downloads begin and must not interrupt those transfers.
+      if (this.live.has(record.id)) continue;
       if ((this.records.get(record.id)?.updatedAt ?? 0) > record.updatedAt) continue;
       if (record.environmentKey !== this.deps.environmentKey) continue;
       if (record.state === "progressing" || record.state === "paused") {

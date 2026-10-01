@@ -370,7 +370,7 @@ function manifestIssue(
 
 const LOCATION_SPECIFIC_BLOCKS = ["app", "extension", "panel", "worker"] as const;
 
-function packageManifestContractError(
+export function packageManifestContractError(
   relativePath: string,
   kind: GraphNode["kind"],
   packageJson: string

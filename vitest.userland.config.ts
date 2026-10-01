@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, type UserConfig } from "vitest/config";
 import fs from "node:fs";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
@@ -40,13 +40,14 @@ function isReactRuntimeAlias(alias: { find: string | RegExp }): boolean {
     : REACT_RUNTIME_SPECIFIER.test(alias.find.source.replace(/^\^/u, "").replace(/\\/gu, ""));
 }
 
-export default defineConfig(async () => {
+export default defineConfig(async (): Promise<UserConfig> => {
   // Vite externalizes workspace packages while bundling its config. Load this
   // source module through the same TypeScript resolver used by host scripts so
   // its package-export graph retains normal `.js`-to-`.ts` resolution.
-  const { composeDevelopmentTemplateCheckouts } = await tsImport<
-    typeof import("./src/dev/developmentTemplateComposition.js")
-  >("./src/dev/developmentTemplateComposition.ts", import.meta.url);
+  const { composeDevelopmentTemplateCheckouts } = (await tsImport(
+    "./src/dev/developmentTemplateComposition.ts",
+    import.meta.url
+  )) as typeof import("./src/dev/developmentTemplateComposition.js");
   const template = process.env["VIBESTUDIO_USERLAND_TEMPLATE"] ?? "base";
   const selected = requireDevelopmentTemplateCheckouts(__dirname);
   const testSourceRoot = (selected.checkouts as Record<string, string | undefined>)[template];
@@ -57,27 +58,39 @@ export default defineConfig(async () => {
     (template === "base"
       ? selected.sources.filter(({ id }) => id === "base")
       : selected.sources.filter(({ id }) => id === "base" || id === template)
-    ).map(({ id, url }) => ({ checkout: selected.checkouts[id], url }))
+    ).map(({ id, url }) => ({ checkout: selected.checkouts[id]!, url }))
   );
   process.once("exit", composition.release);
   const workspaceRoot = composition.root;
   const workspaceGlob = path.relative(__dirname, testSourceRoot).replaceAll(path.sep, "/");
-  const projectedDependencies = await userlandDependencyAliases(__dirname, workspaceRoot);
   const dependencyProjection = await prepareUserlandDependencyProjection({
     appRoot: __dirname,
     workspaceRoot,
     includeDevelopmentDependencies: true,
   });
+  process.once("exit", dependencyProjection.release);
+  const projectedDependencies = userlandDependencyAliases(dependencyProjection);
   const projectedNodePath = [
     dependencyProjection.nodeModulesDir,
-    ...(process.env.NODE_PATH?.split(path.delimiter).filter(Boolean) ?? []),
+    ...(process.env["NODE_PATH"]?.split(path.delimiter).filter(Boolean) ?? []),
   ].join(path.delimiter);
-  process.env.NODE_PATH = projectedNodePath;
+  process.env["NODE_PATH"] = projectedNodePath;
   const baseServer = vitestSharedConfig.test.server;
   const baseDeps = baseServer.deps;
   const baseInline = baseDeps.inline;
   return {
     ...vitestSharedConfig,
+    plugins: [
+      {
+        name: "release-userland-test-environment",
+        closeBundle() {
+          dependencyProjection.release();
+          composition.release();
+          process.removeListener("exit", dependencyProjection.release);
+          process.removeListener("exit", composition.release);
+        },
+      },
+    ],
     // Userland is external source, not a package-manager/test-tool workspace.
     // Keep Vite's derived cache in the host checkout so running focused Base
     // tests can never add undeclared node_modules artifacts to a root template.
@@ -91,9 +104,7 @@ export default defineConfig(async () => {
     // with, so the runner and the compiler cannot disagree about it.
     esbuild: userlandJsxTransform(__dirname),
     server: {
-      ...vitestSharedConfig.server,
       fs: {
-        ...vitestSharedConfig.server?.fs,
         allow: [__dirname, workspaceRoot, testSourceRoot],
       },
     },
@@ -171,6 +182,8 @@ export default defineConfig(async () => {
     },
     test: {
       ...vitestSharedConfig.test,
+      setupFiles: [...vitestSharedConfig.test.setupFiles],
+      globalSetup: [...vitestSharedConfig.test.globalSetup],
       name: `userland-${template}`,
       reporters: [
         "default",
@@ -189,6 +202,14 @@ export default defineConfig(async () => {
         VIBESTUDIO_HOST_ROOT: __dirname,
         VIBESTUDIO_USERLAND_NODE_MODULES: dependencyProjection.nodeModulesDir,
         VIBESTUDIO_USERLAND_ROOT: workspaceRoot,
+        // Nested build probes use the exact same semantic package export graph.
+        VIBESTUDIO_USERLAND_SOURCE_ALIASES: JSON.stringify(
+          Object.fromEntries(
+            discoveredUserlandSourceAliases(dependencyProjection.units).map(
+              ({ find, replacement }) => [String(find), replacement]
+            )
+          )
+        ),
       },
       // Unbounded host-core parallelism oversubscribes the SQLite-heavy semantic
       // suites and can keep a worker from servicing Vitest's own RPC heartbeat.

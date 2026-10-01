@@ -470,6 +470,8 @@ export interface BrowserDownloadRecord {
   state: BrowserDownloadState;
   startedAt: number;
   updatedAt: number;
+  /** Current native capability; derived when listing, never persisted as history. */
+  canResume?: boolean;
 }
 
 export const PageFaviconSchema = z

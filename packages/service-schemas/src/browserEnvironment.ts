@@ -77,6 +77,7 @@ const DownloadRecordSchema = z.object({
   state: z.enum(["progressing", "paused", "completed", "cancelled", "interrupted"]),
   startedAt: z.number(),
   updatedAt: z.number(),
+  canResume: z.boolean().optional(),
 });
 
 const ImportSummarySchema = z.object({
@@ -540,7 +541,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
       rationale:
         "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    description: "Resume a paused browser download.",
+    description: "Resume a paused or resumable interrupted browser download.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
