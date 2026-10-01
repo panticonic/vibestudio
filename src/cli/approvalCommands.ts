@@ -1,3 +1,4 @@
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { randomUUID } from "node:crypto";
 import {
   shellApprovalMethods,
@@ -140,10 +141,10 @@ async function watch(inv: ParsedInvocation): Promise<number> {
   try {
     positionals(inv, 0, "watch");
     rpc = requireClient();
-    const response = await rpc.stream(
-      "main",
-      "events.watch",
-      [["shell-approval:pending-changed", "shell-approval:resolved"], randomUUID()],
+    const response = await EventsClient.openWatch(
+      rpc,
+      ["shell-approval:pending-changed", "shell-approval:resolved"],
+      randomUUID(),
       { signal: controller.signal, bodyIdleTimeoutMs: null }
     );
     let acknowledged = false;

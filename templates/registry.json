@@ -43,7 +43,7 @@
       "id": "google-workspace",
       "role": "catalog",
       "name": "Google Workspace",
-      "description": "Connect Google Workspace and work with a Gmail agent.",
+      "description": "Connect Gmail and other Google apps using your own Google Cloud Desktop OAuth app.",
       "url": "git+https://github.com/panticonic/vibestudio-template-google-workspace.git",
       "tags": ["gmail", "google", "integration"],
       "recommended": true

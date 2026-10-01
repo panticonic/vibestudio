@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Alias, ResolverFunction } from "vite";
-import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
+import type { UserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 
 const RUNNER_OWNED_DEPENDENCIES = new Set(["vitest", "@vitest/browser"]);
 
@@ -14,15 +14,7 @@ function escapeRegex(value: string): string {
  * dependency projection used by checkout typechecking. Source aliases remain
  * separate because workspace packages come from semantic source, not npm.
  */
-export async function userlandDependencyAliases(
-  appRoot: string,
-  workspaceRoot: string
-): Promise<Alias[]> {
-  const projection = await prepareUserlandDependencyProjection({
-    appRoot,
-    workspaceRoot,
-    includeDevelopmentDependencies: true,
-  });
+export function userlandDependencyAliases(projection: UserlandDependencyProjection): Alias[] {
   if (!projection.nodeModulesDir) return [];
 
   return (
@@ -145,7 +137,7 @@ function nearestDependencyPackage(
 }
 
 function captureAliasWildcard(updatedId: string, replacement: string): string {
-  const [prefix, suffix = ""] = replacement.split("$1");
+  const [prefix = "", suffix = ""] = replacement.split("$1");
   if (!updatedId.startsWith(prefix) || !updatedId.endsWith(suffix)) {
     throw new Error(`Cannot recover projected dependency subpath from ${updatedId}`);
   }

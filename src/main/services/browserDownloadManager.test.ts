@@ -146,6 +146,22 @@ describe("browser download destinations", () => {
     expect(manager.list()).toEqual([]);
   });
 
+  it("offers resume only while an interrupted native transfer still owns the record", async () => {
+    const { manager, start } = await setup();
+    const item = start();
+    await Promise.resolve();
+    const id = manager.list()[0]!.id;
+    item.emit("updated", {}, "interrupted");
+    expect(manager.list()[0]).toMatchObject({ id, state: "interrupted", canResume: true });
+    manager.resume(id);
+    expect(item.resume).toHaveBeenCalledTimes(2);
+    expect(manager.list()[0]).toMatchObject({ id, state: "progressing", canResume: false });
+    item.emit("done", {}, "interrupted");
+    expect(manager.list()[0]).toMatchObject({ id, state: "interrupted", canResume: false });
+    expect(() => manager.resume(id)).toThrow();
+    expect(item.resume).toHaveBeenCalledTimes(2);
+  });
+
   it("cannot resume an approved download after its workspace closes", async () => {
     let resolve!: (allowed: boolean) => void;
     const decision = new Promise<boolean>((done) => {
@@ -161,5 +177,26 @@ describe("browser download destinations", () => {
     await decision;
     expect(item.resume).not.toHaveBeenCalled();
     expect(manager.list()).toEqual([]);
+  });
+  it("keeps a live paused transfer authoritative when history attaches", async () => {
+    const { manager, start } = await setup(
+      vi.fn(async () => true),
+      false
+    );
+    start();
+    await Promise.resolve();
+    const record = manager.list()[0]!;
+    manager.pause(record.id);
+    const upsertDownloadRecord = vi.fn(async () => undefined);
+    await manager.attachHistory({
+      listDownloadRecords: async () => [
+        { ...record, state: "progressing", updatedAt: Date.now() + 1000 },
+      ],
+      upsertDownloadRecord,
+    });
+    expect(manager.list()[0]).toMatchObject({ state: "paused", canResume: true });
+    expect(upsertDownloadRecord).not.toHaveBeenCalled();
+    manager.resume(record.id);
+    expect(manager.list()[0]).toMatchObject({ state: "progressing", canResume: false });
   });
 });

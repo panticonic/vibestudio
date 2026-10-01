@@ -41,6 +41,9 @@ export const panelRuntimeSurface: RuntimeSurface = {
   exports: {
     ...coreRuntimeSurface,
     isRpcConnectionLost: valueEntry("Recognize a retired or disconnected RPC session."),
+    launchAgentIntoChannel: valueEntry(
+      "Launch and subscribe an agent through explicit runtime clients and one owned identity. A module-level factory, not a runtime instance member."
+    ),
     createConversationClient: valueEntry(
       "Bind a conversation client to an explicit RPC client. A module-level factory, not a runtime instance member."
     ),
