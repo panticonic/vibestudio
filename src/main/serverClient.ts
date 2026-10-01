@@ -267,7 +267,9 @@ export interface ServerClientOptions {
   /** Enable automatic reconnection on disconnect (default: true if getWsUrl is set). */
   reconnect?: boolean;
   /** Refresh the caller token after an auth failure during reconnect. */
-  refreshAuthToken?: () => Promise<string>;
+  refreshAuthToken?: (signal?: AbortSignal) => Promise<string>;
+  /** Join endpoint readiness before each connection attempt, including reconnects. */
+  prepareConnection?: (signal: AbortSignal) => Promise<void>;
   /**
    * Fired once when the main session paired a fresh device (a one-time pairing
    * code was redeemed): the durable device credential to persist so reconnects
@@ -296,6 +298,13 @@ export async function createServerClient(
     getWsUrl,
     reconnect: shouldReconnect,
     logPrefix: "ServerClient",
+    prepareConnection: options?.prepareConnection
+      ? async (signal) => {
+          await options.prepareConnection!(signal);
+          signal.throwIfAborted();
+          if (refreshAuthToken) activeAuthToken = await refreshAuthToken(signal);
+        }
+      : undefined,
     getAuthMessageFields: () => ({
       ...(options?.clientLabel ? { clientLabel: options.clientLabel } : {}),
       ...(options?.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),

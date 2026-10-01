@@ -5,9 +5,8 @@ export type WorkspaceTransportStatus = "connecting" | "connected" | "disconnecte
 /**
  * Host-owned availability of the selected workspace server.
  *
- * This intentionally contains no transport error prose, endpoint identity, or
- * credential detail. Renderers need one stable presentation fact, not the
- * cascade of failures that happened to reveal it.
+ * Includes the current recovery failure so disconnected views can explain
+ * their state without treating transient transport loss as terminal.
  */
 export interface WorkspaceConnectionState {
   version: 1;
@@ -16,6 +15,7 @@ export interface WorkspaceConnectionState {
   since: number;
   attempt?: number;
   nextRetryInMs?: number;
+  reason?: string;
 }
 
 export interface WorkspaceReconnectProgress {
@@ -36,7 +36,8 @@ function sameState(left: WorkspaceConnectionState, right: WorkspaceConnectionSta
     left.phase === right.phase &&
     left.mode === right.mode &&
     left.attempt === right.attempt &&
-    left.nextRetryInMs === right.nextRetryInMs
+    left.nextRetryInMs === right.nextRetryInMs &&
+    left.reason === right.reason
   );
 }
 
@@ -94,6 +95,11 @@ export class WorkspaceConnectionStateController {
     });
   }
 
+  failure(reason: string): void {
+    if (this.current.phase === "ended") return;
+    this.replace({ ...this.current, reason });
+  }
+
   end(): void {
     this.replace({
       version: 1,
@@ -113,7 +119,7 @@ export class WorkspaceConnectionStateController {
 export function workspaceConnectionPresentation(
   state: WorkspaceConnectionState
 ): WorkspaceConnectionPresentation | null {
-  if (state.phase === "starting" || state.phase === "online") return null;
+  if (state.phase === "online" || (state.phase === "starting" && !state.reason)) return null;
   if (state.phase === "ended") {
     return {
       title: "Connection ended",
@@ -134,6 +140,7 @@ export function workspaceConnectionPresentation(
   return {
     title: "Workspace server unavailable",
     message:
+      state.reason ??
       "Vibestudio is reconnecting automatically. Your workspace is safe and this view will resume when the server is reachable.",
     showSpinner: true,
     showSettings: true,

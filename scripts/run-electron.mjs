@@ -161,8 +161,27 @@ async function runElectron(args) {
     };
 
     currentChild.on("message", (message) => {
-      if (message && message.type === "vibestudio:dev-relaunch" && isStringArray(message.args)) {
-        relaunchArgs = message.args;
+      if (
+        message &&
+        message.type === "vibestudio:dev-relaunch" &&
+        typeof message.requestId === "string" &&
+        isStringArray(message.args)
+      ) {
+        const stopping = shutdown.requestedSignal() !== null;
+        if (!stopping) relaunchArgs = message.args;
+        if (currentChild.connected)
+          currentChild.send(
+            {
+              type: stopping
+                ? "vibestudio:dev-relaunch-rejected"
+                : "vibestudio:dev-relaunch-accepted",
+              requestId: message.requestId,
+              ...(stopping ? { reason: "Developer instance is stopping" } : {}),
+            },
+            (error) => {
+              if (error) console.error("[dev] relaunch acknowledgement failed", error);
+            }
+          );
       }
       if (message && message.type === "vibestudio:dev-ready")
         void startTypeCheck().catch((error) => {
@@ -199,6 +218,8 @@ await runParentOwnedMain(async (ownerSignal) => {
   const ownerLost = () => shutdown.request("SIGTERM");
   ownerSignal.addEventListener("abort", ownerLost, { once: true });
   if (ownerSignal.aborted) ownerLost();
+  let primaryFailure;
+  const failures = [];
   try {
     for (;;) {
       if (ownerSignal.aborted || shutdown.requestedSignal()) break;
@@ -225,9 +246,10 @@ await runParentOwnedMain(async (ownerSignal) => {
       process.exitCode = signal ? signalExitCode(signal) : (result.code ?? 0);
       break;
     }
+  } catch (error) {
+    primaryFailure = error;
   } finally {
     ownerSignal.removeEventListener("abort", ownerLost);
-    const failures = [];
     const requested = await Promise.all(requestedRetirements.values());
     failures.push(
       ...requested.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
@@ -248,8 +270,17 @@ await runParentOwnedMain(async (ownerSignal) => {
     failures.push(
       ...registered.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
     );
-    if (failures.length)
-      throw new AggregateError(failures, "Development runner resource retirement failed");
     registeredReceivers.clear();
   }
+  if (failures.length) {
+    throw Object.assign(
+      new AggregateError(
+        primaryFailure ? [primaryFailure, ...failures] : failures,
+        "Development runner resource retirement failed",
+        primaryFailure ? { cause: primaryFailure } : undefined
+      ),
+      { code: "EOWNERSHIP" }
+    );
+  }
+  if (primaryFailure) throw primaryFailure;
 });

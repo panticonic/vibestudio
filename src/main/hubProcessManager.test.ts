@@ -90,8 +90,6 @@ const LEASE = {
   gatewayPort: RECORD.gatewayPort,
   pid: RECORD.pid,
   acquiredAt: RECORD.startedAt,
-  heartbeatAt: 1_500,
-  expiresAt: 2_000_000_000_000,
 };
 
 function readyInvite() {
@@ -115,8 +113,9 @@ function readyInvite() {
 function makeCentralData(initial: typeof LEASE | null = LEASE) {
   let lease: typeof LEASE | null = initial;
   return {
-    getHubProcessLease: vi.fn(() => lease),
-    releaseHubProcessLease: vi.fn((ownerBootId: string) => {
+    getHubProcessOwner: vi.fn(() => lease),
+    isHubProcessOwned: vi.fn(() => lease !== null),
+    releaseHubProcessOwnership: vi.fn((ownerBootId: string) => {
       if (lease?.ownerBootId !== ownerBootId) return false;
       lease = null;
       return true;
@@ -141,7 +140,7 @@ function manager(
     appVersion: "1.2.3",
     buildId: BUILD_ID,
     centralData: centralData as never,
-    onCrash: vi.fn(),
+    onRecoveryFailure: vi.fn(),
     onInitialWorkspaceResolved: options.onInitialWorkspaceResolved,
     ...(options.onOwnedHubSpawn ? { onOwnedHubSpawn: options.onOwnedHubSpawn } : {}),
   });
@@ -336,21 +335,8 @@ describe("HubProcessManager", () => {
     }
   );
 
-  it("replaces a live hub built from a different server artifact", async () => {
-    let incumbentAlive = true;
-    vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
-      if (pid === RECORD.pid) {
-        if (signal === 0) {
-          if (incumbentAlive) return true;
-          throw Object.assign(new Error("not found"), { code: "ESRCH" });
-        }
-        if (signal === "SIGTERM") {
-          incumbentAlive = false;
-          return true;
-        }
-      }
-      throw new Error(`Unexpected signal ${String(signal)} for PID ${pid}`);
-    }) as typeof process.kill);
+  it("preserves a live hub built from a different server artifact", async () => {
+    const killMock = vi.spyOn(process, "kill");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -366,20 +352,9 @@ describe("HubProcessManager", () => {
         })
       )
     );
-    const replacement = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
-    replacement.pid = 42;
-    replacement.unref = () => undefined;
-    spawnMock.mockImplementation(() => {
-      setTimeout(() => replacement.emit("exit", 1), 0);
-      return replacement;
-    });
-
-    await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(
-      "Local hub exited during startup"
-    );
-
-    expect(incumbentAlive).toBe(false);
-    expect(spawnMock).toHaveBeenCalledOnce();
+    await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow("different build");
+    expect(killMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("fails closed when an initialized hub has no credential for this desktop", async () => {
@@ -425,7 +400,7 @@ describe("HubProcessManager", () => {
     const killMock = vi.spyOn(process, "kill");
 
     await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(
-      /does not match fenced lease/
+      /does not match owner/
     );
     expect(killMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
@@ -501,6 +476,7 @@ describe("HubProcessManager", () => {
       return child;
     });
     const centralData = makeCentralData();
+    centralData.isHubProcessOwned.mockReturnValue(false);
 
     await expect(manager(centralData).attachOrSpawn()).rejects.toThrow(
       "Local hub exited during startup"
@@ -539,7 +515,9 @@ describe("HubProcessManager", () => {
     spawnMock.mockReturnValue(child);
     const register = vi.fn(() => accepted);
 
-    const connecting = manager(makeCentralData(), { onOwnedHubSpawn: register }).attachOrSpawn();
+    const connecting = manager(makeCentralData(null), {
+      onOwnedHubSpawn: register,
+    }).attachOrSpawn();
     await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
     expect(unrefCount).toBe(0);
 
@@ -564,7 +542,7 @@ describe("HubProcessManager", () => {
     spawnMock.mockReturnValue(child);
 
     await expect(
-      manager(makeCentralData(), {
+      manager(makeCentralData(null), {
         onOwnedHubSpawn: () => Promise.reject(new Error("owner rejected")),
       }).attachOrSpawn()
     ).rejects.toThrow("owner rejected");
@@ -618,9 +596,16 @@ describe("HubProcessManager", () => {
     expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(child.pid, {
       termTimeoutMs: 300_000,
       killTimeoutMs: 30_000,
+      identity: {
+        version: 1,
+        platform: "linux",
+        pid: child.pid,
+        processGroupId: child.pid,
+        startCoordinate: "birth",
+      },
     });
-    expect(centralData.releaseHubProcessLease).toHaveBeenCalledWith(SERVER_BOOT_ID);
-    expect(centralData.getHubProcessLease()).toBeNull();
+    expect(centralData.releaseHubProcessOwnership).not.toHaveBeenCalled();
+    expect(centralData.getHubProcessOwner()).toEqual({ ...LEASE, pid: child.pid });
   });
 
   it("leaves a pre-existing hub running when workspace routing fails", async () => {
@@ -657,7 +642,7 @@ describe("HubProcessManager", () => {
 
     expect(spawnMock).not.toHaveBeenCalled();
     expect(terminateOwnedProcessTreeMock).not.toHaveBeenCalled();
-    expect(centralData.releaseHubProcessLease).not.toHaveBeenCalled();
+    expect(centralData.releaseHubProcessOwnership).not.toHaveBeenCalled();
   });
 
   it("never terminates a live PID whose hub identity cannot be verified", async () => {
@@ -671,11 +656,9 @@ describe("HubProcessManager", () => {
       throw new Error(`Unexpected signal ${String(signal)}`);
     }) as typeof process.kill);
 
-    await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(
-      /could not be verified/
-    );
+    await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(/hung/);
 
-    expect(killMock).toHaveBeenCalledWith(RECORD.pid, 0);
+    expect(killMock).not.toHaveBeenCalled();
     expect(killMock).not.toHaveBeenCalledWith(RECORD.pid, "SIGTERM");
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -714,7 +697,18 @@ describe("HubProcessManager", () => {
     ).spawnDetached.bind(processManager);
     await expect(spawnDetached(RECORD.gatewayPort)).rejects.toThrow(/canonical contract/);
 
-    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(killMock).not.toHaveBeenCalled();
+    expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(42, {
+      termTimeoutMs: 300_000,
+      killTimeoutMs: 30_000,
+      identity: {
+        version: 1,
+        platform: "linux",
+        pid: 42,
+        processGroupId: 42,
+        startCoordinate: "birth",
+      },
+    });
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
       env: { VIBESTUDIO_GATEWAY_PORT: String(RECORD.gatewayPort) },
     });

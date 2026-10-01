@@ -4,7 +4,6 @@ export const RPC_WEBSOCKET_ADMISSION_PATH = "/rpc/ws-admission";
 export const RPC_CLIENT_LABEL_HEADER = "x-vibestudio-rpc-client-label";
 export const RPC_CLIENT_PLATFORM_HEADER = "x-vibestudio-rpc-client-platform";
 export const RPC_OAUTH_CALLBACK_MODE_HEADER = "x-vibestudio-rpc-oauth-callback-mode";
-export const RPC_WEBSOCKET_ADMISSION_TIMEOUT_MS = 10_000;
 
 export function encodeRpcClientLabelHeader(label: string): string {
   return encodeURIComponent(label);
@@ -89,8 +88,8 @@ export async function requestRpcWebSocketAdmission(
   request: RpcWebSocketAdmissionRequest,
   options: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<RpcWebSocketAdmissionResponse> {
-  const timeoutMs = options.timeoutMs ?? RPC_WEBSOCKET_ADMISSION_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  const timeoutMs = options.timeoutMs;
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
     throw new TypeError("RPC WebSocket admission timeout must be a positive finite number");
   }
   const controller = new AbortController();
@@ -98,10 +97,13 @@ export async function requestRpcWebSocketAdmission(
   const forwardAbort = (): void => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) forwardAbort();
   else options.signal?.addEventListener("abort", forwardAbort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(`RPC WebSocket admission timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
+  const timeout =
+    timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          controller.abort(new Error(`RPC WebSocket admission timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
 
   let response: Response;
   try {
@@ -120,6 +122,37 @@ export async function requestRpcWebSocketAdmission(
           : {}),
       },
     });
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error(`RPC WebSocket admission returned non-JSON HTTP ${response.status}`);
+    }
+    if (!body || typeof body !== "object" || !("ok" in body)) {
+      throw new Error(`RPC WebSocket admission returned malformed HTTP ${response.status}`);
+    }
+    const result = body as Partial<RpcWebSocketAdmissionResponse>;
+    if (
+      result.ok === true &&
+      typeof result.grant === "string" &&
+      typeof result.expiresAt === "number"
+    ) {
+      return { ok: true, grant: result.grant, expiresAt: result.expiresAt };
+    }
+    if (
+      result.ok === false &&
+      typeof result.code === "string" &&
+      isFailureCode(result.code) &&
+      typeof result.message === "string"
+    ) {
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        ...(typeof result.retryAfterMs === "number" ? { retryAfterMs: result.retryAfterMs } : {}),
+      };
+    }
+    throw new Error(`RPC WebSocket admission returned malformed HTTP ${response.status}`);
   } catch (error) {
     if (timedOut) {
       throw new Error(`RPC WebSocket admission timed out after ${timeoutMs}ms`, { cause: error });
@@ -129,35 +162,4 @@ export async function requestRpcWebSocketAdmission(
     clearTimeout(timeout);
     options.signal?.removeEventListener("abort", forwardAbort);
   }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new Error(`RPC WebSocket admission returned non-JSON HTTP ${response.status}`);
-  }
-  if (!body || typeof body !== "object" || !("ok" in body)) {
-    throw new Error(`RPC WebSocket admission returned malformed HTTP ${response.status}`);
-  }
-  const result = body as Partial<RpcWebSocketAdmissionResponse>;
-  if (
-    result.ok === true &&
-    typeof result.grant === "string" &&
-    typeof result.expiresAt === "number"
-  ) {
-    return { ok: true, grant: result.grant, expiresAt: result.expiresAt };
-  }
-  if (
-    result.ok === false &&
-    typeof result.code === "string" &&
-    isFailureCode(result.code) &&
-    typeof result.message === "string"
-  ) {
-    return {
-      ok: false,
-      code: result.code,
-      message: result.message,
-      ...(typeof result.retryAfterMs === "number" ? { retryAfterMs: result.retryAfterMs } : {}),
-    };
-  }
-  throw new Error(`RPC WebSocket admission returned malformed HTTP ${response.status}`);
 }

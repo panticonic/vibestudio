@@ -5,10 +5,12 @@ export interface RelaunchOptions {
   exitCode?: number;
 }
 
-let installedHandler: ((opts: RelaunchOptions) => void) | null = null;
+let installedHandler: ((opts: RelaunchOptions) => void | Promise<void>) | null = null;
 
 /** Main installs the lifecycle-owned handler once its quit state exists. */
-export function installRelaunchHandler(handler: (opts: RelaunchOptions) => void): void {
+export function installRelaunchHandler(
+  handler: (opts: RelaunchOptions) => void | Promise<void>
+): void {
   if (installedHandler) throw new Error("The app relaunch handler is already installed");
   installedHandler = handler;
 }
@@ -19,9 +21,9 @@ export function installRelaunchHandler(handler: (opts: RelaunchOptions) => void)
  * `exitCode` defaults to 0; crash recovery passes 1. `args` overrides the
  * relaunched process argv.
  */
-export function relaunchApp(opts: RelaunchOptions = {}): void {
+export async function relaunchApp(opts: RelaunchOptions = {}): Promise<void> {
   if (installedHandler) {
-    installedHandler(opts);
+    await installedHandler(opts);
     return;
   }
   if (opts.args) app.relaunch({ args: opts.args });

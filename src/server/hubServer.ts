@@ -123,8 +123,6 @@ import { resolveIrohRelayUrls } from "./irohRelayConfig.js";
 
 declare const __filename: string;
 
-const HUB_PROCESS_LEASE_TTL_MS = 30_000;
-const HUB_PROCESS_LEASE_HEARTBEAT_MS = 5_000;
 const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
 const INTERNAL_DO_BUNDLE_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH";
 
@@ -3069,15 +3067,12 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     process.env["VIBESTUDIO_IDENTITY_DB_PATH"] ??
     path.join(getCentralDataPath(), "server-auth", "identity.db");
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
-  process.env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV] =
-    snapshotInternalDOBundleForHub(getCentralDataPath());
   const { centralData, identityDb } = openHubDataStores(identityDbPath);
   try {
-    centralData.claimHubProcessLease({
+    centralData.claimHubProcessOwnership({
       ownerBootId: serverBootId,
       gatewayPort,
       pid: process.pid,
-      ttlMs: HUB_PROCESS_LEASE_TTL_MS,
     });
   } catch (error) {
     identityDb.close();
@@ -3085,19 +3080,8 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     await new Promise<void>((resolve) => server.close(() => resolve()));
     throw error;
   }
-  let processLeaseLost = false;
-  const processLeaseHeartbeat = setInterval(() => {
-    if (processLeaseLost) return;
-    try {
-      if (centralData.renewHubProcessLease(serverBootId, HUB_PROCESS_LEASE_TTL_MS)) return;
-      console.error(`[Hub] Lost machine-control lease for ${serverBootId}; terminating`);
-    } catch (error) {
-      console.error(`[Hub] Could not renew machine-control lease for ${serverBootId}:`, error);
-    }
-    processLeaseLost = true;
-    process.kill(process.pid, "SIGTERM");
-  }, HUB_PROCESS_LEASE_HEARTBEAT_MS);
-  processLeaseHeartbeat.unref();
+  process.env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV] =
+    snapshotInternalDOBundleForHub(getCentralDataPath());
   recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
   const version =
     process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
@@ -3307,8 +3291,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     console.log("[Hub] Shutdown: gateway closed; governance close started");
     await state.governanceLog?.close();
     console.log("[Hub] Shutdown: governance closed; persistence close started");
-    clearInterval(processLeaseHeartbeat);
-    state.centralData.releaseHubProcessLease(state.serverBootId);
+    state.centralData.releaseHubProcessOwnership(state.serverBootId);
     state.centralData.close();
     state.identityDb.close();
     console.log("[Hub] Shutdown complete");

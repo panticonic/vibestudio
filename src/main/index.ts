@@ -68,6 +68,7 @@ import {
   registerProtocol,
 } from "./protocolHandler.js";
 import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
+import { requestDeveloperRelaunch } from "./developerRelaunch.js";
 import {
   startEventLoopResponsivenessMonitor,
   type EventLoopResponsivenessSample,
@@ -88,7 +89,6 @@ const stopMainEventLoopMonitor = startEventLoopResponsivenessMonitor({
 });
 app.once("quit", stopMainEventLoopMonitor);
 const APP_NAME = "Vibestudio";
-const APP_SHUTDOWN_TIMEOUT_MS = 30_000;
 const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
 // Consume one-shot recovery markers so intentional relaunches do not replay them.
 process.argv = startupInvocation.argv;
@@ -542,10 +542,12 @@ function runUpgradeCommand(
   });
 }
 
-function relaunchWithIntent(opts: RelaunchOptions = {}): void {
-  quitIntent = { kind: "relaunch", exitCode: opts.exitCode ?? 0 };
-  if (opts.args) app.relaunch({ args: opts.args });
+async function relaunchWithIntent(opts: RelaunchOptions = {}): Promise<void> {
+  if (process.env["VIBESTUDIO_DEV_RUNNER_IPC"] === "1") {
+    await requestDeveloperRelaunch(opts.args ?? process.argv.slice(1));
+  } else if (opts.args) app.relaunch({ args: opts.args });
   else app.relaunch();
+  quitIntent = { kind: "relaunch", exitCode: opts.exitCode ?? 0 };
   app.quit();
 }
 installRelaunchHandler(relaunchWithIntent);
@@ -1674,14 +1676,14 @@ function installBootstrapConnectionHandlers(): void {
 
   ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
-    relaunchWithIntent({
+    return relaunchWithIntent({
       args: retryWorkspaceName ? workspaceRelaunchArgs(retryWorkspaceName) : process.argv.slice(1),
     });
   });
 
   ipcMain.handle("vibestudio:bootstrap:choose-connection", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:choose-connection");
-    relaunchWithIntent({
+    return relaunchWithIntent({
       args: [
         ...chooseConnectionRelaunchArgs().filter((arg) => arg !== SKIP_REMOTE_PAIRING_ARG),
         SKIP_REMOTE_PAIRING_ARG,
@@ -2408,6 +2410,7 @@ app.on("ready", async () => {
         pendingPairLabel: readPendingPairLabel(),
         storedRemote: storedRemoteAtLaunch ?? undefined,
         centralData,
+        onLocalRecoveryFailure: (error) => workspaceConnection.failure(error.message),
         onMainSessionTerminalClose: (error) => {
           const message = error.message || "The paired server ended this session.";
           log.error(`[connection] paired workspace session ended: ${message}`);
@@ -3348,6 +3351,7 @@ app.on("will-quit", (event) => {
     // stop-or-detach the local server and close the connection.
     const session = serverSession;
     serverSession = null;
+    session.hubProcessManager?.beginShutdown();
     const stopServer =
       session.serverOwnership === "desktop-local" &&
       session.hubProcessManager !== null &&
@@ -3359,6 +3363,7 @@ app.on("will-quit", (event) => {
     }
 
     const cleanupThenClose = (async () => {
+      const cleanupFailures: unknown[] = [];
       // Exit receipts are server RPCs too. Let the executor finish them before
       // the session is closed, otherwise an in-flight heartbeat/receipt races
       // teardown and reports a misleading connection failure.
@@ -3382,6 +3387,7 @@ app.on("will-quit", (event) => {
         await unregister;
       } catch (error) {
         console.error("[App] Failed to unregister runtime client:", error);
+        cleanupFailures.push(error);
       }
 
       // All server-side cleanup is complete. Close the transports before
@@ -3392,6 +3398,7 @@ app.on("will-quit", (event) => {
         await close;
       } catch (error) {
         console.error("[App] Session close error:", error);
+        cleanupFailures.push(error);
       }
 
       if (stopServer) {
@@ -3399,7 +3406,7 @@ app.on("will-quit", (event) => {
         // desktop session is closed, while still ensuring a close failure cannot
         // leave the user-requested server alive.
         localHubStopPromise = (async () => {
-          const result = await assertPresent(session.hubProcessManager).stopUntilGone();
+          const result = await assertPresent(session.hubProcessManager).stopTree();
           if (!result.gone) throw new Error("The local hub process tree is still running");
           localHubStopConfirmed = true;
           console.log(
@@ -3415,28 +3422,20 @@ app.on("will-quit", (event) => {
         session.hubProcessManager?.detach();
         if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
+      if (cleanupFailures.length)
+        throw new AggregateError(cleanupFailures, "Workspace session cleanup failed");
     })();
     stopPromises.push(cleanupThenClose);
   }
 
-  // Add a timeout to ensure we exit even if cleanup hangs
-  const shutdownTimeout = setTimeout(() => {
-    if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
-      // Never force-exit after an explicit stop request until the owned hub
-      // tree has been proven gone. stopUntilGone continues retrying; this
-      // warning is intentionally non-terminal.
-      console.error(
-        "[App] Shutdown still waiting for local hub termination; refusing to force exit"
+  Promise.allSettled(stopPromises)
+    .then((results) => {
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
       );
-      return;
-    }
-    console.warn("[App] Shutdown timeout - forcing exit");
-    app.exit(1);
-  }, APP_SHUTDOWN_TIMEOUT_MS);
-
-  Promise.all(stopPromises)
+      if (errors.length) throw new AggregateError(errors, "Application shutdown failed");
+    })
     .then(() => {
-      clearTimeout(shutdownTimeout);
       console.log("[App] Shutdown complete");
       app.exit(quitIntent.kind === "relaunch" ? quitIntent.exitCode : 0);
     })
@@ -3463,7 +3462,6 @@ app.on("will-quit", (event) => {
         })();
         return;
       }
-      clearTimeout(shutdownTimeout);
       console.error("[App] Shutdown failed:", formatUnknownError(error));
       app.exit(1);
     });

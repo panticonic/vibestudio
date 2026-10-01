@@ -123,7 +123,7 @@ export function createRemoteCredService(deps: {
           deviceId: stored?.deviceId,
         };
       },
-      pair: (ctx, [{ link, label }]) => {
+      pair: async (ctx, [{ link, label }]) => {
         requireRemoteCredCaller(ctx, "pair");
         const parsed = parseConnectLink(link);
         if (parsed.kind === "error") {
@@ -146,7 +146,7 @@ export function createRemoteCredService(deps: {
         if (typeof label === "string" && label.trim()) {
           relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
         }
-        relaunchApp({ args: relaunchArgs });
+        await relaunchApp({ args: relaunchArgs });
         return { ok: true };
       },
       reconnectNow: (ctx) => {
@@ -165,9 +165,9 @@ export function createRemoteCredService(deps: {
         clearStoredRemotePairingInStore();
         return { ok: true };
       },
-      relaunch: (ctx) => {
+      relaunch: async (ctx) => {
         requireRemoteCredCaller(ctx, "relaunch");
-        relaunchApp();
+        await relaunchApp();
         return { ok: true };
       },
     }),

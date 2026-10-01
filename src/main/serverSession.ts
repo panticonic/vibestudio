@@ -18,7 +18,6 @@ import { HubProcessManager, type InitialWorkspaceResolved } from "./hubProcessMa
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
-import { relaunchApp } from "./relaunchApp.js";
 import {
   preflightDeviceCredentialStoreForPairing,
   saveDeviceCredential,
@@ -28,7 +27,7 @@ import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
+import type { CentralDataManager, HubProcessOwnerRecord } from "@vibestudio/shared/centralData";
 import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
@@ -212,7 +211,7 @@ export async function establishServerSession(args: {
   storedRemote?: StoredRemote;
   centralData: CentralDataManager;
   confirmExistingLocalHub?: (
-    lease: HubProcessLeaseRecord
+    lease: HubProcessOwnerRecord
   ) => Promise<"attach" | "replace" | "cancel">;
   /** Structured startup progress for the bootstrap timeline. */
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
@@ -221,6 +220,7 @@ export async function establishServerSession(args: {
   onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: IrohReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onLocalRecoveryFailure?: (error: Error) => void;
   onMainSessionTerminalClose?: (error: Error) => void;
 }): Promise<SessionConnection> {
   const { mode, pendingPairing, storedRemote } = args;
@@ -250,9 +250,9 @@ export async function establishServerSession(args: {
     centralData: args.centralData,
     confirmExistingHub: args.confirmExistingLocalHub,
     onInitialWorkspaceResolved: args.onInitialWorkspaceResolved,
-    onCrash: (code) => {
-      console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
-      relaunchApp({ exitCode: 1 });
+    onRecoveryFailure: (error) => {
+      console.error("[App] Local hub recovery failed:", error);
+      args.onLocalRecoveryFailure?.(error);
     },
     onOwnedHubSpawn: registerOwnedProcessGroup,
   });
@@ -302,8 +302,11 @@ export async function establishServerSession(args: {
     oauthCallbackMode: "client-loopback",
     getWsUrl: () => hubProcessManager.getCurrentWsUrl() ?? target.wsUrl,
     refreshAuthToken: async () => hubProcessManager.getAuthToken(),
+    prepareConnection: async (signal) => {
+      signal.throwIfAborted();
+      await hubProcessManager.handleDisconnect();
+    },
     onConnectionStatusChanged: (status) => {
-      if (status === "connecting") hubProcessManager.handleDisconnect();
       if (status === "connected") void refreshCdpAuthToken();
       args.onConnectionStatusChanged?.(status);
     },
@@ -321,6 +324,10 @@ export async function establishServerSession(args: {
         oauthCallbackMode: "client-loopback",
         getWsUrl: () => hubProcessManager.getHubWsUrl(),
         refreshAuthToken: () => hubProcessManager.getHubAuthToken(),
+        prepareConnection: async (signal) => {
+          signal.throwIfAborted();
+          await hubProcessManager.handleDisconnect();
+        },
         onDisconnect: () => console.error("[App] Local hub control connection closed"),
       }
     );
@@ -697,11 +704,12 @@ async function connectLocalWorkspace(
   storageScope: string
 ): Promise<WorkspaceSessionConnection> {
   let cdpAuthToken = "";
-  const refresh = async (): Promise<string> => {
+  const refresh = async (signal?: AbortSignal): Promise<string> => {
     const response = await fetch(serverAuthRouteUrl(route.serverUrl, "refresh-shell"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deviceId, refreshToken }),
+      signal,
     });
     if (!response.ok) throw new Error(`Workspace authentication failed (${response.status})`);
     const payload = (await response.json()) as { shellToken?: unknown };
@@ -720,6 +728,12 @@ async function connectLocalWorkspace(
     oauthCallbackMode: "client-loopback",
     getWsUrl: () => serverRpcWsUrl(route.serverUrl),
     refreshAuthToken: refresh,
+    prepareConnection: async (signal) => {
+      signal.throwIfAborted();
+      // Authenticated refresh is the gateway's canonical start-and-route
+      // boundary for a stopped workspace child.
+      await refresh(signal);
+    },
     onDisconnect: () => log.info(`Workspace connection closed: ${route.workspaceId}`),
   });
   try {

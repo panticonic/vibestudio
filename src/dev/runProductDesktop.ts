@@ -97,7 +97,10 @@ async function main(): Promise<void> {
     process.exitCode = await desktop.wait();
   } finally {
     try {
-      fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+      // A failed retirement retains the source inputs for the still-owned
+      // process. Deletion retries cannot establish that ownership has ended.
+      await desktop?.stop();
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
     } finally {
       await desktop?.close();
     }

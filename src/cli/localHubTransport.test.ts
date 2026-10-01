@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
+import type { HubProcessOwnerRecord } from "@vibestudio/shared/centralData";
 import type { CliDeviceCredentials } from "./credentialStore.js";
 import {
   localHubIdentityDatabasePath,
@@ -11,13 +11,11 @@ const hubBootId = `boot_${"H".repeat(24)}`;
 const credentials = {
   serverId,
 } as CliDeviceCredentials;
-const lease: HubProcessLeaseRecord = {
+const lease: HubProcessOwnerRecord = {
   ownerBootId: hubBootId,
   gatewayPort: 46247,
   pid: 1234,
   acquiredAt: 1,
-  heartbeatAt: 900,
-  expiresAt: 2_000,
 };
 
 function health(overrides: Record<string, unknown> = {}) {
@@ -36,7 +34,7 @@ function health(overrides: Record<string, unknown> = {}) {
 
 describe("local hub control resolution", () => {
   it("uses a local profile's paired gateway instead of the parent process lease", async () => {
-    const readLease = vi.fn(() => lease);
+    const readOwner = vi.fn(() => lease);
     const fetchMock = vi.fn<typeof fetch>();
     await expect(
       resolveLocalHubControlTransport(
@@ -45,10 +43,10 @@ describe("local hub control resolution", () => {
           transport: "local",
           url: "http://127.0.0.1:48123/_workspace/system-child",
         },
-        { readLease, fetch: fetchMock }
+        { readOwner, fetch: fetchMock }
       )
     ).resolves.toEqual({ serverUrl: "http://127.0.0.1:48123" });
-    expect(readLease).not.toHaveBeenCalled();
+    expect(readOwner).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -65,20 +63,18 @@ describe("local hub control resolution", () => {
 
     await expect(
       resolveLocalHubControlTransport(credentials, {
-        now: () => 1_000,
-        readLease: () => lease,
+        readOwner: () => lease,
         fetch: fetchMock,
       })
     ).resolves.toEqual({ serverUrl: "http://127.0.0.1:46247" });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("does not infer a local endpoint without a live matching lease", async () => {
+  it("does not infer a local endpoint without a matching owner", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     await expect(
       resolveLocalHubControlTransport(credentials, {
-        now: () => 2_000,
-        readLease: () => lease,
+        readOwner: () => null,
         fetch: fetchMock,
       })
     ).resolves.toBeNull();
@@ -87,8 +83,7 @@ describe("local hub control resolution", () => {
     fetchMock.mockResolvedValueOnce(health({ serverId: `srv_${"X".repeat(24)}` }));
     await expect(
       resolveLocalHubControlTransport(credentials, {
-        now: () => 1_000,
-        readLease: () => lease,
+        readOwner: () => lease,
         fetch: fetchMock,
       })
     ).resolves.toBeNull();
@@ -100,16 +95,14 @@ describe("local hub control resolution", () => {
     });
     await expect(
       resolveLocalHubControlTransport(credentials, {
-        now: () => 1_000,
-        readLease: () => lease,
+        readOwner: () => lease,
         fetch: unreachable,
       })
     ).resolves.toBeNull();
 
     await expect(
       resolveLocalHubControlTransport(credentials, {
-        now: () => 1_000,
-        readLease: () => lease,
+        readOwner: () => lease,
         fetch: vi.fn<typeof fetch>(async () => new Response("{}")),
       })
     ).resolves.toBeNull();

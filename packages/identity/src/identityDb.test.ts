@@ -6,6 +6,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "./identityDb.js";
 
+// Historical fixtures must keep the shipped ownership table, not the current one.
+const RESTORE_LEGACY_HUB_LEASE = `DROP TABLE hub_process_owner;
+  CREATE TABLE hub_process_lease (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    owner_boot_id TEXT NOT NULL, gateway_port INTEGER NOT NULL, pid INTEGER NOT NULL,
+    acquired_at INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL CHECK(expires_at > heartbeat_at)
+  )`;
+
 function restoreV13Membership(db: DatabaseSync): void {
   db.exec(`DROP INDEX membership_by_workspace;
     ALTER TABLE membership RENAME TO membership_current;
@@ -68,6 +77,7 @@ describe("identity package schema cut", () => {
     identity.insertPairingInvite(invite);
     identity.close();
     const old = new DatabaseSync(databasePath);
+    old.exec(RESTORE_LEGACY_HUB_LEASE);
     old.exec(`ALTER TABLE pairing_codes RENAME TO pairing_codes_current;
       CREATE TABLE pairing_codes (
         code TEXT PRIMARY KEY, user_id TEXT,
@@ -95,9 +105,7 @@ describe("identity package schema cut", () => {
     const migrated = new IdentityDb({ path: databasePath, readOnly: false, now: () => 10 });
     expect(migrated.listPairingCodes()).toEqual([invite]);
     const verified = new DatabaseSync(databasePath);
-    expect(
-      tables.slice(0, -1).map((table) => rows(verified, table))
-    ).toEqual(before.slice(0, -1));
+    expect(tables.slice(0, -1).map((table) => rows(verified, table))).toEqual(before.slice(0, -1));
     expect(migrated.listPairingCodes()).toEqual(
       before.at(-1)?.map(({ workspace_id: _discarded, ...entry }) => ({
         code: entry["code"],
@@ -107,7 +115,7 @@ describe("identity package schema cut", () => {
         expiresAt: entry["expires_at"],
       }))
     );
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
     verified.close();
     migrated.insertPairingInvite({
       code: "account-only",
@@ -188,6 +196,7 @@ describe("identity package schema cut", () => {
     identity.close();
 
     const old = new DatabaseSync(databasePath);
+    old.exec(RESTORE_LEGACY_HUB_LEASE);
     restoreV13Membership(old);
     old.exec(`
       DROP TABLE user_workspaces;
@@ -237,7 +246,7 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -274,6 +283,7 @@ describe("identity package schema cut", () => {
     membership.close();
 
     const old = new DatabaseSync(databasePath);
+    old.exec(RESTORE_LEGACY_HUB_LEASE);
     restoreV13Membership(old);
     old.exec(
       "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"
@@ -292,7 +302,7 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();
@@ -314,6 +324,7 @@ describe("identity package schema cut", () => {
     central.addWorkspace("project", "ws_project");
     central.close();
     const old = new DatabaseSync(databasePath);
+    old.exec(RESTORE_LEGACY_HUB_LEASE);
     restoreV13Membership(old);
     old.exec(
       "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"

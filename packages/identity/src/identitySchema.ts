@@ -2,10 +2,18 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 18 is the current schema. The explicitly enumerated final
+ * Version 19 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 18;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 19;
+
+const HUB_PROCESS_OWNER_SQL = `CREATE TABLE hub_process_owner (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  owner_boot_id TEXT NOT NULL,
+  gateway_port INTEGER NOT NULL,
+  pid INTEGER NOT NULL,
+  acquired_at INTEGER NOT NULL
+)`;
 
 // No foreign key to workspaces: deletion must retain retry/deduplication evidence.
 const WORKSPACE_CREATION_OPERATIONS_SQL = `CREATE TABLE workspace_creation_operations (
@@ -185,16 +193,8 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
     },
     {
       type: "table",
-      name: "hub_process_lease",
-      sql: `CREATE TABLE hub_process_lease (
-        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-        owner_boot_id TEXT NOT NULL,
-        gateway_port INTEGER NOT NULL,
-        pid INTEGER NOT NULL,
-        acquired_at INTEGER NOT NULL,
-        heartbeat_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL CHECK(expires_at > heartbeat_at)
-      )`,
+      name: "hub_process_owner",
+      sql: HUB_PROCESS_OWNER_SQL,
     },
     {
       type: "table",
@@ -219,6 +219,24 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 18,
+    toVersion: 19,
+    migrate(db) {
+      // Old hubs do not hold the new process-lifetime lock. Require them to
+      // exit before upgrading, regardless of their lease's wall-clock age.
+      const previous = db.prepare("SELECT pid FROM hub_process_lease WHERE singleton = 1").get();
+      if (previous) {
+        try {
+          process.kill(Number(previous["pid"]), 0);
+          throw new Error("Stop the existing hub before upgrading its process ownership schema");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
+      }
+      db.exec(`DROP TABLE hub_process_lease; ${HUB_PROCESS_OWNER_SQL}`);
+    },
+  },
   {
     fromVersion: 17,
     toVersion: 18,

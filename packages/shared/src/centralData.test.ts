@@ -369,16 +369,16 @@ describe("CentralDataManager SQLite control store", () => {
     const central = manager();
     central.close();
     const db = new DatabaseSync(databasePath);
-    db.exec("DROP TABLE hub_process_lease");
+    db.exec("DROP TABLE hub_process_owner");
     db.close();
     const before = fs.readFileSync(databasePath);
 
-    expect(() => manager()).toThrow(/missing \[table:hub_process_lease\]/);
+    expect(() => manager()).toThrow(/missing \[table:hub_process_owner\]/);
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);
     expect(
       unchanged
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'hub_process_lease'")
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'hub_process_owner'")
         .get()
     ).toBeUndefined();
     unchanged.close();

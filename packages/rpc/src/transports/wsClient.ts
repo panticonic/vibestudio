@@ -44,6 +44,8 @@ export interface WsClientTransportConfig {
   getAuthMessageFields?: () => Partial<Extract<WsClientMessage, { type: "ws:auth" }>>;
   routeTarget?: (targetId: string) => string;
   onRecovery?: (kind: RecoveryKind) => void | Promise<void>;
+  /** Join owned endpoint readiness before reading credentials or requesting admission. */
+  prepareConnection?: (signal: AbortSignal) => Promise<void>;
   /**
    * Fired on a successful auth-result. Carries the optional `deviceCredential`
    * the server issues only when this session authenticated by redeeming a
@@ -85,10 +87,12 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let admissionAbortController: AbortController | null = null;
+  const connectionAttempts = new Set<Promise<void>>();
   let generation = 0;
   let hasConnectedBefore = false;
   let lastSeenBootId: string | null = null;
   let authToken: string | null = null;
+  let closePromise: Promise<void> | null = null;
   let firstConnectPromise: Promise<void> | null = null;
   let firstConnectResolve: (() => void) | null = null;
   let firstConnectReject: ((error: Error) => void) | null = null;
@@ -265,8 +269,17 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     }
   };
 
-  const scheduleReconnect = (socketGeneration: number): void => {
+  const scheduleReconnect = (socketGeneration: number, failure?: Error): void => {
     if (closed) return;
+    if (config.reconnect === false) {
+      firstConnectReject?.(
+        failure ?? connectionLostError("RPC connection could not be established")
+      );
+      firstConnectReject = null;
+      firstConnectResolve = null;
+      setStatus("disconnected");
+      return;
+    }
     clearReconnectTimer();
     const jitter = Math.random() * 500;
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempt) + jitter, 30_000);
@@ -275,7 +288,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (closed || socketGeneration !== generation) return;
-      void openSocket();
+      startConnectionAttempt();
     }, delay);
   };
 
@@ -287,7 +300,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       () => {
         reconnectTimer = null;
         if (closed || socketGeneration !== generation) return;
-        void openSocket();
+        startConnectionAttempt();
       },
       Math.max(0, retryAfterMs)
     );
@@ -336,7 +349,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       reconnectAttempt = 0;
       setTimeout(() => {
         if (closed || nextGeneration !== generation) return;
-        void openSocket();
+        startConnectionAttempt();
       }, 0);
     } catch (error) {
       console.warn("[wsClientTransport] Auth refresh failed:", error);
@@ -478,14 +491,24 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     setStatus("connecting");
     authenticated = false;
     supportsStreamRequestBodies = false;
+    admissionAbortController?.abort();
+    const attemptAdmissionController = new AbortController();
+    admissionAbortController = attemptAdmissionController;
 
     let token: string;
     try {
-      token = authToken ?? (await config.adapter.getAuthToken());
+      await config.prepareConnection?.(attemptAdmissionController.signal);
+      attemptAdmissionController.signal.throwIfAborted();
+      token = config.prepareConnection
+        ? await config.adapter.getAuthToken()
+        : (authToken ?? (await config.adapter.getAuthToken()));
       authToken = token;
     } catch (error) {
-      console.warn(`[${prefix}] Failed to get auth token:`, error);
-      scheduleReconnect(socketGeneration);
+      if (admissionAbortController === attemptAdmissionController) admissionAbortController = null;
+      if (!closed && socketGeneration === generation) {
+        console.warn(`[${prefix}] Connection preparation failed:`, error);
+        scheduleReconnect(socketGeneration, asError(error));
+      }
       return;
     }
 
@@ -509,9 +532,6 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       ...(oauthCallbackMode === undefined ? {} : { oauthCallbackMode }),
       connectionId: effectiveConnectionId,
     };
-    admissionAbortController?.abort();
-    const attemptAdmissionController = new AbortController();
-    admissionAbortController = attemptAdmissionController;
     let admission;
     try {
       admission = await (config.adapter.requestAdmission ?? requestRpcWebSocketAdmission)(
@@ -529,7 +549,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     } catch (error) {
       if (closed || socketGeneration !== generation) return;
       console.warn(`[${prefix}] RPC WebSocket admission request failed:`, error);
-      scheduleReconnect(socketGeneration);
+      scheduleReconnect(socketGeneration, asError(error));
       return;
     } finally {
       if (admissionAbortController === attemptAdmissionController) {
@@ -566,7 +586,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       ]);
     } catch (error) {
       console.warn(`[${prefix}] Failed to create WebSocket:`, error);
-      scheduleReconnect(socketGeneration);
+      scheduleReconnect(socketGeneration, asError(error));
       return;
     }
     socket = nextSocket;
@@ -601,6 +621,11 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         ? new Set(config.terminalCloseCodes)
         : TERMINAL_CLOSE_CODES;
       if (closed || terminalCodes.has(event.code ?? 0) || config.reconnect === false) {
+        firstConnectReject?.(
+          connectionLostError(event.reason || `RPC socket closed (${event.code ?? "unknown"})`)
+        );
+        firstConnectReject = null;
+        firstConnectResolve = null;
         failNativeStreams(connectionLostError("Connection lost during streaming RPC"));
         setStatus("disconnected");
         return;
@@ -610,13 +635,27 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     };
   };
 
+  const startConnectionAttempt = (): void => {
+    const attempt = openSocket();
+    connectionAttempts.add(attempt);
+    void attempt
+      .catch((error: unknown) => {
+        firstConnectReject?.(asError(error));
+        firstConnectReject = null;
+        firstConnectResolve = null;
+        setStatus("disconnected");
+      })
+      .finally(() => connectionAttempts.delete(attempt));
+  };
+
   return {
     connect(): void {
+      if (closePromise) throw connectionLostError("RPC client is closed");
       closed = false;
       clearReconnectTimer();
-      void openSocket();
+      startConnectionAttempt();
     },
-    connectAndWait(timeoutMs: number | null = 10_000): Promise<void> {
+    connectAndWait(timeoutMs: number | null = null): Promise<void> {
       if (socket?.readyState === OPEN && authenticated) return Promise.resolve();
       let shouldConnect = false;
       if (!firstConnectPromise) {
@@ -632,46 +671,76 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       }
       const pendingConnection = firstConnectPromise;
       return new Promise<void>((resolve, reject) => {
+        let deadlineError: Error | null = null;
         const timeout =
           timeoutMs == null
             ? null
-            : setTimeout(
-                () =>
-                  reject(
-                    new Error(`Server WS connection timeout (${timeoutMs}ms): ${config.getWsUrl()}`)
-                  ),
-                timeoutMs
-              );
+            : setTimeout(() => {
+                deadlineError = new Error(
+                  `Server WS connection timeout (${timeoutMs}ms): ${config.getWsUrl()}`
+                );
+                void this.close().then(
+                  () => reject(deadlineError),
+                  (cleanupError: unknown) =>
+                    reject(
+                      new AggregateError(
+                        [deadlineError, cleanupError],
+                        "Connection deadline and cleanup failed"
+                      )
+                    )
+                );
+              }, timeoutMs);
         pendingConnection.then(
           () => {
+            if (deadlineError) return;
             if (timeout) clearTimeout(timeout);
             resolve();
           },
           (error) => {
+            if (deadlineError) return;
             if (timeout) clearTimeout(timeout);
             reject(error);
           }
         );
       });
     },
-    async close(): Promise<void> {
-      closed = true;
-      failNativeStreams(connectionLostError("RPC client closed"));
-      clearReconnectTimer();
-      admissionAbortController?.abort();
-      admissionAbortController = null;
-      const current = socket;
-      socket = null;
-      authenticated = false;
-      supportsStreamRequestBodies = false;
-      setStatus("disconnected");
-      if (!current || current.readyState >= 2) return;
-      await new Promise<void>((resolve) => {
-        const done = (): void => resolve();
-        current.onclose = done;
-        current.close(1000, "Client closing");
-        setTimeout(done, 2000);
-      });
+    close(): Promise<void> {
+      closePromise ??= (async () => {
+        closed = true;
+        const failure = connectionLostError("RPC client closed");
+        firstConnectReject?.(failure);
+        firstConnectReject = null;
+        firstConnectResolve = null;
+        failNativeStreams(failure);
+        clearReconnectTimer();
+        admissionAbortController?.abort();
+        admissionAbortController = null;
+        const current = socket;
+        socket = null;
+        authenticated = false;
+        supportsStreamRequestBodies = false;
+        setStatus("disconnected");
+        const socketClosed =
+          !current || current.readyState === 3
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                const onClose = current.onclose;
+                current.onclose = (event) => {
+                  try {
+                    onClose?.(event);
+                  } finally {
+                    resolve();
+                  }
+                };
+                if (current.readyState < 2) current.close(1000, "Client closing");
+              });
+        const results = await Promise.allSettled([socketClosed, ...connectionAttempts]);
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (failures.length) throw new AggregateError(failures, "RPC connection cleanup failed");
+      })();
+      return closePromise;
     },
     send: (envelope) => sendEnvelope(envelope),
     async streamReadable(envelope, signal, body, headTimeoutMs) {

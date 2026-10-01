@@ -6,11 +6,6 @@ import type { OwnedProcessIdentity } from "./ownedProcessIdentity.js";
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 
-// Workspace readiness can include one sealed npm materialization whose own
-// finite deadline is ten minutes. The process owner must outlive that child
-// operation so it can observe success or its canonical timeout and still
-// perform ordered cleanup.
-const DEFAULT_READY_TIMEOUT_MS = 12 * 60_000;
 const DEFAULT_STOP_TIMEOUT_MS = 10_000;
 
 export interface DevInstanceSupervisorOptions {
@@ -54,16 +49,16 @@ function waitForExit(child: ChildProcess): Promise<number> {
 async function waitForReady(
   file: string,
   child: ChildProcess,
-  timeoutMs: number
+  timeoutMs: number | undefined,
+  signal: AbortSignal
 ): Promise<unknown> {
   const startedAt = Date.now();
   for (;;) {
+    signal.throwIfAborted();
     try {
       return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) {
-        throw error;
-      }
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (child.exitCode !== null || child.signalCode !== null) {
       const outcome =
@@ -72,7 +67,7 @@ async function waitForReady(
           : `with code ${child.exitCode ?? 1}`;
       throw new Error(`Vibestudio server exited ${outcome} before publishing readiness`);
     }
-    if (Date.now() - startedAt >= timeoutMs) {
+    if (timeoutMs !== undefined && Date.now() - startedAt >= timeoutMs) {
       throw new Error(`Timed out waiting for Vibestudio readiness at ${file}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -108,6 +103,8 @@ function forwardSignals(requestStop: (signal: NodeJS.Signals) => Promise<number>
  */
 export class DevInstanceSupervisor {
   private child: ChildProcess | null = null;
+  private readonly lifetime = new AbortController();
+  private readinessWait: Promise<unknown> | null = null;
   private stopForwarding: (() => void) | null = null;
   private exit: Promise<number> | null = null;
   private ownedIdentity: OwnedProcessIdentity | null = null;
@@ -181,14 +178,13 @@ export class DevInstanceSupervisor {
       }
       if (this.ownedIdentity) await this.options.onSpawn?.(this.ownedIdentity);
       if (this.options.readiness) {
-        const ready = await Promise.race([
-          waitForReady(
-            this.options.readiness.file,
-            child,
-            this.options.readiness.timeoutMs ?? DEFAULT_READY_TIMEOUT_MS
-          ),
-          spawnFailure,
-        ]);
+        this.readinessWait = waitForReady(
+          this.options.readiness.file,
+          child,
+          this.options.readiness.timeoutMs,
+          this.lifetime.signal
+        );
+        const ready = await Promise.race([this.readinessWait, spawnFailure]);
         await this.options.readiness.onReady(ready);
       }
     } catch (error) {
@@ -230,8 +226,10 @@ export class DevInstanceSupervisor {
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<number> {
+    this.lifetime.abort(new Error("Developer instance stopped"));
     if (!this.child || !this.exit) return 0;
     await this.ownedGroup?.retire(signal);
+    await Promise.allSettled([this.readinessWait]);
     return this.wait();
   }
 

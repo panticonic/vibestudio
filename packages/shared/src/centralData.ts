@@ -34,17 +34,14 @@ export interface CentralDataManagerOptions {
 }
 
 /**
- * The fenced ownership record for the one hub allowed to mutate machine
- * control state. `ownerBootId` is a process-instance identity, not a PID: PIDs
- * are host-local and reusable, while this lease may live on shared storage.
+ * Routing identity of the hub holding the process-lifetime SQLite ownership
+ * lock. This record is discovery metadata; its age never transfers ownership.
  */
-export interface HubProcessLeaseRecord {
+export interface HubProcessOwnerRecord {
   ownerBootId: string;
   gatewayPort: number;
   pid: number;
   acquiredAt: number;
-  heartbeatAt: number;
-  expiresAt: number;
 }
 
 export function createWorkspaceId(): string {
@@ -71,14 +68,12 @@ function parseWorkspaceCreationIntent(value: SQLOutputValue): WorkspaceCreationD
   return WorkspaceCreationDescriptorSchema.parse(JSON.parse(value));
 }
 
-function rowToHubProcessLease(row: Record<string, SQLOutputValue>): HubProcessLeaseRecord {
+function rowToHubProcessOwner(row: Record<string, SQLOutputValue>): HubProcessOwnerRecord {
   return {
     ownerBootId: row["owner_boot_id"] as string,
     gatewayPort: row["gateway_port"] as number,
     pid: row["pid"] as number,
     acquiredAt: row["acquired_at"] as number,
-    heartbeatAt: row["heartbeat_at"] as number,
-    expiresAt: row["expires_at"] as number,
   };
 }
 
@@ -87,6 +82,9 @@ export class CentralDataManager {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
   private readonly now: () => number;
+  private readonly ownershipPath: string;
+  private ownershipLock: DatabaseSync | null = null;
+  private ownerBootId: string | null = null;
 
   constructor(options: CentralDataManagerOptions = {}) {
     const databasePath =
@@ -94,9 +92,10 @@ export class CentralDataManager {
     this.now = options.now ?? Date.now;
     fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(databasePath);
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.db.exec("PRAGMA foreign_keys = ON");
     try {
+      this.ownershipPath = `${fs.realpathSync(databasePath)}.hub-owner-lock`;
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      this.db.exec("PRAGMA foreign_keys = ON");
       openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_SCHEMA, {
         description: `hub-control schema in ${databasePath}`,
         migrations: IDENTITY_DATABASE_MIGRATIONS,
@@ -111,7 +110,43 @@ export class CentralDataManager {
   }
 
   close(): void {
-    this.db.close();
+    try {
+      try {
+        if (this.ownerBootId) this.releaseHubProcessOwnership(this.ownerBootId);
+      } finally {
+        this.db.close();
+      }
+    } finally {
+      this.ownershipLock?.close();
+      this.ownershipLock = null;
+      this.ownerBootId = null;
+    }
+  }
+
+  /** SQLite holds the OS file lock until this connection closes or its process dies. */
+  private acquireOwnershipLock(): DatabaseSync {
+    const lock = new DatabaseSync(this.ownershipPath);
+    try {
+      lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
+      return lock;
+    } catch (error) {
+      lock.close();
+      throw error;
+    }
+  }
+
+  /** Observe the lock itself, never a heartbeat or the age of its routing row. */
+  isHubProcessOwned(): boolean {
+    if (this.ownershipLock) return true;
+    let lock: DatabaseSync;
+    try {
+      lock = this.acquireOwnershipLock();
+    } catch (error) {
+      if ((error as Error & { errcode?: number }).errcode === 5) return true;
+      throw error;
+    }
+    lock.close();
+    return false;
   }
 
   listWorkspaces(): WorkspaceEntry[] {
@@ -372,82 +407,51 @@ export class CentralDataManager {
     });
   }
 
-  /**
-   * Acquire the singleton process lease, replacing it only after its durable
-   * heartbeat has expired. The returned record is the fenced predecessor.
-   */
-  claimHubProcessLease(input: {
-    ownerBootId: string;
-    gatewayPort: number;
-    pid: number;
-    ttlMs: number;
-  }): HubProcessLeaseRecord | null {
+  /** Claim the routing row only while holding the kernel-backed singleton lock. */
+  claimHubProcessOwnership(input: { ownerBootId: string; gatewayPort: number; pid: number }): void {
     const ownerBootId = input.ownerBootId.trim();
-    if (!ownerBootId) throw new Error("Hub process lease ownerBootId is required");
-    if (
-      !Number.isInteger(input.gatewayPort) ||
-      input.gatewayPort < 1 ||
-      input.gatewayPort > 65_535
-    ) {
-      throw new Error("Hub process lease gatewayPort is invalid");
+    if (!ownerBootId) throw new Error("Hub process ownerBootId is required");
+    if (!Number.isInteger(input.gatewayPort) || input.gatewayPort < 1 || input.gatewayPort > 65_535)
+      throw new Error("Hub process gatewayPort is invalid");
+    if (input.pid !== process.pid) throw new Error("A hub can claim only its own process");
+    if (this.ownershipLock) throw new Error("This control store already owns a hub process");
+    const lock = this.acquireOwnershipLock();
+    try {
+      this.transaction(() => {
+        this.stmt(
+          `INSERT INTO hub_process_owner (singleton, owner_boot_id, gateway_port, pid, acquired_at)
+           VALUES (1, ?, ?, ?, ?)
+           ON CONFLICT(singleton) DO UPDATE SET
+             owner_boot_id = excluded.owner_boot_id,
+             gateway_port = excluded.gateway_port,
+             pid = excluded.pid,
+             acquired_at = excluded.acquired_at`
+        ).run(ownerBootId, input.gatewayPort, input.pid, this.now());
+      });
+      this.ownershipLock = lock;
+      this.ownerBootId = ownerBootId;
+    } catch (error) {
+      lock.close();
+      throw error;
     }
-    if (!Number.isInteger(input.pid) || input.pid < 1) {
-      throw new Error("Hub process lease pid is invalid");
-    }
-    if (!Number.isInteger(input.ttlMs) || input.ttlMs < 1) {
-      throw new Error("Hub process lease ttlMs must be a positive integer");
-    }
-    return this.transaction(() => {
-      const now = this.now();
-      const row = this.stmt("SELECT * FROM hub_process_lease WHERE singleton = 1").get();
-      const previous = row ? rowToHubProcessLease(row) : null;
-      if (previous && previous.expiresAt > now) {
-        throw new Error(
-          `Hub process lease is owned by ${previous.ownerBootId} until ${previous.expiresAt}`
-        );
-      }
-      this.stmt(
-        `INSERT INTO hub_process_lease
-           (singleton, owner_boot_id, gateway_port, pid, acquired_at, heartbeat_at, expires_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(singleton) DO UPDATE SET
-           owner_boot_id = excluded.owner_boot_id,
-           gateway_port = excluded.gateway_port,
-           pid = excluded.pid,
-           acquired_at = excluded.acquired_at,
-           heartbeat_at = excluded.heartbeat_at,
-           expires_at = excluded.expires_at`
-      ).run(ownerBootId, input.gatewayPort, input.pid, now, now, now + input.ttlMs);
-      return previous;
-    });
   }
 
-  /** Renew only the caller's still-live lease. A late or displaced owner is fenced. */
-  renewHubProcessLease(ownerBootId: string, ttlMs: number): boolean {
-    if (!Number.isInteger(ttlMs) || ttlMs < 1) {
-      throw new Error("Hub process lease ttlMs must be a positive integer");
-    }
-    const now = this.now();
-    const result = this.stmt(
-      `UPDATE hub_process_lease
-       SET heartbeat_at = ?, expires_at = ?
-       WHERE singleton = 1 AND owner_boot_id = ? AND expires_at > ?`
-    ).run(now, now + ttlMs, ownerBootId, now);
-    return result.changes === 1;
-  }
-
-  /** Compare-and-release: a stale process can never clear its successor's lease. */
-  releaseHubProcessLease(ownerBootId: string): boolean {
-    return (
-      this.stmt("DELETE FROM hub_process_lease WHERE singleton = 1 AND owner_boot_id = ?").run(
+  /** Only the lock owner may release its routing record. */
+  releaseHubProcessOwnership(ownerBootId: string): boolean {
+    if (this.ownerBootId !== ownerBootId || !this.ownershipLock) return false;
+    const removed =
+      this.stmt("DELETE FROM hub_process_owner WHERE singleton = 1 AND owner_boot_id = ?").run(
         ownerBootId
-      ).changes === 1
-    );
+      ).changes === 1;
+    this.ownershipLock.close();
+    this.ownershipLock = null;
+    this.ownerBootId = null;
+    return removed;
   }
 
-  getHubProcessLease(): HubProcessLeaseRecord | null {
-    const row = this.stmt("SELECT * FROM hub_process_lease WHERE singleton = 1").get();
-    return row ? rowToHubProcessLease(row) : null;
+  getHubProcessOwner(): HubProcessOwnerRecord | null {
+    const row = this.stmt("SELECT * FROM hub_process_owner WHERE singleton = 1").get();
+    return row ? rowToHubProcessOwner(row) : null;
   }
 
   /**
@@ -550,16 +554,10 @@ export class CentralDataManager {
     return statement;
   }
 
-  /** Fail closed unless this exact process instance owns the live control lease. */
-  assertHubProcessLease(ownerBootId: string): void {
-    const now = this.now();
-    const row = this.stmt(
-      `SELECT 1 AS one FROM hub_process_lease
-       WHERE singleton = 1 AND owner_boot_id = ? AND expires_at > ?`
-    ).get(ownerBootId, now);
-    if (!row) {
-      throw new Error(`Hub process ${ownerBootId} does not own the active machine-control lease`);
-    }
+  /** Fail closed unless this manager still holds the exact process ownership lock. */
+  assertHubProcessOwnership(ownerBootId: string): void {
+    if (!this.ownershipLock || this.ownerBootId !== ownerBootId)
+      throw new Error(`Hub process ${ownerBootId} does not own machine control`);
   }
 
   private transaction<T>(fn: () => T): T {

@@ -462,6 +462,10 @@ async function main(): Promise<void> {
     throw error;
   } finally {
     try {
+      // Storage belongs to the full process lifetime, including failed
+      // startup and relaunch. Never remove source checkpoints before joining
+      // every acknowledged native owner.
+      if (!retirementFailed) await supervisor?.stop();
       if (retirementFailed) {
         // State remains owned until every executor retires. Preserve the exact
         // registry and source checkpoints when that join cannot be established.

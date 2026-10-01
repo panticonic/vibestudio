@@ -15,7 +15,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import { createConnectionlessRpcClient } from "@vibestudio/rpc";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
-import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
+import type { CentralDataManager, HubProcessOwnerRecord } from "@vibestudio/shared/centralData";
 import { bootstrapInstanceCliFromDevice } from "../dev/bootstrapInstanceCli.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -47,25 +47,30 @@ import {
 
 const log = createDevLogger("HubProcessManager");
 const READY_POLL_INTERVAL_MS = 250;
-const HEALTHZ_TIMEOUT_MS = 1_500;
-const HEALTH_RETRY_ATTEMPTS = 3;
-const HEALTH_RETRY_INTERVAL_MS = 250;
 // Owned-tree termination normally settles from lifecycle completion. These
 // waits exist only to contain a catastrophically wedged process tree.
 const STOP_SIGTERM_TIMEOUT_MS = 5 * 60_000;
 const STOP_SIGKILL_TIMEOUT_MS = 30_000;
-const STOP_RETRY_INTERVAL_MS = 1_000;
 
 /** The detached machine hub owns every local workspace child's captured output. */
 export function getLocalHubLogPath(): string {
   return path.join(getCentralDataPath(), "logs", "hub.log");
 }
 
-function hubStartupFailureDetail(logPath: string): string | null {
+function hubStartupFailureDetail(logPath: string, startOffset: number): string | null {
   try {
-    const tail = fs.readFileSync(logPath, "utf8").slice(-16_000);
-    const fatalLines = [...tail.matchAll(/^Fatal: (.+)$/gmu)];
-    return fatalLines.at(-1)?.[1]?.trim() || null;
+    const fd = fs.openSync(logPath, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      const offset = Math.max(startOffset, size - 16_000);
+      const buffer = Buffer.alloc(Math.max(0, size - offset));
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, offset);
+      const tail = buffer.subarray(0, bytesRead).toString("utf8");
+      const fatalLines = [...tail.matchAll(/^(?:\[workspace:[^\n]+?\] )?Fatal: (.+)$/gmu)];
+      return fatalLines.at(-1)?.[1]?.trim() || null;
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return null;
   }
@@ -84,10 +89,10 @@ export interface HubProcessManagerConfig {
   buildId: string;
   logLevel?: string;
   centralData: CentralDataManager;
-  onCrash: (code: number | null) => void;
+  onRecoveryFailure: (error: Error) => void;
   onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   /** Desktop-only confirmation before reusing a live detached hub. */
-  confirmExistingHub?: (lease: HubProcessLeaseRecord) => Promise<"attach" | "replace" | "cancel">;
+  confirmExistingHub?: (owner: HubProcessOwnerRecord) => Promise<"attach" | "replace" | "cancel">;
 }
 
 export interface HubWorkspaceTarget {
@@ -150,57 +155,24 @@ interface HubRuntime {
   buildId: string;
 }
 
-async function probeHealthz(gatewayPort: number): Promise<HealthzPayload | null> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${gatewayPort}/healthz`, {
-      signal: AbortSignal.timeout(HEALTHZ_TIMEOUT_MS),
-    });
-    if (!response.ok) return null;
-    const parsed = HealthzPayloadSchema.safeParse(await response.json());
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-    throw error;
-  }
-}
-
-function recordedPidIsHub(pid: number): boolean | null {
-  if (process.platform !== "linux") return null;
-  try {
-    const command = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
-    const readyFlag = command.indexOf("--ready-file");
-    const expectedReadyFile = path.join(getCentralDataPath(), "server-auth", "hub-ready.json");
-    return (
-      command.includes(getServerProcessEntryPath()) &&
-      readyFlag >= 0 &&
-      command[readyFlag + 1] === expectedReadyFile
-    );
-  } catch {
-    return null;
-  }
+async function probeHealthz(gatewayPort: number, signal: AbortSignal): Promise<HealthzPayload> {
+  const response = await fetch(`http://127.0.0.1:${gatewayPort}/healthz`, { signal });
+  if (!response.ok) throw new Error(`Hub health request returned HTTP ${response.status}`);
+  return HealthzPayloadSchema.parse(await response.json());
 }
 
 async function postJson(
   url: URL,
   body: Record<string, unknown>,
-  authorization?: string
+  signal: AbortSignal
 ): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}),
     },
     body: JSON.stringify(body),
+    signal,
   });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
@@ -216,16 +188,16 @@ async function postJson(
 export class HubProcessManager {
   private current: HubWorkspaceTarget | null = null;
   private currentHubPid: number | null = null;
-  private restartTimestamps: number[] = [];
   private isStopping = false;
   private ensureAlivePromise: Promise<void> | null = null;
+  private readonly lifetime = new AbortController();
   /** PIDs proven to be this manager's hub, either by spawn or authenticated health metadata. */
-  private verifiedHubPids = new Set<number>();
+  private verifiedHubPids = new Map<number, OwnedProcessIdentity | null>();
 
   constructor(private readonly config: HubProcessManagerConfig) {}
 
   async attachOrSpawn(options: { onHubReady?: () => void } = {}): Promise<HubWorkspaceTarget> {
-    const existing = this.liveLease();
+    const existing = this.liveOwner();
     let processTarget: HubProcessTarget | null = null;
     if (existing) {
       const decision = this.config.confirmExistingHub
@@ -236,11 +208,14 @@ export class HubProcessManager {
         const attached = await this.tryAttach(existing);
         if (attached) {
           await this.terminateVerifiedHub(existing.pid);
-          this.config.centralData.releaseHubProcessLease(existing.ownerBootId);
           this.verifiedHubPids.delete(existing.pid);
         }
       } else {
         processTarget = await this.tryAttach(existing);
+        if (processTarget && processTarget.record.buildId !== this.config.buildId)
+          throw new Error(
+            "The existing hub uses a different build. Stop or explicitly replace it before connecting this desktop."
+          );
       }
     }
     if (!processTarget) {
@@ -277,65 +252,35 @@ export class HubProcessManager {
     }
   }
 
-  private liveLease(): HubProcessLeaseRecord | null {
-    const lease = this.config.centralData.getHubProcessLease();
-    return lease && lease.expiresAt > Date.now() ? lease : null;
+  private liveOwner(): HubProcessOwnerRecord | null {
+    const owner = this.config.centralData.getHubProcessOwner();
+    return owner && this.config.centralData.isHubProcessOwned() ? owner : null;
   }
 
-  private async tryAttach(lease: HubProcessLeaseRecord): Promise<HubProcessTarget | null> {
-    let health: HealthzPayload | null = null;
-    for (let attempt = 1; attempt <= HEALTH_RETRY_ATTEMPTS; attempt += 1) {
-      health = await probeHealthz(lease.gatewayPort);
-      if (
-        health?.serverBootId === lease.ownerBootId &&
-        health.gatewayPort === lease.gatewayPort &&
-        health.pid === lease.pid
-      ) {
-        break;
-      }
-      if (attempt < HEALTH_RETRY_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, HEALTH_RETRY_INTERVAL_MS));
-      }
-    }
+  private async tryAttach(owner: HubProcessOwnerRecord): Promise<HubProcessTarget | null> {
+    if (!this.config.centralData.isHubProcessOwned()) return null;
+    const identity =
+      process.platform === "linux" || process.platform === "darwin"
+        ? captureOwnedProcessIdentity(owner.pid)
+        : null;
+    const health = await probeHealthz(owner.gatewayPort, this.lifetime.signal);
     if (
-      !health ||
-      health.serverBootId !== lease.ownerBootId ||
-      health.gatewayPort !== lease.gatewayPort ||
-      health.pid !== lease.pid
+      health.serverBootId !== owner.ownerBootId ||
+      health.gatewayPort !== owner.gatewayPort ||
+      health.pid !== owner.pid
     ) {
-      if (health) {
-        throw new Error(
-          `Hub health identity does not match fenced lease ${lease.ownerBootId}; refusing to signal either process`
-        );
-      }
-      // A failed probe is not proof of process death. Conclusively retire the
-      // recorded writer before the caller is allowed to clear its row/spawn.
-      const processIdentity = recordedPidIsHub(lease.pid);
-      if (processIdentity === true) {
-        this.verifiedHubPids.add(lease.pid);
-        await this.waitForExit(lease.pid, false);
-      } else if (processIdentity === null && pidAlive(lease.pid)) {
-        throw new Error(
-          `Hub health check failed, but live PID ${lease.pid} could not be verified; refusing to terminate an unrelated process`
-        );
-      }
-      return null;
-    }
-    this.verifiedHubPids.add(lease.pid);
-    if (health.buildId !== this.config.buildId) {
-      log.info(
-        `[attach] hub build mismatch (${health.buildId} != ${this.config.buildId}); replacing it`
+      throw new Error(
+        `Hub health identity does not match owner ${owner.ownerBootId}; refusing to signal either process`
       );
-      await this.waitForExit(lease.pid, false);
-      return null;
     }
+    this.verifiedHubPids.set(owner.pid, identity);
     return {
       record: {
         gatewayPort: health.gatewayPort,
         pid: health.pid,
         serverId: health.serverId,
         serverBootId: health.serverBootId,
-        startedAt: lease.acquiredAt,
+        startedAt: owner.acquiredAt,
         version: health.version,
         buildId: health.buildId,
       },
@@ -355,7 +300,16 @@ export class HubProcessManager {
     fs.mkdirSync(logDir, { recursive: true });
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.rmSync(readyFile, { force: true });
-    const logFd = fs.openSync(logPath, "w");
+    // Restarts must preserve the failure that caused them. Scope startup
+    // diagnostics to this launch so an older fatal error is never attributed
+    // to the replacement process.
+    const logFd = fs.openSync(logPath, "a", 0o600);
+    const logStartOffset = fs.fstatSync(logFd).size;
+    const spawnedAt = Date.now();
+    fs.writeSync(
+      logFd,
+      `\n[HubProcessManager] Launch ${new Date(spawnedAt).toISOString()} (gateway ${preferredGatewayPort ?? "automatic"})\n`
+    );
     const env: Record<string, string | undefined> = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
@@ -378,7 +332,6 @@ export class HubProcessManager {
         : {}),
     };
     const maxOldSpaceMb = Number(process.env["VIBESTUDIO_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
-    const spawnedAt = Date.now();
     const child = spawn(
       process.execPath,
       [
@@ -400,43 +353,61 @@ export class HubProcessManager {
     );
     fs.closeSync(logFd);
     let exitedWith: number | null | undefined;
+    let startupFailure: Error | undefined;
     child.on("exit", (code) => {
       exitedWith = code;
     });
-    child.on("error", () => {
-      exitedWith = -1;
+    child.on("error", (error) => {
+      startupFailure = error;
     });
     let ready: HubReadyFilePayload;
     try {
       if (child.pid) {
-        this.verifiedHubPids.add(child.pid);
-        if (process.platform === "linux" || process.platform === "darwin") {
-          await this.config.onOwnedHubSpawn?.(captureOwnedProcessIdentity(child.pid));
-        }
+        const identity =
+          process.platform === "linux" || process.platform === "darwin"
+            ? captureOwnedProcessIdentity(child.pid)
+            : null;
+        this.verifiedHubPids.set(child.pid, identity);
+        if (identity) await this.config.onOwnedHubSpawn?.(identity);
       }
       child.unref();
       ready = parseHubReadyFile(
-        await this.waitForReadyFile(readyFile, spawnedAt, () => exitedWith)
+        await this.waitForReadyFile(
+          readyFile,
+          spawnedAt,
+          () => exitedWith,
+          () => startupFailure
+        )
       );
       if (!child.pid || ready.pid !== child.pid) {
         throw new Error(
           `Hub ready PID ${ready.pid} does not match spawned process ${child.pid ?? "unknown"}`
         );
       }
+      if (startupFailure) throw startupFailure;
       if (exitedWith !== undefined) {
         throw new Error(`Local hub exited during startup with ${exitedWith}`);
       }
     } catch (error) {
-      if (exitedWith === undefined && child.pid) {
-        await this.waitForExit(child.pid, false);
+      let failure: unknown = error;
+      let retired = exitedWith !== undefined;
+      if (!retired && child.pid) {
+        try {
+          await this.terminateVerifiedHub(child.pid);
+          retired = true;
+        } catch (cleanupError) {
+          failure = new AggregateError(
+            [error, cleanupError],
+            "Hub startup and process cleanup failed"
+          );
+        }
       }
-      fs.rmSync(readyFile, { force: true });
-      const detail = hubStartupFailureDetail(logPath);
-      if (detail) {
-        const summary = error instanceof Error ? error.message : String(error);
-        throw new Error(`${summary}: ${detail}`, { cause: error });
-      }
-      throw error;
+      if (retired) fs.rmSync(readyFile, { force: true });
+      const detail = hubStartupFailureDetail(logPath, logStartOffset);
+      const summary = failure instanceof Error ? failure.message : String(failure);
+      throw new Error(`${summary}${detail ? `: ${detail}` : ""} (hub log: ${logPath})`, {
+        cause: failure,
+      });
     }
     const record: HubRuntime = {
       gatewayPort: ready.gatewayPort,
@@ -470,11 +441,15 @@ export class HubProcessManager {
     }
     const label = `${os.hostname()} desktop`;
     const baseUrl = `http://127.0.0.1:${target.record.gatewayPort}`;
-    const paired = await postJson(serverAuthRouteUrl(baseUrl, "complete-pairing"), {
-      code: inviteCode,
-      label,
-      platform: "desktop",
-    });
+    const paired = await postJson(
+      serverAuthRouteUrl(baseUrl, "complete-pairing"),
+      {
+        code: inviteCode,
+        label,
+        platform: "desktop",
+      },
+      this.lifetime.signal
+    );
     if (
       paired["serverId"] !== target.record.serverId ||
       !isDeviceId(paired["deviceId"]) ||
@@ -499,10 +474,14 @@ export class HubProcessManager {
     credential: DeviceCredentialEntry
   ): Promise<HubWorkspaceTarget> {
     const baseUrl = `http://127.0.0.1:${target.record.gatewayPort}`;
-    const session = await postJson(serverAuthRouteUrl(baseUrl, "refresh-shell"), {
-      deviceId: credential.deviceId,
-      refreshToken: credential.refreshToken,
-    });
+    const session = await postJson(
+      serverAuthRouteUrl(baseUrl, "refresh-shell"),
+      {
+        deviceId: credential.deviceId,
+        refreshToken: credential.refreshToken,
+      },
+      this.lifetime.signal
+    );
     if (typeof session["shellToken"] !== "string") {
       throw new Error("Hub refresh returned no shell session token");
     }
@@ -511,7 +490,13 @@ export class HubProcessManager {
       callerKind: "shell",
       serverUrl: baseUrl,
       authToken: session["shellToken"],
-      fetch: globalThis.fetch,
+      fetch: (input, init) =>
+        globalThis.fetch(input, {
+          ...init,
+          signal: init?.signal
+            ? AbortSignal.any([this.lifetime.signal, init.signal])
+            : this.lifetime.signal,
+        }),
     }).client;
     const hubControl = createTypedServiceClient(
       "hubControl",
@@ -570,13 +555,17 @@ export class HubProcessManager {
   private async waitForReadyFile(
     readyFile: string,
     spawnedAt: number,
-    exitCode: () => number | null | undefined
+    exitCode: () => number | null | undefined,
+    failure: () => Error | undefined
   ): Promise<unknown> {
     // The hub owns its workspace child's progress diagnostics and exits when
     // that child cannot start. Waiting here therefore follows process
     // liveness rather than imposing a second, shorter startup deadline that
     // can abandon a healthy cold build.
     for (;;) {
+      this.lifetime.signal.throwIfAborted();
+      const startupFailure = failure();
+      if (startupFailure) throw startupFailure;
       const exited = exitCode();
       if (exited !== undefined) throw new Error(`Local hub exited during startup with ${exited}`);
       try {
@@ -584,8 +573,8 @@ export class HubProcessManager {
         if (stat.mtimeMs >= spawnedAt) {
           return JSON.parse(fs.readFileSync(readyFile, "utf8")) as unknown;
         }
-      } catch {
-        // Not ready yet.
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_INTERVAL_MS));
     }
@@ -617,7 +606,8 @@ export class HubProcessManager {
     if (!current) throw new Error("No routed local workspace");
     const response = await postJson(
       serverAuthRouteUrl(`http://127.0.0.1:${current.gatewayPort}`, "refresh-shell"),
-      { deviceId: current.deviceId, refreshToken: current.refreshToken }
+      { deviceId: current.deviceId, refreshToken: current.refreshToken },
+      this.lifetime.signal
     );
     const shellToken = response["shellToken"];
     if (typeof shellToken !== "string" || shellToken.length === 0) {
@@ -630,67 +620,60 @@ export class HubProcessManager {
     return this.current?.gatewayPort ?? null;
   }
 
-  handleDisconnect(): void {
-    if (this.isStopping) return;
+  /** Reconnection joins readiness before issuing admission requests to the workspace. */
+  handleDisconnect(): Promise<void> {
+    if (this.isStopping) return Promise.resolve();
     this.ensureAlivePromise ??= this.ensureAlive().finally(() => {
       this.ensureAlivePromise = null;
     });
+    return this.ensureAlivePromise;
   }
 
   private async ensureAlive(): Promise<void> {
     const current = this.current;
     if (!current || this.isStopping) return;
-    const lease = this.liveLease();
-    const attached = lease ? await this.tryAttach(lease) : null;
-    if (attached?.record.serverBootId === current.hubServerBootId) return;
-    if (attached) {
-      const credential = await this.ensureDeviceCredential(attached);
-      const routed = await this.routeWorkspace(attached, credential);
-      if (this.isStopping) {
-        await this.discardReplacementHub(attached);
-        return;
-      }
-      this.current = routed;
-      this.currentHubPid = attached.record.pid;
-      return;
-    }
-    const now = Date.now();
-    this.restartTimestamps = this.restartTimestamps.filter((at) => now - at < 60_000);
-    if (this.restartTimestamps.length >= 5) {
-      this.config.onCrash(null);
-      return;
-    }
-    this.restartTimestamps.push(now);
     let target: HubProcessTarget | null = null;
     try {
       // The desktop session exposes the gateway port to panel and asset
       // consumers. Rebind the replacement hub to that same port so a successful
       // supervised restart is atomic for every consumer, not only RPC reconnects.
-      target = await this.spawnDetached(current.gatewayPort);
+      const owner = this.liveOwner();
+      target = owner ? await this.tryAttach(owner) : null;
+      // Only an absent ownership lock permits creating a replacement hub.
+      target ??= await this.spawnDetached(current.gatewayPort);
+      if (target.record.buildId !== this.config.buildId)
+        throw new Error(
+          "Hub recovery found a different build; refusing to replace a live owner automatically"
+        );
       const credential = await this.ensureDeviceCredential(target);
       const routed = await this.routeWorkspace(target, credential);
       if (this.isStopping) {
-        await this.discardReplacementHub(target);
+        if (!target.attached) await this.discardSpawnedHub(target);
         return;
       }
       this.current = routed;
       this.currentHubPid = target.record.pid;
     } catch (error) {
-      if (this.isStopping && target) await this.discardReplacementHub(target);
-      log.warn(`[supervise] hub restart failed: ${error instanceof Error ? error.message : error}`);
-      if (!this.isStopping) this.config.onCrash(null);
-    }
-  }
-
-  private async discardReplacementHub(target: HubProcessTarget): Promise<void> {
-    try {
-      await this.discardVerifiedHub(target);
-    } catch (error) {
-      log.error(
-        `[supervise] replacement hub termination deferred: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+      let failure: unknown = error;
+      if (target && !target.attached) {
+        try {
+          await this.discardSpawnedHub(target);
+        } catch (cleanupError) {
+          failure = new AggregateError(
+            [error, cleanupError],
+            "Hub recovery and replacement cleanup failed"
+          );
+        }
+      }
+      log.warn(
+        `[supervise] hub recovery failed: ${failure instanceof Error ? failure.message : failure}`
       );
+      if (!this.isStopping) {
+        const original = failure instanceof Error ? failure : new Error(String(failure));
+        this.config.onRecoveryFailure(original);
+        throw original;
+      }
+      if (failure !== error) throw failure;
     }
   }
 
@@ -705,23 +688,24 @@ export class HubProcessManager {
     await this.terminateVerifiedHub(target.record.pid);
     this.verifiedHubPids.delete(target.record.pid);
     if (this.currentHubPid === target.record.pid) this.currentHubPid = null;
-    const lease = this.config.centralData.getHubProcessLease();
-    if (lease?.pid === target.record.pid) {
-      this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
-    }
   }
 
   async stop(): Promise<void> {
-    await this.stopUntilGone();
+    await this.stopTree();
   }
 
   /**
    * Stop the verified detached hub once and return only after its complete
-   * owned process tree is gone. User-facing shutdown uses stopUntilGone when
-   * it must remain fail-closed across transient termination failures.
+   * owned process tree is gone. Failures retain the receipt and propagate to
+   * the caller; elapsed time never releases ownership.
    */
-  async stopTree(): Promise<ProcessTreeTerminationResult> {
+  beginShutdown(): void {
     this.isStopping = true;
+    this.lifetime.abort(new Error("Local hub session is shutting down"));
+  }
+
+  async stopTree(): Promise<ProcessTreeTerminationResult> {
+    this.beginShutdown();
     this.current = null;
     const recovery = this.ensureAlivePromise;
     if (recovery) {
@@ -733,13 +717,11 @@ export class HubProcessManager {
         );
       });
     }
-    // Keep the PID until termination is proven. A failed SIGKILL must be
-    // retryable even after the lease expires; clearing it here would turn a
-    // live owned hub into an untracked process.
-    const lease = this.config.centralData.getHubProcessLease();
-    const pids = new Set(this.verifiedHubPids);
+    // Keep each verified process receipt until termination is proven. A
+    // routing row belonging to a successor never grants us its lifetime.
+
+    const pids = new Set(this.verifiedHubPids.keys());
     if (this.currentHubPid !== null) pids.add(this.currentHubPid);
-    if (lease) pids.add(lease.pid);
     if (pids.size === 0) return { gone: true, escalated: false };
 
     let escalated = false;
@@ -747,57 +729,24 @@ export class HubProcessManager {
       if (!this.verifiedHubPids.has(pid)) {
         throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
       }
-      if (recordedPidIsHub(pid) === false) {
-        if (!pidAlive(pid)) {
-          this.verifiedHubPids.delete(pid);
-          if (this.currentHubPid === pid) this.currentHubPid = null;
-          continue;
-        }
-        throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
-      }
       const result = await this.terminateVerifiedHub(pid);
       escalated ||= result.escalated;
       this.verifiedHubPids.delete(pid);
       if (this.currentHubPid === pid) this.currentHubPid = null;
     }
     this.currentHubPid = null;
-    if (lease) this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
     return { gone: true, escalated };
-  }
-
-  /**
-   * Stop requested by the user. This deliberately has no failure exit: the
-   * caller must not be allowed to quit while an owned hub process tree is
-   * still alive. A transient signal/identity race is retried until the
-   * termination proof succeeds.
-   */
-  async stopUntilGone(): Promise<ProcessTreeTerminationResult> {
-    let attempt = 0;
-    for (;;) {
-      try {
-        return await this.stopTree();
-      } catch (error) {
-        attempt += 1;
-        log.error(
-          `[stop] local hub termination attempt ${attempt} failed; refusing to release it: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-        await new Promise((resolve) => setTimeout(resolve, STOP_RETRY_INTERVAL_MS));
-      }
-    }
   }
 
   private async terminateVerifiedHub(pid: number): Promise<ProcessTreeTerminationResult> {
     if (!this.verifiedHubPids.has(pid)) {
       throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
     }
-    if (recordedPidIsHub(pid) === false) {
-      throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
-    }
+    const identity = this.verifiedHubPids.get(pid);
     const result = await terminateOwnedProcessTree(pid, {
       termTimeoutMs: STOP_SIGTERM_TIMEOUT_MS,
       killTimeoutMs: STOP_SIGKILL_TIMEOUT_MS,
+      ...(identity ? { identity } : {}),
     });
     if (!result.gone) {
       throw new Error(result.detail ?? `Hub process tree ${pid} survived termination`);
@@ -806,41 +755,7 @@ export class HubProcessManager {
   }
 
   detach(): void {
-    this.isStopping = true;
+    this.beginShutdown();
     this.currentHubPid = null;
-  }
-
-  private async waitForExit(pid: number, alreadyRequested: boolean): Promise<void> {
-    if (!this.verifiedHubPids.has(pid)) {
-      throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
-    }
-    if (!pidAlive(pid)) return;
-    if (!alreadyRequested) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-        throw error;
-      }
-    }
-    const deadline = Date.now() + STOP_SIGTERM_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (!pidAlive(pid)) return;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-    const killDeadline = Date.now() + STOP_SIGKILL_TIMEOUT_MS;
-    while (Date.now() < killDeadline) {
-      if (!pidAlive(pid)) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (pidAlive(pid)) {
-      throw new Error(`Hub process ${pid} did not exit after SIGKILL`);
-    }
-    this.verifiedHubPids.delete(pid);
   }
 }
