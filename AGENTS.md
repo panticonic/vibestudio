@@ -63,6 +63,21 @@ inspector/page connection remains live. Instance startup is a blocker only when
 isolated bootstrap itself fails after its supervisor log has been inspected and
 the infrastructure defect cannot be repaired within the task.
 
+Profiling owns generated data as well as processes. Before allocating large
+benchmark caches, template checkpoints, or review worktrees, inspect the backing
+filesystem (for example, `findmnt -T PATH` on Linux). Use a private disk-backed
+directory; `/tmp`, `/run/user`, and `/dev/shm` may consume RAM. Separate retained
+profiles, logs, and receipts from regenerable scratch data. The operation that
+creates an isolated derived/npm cache owns its removal: stop and join its exact
+workloads first, then remove that cache in a `finally`-equivalent path before
+starting another cold sample. Keep a cache only through its immediate warm
+comparison, then retire it. Remove owned review worktrees after integration.
+Stopping an instance does not remove caller-supplied cache paths outside its
+root. Never delete inherited or shared caches to satisfy this rule; their owner
+must manage them. Cleanup is complete only when both owned processes and owned
+scratch paths are retired. Retain bounded failure evidence on disk, and repair
+any failed retirement before continuing the investigation.
+
 ## External template verification
 
 Configured Base, Personal, System, and catalog-template checkouts are source inputs,
