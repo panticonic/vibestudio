@@ -19,21 +19,46 @@ import { relationship, requirementForPrincipals } from "./authorization.js";
 
 const methods = defineServiceMethods({
   ping: {
-    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.literal("pong") } as const,
+    website: { kind: "eligible", rationale: "Explicit receiver policy for this test fixture." },
+    args: z.tuple([]),
+    returns: z.literal("pong"),
+  } as const,
   echo: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([z.string(), z.number().optional()]) },
+    website: {
+      kind: "eligible",
+      rationale: "Explicit receiver policy for this test fixture.",
+    } as const,
+    args: z.tuple([z.string(), z.number().optional()]),
+  },
   "units.list": {
-    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.array(z.object({ name: z.string() })) } as const,
+    website: { kind: "eligible", rationale: "Explicit receiver policy for this test fixture." },
+    args: z.tuple([]),
+    returns: z.array(z.object({ name: z.string() })),
+  } as const,
   "units.logs": {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Explicit receiver policy for this test fixture.",
+    } as const,
     args: z.tuple([z.string(), z.object({ limit: z.number() }).optional()]),
   },
   "hostTargets.selection.get": {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([z.string()]) },
+    website: {
+      kind: "eligible",
+      rationale: "Explicit receiver policy for this test fixture.",
+    } as const,
+    args: z.tuple([z.string()]),
+  },
   voidResult: {
-    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.void() } as const,
+    website: { kind: "eligible", rationale: "Explicit receiver policy for this test fixture." },
+    args: z.tuple([]),
+    returns: z.void(),
+  } as const,
   nullableResult: {
-    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.string().nullable() } as const,
+    website: { kind: "eligible", rationale: "Explicit receiver policy for this test fixture." },
+    args: z.tuple([]),
+    returns: z.string().nullable(),
+  } as const,
 });
 
 describe("createTypedServiceClient", () => {
@@ -77,10 +102,50 @@ describe("createTypedServiceClient", () => {
     expect((error as Error & { cause?: unknown }).cause).toBeInstanceOf(z.ZodError);
   });
 
+  it("preserves client validation details in the same wire payload as receiver validation", async () => {
+    const call = vi.fn(async () => null);
+    const client = createTypedServiceClient("demo", methods, call);
+    const failure = await client.echo({ digest: "private-value" } as never).catch((error) => error);
+    if (!(failure instanceof Error)) throw new Error("Expected argument validation failure");
+    expect(failure.message).toContain("invalid argument [0] — expected string, received object");
+    expect((failure as Error & { errorData: unknown }).errorData).toMatchObject({
+      code: "invalid-arguments",
+      method: "demo.echo",
+      issues: [{ code: "invalid_type", path: [0], expected: "string", received: "object" }],
+    });
+    expect(failure.message).not.toContain("private-value");
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("propagates an exception thrown by a schema transform without relabelling it", async () => {
+    const cause = new Error("transform storage unavailable");
+    const client = createTypedServiceClient(
+      "demo",
+      defineServiceMethods({
+        probe: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([
+            z.string().transform((): string => {
+              throw cause;
+            }),
+          ]),
+        },
+      }),
+      async () => null
+    );
+    await expect(client.probe("value")).rejects.toBe(cause);
+  });
+
   it("renders object request fields in outbound schema errors", async () => {
     const objectMethods = defineServiceMethods({
       inspect: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
         args: z.tuple([
           z.object({
             state: z.object({ eventId: z.string() }),
@@ -115,9 +180,19 @@ describe("createTypedServiceClient", () => {
   it("rejects method names that collide with a group prefix", () => {
     const colliding = defineServiceMethods({
       "units.list": {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]) },
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
+        args: z.tuple([]),
+      },
       units: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]) },
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
+        args: z.tuple([]),
+      },
     });
     expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(/collides/);
   });
@@ -287,23 +362,30 @@ describe("describeArgsValidationError (the one argument-validation formatter)", 
   });
 
   it("proves optionality across overload unions only when every option agrees", () => {
-    const overloaded = z.union([
-      z.tuple([z.string()]),
-      z.tuple([z.string(), z.number()]),
-    ]);
+    const overloaded = z.union([z.tuple([z.string()]), z.tuple([z.string(), z.number()])]);
     expect(argsPositionProvablyOptional(overloaded, 1)).toBe(false);
-    const agreeing = z.union([
-      z.tuple([z.string()]),
-      z.tuple([z.string(), z.number().optional()]),
-    ]);
+    const agreeing = z.union([z.tuple([z.string()]), z.tuple([z.string(), z.number().optional()])]);
     expect(argsPositionProvablyOptional(agreeing, 1)).toBe(true);
     expect(maxArgsArity(overloaded)).toBe(2);
     expect(maxArgsArity(z.object({}))).toBe(null);
   });
 });
 
-
 it("shows each supported positional call shape for union arguments", async () => {
-  const client = createTypedServiceClient("git", { status: { website: { kind: "closed", reason: "test" }, args: z.union([z.tuple([z.array(z.string())]), z.tuple([z.array(z.string()), z.object({ refresh: z.boolean() })])]) } }, vi.fn());
-  await expect((client.status as (...args: unknown[]) => Promise<unknown>)()).rejects.toThrow("git.status(arg1) or git.status(arg1, { refresh })");
+  const client = createTypedServiceClient(
+    "git",
+    {
+      status: {
+        website: { kind: "closed", reason: "test" },
+        args: z.union([
+          z.tuple([z.array(z.string())]),
+          z.tuple([z.array(z.string()), z.object({ refresh: z.boolean() })]),
+        ]),
+      },
+    },
+    vi.fn()
+  );
+  await expect((client.status as (...args: unknown[]) => Promise<unknown>)()).rejects.toThrow(
+    "git.status(arg1) or git.status(arg1, { refresh })"
+  );
 });

@@ -349,7 +349,13 @@ export class CdpBridge {
    * These are not CDP commands; they drive Electron-hosted operations such as
    * opening DevTools or rebuilding a panel on the host that owns the lease.
    */
-  async sendHostCommand(targetId: string, action: string, args: unknown[] = []): Promise<unknown> {
+  async sendHostCommand(
+    targetId: string,
+    action: string,
+    args: unknown[] = [],
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    signal?.throwIfAborted();
     const provider = this.providerForTarget(targetId);
     if (!provider) {
       throw new Error("CDP provider not connected");
@@ -362,9 +368,28 @@ export class CdpBridge {
     const requestId = String(this.nextRequestId++);
 
     return new Promise((resolve, reject) => {
+      let cancelled = false;
+      const cancel = () => {
+        cancelled = true;
+        try {
+          provider.send(JSON.stringify({ type: "host:cancel", requestId, targetId }));
+        } catch (error) {
+          this.pendingNavCommands.delete(requestId);
+          finishReject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      const cleanup = () => signal?.removeEventListener("abort", cancel);
+      const finishReject = (error: Error) => {
+        cleanup();
+        reject(cancelled && signal?.reason instanceof Error ? signal.reason : error);
+      };
       this.pendingNavCommands.set(requestId, {
-        resolve,
-        reject,
+        resolve: (value) => {
+          cleanup();
+          if (cancelled) reject(signal?.reason ?? new Error("Host command cancelled"));
+          else resolve(value);
+        },
+        reject: finishReject,
         targetId,
         providerHostConnectionId: this.targetRegistry.get(targetId)?.hostConnectionId,
         resilientToTargetClose: isModelAwareHostCommand(action),
@@ -380,9 +405,11 @@ export class CdpBridge {
             args,
           })
         );
+        signal?.addEventListener("abort", cancel, { once: true });
+        if (signal?.aborted) cancel();
       } catch (err) {
         this.pendingNavCommands.delete(requestId);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        finishReject(err instanceof Error ? err : new Error(String(err)));
       }
     });
   }
@@ -495,21 +522,27 @@ export class CdpBridge {
     this.providers.set(hostConnectionId, ws);
     log.info(`CDP host provider connected: ${hostConnectionId}`);
 
+    const failProvider = (error: unknown) => {
+      const reason = `CDP host provider protocol failure: ${error instanceof Error ? error.message : String(error)}`;
+      log.warn(reason);
+      if (this.providers.get(hostConnectionId) === ws) this.flushProvider(hostConnectionId, reason);
+      ws.close(1002, "CDP host provider protocol failure");
+    };
     let providerMessageQueue = Promise.resolve();
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(providerMessageText(data)) as ProviderBridgeMessage;
+        if (!msg || typeof msg !== "object" || typeof msg.type !== "string")
+          throw new Error("Invalid CDP provider envelope");
         providerMessageQueue = providerMessageQueue
           .then(() => this.handleProviderMessage(msg, ws, hostConnectionId))
-          .catch((err: unknown) => {
+          .catch((error: unknown) => {
             log.warn(
-              `Failed to handle host provider message: ${
-                err instanceof Error ? err.message : String(err)
-              }`
+              `Failed to handle host provider message: ${error instanceof Error ? error.message : String(error)}`
             );
           });
       } catch (err) {
-        log.warn(`Failed to parse host provider message: ${err}`);
+        failProvider(err);
       }
     });
 
@@ -834,6 +867,9 @@ export class CdpBridge {
           sessionId?: string;
         };
 
+        if (!msg || !Number.isSafeInteger(msg.id) || typeof msg.method !== "string")
+          throw new Error("Invalid CDP client command");
+
         const provider = this.providerForTarget(targetId);
         if (!provider) {
           this.sendErrorToClient(ws, msg.id, "CDP provider not connected", msg.sessionId);
@@ -869,6 +905,7 @@ export class CdpBridge {
         }
       } catch (err) {
         log.warn(`Failed to parse client message: ${err}`);
+        ws.close(1002, "Invalid CDP client message");
       }
     });
 
@@ -1089,6 +1126,9 @@ export class CdpBridge {
       if (pending.targetId !== targetId) continue;
       if (pending.resilientToTargetClose && reason === CDP_TARGET_LIFECYCLE_REASONS.closed)
         continue;
+      const provider = this.providerForTarget(targetId);
+      if (provider?.readyState === WebSocket.OPEN)
+        provider.send(JSON.stringify({ type: "host:cancel", requestId, targetId }));
       pending.reject(new Error(reason));
       this.pendingNavCommands.delete(requestId);
     }

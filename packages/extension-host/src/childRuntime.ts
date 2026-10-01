@@ -166,7 +166,10 @@ function createExtensionsClient(): ExtensionsClient {
       options?: { signal?: AbortSignal }
     ) => getRuntimeBridge().stream("main", method, args, options),
     on: (eventName: string, listener: (event: import("@vibestudio/rpc").RpcEventContext) => void) =>
-      getRuntimeBridge().on(eventName, listener, {"kind":"closed","reason":"This listener consumes host or implementation lifecycle events."}),
+      getRuntimeBridge().on(eventName, listener, {
+        kind: "closed",
+        reason: "This listener consumes host or implementation lifecycle events.",
+      }),
   };
   const events = new EventsClient(proxyRpc);
   const eventRefcounts = new Map<string, number>();
@@ -434,7 +437,10 @@ function createContext() {
         options?: { signal?: AbortSignal }
       ) => getRuntimeBridge().stream(targetId, method, args, options),
       on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
-        getRuntimeBridge().on(eventName, cb, {"kind":"closed","reason":"This listener consumes host or implementation lifecycle events."}),
+        getRuntimeBridge().on(eventName, cb, {
+          kind: "closed",
+          reason: "This listener consumes host or implementation lifecycle events.",
+        }),
     },
     workers: {
       listServices: () => rpcCall("workers.listServices", []),
@@ -564,6 +570,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
     callerKind: "extension",
     transport,
     authorityAcquisition: "wait",
+    invocationSignal: () => invocationStore.getStore()?.signal,
   });
   let accept!: () => void;
   let rejectAuth!: (error: Error) => void;
@@ -821,149 +828,193 @@ async function main(): Promise<void> {
   const fetchHandler =
     typeof defaultExport?.fetch === "function" ? defaultExport.fetch.bind(defaultExport) : null;
 
-  runtimeBridge.expose("extension.invoke", async (req) => {
-    assertHostControlCaller(req, "extension.invoke");
-    const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-    return invocationStore.run({ invocation, signal: req.signal }, async () => {
-      const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
-        ? apiObject[method]
-        : undefined;
-      if (typeof fn !== "function") {
-        const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
-        err.code = "ENOMETHOD";
-        throw err;
-      }
-      try {
-        return await fn(...args);
-      } catch (err) {
-        throw extensionRuntimeError("invoke", err, {
-          extension: extensionName,
-          method,
-          caller: invocation.caller.callerId,
-        });
-      }
-    });
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
-
-  runtimeBridge.expose("extension.invokeProvider", async (req) => {
-    assertHostControlCaller(req, "extension.invokeProvider");
-    const [provider, method, args, invocation] = req.args as [
-      string,
-      string,
-      unknown[],
-      ExtensionInvocation,
-    ];
-    return invocationStore.run({ invocation, signal: req.signal }, async () => {
-      const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
-        ? providerApis[provider]
-        : undefined;
-      const fn =
-        providerApi && typeof providerApi === "object"
-          ? (providerApi as Record<string, unknown>)[method]
+  runtimeBridge.expose(
+    "extension.invoke",
+    async (req) => {
+      assertHostControlCaller(req, "extension.invoke");
+      const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
+      return invocationStore.run({ invocation, signal: req.signal }, async () => {
+        const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
+          ? apiObject[method]
           : undefined;
-      if (typeof fn !== "function") {
-        const err = new Error(
-          `Extension provider method not found: providers.${provider}.${method}`
-        ) as NodeJS.ErrnoException;
-        err.code = "ENOMETHOD";
-        throw err;
-      }
-      try {
-        return await fn(...args);
-      } catch (err) {
-        throw extensionRuntimeError("invoke", err, {
-          extension: extensionName,
-          method: `providers.${provider}.${method}`,
-          caller: invocation.caller.callerId,
-        });
-      }
-    });
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
-
-  runtimeBridge.exposeStreaming("extension.invokeStream", async (req, sink) => {
-    assertHostControlCaller(req, "extension.invokeStream");
-    const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-    await invocationStore.run({ invocation, signal: req.signal }, async () => {
-      const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
-        ? apiObject[method]
-        : undefined;
-      if (typeof fn !== "function") {
-        const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
-        err.code = "ENOMETHOD";
-        throw err;
-      }
-      const result = await fn(...methodArgs);
-      if (result instanceof Response) {
-        await streamResponse(result, sink, req.signal);
-        return;
-      }
-      if (result instanceof ReadableStream) {
-        await streamResponse(new Response(result), sink, req.signal);
-        return;
-      }
-      throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
-    });
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
-
-  runtimeBridge.expose("extension.fetchResponseBodyChunk", async (req) => {
-    assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
-    const [streamId] = req.args as [string];
-    return readNextResponseBodyChunk(streamId);
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
-
-  runtimeBridge.expose("extension.fetchResponseBodyClose", async (req) => {
-    assertHostControlCaller(req, "extension.fetchResponseBodyClose");
-    const [streamId] = req.args as [string];
-    await closeResponseBodyStream(streamId);
-    return null;
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
-
-  runtimeBridge.expose("extension.fetch", async (req) => {
-    assertHostControlCaller(req, "extension.fetch");
-    const [requestEnvelope, invocation] = req.args as [
-      { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
-      ExtensionInvocation,
-    ];
-    if (!fetchHandler) {
-      const err = new Error(`Extension has no fetch handler: ${ctx.name}`) as NodeJS.ErrnoException;
-      err.code = "ENOFETCH";
-      throw err;
-    }
-    return invocationStore.run({ invocation, signal: req.signal }, async () => {
-      const body = await requestBodyFromEnvelope(requestEnvelope.body);
-      const request = new Request(requestEnvelope.url, {
-        method: requestEnvelope.method,
-        headers: requestEnvelope.headers,
-        ...(body ? { body, duplex: "half" } : {}),
-      } as RequestInit & { duplex?: "half" });
-      const waitUntil: Promise<unknown>[] = [];
-      const fetchCtx = {
-        ...ctx,
-        waitUntil(promise: Promise<unknown>) {
-          waitUntil.push(promise);
-        },
-      };
-      try {
-        let response: Response;
+        if (typeof fn !== "function") {
+          const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
+          err.code = "ENOMETHOD";
+          throw err;
+        }
         try {
-          response = await fetchHandler(request, fetchCtx);
+          return await fn(...args);
         } catch (err) {
-          throw extensionRuntimeError("fetch", err, {
+          throw extensionRuntimeError("invoke", err, {
             extension: extensionName,
-            method: requestEnvelope.method,
-            url: requestEnvelope.url,
+            method,
+            caller: invocation.caller.callerId,
           });
         }
-        return {
-          status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          body: responseBodyToEnvelope(response),
-        };
-      } finally {
-        settleWaitUntil(waitUntil);
+      });
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+
+  runtimeBridge.expose(
+    "extension.invokeProvider",
+    async (req) => {
+      assertHostControlCaller(req, "extension.invokeProvider");
+      const [provider, method, args, invocation] = req.args as [
+        string,
+        string,
+        unknown[],
+        ExtensionInvocation,
+      ];
+      return invocationStore.run({ invocation, signal: req.signal }, async () => {
+        const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
+          ? providerApis[provider]
+          : undefined;
+        const fn =
+          providerApi && typeof providerApi === "object"
+            ? (providerApi as Record<string, unknown>)[method]
+            : undefined;
+        if (typeof fn !== "function") {
+          const err = new Error(
+            `Extension provider method not found: providers.${provider}.${method}`
+          ) as NodeJS.ErrnoException;
+          err.code = "ENOMETHOD";
+          throw err;
+        }
+        try {
+          return await fn(...args);
+        } catch (err) {
+          throw extensionRuntimeError("invoke", err, {
+            extension: extensionName,
+            method: `providers.${provider}.${method}`,
+            caller: invocation.caller.callerId,
+          });
+        }
+      });
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+
+  runtimeBridge.exposeStreaming(
+    "extension.invokeStream",
+    async (req, sink) => {
+      assertHostControlCaller(req, "extension.invokeStream");
+      const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
+      await invocationStore.run({ invocation, signal: req.signal }, async () => {
+        const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
+          ? apiObject[method]
+          : undefined;
+        if (typeof fn !== "function") {
+          const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
+          err.code = "ENOMETHOD";
+          throw err;
+        }
+        const result = await fn(...methodArgs);
+        if (result instanceof Response) {
+          await streamResponse(result, sink, req.signal);
+          return;
+        }
+        if (result instanceof ReadableStream) {
+          await streamResponse(new Response(result), sink, req.signal);
+          return;
+        }
+        throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
+      });
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+
+  runtimeBridge.expose(
+    "extension.fetchResponseBodyChunk",
+    async (req) => {
+      assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
+      const [streamId] = req.args as [string];
+      return readNextResponseBodyChunk(streamId);
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+
+  runtimeBridge.expose(
+    "extension.fetchResponseBodyClose",
+    async (req) => {
+      assertHostControlCaller(req, "extension.fetchResponseBodyClose");
+      const [streamId] = req.args as [string];
+      await closeResponseBodyStream(streamId);
+      return null;
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
+
+  runtimeBridge.expose(
+    "extension.fetch",
+    async (req) => {
+      assertHostControlCaller(req, "extension.fetch");
+      const [requestEnvelope, invocation] = req.args as [
+        { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
+        ExtensionInvocation,
+      ];
+      if (!fetchHandler) {
+        const err = new Error(
+          `Extension has no fetch handler: ${ctx.name}`
+        ) as NodeJS.ErrnoException;
+        err.code = "ENOFETCH";
+        throw err;
       }
-    });
-  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
+      return invocationStore.run({ invocation, signal: req.signal }, async () => {
+        const body = await requestBodyFromEnvelope(requestEnvelope.body);
+        const request = new Request(requestEnvelope.url, {
+          method: requestEnvelope.method,
+          headers: requestEnvelope.headers,
+          ...(body ? { body, duplex: "half" } : {}),
+        } as RequestInit & { duplex?: "half" });
+        const waitUntil: Promise<unknown>[] = [];
+        const fetchCtx = {
+          ...ctx,
+          waitUntil(promise: Promise<unknown>) {
+            waitUntil.push(promise);
+          },
+        };
+        try {
+          let response: Response;
+          try {
+            response = await fetchHandler(request, fetchCtx);
+          } catch (err) {
+            throw extensionRuntimeError("fetch", err, {
+              extension: extensionName,
+              method: requestEnvelope.method,
+              url: requestEnvelope.url,
+            });
+          }
+          return {
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries()),
+            body: responseBodyToEnvelope(response),
+          };
+        } finally {
+          settleWaitUntil(waitUntil);
+        }
+      });
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
+    }
+  );
 
   const disposeSubscriptions = () => {
     while (ctx.subscriptions.length) {

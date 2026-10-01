@@ -360,6 +360,8 @@ export function createDesktopWorkspaceRuntime(deps: {
     return new WorkspaceNativeViews(workspaceId, window.viewManager);
   };
   const cdpHost = {
+    emitBrowserActivity: (panelId: string, activity: "popup" | "download", payload: unknown) =>
+      cdp?.emitBrowserActivity(panelId, activity, payload),
     registerTarget: (id: string, contents: number) => cdp?.registerTarget(id, contents),
     unregisterTarget: (id: string, contentsId: number) => cdp?.unregisterTarget(id, contentsId),
     cleanupPanelAccess: (id: string) => cdp?.cleanupPanelAccess(id),
@@ -758,6 +760,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           downloadsDirectory: app.getPath("downloads"),
           eventService,
           getViewManager: nativeViews,
+          onActivity: (panelId, payload) => cdp?.emitBrowserActivity(panelId, "download", payload),
           requestSiteCapability: (contents, capability) =>
             browserPermissions.requestSiteCapability(contents, capability),
         });
@@ -825,7 +828,13 @@ export function createDesktopWorkspaceRuntime(deps: {
           getViewManager: () => nativeViews(),
           diagnosticsStore: new RuntimeDiagnosticsStore({ statePath: connection.statePath }),
           forwardDiagnostic,
-          onHostCommand: async (panelId, action) => {
+          onHostCommand: async (panelId, action, args, signal) => {
+            if (action === "browserOperation") {
+              const request =
+                args[0] as import("@vibestudio/shared/panel/browserAutomation").BrowserAutomationRequest;
+              if (!downloads) throw new Error("Download provider unavailable");
+              return downloads.automation(panelId, request, signal);
+            }
             if (action === "rebuildPanel") return controller.orchestrator.rebuildPanel(panelId);
             if (action === "reloadPanel") return controller.orchestrator.reloadPanel(panelId);
             if (action === "panelObservation") {

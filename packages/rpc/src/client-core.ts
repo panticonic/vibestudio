@@ -954,6 +954,18 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     }
   }
 
+  function invocationOptions<T extends { signal?: AbortSignal }>(options?: T): T | undefined {
+    const signal = config.invocationSignal?.();
+    if (!signal) return options;
+    return {
+      ...options,
+      signal:
+        options?.signal && options.signal !== signal
+          ? AbortSignal.any([signal, options.signal])
+          : signal,
+    } as T;
+  }
+
   function callOnceWithProvenance<T = unknown>(
     provenance: AuthenticatedCaller[],
     targetId: string,
@@ -1035,6 +1047,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<T> {
+    options = invocationOptions(options);
     for (;;) {
       try {
         return await callOnceWithProvenance<T>(provenance, targetId, method, args, options);
@@ -1087,6 +1100,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    options = invocationOptions(options);
     if (retired) return Promise.reject(retiredError());
     // Connectionless transports (HTTP) physically stream the response body, so
     // delegate to their first-class `stream` hook. Socket transports omit it
@@ -1167,6 +1181,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ) {
+    options = invocationOptions(options);
     if (retired) return Promise.reject(retiredError());
     // Prefer a transport-native raw stream (notably React Native Iroh, where
     // whatwg-fetch Response cannot consume a ReadableStream body). Browser and

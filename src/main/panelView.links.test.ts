@@ -97,6 +97,7 @@ function createHarness(
   const openExternal = vi.fn(async () => undefined);
   const openShellSurface = vi.fn();
   const openPanelLocation = vi.fn();
+  const browserActivity = vi.fn();
   const panelView = new PanelView({
     openPanelLocation,
     nativeStorageScope: "test-host-device",
@@ -108,6 +109,7 @@ function createHarness(
       externalHost: options.externalHost ?? "127.0.0.1",
     },
     cdpHost: {
+      emitBrowserActivity: browserActivity,
       registerTarget: vi.fn(),
       unregisterTarget: vi.fn(),
       cleanupPanelAccess: vi.fn(),
@@ -133,6 +135,7 @@ function createHarness(
     openShellSurface,
     ...wc,
     openPanelLocation,
+    browserActivity,
   };
 }
 
@@ -167,11 +170,26 @@ describe("PanelView plain panel links", () => {
       expect(event.preventDefault).toHaveBeenCalledOnce();
       expect(openPanelLocation).toHaveBeenLastCalledWith({ ...location, disposition: "root" });
       windowOpen({ url });
-      expect(openPanelLocation).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(openPanelLocation).toHaveBeenCalledTimes(2));
       expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
       expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
     }
   );
+  it("settles popup observation when a link opens shell UI instead of a panel", async () => {
+    const { panelId, panelView, windowOpen, browserActivity } = createHarness();
+    await panelView.createViewForPanel(
+      panelId,
+      "http://127.0.0.1:1234/panels/chat/",
+      "ctx-current"
+    );
+    windowOpen({ url: "vibestudio://surface?v=1&kind=workspace-chooser" });
+    await vi.waitFor(() =>
+      expect(browserActivity).toHaveBeenCalledWith(panelId, "popup", {
+        error: "Link opened without creating a browser panel",
+      })
+    );
+  });
+
   it("opens shell surface links from installed panels without navigating their document", async () => {
     const { panelId, panelView, webContents, windowOpen, openShellSurface, panelOrchestrator } =
       createHarness();
@@ -186,7 +204,7 @@ describe("PanelView plain panel links", () => {
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(openShellSurface).toHaveBeenLastCalledWith({ kind: "workspace-chooser" });
     expect(windowOpen({ url })).toEqual({ action: "deny" });
-    expect(openShellSurface).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(openShellSurface).toHaveBeenCalledTimes(2));
     expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
     expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
   });
@@ -207,7 +225,7 @@ describe("PanelView plain panel links", () => {
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(openShellSurface).toHaveBeenLastCalledWith({ kind: "workspace-chooser", sourceUrl });
     expect(windowOpen({ url })).toEqual({ action: "deny" });
-    expect(openShellSurface).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(openShellSurface).toHaveBeenCalledTimes(2));
     const ordinary = { preventDefault: vi.fn() };
     webContents.emit("will-navigate", ordinary, "https://example.com/next");
     expect(ordinary.preventDefault).not.toHaveBeenCalled();
@@ -638,10 +656,12 @@ describe("PanelView plain panel links", () => {
 
     expect(openExternal).not.toHaveBeenCalled();
     expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
-    expect(sendPanelEvent).toHaveBeenCalledWith(
-      panelId,
-      "runtime:child-creation-error",
-      expect.objectContaining({ url: "file:///etc/passwd" })
+    await vi.waitFor(() =>
+      expect(sendPanelEvent).toHaveBeenCalledWith(
+        panelId,
+        "runtime:child-creation-error",
+        expect.objectContaining({ url: "file:///etc/passwd" })
+      )
     );
   });
 

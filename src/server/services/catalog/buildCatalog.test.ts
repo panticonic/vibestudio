@@ -371,6 +371,30 @@ describe("buildCatalog", () => {
     });
   });
 
+  it("projects canonical browser client signatures and request types", () => {
+    const projected = buildCatalog({
+      definitions: [],
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker",
+          exports: { browserData: workerRuntimeSurface.exports["browserData"]! },
+        },
+      },
+    });
+    expect(byId(projected, "runtime:workerRuntime.browserData.openTabsAsPanels")).toMatchObject({
+      signature:
+        "browserData.openTabsAsPanels(request: OpenTabsAsPanelsRequest): Promise<OpenTabsAsPanelsResult>",
+      argumentNames: ["request"],
+      description: expect.stringContaining("selection: string[]"),
+    });
+    expect(byId(projected, "runtime:workerRuntime.browserData.startSensitiveImport")).toMatchObject(
+      {
+        description: expect.stringContaining("operationId: string"),
+      }
+    );
+  });
+
   it("projects generated runtime method schemas without importing userland code", () => {
     const projected = buildCatalog({
       definitions: [],

@@ -1159,7 +1159,7 @@ export class RpcServer {
       authorizingCaller: VerifiedCaller | null;
     } | null
   ): VerifiedCaller {
-    const attributed = this.callerWithParentTask(caller, parent?.authorizingCaller);
+    const attributed = this.callerWithParentInvocation(caller, parent?.authorizingCaller);
     if (!parent || parent.requested === null || !attributed.code) return attributed;
     return {
       ...attributed,
@@ -1170,10 +1170,10 @@ export class RpcServer {
     };
   }
 
-  /** Carry task membership through a verified, live invocation, never onto the
-   * shared runtime or connection. The deputy retains its own code, manifest,
-   * and execution admission; the parent's task supplies only task-scoped grants. */
-  private callerWithParentTask(
+  /** Carry task membership and sealed test policy through a verified live
+   * invocation, never onto the shared runtime or connection. The deputy keeps
+   * its own code, manifest, and execution admission. */
+  private callerWithParentInvocation(
     caller: VerifiedCaller,
     parent: VerifiedCaller | null | undefined
   ): VerifiedCaller {
@@ -1181,7 +1181,15 @@ export class RpcServer {
       caller.executionSession?.taskAuthority ??
       parent?.executionSession?.taskAuthority ??
       parent?.taskAuthority;
-    return taskAuthority ? { ...caller, taskAuthority } : caller;
+    const testPolicy = refineTestPolicy(
+      caller.testPolicy ?? caller.executionSession?.testPolicy,
+      parent?.testPolicy ?? parent?.executionSession?.testPolicy
+    );
+    return {
+      ...caller,
+      ...(taskAuthority ? { taskAuthority } : {}),
+      ...(testPolicy ? { testPolicy } : {}),
+    };
   }
 
   private beginAuthorityParent(
@@ -1465,7 +1473,7 @@ export class RpcServer {
     causal: ResolvedCausalInvocation | undefined
   ): VerifiedCaller {
     const parent = this.resolveExtensionParentCaller(caller, message);
-    caller = this.callerWithParentTask(caller, parent?.authorizingCaller);
+    caller = this.callerWithParentInvocation(caller, parent?.authorizingCaller);
     // An extension remains the executing/code principal, while the active
     // host-retained invocation supplies the human on whose behalf its nested
     // service effects run. This is the direct-service counterpart of the

@@ -1,3 +1,4 @@
+import type { BrowserPopup } from "@vibestudio/shared/panel/browserAutomation";
 import { scopedNativePartition } from "./nativeStorageScope.js";
 /**
  * PanelView — Electron-only view management service.
@@ -73,6 +74,7 @@ interface CdpHostLike {
   registerTarget(panelId: string, contentsId: number): void;
   unregisterTarget(panelId: string, contentsId: number): void;
   cleanupPanelAccess(panelId: string): void;
+  emitBrowserActivity?(panelId: string, activity: "popup" | "download", payload: unknown): void;
 }
 
 interface PanelOrchestratorLike {
@@ -992,36 +994,42 @@ export class PanelView implements PanelViewLike {
       requirePopupPermission: boolean;
     }
   ): void {
-    if (this.handleShellSurfaceLink(panelId, url)) return;
     const parsed =
       options.translateManagedLinks || tryParsePanelLocationLink(url)
         ? this.parseManagedPanelUrl(url)
         : null;
-    if (parsed) {
-      void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
-        this.handlePanelLinkError(panelId, err, url)
-      );
-      return;
-    }
     const policy = classifyPanelUrl(url);
-    if (policy.disposition !== "browser-panel" && policy.disposition !== "external") {
-      this.handlePanelLinkError(
-        panelId,
-        new Error(policy.reason ?? "This link type is not supported"),
-        url
-      );
-      return;
-    }
-    const open = (): Promise<void> =>
-      policy.disposition === "browser-panel"
-        ? this.openBrowserLink(panelId, url, options.disposition)
-        : this.openExternalLink(url);
+    const open = async (): Promise<BrowserPopup | undefined> => {
+      if (this.handleShellSurfaceLink(panelId, url)) return;
+      if (parsed) return this.handleManagedLink(panelId, parsed, url, "child");
+      if (policy.disposition === "browser-panel") {
+        return this.openBrowserLink(panelId, url, options.disposition);
+      }
+      if (policy.disposition === "external") {
+        await this.openExternalLink(url);
+        return;
+      }
+      throw new Error(policy.reason ?? "This link type is not supported");
+    };
     const permitted = options.requirePopupPermission
       ? this.allowPopup(panelId, contents)
       : Promise.resolve(true);
     void permitted
-      .then((allowed) => (allowed ? open() : undefined))
-      .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
+      .then(async (allowed) => {
+        if (!allowed) throw new Error("Popup permission denied");
+        const popup = await open();
+        if (options.requirePopupPermission && !popup)
+          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
+            error: "Link opened without creating a browser panel",
+          });
+      })
+      .catch((err: unknown) => {
+        if (options.requirePopupPermission)
+          this.cdpHost.emitBrowserActivity?.(panelId, "popup", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        this.handlePanelLinkError(panelId, err, url);
+      });
   }
 
   private setupLinkInterception(
@@ -1192,7 +1200,7 @@ export class PanelView implements PanelViewLike {
     parsed: ParsedPanelUrl,
     url: string,
     disposition: Exclude<PanelDisposition, "current">
-  ): Promise<void> {
+  ): Promise<BrowserPopup> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const result = await this.panelOrchestrator.createPanel(
       sourceViewId,
@@ -1205,6 +1213,10 @@ export class PanelView implements PanelViewLike {
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+    this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
+      popup: { panelId: result.id, url },
+    });
+    return { panelId: result.id, url };
   }
 
   private async handleManagedLink(
@@ -1212,7 +1224,7 @@ export class PanelView implements PanelViewLike {
     parsed: ParsedPanelUrl,
     url: string,
     fallbackDisposition: PanelDisposition
-  ): Promise<void> {
+  ): Promise<BrowserPopup | undefined> {
     const location = tryParsePanelLocationLink(url);
     if (location?.workspace !== undefined) {
       // The destination owns its tree. Never carry a source panel or context
@@ -1226,7 +1238,7 @@ export class PanelView implements PanelViewLike {
       await this.navigateManagedLink(sourceViewId, parsed, url);
       return;
     }
-    await this.openManagedLink(
+    return this.openManagedLink(
       sourceViewId,
       parsed,
       url,
@@ -1238,7 +1250,7 @@ export class PanelView implements PanelViewLike {
     sourceViewId: string,
     url: string,
     disposition: Electron.HandlerDetails["disposition"] = "default"
-  ): Promise<void> {
+  ): Promise<BrowserPopup> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const background = disposition === "background-tab";
     const result = await this.panelOrchestrator.createBrowserUrlPanel(
@@ -1248,6 +1260,10 @@ export class PanelView implements PanelViewLike {
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+    this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
+      popup: { panelId: result.id, url },
+    });
+    return { panelId: result.id, url };
   }
 
   private async navigateManagedLink(

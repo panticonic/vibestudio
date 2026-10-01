@@ -1,3 +1,4 @@
+import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserAutomation";
 import { z } from "zod";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -115,6 +116,11 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     requesterEntityId: string,
     options?: PanelConsoleHistoryOptions
   ): Promise<PanelConsoleHistoryResult>;
+  browserOperation?(
+    panelId: string,
+    request: BrowserAutomationRequest,
+    signal?: AbortSignal
+  ): Promise<unknown>;
   hostProvider?: {
     open(sessionId: string, hostConnectionId: string, caller: PanelCdpHostProviderCaller): Response;
     send(sessionId: string, data: string, caller: PanelCdpHostProviderCaller): void | Promise<void>;
@@ -253,6 +259,41 @@ const panelCdpMethods = defineServiceMethods({
     description: "Stop loading an approved panel target through its active CDP host.",
     args: z.tuple([z.string()]),
     authority: cdpBoundaryAuthority("stop"),
+    access: { sensitivity: "write" },
+  },
+  browserOperation: {
+    website: {
+      kind: "closed",
+      reason: "Native browser activity is scoped to an approved panel target.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "The owning provider observes popups and reads only its own panel download records",
+    },
+    description:
+      "Inspect, cancel, and read approved native downloads without exposing host filesystem paths.",
+    args: z.tuple([
+      z.string(),
+      z.discriminatedUnion("operation", [
+        z.object({ operation: z.literal("listDownloads") }).strict(),
+        z.object({ operation: z.literal("downloadInfo"), id: z.string() }).strict(),
+        z.object({ operation: z.literal("downloadFinished"), id: z.string() }).strict(),
+        z.object({ operation: z.literal("cancelDownload"), id: z.string() }).strict(),
+        z
+          .object({
+            operation: z.literal("readDownloadChunk"),
+            id: z.string(),
+            offset: z.number().int().nonnegative(),
+            length: z.number().int().min(1).max(262144),
+          })
+          .strict(),
+      ]),
+    ]),
+    authority: cdpBoundaryAuthority("browserOperation"),
     access: { sensitivity: "write" },
   },
   consoleHistory: {
@@ -482,6 +523,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     authorityPreparation: Object.fromEntries(
       [
         ["getCdpEndpoint", "cdp"],
+        ["browserOperation", "cdp"],
         ["consoleHistory", "cdp"],
         ["screenshot", "cdp"],
         ["evaluate", "cdp"],
@@ -531,6 +573,11 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         await recordCdpAccess(ctx, "getCdpEndpoint", panelId);
         const endpoint = await deps.getEndpoint(panelId, ctx.caller.runtime.id);
         return endpoint;
+      },
+      browserOperation: async (ctx, [panelId, request]) => {
+        await recordCdpAccess(ctx, "browserOperation", panelId);
+        if (!deps.browserOperation) throw new Error("Native browser automation is unavailable");
+        return deps.browserOperation(panelId, request, ctx.signal);
       },
       consoleHistory: async (ctx, [panelId, options]) => {
         await recordCdpAccess(ctx, "consoleHistory", panelId);

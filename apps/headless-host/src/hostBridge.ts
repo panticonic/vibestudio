@@ -24,7 +24,12 @@ export interface HostBridgeHandlers {
     sessionId?: string
   ): Promise<unknown>;
   navCommand(targetId: string, action: string, url?: string): Promise<void>;
-  hostCommand(targetId: string, action: string, args: unknown[]): Promise<unknown>;
+  hostCommand(
+    targetId: string,
+    action: string,
+    args: unknown[],
+    signal: AbortSignal
+  ): Promise<unknown>;
   hostOperation(action: string, args: unknown[]): Promise<unknown>;
   detach(targetId: string): Promise<void>;
   /** Server rejected our registration for this target (lease moved etc.). */
@@ -75,6 +80,8 @@ export interface CdpHostBridgeDiagnostic {
 }
 
 export class CdpHostBridgeClient {
+  private readonly hostCommands = new Map<string, AbortController>();
+
   private socket: CdpHostBridgeSocket | null = null;
   private stopped = false;
   private admitted = false;
@@ -107,6 +114,8 @@ export class CdpHostBridgeClient {
   }
 
   stop(): void {
+    for (const owner of this.hostCommands.values())
+      owner.abort(new Error("CDP host bridge stopped"));
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
@@ -197,6 +206,8 @@ export class CdpHostBridgeClient {
       void this.handleMessage(String(data));
     });
     socket.on("close", (code, reason) => {
+      for (const owner of this.hostCommands.values())
+        owner.abort(new Error("CDP host bridge disconnected"));
       this.admitted = false;
       if (this.socket === socket) this.socket = null;
       this.updateDiagnostic({
@@ -282,11 +293,24 @@ export class CdpHostBridgeClient {
         }
         return;
       }
+      case "host:cancel":
+        if (message.requestId)
+          this.hostCommands
+            .get(message.requestId)
+            ?.abort(new Error("Host command cancelled by its caller"));
+        return;
       case "host:command": {
         const { requestId, targetId, action, args } = message;
         if (!requestId || !targetId || !action) return;
+        const owner = new AbortController();
+        this.hostCommands.set(requestId, owner);
         try {
-          const result = await this.opts.handlers.hostCommand(targetId, action, args ?? []);
+          const result = await this.opts.handlers.hostCommand(
+            targetId,
+            action,
+            args ?? [],
+            owner.signal
+          );
           this.send({ type: "host:result", requestId, targetId, result });
         } catch (error) {
           this.send({
@@ -295,6 +319,8 @@ export class CdpHostBridgeClient {
             targetId,
             error: error instanceof Error ? error.message : String(error),
           });
+        } finally {
+          this.hostCommands.delete(requestId);
         }
         return;
       }

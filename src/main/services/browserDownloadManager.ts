@@ -1,3 +1,9 @@
+import { open as openFile } from "node:fs/promises";
+import {
+  BrowserActivity,
+  type BrowserDownload,
+  type BrowserAutomationRequest,
+} from "@vibestudio/shared/panel/browserAutomation";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -24,6 +30,7 @@ interface LiveDownload {
 
 /** Owns one environment's Electron downloads and persists metadata, never file contents. */
 export class BrowserDownloadManager {
+  private readonly completed = new BrowserActivity<BrowserDownload>();
   private readonly records = new Map<string, BrowserDownloadRecord>();
   private readonly pendingApproval = new Set<DownloadItem>();
   private readonly live = new Map<string, LiveDownload>();
@@ -43,6 +50,7 @@ export class BrowserDownloadManager {
       eventService: EventService;
       getViewManager(): Pick<ViewManager, "findViewIdByWebContentsId"> | null;
       requestSiteCapability(contents: WebContents, capability: "downloads"): Promise<boolean>;
+      onActivity?(panelId: string, payload: { download?: BrowserDownload; error?: string }): void;
     }
   ) {
     this.history = deps.browserData;
@@ -67,6 +75,8 @@ export class BrowserDownloadManager {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    const error = new Error("Download provider stopped");
+    this.completed.close(error);
     this.deps.browserSession.off("will-download", this.onWillDownload);
     for (const item of this.pendingApproval) item.cancel();
     this.pendingApproval.clear();
@@ -84,6 +94,62 @@ export class BrowserDownloadManager {
           (this.live.get(record.id)?.item.canResume() ?? false),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async automation(
+    panelId: string,
+    request: BrowserAutomationRequest,
+    signal: AbortSignal
+  ): Promise<unknown> {
+    signal.throwIfAborted();
+    const publicRecord = (record: BrowserDownloadRecord): BrowserDownload => ({
+      id: record.id,
+      url: record.url,
+      filename: record.filename,
+      state: record.state,
+      receivedBytes: record.receivedBytes,
+      totalBytes: record.totalBytes,
+    });
+    if (request.operation === "listDownloads")
+      return this.list()
+        .filter((record) => record.panelId === panelId)
+        .map(publicRecord);
+    const record = this.requireRecord(request.id);
+    if (record.panelId !== panelId) throw new Error("Download does not belong to this panel");
+    if (request.operation === "downloadInfo") return publicRecord(record);
+    if (request.operation === "cancelDownload") {
+      this.cancel(record.id);
+      return;
+    }
+    if (request.operation === "downloadFinished") {
+      if (record.state === "completed") return publicRecord(record);
+      if (["cancelled", "interrupted"].includes(record.state))
+        throw new Error(`Download ${record.state}`);
+      return this.completed.wait(record.id, signal);
+    }
+    if (record.state !== "completed") throw new Error("Download is not complete");
+    if (
+      !Number.isSafeInteger(request.offset) ||
+      request.offset < 0 ||
+      !Number.isInteger(request.length) ||
+      request.length < 1 ||
+      request.length > 262144
+    )
+      throw new Error("Invalid download byte range");
+    const file = await openFile(record.savePath, "r");
+    try {
+      signal.throwIfAborted();
+      const buffer = Buffer.alloc(request.length);
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, request.offset);
+      signal.throwIfAborted();
+      const size = (await file.stat()).size;
+      return {
+        base64: buffer.subarray(0, bytesRead).toString("base64"),
+        eof: request.offset + bytesRead >= size,
+      };
+    } finally {
+      await file.close();
+    }
   }
 
   pause(id: string): void {
@@ -127,6 +193,7 @@ export class BrowserDownloadManager {
       return;
     }
     this.pendingApproval.add(item);
+    const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
     // Electron reads the destination when will-download returns, before an
     // asynchronous site approval can settle. Reserve it for the item's entire
     // lifetime, including approval, when no file may exist on disk yet.
@@ -147,12 +214,24 @@ export class BrowserDownloadManager {
         this.pendingApproval.delete(item);
         if (this.stopped || !granted || contents.isDestroyed() || !item.canResume()) {
           item.cancel();
+          if (panelId)
+            this.deps.onActivity?.(panelId, {
+              error: !granted
+                ? "Download permission denied"
+                : "Download target no longer available",
+            });
           return;
         }
         this.beginDownload(item, contents, savePath);
         item.resume();
       })
-      .catch(() => item.cancel());
+      .catch((error) => {
+        item.cancel();
+        if (panelId)
+          this.deps.onActivity?.(panelId, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+      });
   };
 
   private beginDownload(item: DownloadItem, contents: WebContents, savePath: string): void {
@@ -199,6 +278,17 @@ export class BrowserDownloadManager {
       this.live.delete(id);
       this.notify(record);
     });
+    if (panelId)
+      this.deps.onActivity?.(panelId, {
+        download: {
+          id,
+          url,
+          filename: record.filename,
+          state: record.state,
+          receivedBytes: record.receivedBytes,
+          totalBytes: record.totalBytes,
+        },
+      });
   }
 
   private update(live: LiveDownload, state: BrowserDownloadState): void {
@@ -207,6 +297,21 @@ export class BrowserDownloadManager {
     live.record.totalBytes = Math.max(0, live.item.getTotalBytes());
     live.record.updatedAt = Date.now();
     this.persist(live.record);
+    if (["completed", "cancelled", "interrupted"].includes(state))
+      this.completed.publish(
+        live.record.id,
+        state === "completed"
+          ? {
+              id: live.record.id,
+              url: live.record.url,
+              filename: live.record.filename,
+              state,
+              receivedBytes: live.record.receivedBytes,
+              totalBytes: live.record.totalBytes,
+            }
+          : undefined,
+        state === "completed" ? undefined : new Error(`Download ${state}`)
+      );
   }
 
   private notify(record: BrowserDownloadRecord): void {
