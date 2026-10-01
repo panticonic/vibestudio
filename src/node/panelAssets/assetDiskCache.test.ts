@@ -151,6 +151,140 @@ describe("AssetDiskCache", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("lets demand join a prewarm download and read its prefix before EOF", async () => {
+    const cache = await newCache();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const fetcher = vi.fn(async () =>
+      immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            source = controller;
+          },
+        }),
+      })
+    );
+    const prewarm = await cache.serve("/shared.js", fetcher);
+    if (prewarm.kind !== "passthrough") throw new Error("Expected a live download");
+    const prewarmReader = prewarm.response.body!.getReader();
+    source.enqueue(Buffer.from("prefix"));
+    expect(Buffer.from((await prewarmReader.read()).value!).toString()).toBe("prefix");
+    const demand = await cache.serve("/shared.js", fetcher);
+    if (demand.kind !== "passthrough") throw new Error("Expected a joined download");
+    const demandReader = demand.response.body!.getReader();
+    expect(Buffer.from((await demandReader.read()).value!).toString()).toBe("prefix");
+    expect(fetcher).toHaveBeenCalledOnce();
+    // Cancelling the speculative reader must not cancel the browser's download.
+    await prewarmReader.cancel();
+    source.enqueue(Buffer.from("tail"));
+    source.close();
+    expect(Buffer.from((await demandReader.read()).value!).toString()).toBe("tail");
+    expect((await demandReader.read()).done).toBe(true);
+    await cache.close();
+    expect(await cache.get("/shared.js")).not.toBeNull();
+  });
+
+  it("publishes and completes demand without waiting for a slower joined reader", async () => {
+    const cache = await newCache();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const fetcher = vi.fn(async () =>
+      immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            source = controller;
+          },
+        }),
+      })
+    );
+    const demand = await cache.serve("/paced.js", fetcher);
+    const slower = await cache.serve("/paced.js", fetcher);
+    if (demand.kind !== "passthrough" || slower.kind !== "passthrough")
+      throw new Error("Expected joined streams");
+    source.enqueue(Buffer.from("complete body"));
+    source.close();
+    expect(await new Response(demand.response.body).text()).toBe("complete body");
+    expect(await cache.get("/paced.js")).not.toBeNull();
+    // Publication renames the file while this consumer has not read any bytes.
+    expect(await new Response(slower.response.body).text()).toBe("complete body");
+    expect(fetcher).toHaveBeenCalledOnce();
+    await cache.close();
+  });
+
+  it("cancels the source and retires scratch when its last consumer closes", async () => {
+    const cache = await newCache();
+    const cancelled = vi.fn();
+    const result = await cache.serve("/cancelled.js", async () =>
+      immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({ cancel: cancelled }),
+      })
+    );
+    if (result.kind !== "passthrough") throw new Error("Expected a live stream");
+    await result.response.body!.cancel();
+    await cache.close();
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(await cache.get("/cancelled.js")).toBeNull();
+    expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
+  });
+
+  it("keeps shared network ownership when the initiating browser aborts", async () => {
+    const cache = await newCache();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let sharedSignal!: AbortSignal;
+    const initiator = new AbortController();
+    const fetcher = vi.fn(async (signal: AbortSignal) => {
+      sharedSignal = signal;
+      return immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            source = controller;
+          },
+        }),
+      });
+    });
+    const one = await cache.serve("/owned.js", fetcher, initiator.signal);
+    const two = await cache.serve("/owned.js", fetcher);
+    if (one.kind !== "passthrough" || two.kind !== "passthrough")
+      throw new Error("Expected readers");
+    const read = one.response.body!.getReader().read();
+    const failure = new Error("First browser closed");
+    initiator.abort(failure);
+    await expect(read).rejects.toBe(failure);
+    expect(sharedSignal.aborted).toBe(false);
+    source.enqueue(Buffer.from("still owned"));
+    source.close();
+    expect((await readStream(two.response.body!)).toString()).toBe("still owned");
+    await cache.close();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("propagates a broken source to every reader and never publishes partial bytes", async () => {
+    const cache = await newCache();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const fetcher = vi.fn(async () =>
+      immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            source = controller;
+          },
+        }),
+      })
+    );
+    const one = await cache.serve("/broken.js", fetcher);
+    const two = await cache.serve("/broken.js", fetcher);
+    if (one.kind !== "passthrough" || two.kind !== "passthrough")
+      throw new Error("Expected readers");
+    const failure = new Error("Original transfer reset");
+    const reads = [readStream(one.response.body!), readStream(two.response.body!)];
+    source.error(failure);
+    const results = await Promise.allSettled(reads);
+    expect(results).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    await cache.close();
+    expect(await cache.get("/broken.js")).toBeNull();
+    expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
+  });
+
   it("caches ONLY immutable-cacheable responses (no-store passes through, refetches)", async () => {
     const cache = await newCache();
     const fetcher = vi.fn(async () =>
@@ -282,14 +416,12 @@ describe("AssetDiskCache", () => {
     const [ra, rb] = await Promise.all([a, b]);
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect([ra.kind, rb.kind].sort()).toEqual(["asset", "passthrough"]);
-    if (ra.kind === "passthrough") {
-      expect((await readStream(ra.response.body!)).toString()).toBe("shared");
-    } else if (rb.kind === "passthrough") {
-      expect((await readStream(rb.response.body!)).toString()).toBe("shared");
-    } else {
-      throw new Error("expected one concurrent caller to receive the live response");
-    }
+    expect([ra.kind, rb.kind]).toEqual(["passthrough", "passthrough"]);
+    if (ra.kind !== "passthrough" || rb.kind !== "passthrough")
+      throw new Error("Expected streaming readers");
+    const bytes = await Promise.all([readStream(ra.response.body!), readStream(rb.response.body!)]);
+    expect(bytes.map((body) => body.toString())).toEqual(["shared", "shared"]);
+    await cache.close();
   });
 
   it("handles concurrent same-digest writes for different cache keys", async () => {

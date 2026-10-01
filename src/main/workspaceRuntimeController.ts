@@ -52,6 +52,8 @@ import {
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_MAX_LOADED_DESKTOP, PANEL_UI_IDLE_UNLOAD_MS } from "@vibestudio/shared/constants";
+import { recoverRenderer } from "./rendererRecovery.js";
+import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 
 type StartableDesktopWorkspaceRuntime = {
   start(): Promise<void>;
@@ -471,6 +473,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     if (attention) deps.events?.onAttentionRequired?.(attention.title, attention.message);
   });
   let semanticRecoveryEpoch = 0;
+  let rendererRecovery = new AbortController();
   let latestConnection = {
     status: connection.serverClient.getConnectionStatus(),
     isRemote: connection.connectionMode === "remote",
@@ -483,17 +486,28 @@ export function createDesktopWorkspaceRuntime(deps: {
   const recover = async (kind: "resubscribe" | "cold-recover") => {
     if (closed) return;
     const epoch = ++semanticRecoveryEpoch;
+    rendererRecovery.abort(new Error("Workspace recovery superseded"));
+    rendererRecovery = new AbortController();
+    const signal = rendererRecovery.signal;
     await watch.recover();
     if (closed || epoch !== semanticRecoveryEpoch) return;
     await controller.orchestrator.recoverShellSnapshot({ loadFocusedView: false });
     if (closed || epoch !== semanticRecoveryEpoch) return;
+    const renderers = new Set<Electron.WebContents>();
     for (const { panelId } of controller.registry.listPanels()) {
+      const panel = controller.registry.getPanel(panelId);
+      if (!panel || getPanelSource(panel).startsWith("browser:")) continue;
       const contents = window.getWorkspacePanelView(workspaceId)?.getWebContents(panelId);
-      if (contents && !contents.isDestroyed())
-        contents.send("vibestudio:rpc:recovery", kind, workspaceId);
+      if (contents && !contents.isDestroyed()) renderers.add(contents);
     }
     const chrome = window.viewManager?.getHostedShellWebContents();
-    if (chrome && !chrome.isDestroyed()) chrome.send("vibestudio:rpc:recovery", kind, workspaceId);
+    if (chrome && !chrome.isDestroyed()) renderers.add(chrome);
+    const results = await Promise.allSettled(
+      [...renderers].map((contents) => recoverRenderer(contents, kind, workspaceId, signal))
+    );
+    if (closed || epoch !== semanticRecoveryEpoch) return;
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     recoveryPending = false;
     publishConnectionStatus("connected");
     await deps.onRecovered?.(kind);
@@ -503,6 +517,13 @@ export function createDesktopWorkspaceRuntime(deps: {
     if (closed) return;
     if (status === "connected") reportingDelivery.wake();
     if (status !== "connected") {
+      rendererRecovery.abort(
+        new RpcBoundaryError(
+          "Workspace connection lost during recovery",
+          "transport",
+          "CONNECTION_LOST"
+        )
+      );
       semanticRecoveryEpoch += 1;
       recoveryPending = true;
     }
@@ -520,6 +541,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   };
   type CleanupStep = { done: boolean; run: () => unknown };
   const producerCleanup: CleanupStep[] = [
+    () => rendererRecovery.abort(new Error("Workspace runtime closed")),
     stopDirectEvents,
     stopAttention,
     stopNotificationAction,

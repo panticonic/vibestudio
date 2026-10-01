@@ -14,6 +14,7 @@ import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 
 const edges = vi.hoisted(() => ({
   controller: vi.fn(),
+  rendererRecovery: vi.fn(),
   partition: vi.fn(),
   permissionStop: vi.fn(),
   downloads: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("@vibestudio/env-paths", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@vibestudio/env-paths")>()),
   getCentralDataPath: () => edges.reportingRoot,
 }));
+vi.mock("./rendererRecovery.js", () => ({ recoverRenderer: edges.rendererRecovery }));
 vi.mock("./desktopWorkspaceController.js", () => ({
   createDesktopWorkspaceController: edges.controller,
 }));
@@ -279,6 +281,9 @@ function fixture(
     onRecovery: vi.fn(() => release),
     onConnectionStatusChange: vi.fn((_listener: (status: string) => void) => release),
   };
+  edges.rendererRecovery.mockImplementation(async (contents, kind, id) => {
+    contents.send("vibestudio:rpc:recovery", kind, id);
+  });
   const send = vi.fn();
   const chromeSend = vi.fn();
   const ownPanel = { getWebContents: vi.fn(() => ({ isDestroyed: () => false, send })) };
@@ -693,6 +698,8 @@ describe("workspace runtime ownership", () => {
     const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
     const replay = deferred<void>();
     const snapshot = deferred<undefined>();
+    const renderer = deferred<void>();
+    edges.rendererRecovery.mockReturnValue(renderer.promise);
     owner.watch.recover.mockReturnValueOnce(replay.promise);
     owner.orchestrator.recoverShellSnapshot.mockReturnValueOnce(snapshot.promise);
     status("disconnected");
@@ -711,6 +718,10 @@ describe("workspace runtime ownership", () => {
     await vi.waitFor(() => expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce());
     expect(owner.send).not.toHaveBeenCalled();
     snapshot.resolve(undefined);
+    await vi.waitFor(() => expect(edges.rendererRecovery).toHaveBeenCalled());
+    expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    renderer.resolve();
     await recovery;
     expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledOnce();
@@ -725,6 +736,18 @@ describe("workspace runtime ownership", () => {
     status("connected");
     await owner.runtime.recover("cold-recover");
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("propagates renderer replay failure without reporting the workspace connected", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
+    status("disconnected");
+    const failure = new Error("Renderer watch replay failed");
+    edges.rendererRecovery.mockRejectedValue(failure);
+    await expect(owner.runtime.recover("resubscribe")).rejects.toBe(failure);
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await owner.runtime.close();
   });
 
   it("reports failed lease cleanup after stopping the remaining owned resources", async () => {

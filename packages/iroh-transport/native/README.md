@@ -1,5 +1,27 @@
 # Iroh native lifecycle repairs
 
+## Request-owned dial cancellation
+
+The reviewed patch additionally introduces `Endpoint.beginConnect(addr, alpn)`
+and a native `DialAttempt` with `connect()` and `cancel()`. Creating the handle
+precedes address resolution and connection establishment. Cancellation drops
+the complete owned dial future and joins it before returning; it does not close
+the shared endpoint or its healthy connections. Endpoint closure also settles
+the pending dial. The Node and UniFFI implementations share this contract.
+
+The real QUIC regression holds a relay unresponsive, cancels repeated dials,
+and verifies that another connection still transfers data. It also checks
+cancellation before connect, single consumption, and endpoint closure.
+
+This API is **not shipped** by the currently pinned `1.1.0-cancel.2` release.
+The application still needs the matching published release before its endpoint
+generation owner can use this contract. Publishing requires regenerating the
+Node JavaScript/type exports and Kotlin/Swift bindings in addition to building
+the native artifacts. The existing platform-only replacement workflow keeps
+upstream's API declarations and therefore cannot publish this API on its own.
+Do not add feature detection, cast an unsupported API, or substitute the proof
+binary into production to bypass that dependency boundary.
+
 ## Endpoint readiness cancellation
 
 The previous `1.1.0-cancel.1` binaries repair stream cancellation but still
@@ -60,7 +82,7 @@ Requires Git, Node 20.3+, Rust 1.91+, a native C toolchain, and network access t
 fetch the pinned source/dependencies. From the host checkout:
 
 ```sh
-node packages/iroh-transport/native/build-and-verify.mjs /tmp/iroh-cancellation-proof
+node packages/iroh-transport/native/build-and-verify.mjs /path/on/disk/iroh-cancellation-proof
 ```
 
 The output directory must be new. The script checks source/patch/lock digests,

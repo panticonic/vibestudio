@@ -155,23 +155,31 @@ describe("startPanelAssetFacade", () => {
   });
 });
 
-describe("panel asset façade backstops (offline / stalled server)", () => {
-  it("surfaces a clear 504 when the server never responds (connect backstop)", async () => {
-    // An offline server: the gateway.fetch stream never resolves. Without a
-    // backstop the request parks forever → blank webview. With one it fails loud.
-    const stream = vi.fn<GatewayStream>(
-      () => new Promise<Response>(() => {}) // never resolves
-    );
-    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
-      connectBackstopMs: 100,
-    });
-    try {
-      const res = await fetch(`http://127.0.0.1:${facade.port}/apps/shell/bundle.js`);
-      expect(res.status).toBe(504);
-      expect(await res.text()).toMatch(/can't reach your server/i);
-    } finally {
-      await facade.close();
-    }
+describe("panel asset facade lifecycle", () => {
+  it("settles a pending asset request when its facade closes", async () => {
+    const started = deferred<void>();
+    const stopped = deferred<void>();
+    const client: PanelAssetStreamClient = {
+      stream(_service, _method, _args, options) {
+        started.resolve();
+        return new Promise<Response>((_resolve, reject) => {
+          options!.signal!.addEventListener(
+            "abort",
+            () => {
+              stopped.resolve();
+              reject(options!.signal!.reason);
+            },
+            { once: true }
+          );
+        });
+      },
+    };
+    const facade = await startPanelAssetFacade(client);
+    const request = fetch(`http://127.0.0.1:${facade.port}/apps/shell/bundle.js`);
+    await started.promise;
+    await facade.close();
+    await stopped.promise;
+    expect((await request).status).toBe(502);
   });
 
   it("cancels the pipe stream when the webview aborts mid-body", async () => {
@@ -309,6 +317,42 @@ describe("panel asset façade content cache", () => {
       await (await first).text();
     } finally {
       releaseFirst.resolve(undefined);
+      await facade.close();
+    }
+  });
+
+  it("reconsiders a failed prewarm when the pinned entry is requested again", async () => {
+    let manifests = 0;
+    const warning = vi.spyOn(console, "warn");
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      if (descriptor.path.endsWith("__manifest.json")) {
+        manifests++;
+        return new Response(manifests === 1 ? "invalid manifest" : initialManifest([]), {
+          headers: { "content-type": "application/json", "cache-control": "no-store" },
+        });
+      }
+      return new Response("<html>entry</html>", {
+        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const entry = `http://127.0.0.1:${facade.port}/panels/chat/?buildKey=${BUILD_KEY}`;
+      await (await fetch(entry)).text();
+      await vi.waitFor(() =>
+        expect(
+          warning.mock.calls.some((args) =>
+            String(args[0]).includes("Initial asset prewarm failed")
+          )
+        ).toBe(true)
+      );
+      await (await fetch(entry)).text();
+      await vi.waitFor(() => expect(manifests).toBe(2));
+    } finally {
+      warning.mockRestore();
       await facade.close();
     }
   });

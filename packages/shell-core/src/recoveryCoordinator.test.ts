@@ -6,6 +6,32 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("RecoveryCoordinator", () => {
+  it("propagates the original failure without retrying or claiming completion", async () => {
+    const coordinator = createRecoveryCoordinator();
+    const error = new Error("Snapshot could not be restored");
+    const failed = vi.fn(() => {
+      throw error;
+    });
+    const after = vi.fn();
+    const release = coordinator.registerResubscribeHandler("snapshot", failed);
+    coordinator.registerResubscribeHandler("after", after);
+    await expect(coordinator.run("resubscribe")).rejects.toBe(error);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(after).not.toHaveBeenCalled();
+    release();
+    await coordinator.run("resubscribe");
+    expect(after).toHaveBeenCalledOnce();
+  });
+
+  it("propagates connection loss and permits the next authoritative generation", async () => {
+    const coordinator = createRecoveryCoordinator();
+    const error = Object.assign(new Error("Connection lost"), { code: "CONNECTION_LOST" });
+    const handler = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+    coordinator.registerResubscribeHandler("watch", handler);
+    await expect(coordinator.run("resubscribe")).rejects.toBe(error);
+    await coordinator.run("resubscribe");
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
   it("runs newly registered resubscribe handlers after resubscribe completed for the current generation", async () => {
     const coordinator = createRecoveryCoordinator();
     await coordinator.run("resubscribe");

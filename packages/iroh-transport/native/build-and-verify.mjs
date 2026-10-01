@@ -10,8 +10,8 @@ if (!args[0] || args.length > 2 || !["dev", "release"].includes(profile)) {
 }
 const { output, source, target } = preparePatchedSource(args[0]);
 const env = { CARGO_TARGET_DIR: target };
-// Use upstream's Cargo package/build layout. No generated API or loader changes
-// are necessary: the repair is entirely within the existing native methods.
+// Use upstream's Cargo package/build layout. The local proof loads the native
+// exports directly; publishing the dial API also requires regenerated bindings.
 runIn("cargo", ["build", "--locked", "--profile", profile, "-p", "number0_iroh"], source, env);
 runIn("cargo", ["check", "--locked", "-p", "iroh-ffi"], source, env);
 const library =
@@ -25,7 +25,7 @@ copyFileSync(join(target, profile === "dev" ? "debug" : "release", library), art
 // This is an explicit test-only loader selection, never application configuration.
 runIn(
   process.execPath,
-  ["--test", "test/endpoint.mjs", "test/stream-cancellation.mjs"],
+  ["--test", "test/endpoint.mjs", "test/stream-cancellation.mjs", "test/dial-cancellation.mjs"],
   join(source, "iroh-js"),
   { NAPI_RS_NATIVE_LIBRARY_PATH: artifact }
 );
@@ -42,6 +42,7 @@ const receipt = {
   validation: [
     "endpoint tests including readiness cancellation",
     "native stream cancellation tests",
+    "request-owned dial cancellation with a healthy sibling connection",
     "UniFFI cargo check",
   ],
   scope: "Local acceptance artifact; not a published or installed binding release",

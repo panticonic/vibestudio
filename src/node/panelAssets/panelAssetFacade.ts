@@ -38,6 +38,8 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { isRpcConnectionLost } from "@vibestudio/rpc/errors";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { RpcStreamOptions } from "@vibestudio/rpc";
 import {
@@ -57,32 +59,11 @@ export interface PanelAssetStreamClient {
     service: string,
     method: string,
     args?: unknown[],
-    options?: Pick<RpcStreamOptions, "signal" | "headTimeoutMs" | "trafficClass">
+    options?: Pick<RpcStreamOptions, "signal" | "headTimeoutMs" | "bodyIdleTimeoutMs">
   ): Promise<Response>;
 }
 
 const log = createDevLogger("PanelAssetFacade");
-
-/**
- * GENEROUS fail-loud backstops (never tight enough to abort a slow-but-healthy
- * load). Without them an offline/unreachable server parks every panel asset
- * request forever (the RPC has no implicit deadline and reconnects are
- * unbounded) → a blank webview with no error. Two independent backstops:
- *
- *  - CONNECT: cap the time-to-first-response (the `gateway.fetch` stream call
- *    resolving at all). A dead pipe never returns a `Response`, so this is what
- *    unsticks the request and surfaces "can't reach your server — reconnecting".
- *  - STALL: once bytes are flowing, cap the gap between chunks — NOT the total
- *    duration. A multi-MB bundle over slow TURN keeps arming the timer on every
- *    chunk, so only a genuine no-progress stall trips it.
- */
-const ASSET_CONNECT_BACKSTOP_MS = 10 * 60_000;
-const ASSET_STALL_BACKSTOP_MS = 5 * 60_000;
-// A build manifest is normally kilobytes. This is only a catastrophic
-// allocation boundary for corrupt or hostile input, deliberately far outside
-// normal operation and aligned with mobile.
-const CATASTROPHIC_PREWARM_MANIFEST_BYTES = 64 * 1024 * 1024;
-const SHA256_INTEGRITY = /^sha256-[0-9a-f]{64}$/u;
 
 interface PrewarmManifestResource {
   path: string;
@@ -103,70 +84,13 @@ interface PinnedEntry {
   sourceRoot: string;
 }
 
-/** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
-class AssetBackstopError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AssetBackstopError";
-  }
-}
-
-/**
- * Await the first response, but abort (and reject loud) if it never arrives
- * within the connect backstop — an offline server otherwise parks here forever.
- */
-async function withConnectBackstop<T>(
-  run: () => Promise<T>,
-  controller: AbortController,
-  reqPath: string,
-  connectMs: number
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      reject(
-        new AssetBackstopError(
-          `no response from your server within ${connectMs / 1000}s for ${reqPath}`
-        )
-      );
-    }, connectMs);
-  });
-  try {
-    return await Promise.race([run(), timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-/**
- * Optional server-supplied content digest. The gateway serving panel artifacts
- * does not emit this today (see gatewayFetchService — artifacts are hashed at
- * build time but the hash isn't surfaced as a response header), so the façade
- * falls back to hashing immutable bodies on write. If a future change surfaces a
- * digest here, the cache prefers it (it is not forwarded to the webview).
- */
+/** Only demand owns remote asset work. Its lifetime is the browser request or facade. */
+const SHA256_INTEGRITY = /^sha256-[0-9a-f]{64}$/u;
 const CONTENT_DIGEST_HEADER = "x-vibestudio-content-digest";
 
 export interface PanelAssetFacadeOptions {
-  /**
-   * Directory for persistent façade state (content-addressed asset cache under
-   * `asset-cache/`, persisted loopback port in `port`). Omitted in unit tests →
-   * cache disabled and an ephemeral port is used.
-   */
+  /** Persistent immutable cache and stable browser origin. */
   stateDir?: string;
-  /**
-   * Backstop windows (ms). Defaults are GENEROUS ({@link ASSET_CONNECT_BACKSTOP_MS}
-   * / {@link ASSET_STALL_BACKSTOP_MS}); tests override them to small values to
-   * exercise the offline-server path without a 30s wait.
-   */
-  connectBackstopMs?: number;
-  stallBackstopMs?: number;
-}
-
-interface ResolvedBackstops {
-  connectMs: number;
-  stallMs: number;
 }
 
 function collectForwardHeaders(req: http.IncomingMessage): Record<string, string> {
@@ -238,38 +162,20 @@ export async function startPanelAssetFacade(
     await cache.init();
   }
 
-  const backstops: ResolvedBackstops = {
-    connectMs: options.connectBackstopMs ?? ASSET_CONNECT_BACKSTOP_MS,
-    stallMs: options.stallBackstopMs ?? ASSET_STALL_BACKSTOP_MS,
-  };
-  const prewarmLifetime = new AbortController();
+  const lifetime = new AbortController();
+  const requests = new Set<Promise<void>>();
   const prewarmFlights = new Map<string, Promise<void>>();
   const prewarmCompletedBuilds = new Map<string, true>();
   const ensureBuildPrewarm = (entry: PinnedEntry): void => {
     if (
       !cache ||
-      prewarmLifetime.signal.aborted ||
+      lifetime.signal.aborted ||
       prewarmCompletedBuilds.has(entry.buildKey) ||
       prewarmFlights.has(entry.buildKey)
     ) {
       return;
     }
-    const flight = prewarmInitialAssets(
-      serverClient,
-      cache,
-      backstops,
-      entry,
-      prewarmLifetime.signal
-    )
-      .catch((error: unknown) => {
-        if (prewarmLifetime.signal.aborted) return;
-        log.warn(
-          `Initial asset prewarm failed for build ${entry.buildKey}; ` +
-            `demanded assets remain independently available: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-        );
-      })
+    const flight = prewarmInitialAssets(serverClient, cache, entry, lifetime.signal)
       .then(() => {
         prewarmCompletedBuilds.delete(entry.buildKey);
         prewarmCompletedBuilds.set(entry.buildKey, true);
@@ -278,25 +184,52 @@ export async function startPanelAssetFacade(
           if (oldest) prewarmCompletedBuilds.delete(oldest);
         }
       })
+      .catch((error: unknown) => {
+        if (lifetime.signal.aborted) return;
+        log.warn(
+          `Initial asset prewarm failed for build ${entry.buildKey}; ` +
+            `demanded assets remain independently available: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      })
       .finally(() => prewarmFlights.delete(entry.buildKey));
     prewarmFlights.set(entry.buildKey, flight);
   };
+
   const server = http.createServer((req, res) => {
-    void handleRequest(serverClient, cache, ensureBuildPrewarm, backstops, req, res);
+    const request = handleRequest(
+      serverClient,
+      cache,
+      ensureBuildPrewarm,
+      lifetime.signal,
+      req,
+      res
+    );
+    requests.add(request);
+    void request
+      .finally(() => requests.delete(request))
+      .catch((error: unknown) => {
+        log.warn(`Panel asset request failed: ${String(error)}`);
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
   });
 
   const port = await listenWithStablePort(server, portFile);
   log.info(`Panel asset façade listening on http://127.0.0.1:${port}`);
+  let closing: Promise<void> | null = null;
   return {
     port,
-    close: async () => {
-      prewarmLifetime.abort(new Error("Panel asset facade closed"));
-      await new Promise<void>((resolveClose, rejectClose) => {
-        server.close((err) => (err ? rejectClose(err) : resolveClose()));
-      });
-      await Promise.allSettled(prewarmFlights.values());
-      await cache?.close();
-    },
+    close: () =>
+      (closing ??= (async () => {
+        lifetime.abort(new Error("Panel asset facade closed"));
+        await new Promise<void>((resolveClose, rejectClose) => {
+          server.close((err) => (err ? rejectClose(err) : resolveClose()));
+        });
+        await Promise.allSettled([...requests]);
+        await Promise.allSettled([...prewarmFlights.values()]);
+        await cache?.close();
+      })()),
   };
 }
 
@@ -359,7 +292,7 @@ async function handleRequest(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache | null,
   ensureBuildPrewarm: (entry: PinnedEntry) => void,
-  backstops: ResolvedBackstops,
+  lifetime: AbortSignal,
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
@@ -404,65 +337,51 @@ async function handleRequest(
 
   const forwardHeaders = collectForwardHeaders(req);
 
-  // One controller for the whole request: the connect/stall backstops and the
-  // webview-cancel path all abort it, which cancels the underlying pipe stream so
-  // we stop pulling multi-MB bytes over the (paid) pipe nobody will read.
   const controller = new AbortController();
+  const abort = (): void => controller.abort(lifetime.reason);
+  lifetime.addEventListener("abort", abort, { once: true });
+  if (lifetime.aborted) abort();
   res.on("close", () => {
-    if (!res.writableEnded && !controller.signal.aborted) {
-      controller.abort();
-    }
+    if (!res.writableEnded) controller.abort(new Error("Panel asset request closed"));
   });
-
-  const fetcher = async (): Promise<FetchedResponse> => {
-    const response = await withConnectBackstop(
-      () =>
-        serverClient.stream(
-          "gateway",
-          "fetch",
-          [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
-          {
-            signal: controller.signal,
-            headTimeoutMs: backstops.connectMs,
-            // Every request here was demanded by a live browser surface. It is
-            // never background work and must not queue behind speculative bulk
-            // transfer. Immutable response and browser caches supply reuse.
-            trafficClass: "interactive",
-          }
-        ),
-      controller,
-      reqPath,
-      backstops.connectMs
+  const fetcher = async (signal = controller.signal): Promise<FetchedResponse> => {
+    const response = await serverClient.stream(
+      "gateway",
+      "fetch",
+      [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
+      { signal, headTimeoutMs: 0, bodyIdleTimeoutMs: null }
     );
     return normalizeResponse(response);
   };
 
   try {
     if (cache) {
-      const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
+      const outcome = await cache.serve(
+        panelAssetCacheKey(gatewayPath, forwardHeaders),
+        fetcher,
+        controller.signal
+      );
       if (outcome.kind === "asset") {
         const { asset } = outcome;
         res.writeHead(
           asset.status,
           buildResponseHeaders(asset.contentType, asset.gzip, asset.replayHeaders)
         );
-        fs.createReadStream(asset.bodyPath)
-          .once("error", (error) => res.destroy(error))
-          .pipe(res);
+        await pipeline(fs.createReadStream(asset.bodyPath), res, { signal: controller.signal });
         return;
       }
-      writePassthrough(reqPath, res, outcome.response, controller, backstops.stallMs);
+      await writePassthrough(res, outcome.response, controller.signal);
       return;
     }
 
-    writePassthrough(reqPath, res, await fetcher(), controller, backstops.stallMs);
+    await writePassthrough(res, await fetcher(), controller.signal);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A webview cancel aborts the controller too; that's not an error worth a body.
     if (res.writableEnded || res.destroyed) return;
-    const unreachable = err instanceof AssetBackstopError;
+    const unreachable = isRpcConnectionLost(err);
     log.warn(
-      `Panel asset fetch ${unreachable ? "backstopped" : "failed"} for ${reqPath}: ${message}`
+      `Panel asset fetch ${unreachable ? "disconnected" : "failed"} for ${reqPath}: ${message}`
     );
     const wantsDocument = String(req.headers.accept ?? "").includes("text/html");
     if (!res.headersSent) {
@@ -485,6 +404,8 @@ async function handleRequest(
           : "Panel asset bridge error"
       );
     }
+  } finally {
+    lifetime.removeEventListener("abort", abort);
   }
 }
 
@@ -524,29 +445,25 @@ function parsePinnedEntry(rawPath: string): PinnedEntry | null {
 async function prewarmInitialAssets(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache,
-  backstops: ResolvedBackstops,
   entry: PinnedEntry,
   lifetime: AbortSignal
 ): Promise<void> {
   const manifestPath = `${entry.artifactRoot}__manifest.json`;
-  const manifestOutcome = await cache.serve(panelAssetCacheKey(manifestPath, {}), () =>
-    fetchPrewarmAsset(serverClient, backstops, manifestPath, false, lifetime)
+  const manifestOutcome = await cache.serve(
+    panelAssetCacheKey(manifestPath, {}),
+    (signal) => fetchPrewarmAsset(serverClient, manifestPath, false, signal),
+    lifetime
   );
   let manifestBytes: Uint8Array;
   if (manifestOutcome.kind === "asset") {
-    if (manifestOutcome.asset.size > CATASTROPHIC_PREWARM_MANIFEST_BYTES) {
+    if (manifestOutcome.asset.size > 64 * 1024 * 1024) {
       throw new Error(
-        `panel prewarm manifest exceeded catastrophic ${CATASTROPHIC_PREWARM_MANIFEST_BYTES}-byte boundary`
+        `panel prewarm manifest exceeded catastrophic ${64 * 1024 * 1024}-byte boundary`
       );
     }
     manifestBytes = await fs.promises.readFile(manifestOutcome.asset.bodyPath);
   } else {
-    manifestBytes = await readBodyWithStallBackstop(
-      manifestOutcome.response.body,
-      manifestPath,
-      backstops.stallMs,
-      CATASTROPHIC_PREWARM_MANIFEST_BYTES
-    );
+    manifestBytes = await readBody(manifestOutcome.response.body, manifestPath, 64 * 1024 * 1024);
   }
   const manifest = parsePrewarmManifest(manifestBytes);
 
@@ -559,30 +476,42 @@ async function prewarmInitialAssets(
       .map((resource) => `${entry.sourceRoot}${resource.path}?v=${resource.version}`),
   ];
 
-  await Promise.all(
-    paths.map(async (assetPath) => {
-      const outcome = await cache.serve(panelAssetCacheKey(assetPath, {}), () =>
-        fetchPrewarmAsset(serverClient, backstops, assetPath, true, lifetime)
-      );
-      if (outcome.kind === "asset") return;
-      if (outcome.response.status !== 200) {
-        await outcome.response.body?.cancel().catch(() => undefined);
-        throw new Error(`prewarm ${assetPath} was not an HTTP 200 response`);
-      }
-      await readBodyWithStallBackstop(
-        outcome.response.body,
-        assetPath,
-        backstops.stallMs,
-        Number.POSITIVE_INFINITY,
-        false
-      );
-    })
-  );
+  const consumers = new AbortController();
+  const abort = () => consumers.abort(lifetime.reason);
+  lifetime.addEventListener("abort", abort, { once: true });
+  if (lifetime.aborted) abort();
+  try {
+    const results = await Promise.allSettled(
+      paths.map(async (assetPath) => {
+        try {
+          const outcome = await cache.serve(
+            panelAssetCacheKey(assetPath, {}),
+            (signal) => fetchPrewarmAsset(serverClient, assetPath, true, signal),
+            consumers.signal
+          );
+          if (outcome.kind === "asset") return;
+          if (outcome.response.status !== 200) {
+            await outcome.response.body?.cancel().catch(() => undefined);
+            throw new Error(`prewarm ${assetPath} was not an HTTP 200 response`);
+          }
+          await readBody(outcome.response.body, assetPath, Number.POSITIVE_INFINITY, false);
+        } catch (error) {
+          // Retire this operation's remaining speculative consumers. Demanded
+          // readers keep their independently owned shared transfers alive.
+          consumers.abort(error);
+          throw error;
+        }
+      })
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw consumers.signal.reason;
+  } finally {
+    lifetime.removeEventListener("abort", abort);
+  }
 }
 
 async function fetchPrewarmAsset(
   serverClient: PanelAssetStreamClient,
-  backstops: ResolvedBackstops,
   assetPath: string,
   gzip: boolean,
   lifetime: AbortSignal
@@ -592,23 +521,11 @@ async function fetchPrewarmAsset(
   lifetime.addEventListener("abort", abort, { once: true });
   if (lifetime.aborted) abort();
   try {
-    const response = await withConnectBackstop(
-      () =>
-        serverClient.stream(
-          "gateway",
-          "fetch",
-          [{ path: assetPath, method: "GET", headers: {}, gzip }],
-          {
-            signal: controller.signal,
-            headTimeoutMs: backstops.connectMs,
-            // Initial assets directly contribute to first paint. They are not
-            // bulk maintenance traffic; QUIC should interleave them with demand.
-            trafficClass: "interactive",
-          }
-        ),
-      controller,
-      assetPath,
-      backstops.connectMs
+    const response = await serverClient.stream(
+      "gateway",
+      "fetch",
+      [{ path: assetPath, method: "GET", headers: {}, gzip }],
+      { signal: controller.signal, headTimeoutMs: 0, bodyIdleTimeoutMs: null }
     );
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
@@ -665,10 +582,9 @@ function bindBodyToLifetime(response: Response, lifetime: AbortSignal): Response
   });
 }
 
-async function readBodyWithStallBackstop(
+async function readBody(
   body: ReadableStream<Uint8Array> | null,
   assetPath: string,
-  stallMs: number,
   maxBytes = Number.POSITIVE_INFINITY,
   retainBytes = true
 ): Promise<Buffer> {
@@ -678,19 +594,7 @@ async function readBodyWithStallBackstop(
   let total = 0;
   try {
     for (;;) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const stalled = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new AssetBackstopError(`prewarm stream stalled for ${assetPath}`)),
-          stallMs
-        );
-      });
-      let next: ReadableStreamReadResult<Uint8Array>;
-      try {
-        next = await Promise.race([reader.read(), stalled]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
       if (total > maxBytes) {
@@ -759,13 +663,11 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => replacements[char] ?? char);
 }
 
-function writePassthrough(
-  reqPath: string,
+async function writePassthrough(
   res: http.ServerResponse,
   response: FetchedResponse,
-  controller: AbortController,
-  stallMs: number
-): void {
+  signal: AbortSignal
+): Promise<void> {
   res.writeHead(
     response.status,
     buildResponseHeaders(response.contentType, response.gzip, response.replayHeaders)
@@ -774,44 +676,8 @@ function writePassthrough(
     res.end();
     return;
   }
-  // Pipe the streamed body straight to the webview (Node uses chunked transfer
-  // since Content-Length was stripped). Tear down on error either way.
-  const nodeBody = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
-
-  // Stall backstop: arm on start, re-arm on every chunk. Only a genuine
-  // no-progress gap (server wedged mid-transfer) trips it — a slow-but-steady
-  // transfer keeps it disarmed indefinitely.
-  let stallTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearStall = () => {
-    if (stallTimer) {
-      clearTimeout(stallTimer);
-      stallTimer = undefined;
-    }
-  };
-  const armStall = () => {
-    clearStall();
-    stallTimer = setTimeout(() => {
-      log.warn(
-        `Panel asset stream stalled for ${reqPath} (>${stallMs / 1000}s, no progress) — aborting`
-      );
-      controller.abort();
-      nodeBody.destroy(new AssetBackstopError("panel asset stream stalled"));
-    }, stallMs);
-  };
-  armStall();
-  nodeBody.on("data", armStall);
-  nodeBody.on("end", clearStall);
-  nodeBody.on("close", clearStall);
-  nodeBody.on("error", (err) => {
-    clearStall();
-    log.warn(`Panel asset stream errored for ${reqPath}: ${err.message}`);
-    if (!res.writableEnded) res.destroy(err);
+  // pipeline owns backpressure, browser cancellation, source errors, and settlement.
+  await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]), res, {
+    signal,
   });
-  // Webview canceled the panel mid-boot: stop pulling bytes over the pipe by
-  // destroying the source (Readable.fromWeb cancels the underlying web stream).
-  res.on("close", () => {
-    clearStall();
-    if (!res.writableEnded && !nodeBody.destroyed) nodeBody.destroy();
-  });
-  nodeBody.pipe(res);
 }

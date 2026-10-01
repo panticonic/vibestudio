@@ -25,17 +25,16 @@
  * Only responses the façade flags `cacheable` (immutable marker + 200) are
  * persisted; `no-store` HTML entry documents are never cached. Concurrent misses
  * for the same path are single-flighted so two webview requests trigger one pipe
- * fetch. The 64 GiB default is catastrophic disk containment rather than an
- * operating cache target; pruning is LRU by blob mtime and runs on write.
+ * fetch. The default retained-cache cap is 64 GiB; pruning is LRU by blob mtime
+ * and runs on write. Live responses are not truncated to that retention budget.
  */
 
 import { createHash, randomUUID } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-// Catastrophic corruption/hostile-peer containment, not a product asset limit.
-// Ordinary capacity is governed by cache pruning and free disk, while bodies
-// stream to disk and never occupy this many bytes in JS memory.
+// Retained-cache budget, not a response-size limit. Live bodies stream to disk
+// and never occupy this many bytes in JavaScript memory.
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024 * 1024; // 64 GiB
 
 class CachePopulationTooLargeError extends Error {
@@ -110,6 +109,306 @@ interface IndexEntry {
   metadataKey: string;
 }
 
+function waitForAsset<T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined,
+  release: () => void
+): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => {
+      release();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", aborted, { once: true });
+    if (signal.aborted) aborted();
+    void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+  });
+}
+
+function ownAssetBody(
+  body: ReadableStream<Uint8Array>,
+  release: () => void,
+  signal?: AbortSignal
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let retired = false;
+  let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+  const finish = () => {
+    if (retired) return;
+    retired = true;
+    signal?.removeEventListener("abort", aborted);
+    release();
+    reader.releaseLock();
+  };
+  const aborted = () => {
+    if (retired) return;
+    bodyController.error(signal?.reason);
+    void reader.cancel(signal?.reason).then(finish, finish);
+  };
+  const owned = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        bodyController = controller;
+      },
+      async pull(controller) {
+        try {
+          const next = await reader.read();
+          if (retired) {
+            controller.error(signal?.reason);
+            return;
+          }
+          if (next.done) {
+            finish();
+            controller.close();
+          } else controller.enqueue(next.value);
+        } catch (error) {
+          finish();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          finish();
+        }
+      },
+    },
+    { highWaterMark: 0 }
+  );
+  signal?.addEventListener("abort", aborted, { once: true });
+  if (signal?.aborted) aborted();
+  return owned;
+}
+
+/** One producer and independently paced readers of a growing immutable file. */
+class AssetPopulation {
+  private written = 0;
+  private ended = false;
+  private failure: unknown;
+  private readers = 0;
+  private readonly changed = new Set<() => void>();
+  private readonly source: ReadableStreamDefaultReader<Uint8Array>;
+  private resolveDone!: () => void;
+  private rejectDone!: (error: unknown) => void;
+  private resolvePublication!: () => void;
+  private rejectPublication!: (error: unknown) => void;
+  private readonly publication = new Promise<void>((resolve, reject) => {
+    this.resolvePublication = resolve;
+    this.rejectPublication = reject;
+  });
+  readonly done = new Promise<void>((resolve, reject) => {
+    this.resolveDone = resolve;
+    this.rejectDone = reject;
+  });
+
+  private constructor(
+    private readonly response: FetchedResponse & { body: ReadableStream<Uint8Array> },
+    private readonly tmp: string,
+    private readonly writer: fsp.FileHandle,
+    private readonly maxBytes: number,
+    private readonly signal: AbortSignal,
+    private readonly publish: (streamed: {
+      digest: string;
+      blobPath: string;
+      size: number;
+    }) => Promise<ServedAsset>
+  ) {
+    this.source = response.body.getReader();
+    this.signal.addEventListener("abort", this.abort, { once: true });
+    if (this.signal.aborted) this.abort();
+    void this.done.catch(() => undefined);
+    void this.publication.catch(() => undefined);
+  }
+
+  static async create(
+    response: FetchedResponse & { body: ReadableStream<Uint8Array> },
+    tmp: string,
+    maxBytes: number,
+    signal: AbortSignal,
+    publish: AssetPopulation["publish"]
+  ): Promise<AssetPopulation> {
+    try {
+      return new AssetPopulation(
+        response,
+        tmp,
+        await fsp.open(tmp, "wx+"),
+        maxBytes,
+        signal,
+        publish
+      );
+    } catch (error) {
+      await response.body.cancel(error);
+      throw error;
+    }
+  }
+
+  private readonly abort = () => {
+    if (this.ended) return;
+    this.failure = this.signal.reason;
+    void this.source.cancel(this.failure).catch(() => undefined);
+    this.notify();
+  };
+
+  get canPublish(): boolean {
+    return this.ended && this.readers === 0;
+  }
+
+  serve(release: () => void, signal?: AbortSignal): ServeOutcome {
+    this.readers++;
+    let offset = 0;
+    let retired = false;
+    let retiring: Promise<void> | undefined;
+    let reading: Promise<{ bytes: Buffer; bytesRead: number }> | undefined;
+    let wake: (() => void) | null = null;
+    const retire = (): Promise<void> => {
+      if (retiring) return retiring;
+      retired = true;
+      wake?.();
+      retiring = (async () => {
+        try {
+          // Cancellation joins this consumer's positioned read before releasing
+          // its reference to the population-owned file handle.
+          await reading?.catch(() => undefined);
+        } finally {
+          this.readers--;
+          signal?.removeEventListener("abort", aborted);
+          release();
+          this.notify();
+        }
+      })();
+      return retiring;
+    };
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const aborted = () => {
+      if (retired) return;
+      bodyController.error(signal?.reason);
+      void retire().catch(() => undefined);
+    };
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          bodyController = controller;
+        },
+        pull: async (controller) => {
+          try {
+            for (;;) {
+              if (retired) return;
+              if (this.failure !== undefined) throw this.failure;
+              if (offset < this.written) {
+                reading = (async () => {
+                  const bytes = Buffer.allocUnsafe(Math.min(64 * 1024, this.written - offset));
+                  const { bytesRead } = await this.writer.read(bytes, 0, bytes.length, offset);
+                  return { bytes, bytesRead };
+                })();
+                const { bytes, bytesRead } = await reading;
+                reading = undefined;
+                if (bytesRead === 0) throw new Error("Asset spool ended before committed bytes");
+                offset += bytesRead;
+                if (!retired) controller.enqueue(bytes.subarray(0, bytesRead));
+                return;
+              }
+              if (this.ended) {
+                await retire();
+                await this.publication;
+                controller.close();
+                return;
+              }
+              await new Promise<void>((resolve) => {
+                wake = resolve;
+                this.changed.add(resolve);
+              });
+              if (wake) this.changed.delete(wake);
+              wake = null;
+            }
+          } catch (error) {
+            const cancelled = retired;
+            await retire();
+            if (!cancelled) controller.error(error);
+          }
+        },
+        cancel: retire,
+      },
+      { highWaterMark: 0 }
+    );
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (signal?.aborted) aborted();
+    return { kind: "passthrough", response: { ...this.response, cacheable: false, body } };
+  }
+
+  start(): void {
+    void this.pump().then(this.resolveDone, this.rejectDone);
+  }
+
+  private notify(): void {
+    for (const resolve of this.changed) resolve();
+    this.changed.clear();
+  }
+
+  private async pump(): Promise<void> {
+    const hash = createHash("sha256");
+    try {
+      try {
+        for (;;) {
+          const next = await this.source.read();
+          if (this.failure !== undefined) throw this.failure;
+          if (next.done) break;
+          let offset = 0;
+          while (offset < next.value.byteLength) {
+            const { bytesWritten } = await this.writer.write(
+              next.value,
+              offset,
+              next.value.byteLength - offset
+            );
+            if (bytesWritten === 0) throw new Error("Asset cache write made no progress");
+            offset += bytesWritten;
+          }
+          hash.update(next.value);
+          this.written += next.value.byteLength;
+          this.notify();
+        }
+      } catch (error) {
+        this.failure = error;
+        await this.source.cancel(error).catch(() => undefined);
+      } finally {
+        this.ended = true;
+        this.notify();
+        this.source.releaseLock();
+        this.signal.removeEventListener("abort", this.abort);
+      }
+      if (this.failure !== undefined) {
+        this.rejectPublication(this.failure);
+        return;
+      }
+      const digest = hash.digest("hex");
+      const blobPath = path.join(path.dirname(this.tmp), digest);
+      if (this.written <= this.maxBytes) {
+        // Every reader uses the population-owned handle with an explicit file
+        // position. Rename preserves that handle, including for late readers,
+        // without copying bytes or waiting for slow consumers to finish.
+        await fsp.rename(this.tmp, blobPath);
+        await this.publish({ digest, blobPath, size: this.written });
+      }
+      this.resolvePublication();
+      // The retention budget is not a response-size limit. Oversized spools retire below.
+    } catch (error) {
+      this.rejectPublication(error);
+      throw error;
+    } finally {
+      try {
+        while (this.readers > 0) await new Promise<void>((resolve) => this.changed.add(resolve));
+      } finally {
+        try {
+          await this.writer.close();
+        } finally {
+          await fsp.rm(this.tmp, { force: true });
+        }
+      }
+    }
+  }
+}
+
 export class AssetDiskCache {
   private readonly blobsDir: string;
   private readonly metadataDir: string;
@@ -117,8 +416,17 @@ export class AssetDiskCache {
   private readonly maxBytes: number;
   /** path → content digest + per-path metadata key */
   private readonly index = new Map<string, IndexEntry>();
-  /** Single-flight: path → in-flight population (resolves to the persisted asset, or null if uncacheable). */
-  private readonly inflight = new Map<string, Promise<ServedAsset | null>>();
+  /** One owned upstream fetch per immutable path, with independent consumers. */
+  private readonly inflight = new Map<
+    string,
+    {
+      controller: AbortController;
+      references: number;
+      claimed: boolean;
+      ready: Promise<AssetPopulation | FetchedResponse>;
+    }
+  >();
+  private readonly populations = new Set<AssetPopulation>();
   /** Serializes index writes + prune so concurrent persists don't clobber index.json. */
   private writeChain: Promise<void> = Promise.resolve();
   private ready = false;
@@ -151,67 +459,96 @@ export class AssetDiskCache {
   /**
    * Serve `cacheKey`, fetching over the pipe only on a miss.
    *  - Disk hit (index → digest → blob) → `{kind:"asset"}`, `fetcher` NOT called.
-   *  - Miss → single-flighted `fetcher()`. A cacheable body is teed so the first
-   *    caller can stream immediately while hashing and persistence finish in the
-   *    background. Otherwise the live response is streamed through untouched.
+   *  - Miss → one bounded network-to-disk population. Every caller streams from
+   *    its own position in that growing file, including a demand joining prewarm.
+   *    Lagging consumers retain disk bytes rather than an unbounded tee queue.
    */
-  async serve(cacheKey: string, fetcher: () => Promise<FetchedResponse>): Promise<ServeOutcome> {
+  async serve(
+    cacheKey: string,
+    fetcher: (signal: AbortSignal) => Promise<FetchedResponse>,
+    signal?: AbortSignal
+  ): Promise<ServeOutcome> {
     if (!this.ready) throw new Error("AssetDiskCache.init() not called");
-
-    // 1. Disk hit.
+    signal?.throwIfAborted();
     const hit = await this.readByPath(cacheKey);
+    signal?.throwIfAborted();
     if (hit) return { kind: "asset", asset: hit };
 
-    // 2. Coalesce with an in-flight population for the same key.
-    const existing = this.inflight.get(cacheKey);
-    if (existing) {
-      const asset = await existing;
-      if (asset) return { kind: "asset", asset };
-      // The owner's response was uncacheable — the cache can't help. Fetch our own
-      // (rare: concurrent requests for a no-store path) and stream it through.
-      return { kind: "passthrough", response: await fetcher() };
-    }
-
-    // 3. We own the population for this path.
-    let settle!: (asset: ServedAsset | null) => void;
-    const populated = new Promise<ServedAsset | null>((resolve) => {
-      settle = resolve;
-    });
-    this.inflight.set(cacheKey, populated);
-    try {
-      const response = await fetcher();
-      if (!response.cacheable || !response.body) {
-        settle(null);
-        this.inflight.delete(cacheKey);
-        return { kind: "passthrough", response };
-      }
-      const [cacheBody, passthroughBody] = response.body.tee();
-      const passthroughResponse: FetchedResponse = {
-        ...response,
-        cacheable: false,
-        body: passthroughBody,
-      };
-      // Do not hold the renderer behind hashing, disk I/O, index persistence,
-      // or pruning. Concurrent callers still join `populated` and receive the
-      // completed cache entry once the background branch settles.
-      void this.persist(cacheKey, { ...response, body: cacheBody })
-        .then((asset) => settle(asset))
-        .catch((err: unknown) => {
-          if (err instanceof CachePopulationTooLargeError) {
-            console.warn(`[AssetDiskCache] ${err.message}; serving ${cacheKey} without caching`);
-          } else {
-            console.warn(`[AssetDiskCache] Failed to cache ${cacheKey}:`, err);
+    let flight = this.inflight.get(cacheKey);
+    if (!flight) {
+      const controller = new AbortController();
+      flight = {
+        controller,
+        references: 0,
+        claimed: false,
+        ready: Promise.resolve().then(async () => {
+          const response = await fetcher(controller.signal);
+          if (!response.cacheable || !response.body) {
+            this.inflight.delete(cacheKey);
+            return response;
           }
-          settle(null);
-        })
-        .finally(() => {
-          this.inflight.delete(cacheKey);
-        });
-      return { kind: "passthrough", response: passthroughResponse };
-    } catch (err) {
-      settle(null);
-      this.inflight.delete(cacheKey);
-      throw err;
+          const population = await AssetPopulation.create(
+            response as FetchedResponse & { body: ReadableStream<Uint8Array> },
+            path.join(this.blobsDir, `.stream.${process.pid}.${randomUUID()}.tmp`),
+            this.maxBytes,
+            controller.signal,
+            (streamed) => this.publish(cacheKey, response, streamed)
+          );
+          this.populations.add(population);
+          // Every waiting caller acquires its reader before the producer starts.
+          queueMicrotask(() => population.start());
+          void population.done
+            .then(() => {
+              if (this.inflight.get(cacheKey) === flight) this.inflight.delete(cacheKey);
+              this.populations.delete(population);
+            })
+            .catch(() => undefined);
+          return population;
+        }),
+      };
+      this.inflight.set(cacheKey, flight);
+      void flight.ready.catch(() => {
+        if (this.inflight.get(cacheKey) === flight) this.inflight.delete(cacheKey);
+      });
+    }
+    const owned = flight;
+    owned.references++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      owned.references--;
+      if (owned.references === 0) owned.controller.abort(new Error("All asset consumers closed"));
+    };
+    try {
+      const resource = await waitForAsset(owned.ready, signal, release);
+      if (resource instanceof AssetPopulation) {
+        if (resource.canPublish) {
+          release();
+          await resource.done;
+          return this.serve(cacheKey, fetcher, signal);
+        }
+        return resource.serve(release, signal);
+      }
+      if (owned.claimed) {
+        release();
+        return this.serve(cacheKey, fetcher, signal);
+      }
+      owned.claimed = true;
+      if (!resource.body) {
+        release();
+        return { kind: "passthrough", response: resource };
+      }
+      return {
+        kind: "passthrough",
+        response: {
+          ...resource,
+          body: ownAssetBody(resource.body, release, signal),
+        },
+      };
+    } catch (error) {
+      release();
+      throw error;
     }
   }
 
@@ -295,7 +632,8 @@ export class AssetDiskCache {
    * admitted while this barrier is waiting.
    */
   async close(): Promise<void> {
-    await Promise.allSettled([...this.inflight.values()]);
+    await Promise.allSettled([...this.inflight.values()].map((flight) => flight.ready));
+    await Promise.all([...this.populations].map((population) => population.done));
     await this.writeChain;
   }
 
@@ -347,11 +685,11 @@ export class AssetDiskCache {
     };
   }
 
-  private async persist(
+  private async publish(
     cacheKey: string,
-    response: FetchedResponse & { body: ReadableStream<Uint8Array> }
+    response: FetchedResponse,
+    streamed: { digest: string; blobPath: string; size: number }
   ): Promise<ServedAsset> {
-    const streamed = await this.writeStreamToContentAddressedBlob(response.body);
     const { digest, blobPath, size } = streamed;
     const metadataKey = createHash("sha256").update(cacheKey).digest("hex");
 
@@ -382,50 +720,6 @@ export class AssetDiskCache {
       bodyPath: blobPath,
       size,
     };
-  }
-
-  private async writeStreamToContentAddressedBlob(
-    stream: ReadableStream<Uint8Array>
-  ): Promise<{ digest: string; blobPath: string; size: number }> {
-    const tmp = path.join(this.blobsDir, `.stream.${process.pid}.${randomUUID()}.tmp`);
-    const reader = stream.getReader();
-    const hash = createHash("sha256");
-    const handle = await fsp.open(tmp, "wx");
-    let size = 0;
-    let closed = false;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value || value.byteLength === 0) continue;
-        size += value.byteLength;
-        if (size > this.maxBytes) {
-          const error = new CachePopulationTooLargeError(this.maxBytes);
-          void reader.cancel(error).catch(() => undefined);
-          throw error;
-        }
-        hash.update(value);
-        await handle.write(value);
-      }
-      await handle.close();
-      closed = true;
-      const digest = hash.digest("hex");
-      const blobPath = path.join(this.blobsDir, digest);
-      try {
-        await fsp.rename(tmp, blobPath);
-      } catch (error) {
-        try {
-          await fsp.access(blobPath);
-        } catch {
-          throw error;
-        }
-      }
-      return { digest, blobPath, size };
-    } finally {
-      reader.releaseLock();
-      if (!closed) await handle.close().catch(() => undefined);
-      await fsp.rm(tmp, { force: true }).catch(() => undefined);
-    }
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {

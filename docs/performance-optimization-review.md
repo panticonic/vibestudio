@@ -15,6 +15,44 @@ is otherwise validated.
 
 ## Open choices
 
+- **Remote server / local client UX / 2026-10-01**
+  - **Implemented:** Preserve speculative initial-asset prewarming and give
+    demand/prewarming independently paced readers of one growing disk spool.
+    Remove asset elapsed-time watchdogs and join owned work on lifecycle
+    cancellation. Propagate recovery failures and wait for renderer completion
+    before publishing workspace readiness. In Base's chat hook, distinguish
+    accepted publication from transcript refresh: show the original refresh
+    error without restoring or requeuing the accepted mutation.
+  - **Evidence:** 77 focused host tests passed. The host typecheck, lint, build contracts,
+    and template-checkout hygiene passed. A real Electron Iroh pairing/restart
+    smoke passed with retained System/Personal panel trees, rendered onboarding,
+    native menu/title checks, and no repeat pairing. The native prototype passed
+    18 real endpoint/stream/dial tests and a UniFFI cargo check. Eighteen focused
+    Base tests and the composition typecheck passed through the host-owned
+    userland projection, never a template tool workspace.
+  - **Performance boundary:** Native startup profiling measured 3,861 ms for
+    System semantic activation, including 3,739 ms of snapshot import. Chat's
+    build profile measured 11,170 ms and a 17.35 ms identical-key repeat, with
+    2,029,308 initial bytes over 31 resources; CSS accounts for 750,061 bytes.
+    These are individual runs with inherited validated caches, not a controlled
+    WAN cold/warm comparison or evidence of a speedup from these changes.
+  - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
+    bindings and matching native artifacts, then adopt request-owned cancellation
+    in the endpoint-generation owner. Production dependency pins are unchanged.
+  - **Remaining design work:** An interrupted mutation with no acceptance
+    receipt still has an unknown outcome. Recovering it requires a stable
+    operation identity and authoritative status/replay at the operation owner;
+    transport-level replay of arbitrary mutations would be unsafe. The accepted
+    chat-publication fix addresses the distinct receipt-followed-by-refresh
+    failure. Do not describe it as a universal exactly-once mutation journal.
+  - **Recommended measurement:** Compare prewarm/demand overlap and semantic
+    panel readiness under controlled WAN latency, loss, and cold/warm caches,
+    including slow-disk clients and mobile. Use native panel/build profiling.
+    No new transport scheduler, speculative concurrency limit, RPC bootstrap
+    endpoint, or payload removal was justified by this pass's attribution.
+    Required runtime peers remain; confirm unused styles/modules with coverage
+    before splitting them.
+
 - **Build track, tranche 3 / 2026-07-27**
   - **Choice:** Reuse infrastructure package outputs only when a package's
     transitive local-source closure, root build configuration, lockfile,
