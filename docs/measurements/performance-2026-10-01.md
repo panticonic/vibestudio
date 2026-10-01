@@ -210,7 +210,7 @@ of its constituent checks in a 12,349 ms managed run. No broad suite ran alongsi
 the agent latency experiment.
 
 Private logs, native profiles, captured immutable requests, and trajectories are
-under `/tmp/vibestudio-perf-20261001`, with restrictive permissions. The initial
+under `/home/werg/.cache/vibestudio-performance/2026-10-01-initial`, with restrictive permissions. The initial
 agent run is `st_f41267655fa643c58a3f8ce97c07edc8`, passing build-profile run
 `st_ac297457b82741ada34b2a1b320d4037`, and passing chat run
 `st_88599bf83a5c46f3bdf6fb4da5d3a7ea`. Raw trajectories are not published here.
@@ -234,3 +234,127 @@ also required removing inherited `WAYLAND_DISPLAY` and `XDG_SESSION_TYPE`. Xvfb
 was extracted into the private temporary directory rather than installed into
 the host. The smoke owns and cleans its desktop, hub, workspace processes, secret
 service, and application state.
+
+## Follow-up: template preparation and the New launcher
+
+The follow-up removes a repeated status scan of already sealed private template
+checkpoints, runs independent checkpoint and snapshot work with four concurrent
+owners, and joins all started inspections before propagating a failure. Native
+Git still captures visible tracked and untracked edits in private repositories;
+exact snapshot admission and template validation remain mandatory. Selection
+order and canonical source pins are preserved.
+
+A controlled replay of the canonical `resolveDevelopmentTemplateSet` operation
+used the same eight source pins for all six samples, fresh checkpoint roots, and
+no other heavy work from this investigation. Original preparation took 8,622,
+8,360, and 8,147 ms. The candidate took 4,632, 4,984, and 5,563 ms. Median
+preparation fell from 8,360 to 4,984 ms, a 40.4% reduction. The redundant Base
+checkpoint status walk alone had measured 2,797 ms. This is preparation before
+application launch, rather than a claim about total onboarding or model time.
+
+New previously waited for both `workspace.sourceTree()` and
+`workers.listServices()` before publishing its launchable panel catalogue. In
+one native operation, the source tree returned in 42 ms and service discovery in
+231 ms. The launcher now publishes the catalogue as soon as its authoritative
+source tree arrives. Independent, single-flight service discovery still enables
+history when available; its failure retains the original diagnostic and leaves
+panel launching usable. Existing history, ranking, launch links, keyboard modes,
+user preferences, and permissions retain their normal behavior.
+
+The HTTP runtime helpers now use the existing compression path with a bounded
+cache shared by individual helper responses and bundle records. Negotiation,
+versioned immutable caching, identity responses, and content digests remain
+intact. For the exact same browser transport script, the original HTTP response
+transferred 594,517 bytes despite accepting compression. The candidate transfers
+79,334 bytes with Brotli (86.7% less), or 101,972 with gzip. Both decompress to
+594,517 bytes with the original SHA-256 digest. Chromium resource timing also
+observed 79,334 encoded bytes and 594,517 decoded bytes. Shared styles and normal
+build artifacts were already compressed; their decoded sizes are not savings
+from this change.
+
+Native New profiles used fresh named instances and the same profiling options.
+The initial exploratory samples overlapped template benchmarking and are not a
+reliable latency baseline. A subsequent control restored the original launcher
+and helper serving code, with the optimized template preparation retained. Both
+control and candidate used fresh application state, derived caches, and npm
+caches. Their first New build receipts were `preexisting`, so neither is a cold
+compilation claim.
+
+| New boundary | Control | Candidate |
+| --- | ---: | ---: |
+| First native panel open after build profiling | 1,324 ms | 1,371 ms |
+| Four subsequent opens | 406 / 397 / 404 / 422 ms | 462 / 464 / 435 / 399 ms |
+| Four subsequent first paints | 184 / 196 / 188 / 208 ms | 192 / 200 / 216 / 188 ms |
+| Five native reloads | 125 / 164 / 113 / 101 / 92 ms | 165 / 215 / 101 / 105 / 97 ms |
+| New initial emitted payload | 1,640,949 bytes | 1,641,137 bytes |
+| Verified repeat build | 27 ms | 15 ms |
+
+Each verified repeat preserved its first build key and returned no diagnostics.
+Control New key was `088f7eeef51520d7c2f23aa68fdcf76d5879d0e464e2e4a95c94d1d3e0267d15`;
+candidate key was `b5c53aa78ae98ce70d95e0b5deb4f7c4dcd95774e89c5cec329fb93db2bdfd0f`.
+All ten observed panels initially focused the combobox. These small loopback
+samples do not establish a panel-open speedup; the verified benefits are fewer
+transport bytes and removal of the optional service-discovery readiness gate.
+Runtime helper bytes are outside the panel's initial emitted payload above.
+
+The exact managed `build-performance-profile` test passed in 66,261 ms with no
+tool failures. Its agent used ten model calls totaling 26,098 ms and chose a
+cold Terminal build. This differs from the earlier agent's target and workflow;
+it does not establish an agent-inference speedup. Deterministic real chat-panel
+responses completed in 3,088, 519, and 604 ms, with no browser long tasks and no
+failed requests. Compiler validation, required patched provider SDK installs,
+semantic snapshot admission, and model inference remain substantial cold costs.
+Required peers, styles, compiler checks, and provider behavior were preserved.
+
+
+### Follow-up cold desktop verification and limits
+
+The final successful desktop run used an isolated host review worktree containing
+only this pass's host changes, fresh application state, and unique empty derived
+and npm caches. Its native shell startup was 24,303 ms; command-to-shell was
+33,171 ms. Onboarding rendered in 63,909 ms from the local launch phase, or
+72,062 ms from the command. The complete smoke, including separately opening New,
+reading history, filtering `@Help`, launching Help with Enter, and cleanup, passed
+in 84,282 ms. Installed host dependencies and verified host outputs remained
+available, as defined in the cold-state boundary above. This individual run does
+not establish a total-startup improvement over the earlier 71,816 ms onboarding
+observation.
+
+A fresh-application repeat with the same derived/npm caches also passed the full
+smoke in 64,652 ms, reaching onboarding at 51,826 ms from the command. This is
+warm-derived evidence, not another completely cold run. A further empty-cache
+repeat reached its native shell boundary in 31,777 ms, then reported that the
+shell renderer was `killed` and failed with `Hosted desktop chrome is unavailable`.
+Its owned processes and temporary state were retired. The cause of that renderer
+termination was not established; it is retained as a failed observation rather
+than folded into successful timing claims.
+
+Earlier cold investigations twice blocked workspace admission behind a generic
+reporting-preference failure banner, including once in the isolated host candidate.
+This intermittent failure has not been diagnosed or claimed fixed. The reporting
+UI now preserves the original save error in its banner, and the smoke propagates
+a visible reporting failure before continuing to wait for admission. The latest
+successful cold run and fresh-application repeat did not reproduce that failure.
+Consent revisions, trusted UI checks, explicit retry, and admission gates remain
+intact. The investigation did not add automatic recovery or production deadlines.
+
+Verification passed 60 focused host tests, 21 New launcher tests, and 15 reporting
+UI tests, plus Base and System composition typechecks. The isolated host commit
+gate checks host/workerd types, lint, format, template hygiene, documentation,
+authority, and dependency boundaries. Native profiling instances
+`perf-new-20261001-baseline`, `perf-new-20261001-final`, and
+`perf-new-20261001-control` were stopped; opened panels and inspector connections
+were closed. Logs, native profiles, failed observations, and screenshots remain
+private under `/home/werg/.cache/vibestudio-performance/2026-10-01-follow-up`.
+
+
+The retained benchmarking caches initially occupied approximately 9.7 GB on this
+host's RAM-backed `/tmp`. They contributed materially to memory pressure and
+should have been retired sooner. All completed runs' derived caches were removed;
+retained evidence and the review worktree were moved to the disk-backed private
+cache directory above. `/tmp` usage fell from 11 GB to 1.1 GB, and available memory
+rose to approximately 20 GB. No owned profiling process remained live. The other
+active instance, `trello-import-20261001`, was left running. This resource evidence
+does not by itself establish the cause of the earlier renderer termination.
+Future cold experiments should allocate their fresh caches on disk and remove
+owned caches after inspection rather than accumulate them on a RAM filesystem.

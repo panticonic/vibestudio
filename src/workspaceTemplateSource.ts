@@ -92,15 +92,19 @@ export async function inspectWorkspaceSources(input: {
   declareDependencies?: ReadonlyMap<string, readonly string[]>;
 }): Promise<WorkspaceSourceInspection[]> {
   const gitClient = new GitClient();
-  const selections: WorkspaceSourceInspection[] = [];
+  const selections = new Array<WorkspaceSourceInspection>(input.checkouts.length);
   const selectedUrls = new Set<string>();
-  for (const [index, requested] of input.checkouts.entries()) {
+  const checkouts = input.checkouts.map((requested) => {
     const sourceCheckout = fs.realpathSync(path.resolve(requested));
     const url = canonicalTemplateUrlFromCheckout(sourceCheckout);
     if (selectedUrls.has(url)) {
       throw new Error(`Template checkout selected more than once for ${url}`);
     }
     selectedUrls.add(url);
+    return { sourceCheckout, url };
+  });
+  const inspect = async (index: number): Promise<void> => {
+    const { sourceCheckout, url } = checkouts[index]!;
     const checkpoint = await checkpointWorkspaceSource({
       checkout: sourceCheckout,
       target: path.join(input.checkpointRoot, String(index)),
@@ -108,14 +112,20 @@ export async function inspectWorkspaceSources(input: {
     for (const dependencyUrl of input.declareDependencies?.get(sourceCheckout) ?? []) {
       declareCheckpointDependency(checkpoint.checkout, dependencyUrl);
     }
-    const status = await gitClient.status(checkpoint.checkout);
-    if (!status.commit || !status.branch) {
+    // The checkpoint already sealed the visible worktree. Read its identity,
+    // then admit the immutable commit tree below; a second whole-worktree
+    // status walk adds no evidence to that snapshot boundary.
+    const [commit, branch] = await Promise.all([
+      gitClient.getCurrentCommit(checkpoint.checkout),
+      gitClient.getCurrentBranch(checkpoint.checkout),
+    ]);
+    if (!commit || !branch) {
       throw new Error(`Development template checkpoint ${checkpoint.checkout} has no named commit`);
     }
     const snapshot = await readExactGitSnapshot({
       git: gitClient,
       dir: checkpoint.checkout,
-      commit: status.commit,
+      commit,
       label: `development template ${url}`,
       sink: {
         async put(bytes) {
@@ -133,10 +143,10 @@ export async function inspectWorkspaceSources(input: {
     });
     const pin = WorkspaceTemplatePinSchema.parse({
       url,
-      ref: `refs/heads/${status.branch}`,
+      ref: `refs/heads/${branch}`,
       commit: snapshot.commit,
     }) as WorkspaceTemplatePin;
-    selections.push({
+    selections[index] = {
       ...checkpoint,
       pin,
       review: {
@@ -151,7 +161,18 @@ export async function inspectWorkspaceSources(input: {
         ...manifest.inventory,
         dependencies: manifest.dependencies,
       },
-    });
+    };
+  };
+  // Each checkpoint and snapshot has its own immutable repository. Bound the
+  // independent I/O, preserve source order, and join every started inspection
+  // before propagating its original failure to the owner of checkpointRoot.
+  let next = 0;
+  const workers = Array.from({ length: Math.min(4, checkouts.length) }, async () => {
+    while (next < checkouts.length) await inspect(next++);
+  });
+  const results = await Promise.allSettled(workers);
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
   }
   return selections;
 }

@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 // Checkpoint construction owns every writer. Git's automatic maintenance may
 // detach a pack rewrite after commit, racing the exact snapshot reader.
@@ -13,17 +16,25 @@ export const CHECKPOINT_GIT_CONFIG = [
   "gc.auto=0",
 ] as const;
 
-function git(directory: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
+async function git(
+  directory: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv
+): Promise<string> {
   // A checkpoint lands the whole workspace inside a private temporary tree, so
   // its deepest paths are the developer's plus wherever the checkpoint sits.
   // Windows refuses those past 260 characters unless Git is told otherwise, and
   // the failure is per-file — a checkout that mostly worked, missing exactly
   // the files with the longest names.
-  return execFileSync("git", [...CHECKPOINT_GIT_CONFIG, "-C", directory, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    ...(env ? { env } : {}),
-  });
+  const { stdout } = await execFileAsync(
+    "git",
+    [...CHECKPOINT_GIT_CONFIG, "-C", directory, ...args],
+    {
+      encoding: "utf8",
+      ...(env ? { env } : {}),
+    }
+  );
+  return stdout;
 }
 
 function copyWorktreePath(sourceRoot: string, targetRoot: string, relativePath: string): void {
@@ -74,13 +85,15 @@ export async function checkpointWorkspaceSource(input: {
   // Native Git owns developer checkouts, including linked/detached worktrees.
   // Always seal a private clone, so downstream exact readers never observe a
   // live checkout or need to interpret its .git indirection.
-  const commit = git(sourceCheckout, ["rev-parse", "--verify", "HEAD"]).trim();
+  const commit = (await git(sourceCheckout, ["rev-parse", "--verify", "HEAD"])).trim();
   const changedPaths = [
     ...new Set([
-      ...git(sourceCheckout, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"]).split(
+      ...(
+        await git(sourceCheckout, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"])
+      ).split("\0"),
+      ...(await git(sourceCheckout, ["ls-files", "--others", "--exclude-standard", "-z"])).split(
         "\0"
       ),
-      ...git(sourceCheckout, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
     ]),
   ]
     .filter(Boolean)
@@ -91,21 +104,22 @@ export async function checkpointWorkspaceSource(input: {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   // Transfer objects through Git's snapshot protocol instead of copying a
   // live object directory (which can inherit borrowed alternates and race GC).
-  execFileSync(
-    "git",
-    [...CHECKPOINT_GIT_CONFIG, "clone", "--no-local", "--no-checkout", sourceCheckout, target],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  );
-  git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", commit]);
+  await execFileAsync("git", [
+    ...CHECKPOINT_GIT_CONFIG,
+    "clone",
+    "--no-local",
+    "--no-checkout",
+    sourceCheckout,
+    target,
+  ]);
+  await git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", commit]);
   for (const relativePath of changedPaths) copyWorktreePath(sourceCheckout, target, relativePath);
-  git(target, ["add", "-A"]);
+  await git(target, ["add", "-A"]);
   try {
-    git(target, ["diff", "--cached", "--quiet"]);
+    await git(target, ["diff", "--cached", "--quiet"]);
   } catch (error) {
-    if ((error as { status?: number }).status !== 1) throw error;
-    git(target, ["commit", "--no-gpg-sign", "-m", "Vibestudio development checkpoint"], {
+    if ((error as { code?: number }).code !== 1) throw error;
+    await git(target, ["commit", "--no-gpg-sign", "-m", "Vibestudio development checkpoint"], {
       ...process.env,
       GIT_AUTHOR_NAME: "Vibestudio Development",
       GIT_AUTHOR_EMAIL: "development@vibestudio.invalid",

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
-import { gunzipSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
@@ -756,6 +756,45 @@ describe("PanelHttpServer build cache", () => {
     );
 
     expect(getBuild).toHaveBeenCalledWith("panels/my-app", undefined);
+  });
+
+  it("negotiates runtime helper compression without changing content or cache identity", async () => {
+    const server = new PanelHttpServer();
+    const helper = PANEL_RUNTIME_HELPER_SET.helpers.find((entry) => entry.path === "__loader.js")!;
+    expect(helper.body.byteLength).toBeGreaterThan(1_024);
+    for (const [accept, encoding] of [
+      ["br, gzip", "br"],
+      ["br;q=0.1, gzip;q=1", "gzip"],
+      ["br;q=0, gzip;q=0", undefined],
+    ] as const) {
+      const url = `/__loader.js?v=${PANEL_RUNTIME_HELPER_SET.version}`;
+      const response = await handlePanelRequest(server, url, { "accept-encoding": accept });
+      expect(response.statusCodeWritten).toBe(200);
+      expect(response.headersWritten?.["Content-Encoding"]).toBe(encoding);
+      expect(response.headersWritten?.["Vary"]).toBe("Accept-Encoding");
+      expect(response.headersWritten?.["Cache-Control"]).toBe(
+        "public, max-age=31536000, immutable"
+      );
+      const body = Buffer.from(response.body as string | Uint8Array);
+      expect(response.headersWritten?.["Content-Length"]).toBe(body.length);
+      const decoded =
+        encoding === "br"
+          ? brotliDecompressSync(body)
+          : encoding === "gzip"
+            ? gunzipSync(body)
+            : body;
+      expect(decoded).toEqual(helper.body);
+      if (encoding) {
+        expect(body.length).toBeLessThan(helper.body.length);
+        const repeated = await handlePanelRequest(server, url, { "accept-encoding": accept });
+        expect(repeated.body).toBe(response.body);
+      }
+    }
+    const mutable = await handlePanelRequest(server, "/panels/my-app/__loader.js", {
+      "accept-encoding": "gzip",
+    });
+    expect(mutable.headersWritten?.["Cache-Control"]).toBe("no-store");
+    expect(gunzipSync(mutable.body as Buffer)).toEqual(helper.body);
   });
 
   it("serves runtime helpers from a panel route for workspace-prefixed clients", async () => {

@@ -20,7 +20,6 @@ import type {
 import { artifactFilePath, readArtifactBytesAsync } from "./buildV2/buildStore.js";
 import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
-import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
@@ -181,6 +180,7 @@ function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise
 
 export class PanelHttpServer {
   private readonly runtimeHelperSet = getPanelRuntimeHelperSet();
+  private readonly compressedRuntimeHelpers = new Map<string, Promise<Buffer>>();
   constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
 
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
@@ -529,7 +529,7 @@ export class PanelHttpServer {
     }
 
     // ── Static runtime helpers ────────────────────────────────────────────
-    if (this.serveRuntimeHelper(pathname, url, res)) {
+    if (await this.serveRuntimeHelper(pathname, url, req, res)) {
       return;
     }
 
@@ -541,7 +541,7 @@ export class PanelHttpServer {
 
     const parsed = extractSourcePath(pathname);
     if (parsed) {
-      if (this.serveRuntimeHelper(parsed.resource, url, res)) {
+      if (await this.serveRuntimeHelper(parsed.resource, url, req, res)) {
         return;
       }
       const contextId =
@@ -691,27 +691,35 @@ export class PanelHttpServer {
     return ref ? `${source}@${ref}` : source;
   }
 
-  private serveRuntimeHelper(
+  private async serveRuntimeHelper(
     pathname: string,
     url: URL,
+    req: import("http").IncomingMessage,
     res: import("http").ServerResponse
-  ): boolean {
+  ): Promise<boolean> {
+    const helper = this.runtimeHelperSet.helpers.find((entry) => `/${entry.path}` === pathname);
+    if (!helper) return false;
     const versioned = url.searchParams.get("v") === this.runtimeHelperSet.version;
-    const headers = {
-      "Content-Type": "application/javascript; charset=utf-8",
+    const encoding =
+      helper.body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
+    const encoded = encoding
+      ? await this.compressedContent(
+          this.compressedRuntimeHelpers,
+          `sha256-${helper.integrity}`,
+          helper.path,
+          helper.body,
+          encoding
+        )
+      : null;
+    res.writeHead(200, {
+      "Content-Type": helper.contentType,
+      "Content-Length": encoded?.length ?? helper.body.length,
       "Cache-Control": versioned ? "public, max-age=31536000, immutable" : "no-store",
-    };
-    if (pathname === "/__loader.js") {
-      res.writeHead(200, headers);
-      res.end(PANEL_BOOTSTRAP_SCRIPT);
-      return true;
-    }
-    if (pathname === "/__transport.js") {
-      res.writeHead(200, headers);
-      res.end(this.runtimeHelperSet.browserTransportJs);
-      return true;
-    }
-    return false;
+      Vary: "Accept-Encoding",
+      ...(encoding && encoded ? { "Content-Encoding": encoding } : {}),
+    });
+    res.end(encoded ?? helper.body.toString("utf8"));
+    return true;
   }
 
   private refFromReferer(req: import("http").IncomingMessage): string | null {
@@ -1068,7 +1076,12 @@ export class PanelHttpServer {
       // and, unlike a whole-response encoding flag, cannot mislabel anything.
       const encoded =
         gzip && artifact.encoding !== "base64" && raw.length >= 1_024
-          ? await this.compressedArtifact(build, artifact, raw)
+          ? await this.compressedContent(
+              build.compressedArtifacts,
+              artifact.integrity,
+              artifact.path,
+              raw
+            )
           : null;
       const record = encoded
         ? encodeBlobRecord(
@@ -1085,9 +1098,12 @@ export class PanelHttpServer {
       const helper = this.runtimeHelperSet.helpers[index]!;
       const encoded =
         gzip && helper.body.byteLength >= 1_024
-          ? await new Promise<Buffer>((resolve, reject) => {
-              zlib.gzip(helper.body, (error, value) => (error ? reject(error) : resolve(value)));
-            })
+          ? await this.compressedContent(
+              this.compressedRuntimeHelpers,
+              `sha256-${helper.integrity}`,
+              helper.path,
+              helper.body
+            )
           : null;
       const record = encoded
         ? encodeBlobRecord(
@@ -1104,34 +1120,35 @@ export class PanelHttpServer {
   }
 
   /**
-   * The artifact's compressed form: the warm cross-build derivative if there is
-   * one, else compressed once and kept for this build.
+   * The content's compressed form: the warm derivative if there is one, else
+   * compressed once and kept by its build or runtime helper owner.
    *
    * Shared by the per-asset route and the bundle so a device receives the same
    * bytes either way, and so one panel open cannot compress the same artifact
    * twice. Returns null when compression fails — the caller sends identity.
    */
-  private async compressedArtifact(
-    build: CachedBuild,
-    artifact: BuildArtifactManifestEntry & { content: string },
+  private async compressedContent(
+    cache: Map<string, Promise<Buffer>>,
+    integrity: string | undefined,
+    name: string,
     body: Buffer,
     encoding: PanelContentEncoding = "gzip"
   ): Promise<Buffer | null> {
-    if (artifact.integrity) {
-      const derivative = await this.transportDerivativeCache.get(artifact.integrity, encoding);
+    if (integrity) {
+      const derivative = await this.transportDerivativeCache.get(integrity, encoding);
       if (derivative) return derivative;
     }
-    const cacheKey = `${encoding}:${artifact.path}`;
-    let compressed = build.compressedArtifacts.get(cacheKey);
+    const cacheKey = `${encoding}:${integrity ?? name}`;
+    let compressed = cache.get(cacheKey);
     if (!compressed) {
       compressed = compressArtifact(body, encoding);
-      build.compressedArtifacts.set(cacheKey, compressed);
+      cache.set(cacheKey, compressed);
     }
     try {
       return await compressed;
     } catch (error) {
-      build.compressedArtifacts.delete(cacheKey);
-      log.warn(`Failed to ${encoding}-compress panel artifact ${artifact.path}: ${String(error)}`);
+      cache.delete(cacheKey);
+      log.warn(`Failed to ${encoding}-compress panel content ${name}: ${String(error)}`);
       return null;
     }
   }
@@ -1208,7 +1225,13 @@ export class PanelHttpServer {
     const encoding =
       body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     const compressedBody = encoding
-      ? await this.compressedArtifact(build, artifact, body, encoding)
+      ? await this.compressedContent(
+          build.compressedArtifacts,
+          artifact.integrity,
+          artifact.path,
+          body,
+          encoding
+        )
       : null;
     res.writeHead(200, {
       "Content-Type": artifact.contentType,

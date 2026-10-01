@@ -1287,6 +1287,12 @@ async function readInitialPanelHistory(app, webContentsId, workspaceId) {
 async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) {
   let latestObservation = null;
   while (Date.now() < deadline) {
+    const reportingFailure = await evaluateHostedChrome(
+      app,
+      `document.querySelector('[data-shell-top-chrome="reporting-choice-status"] [role="alert"]')?.textContent ?? null`,
+      "checking reporting readiness before workspace admission"
+    );
+    if (reportingFailure) throw new Error(`Reporting preference blocked startup: ${reportingFailure}`);
     if (await clickDesktopButton(app, /^Add to workspace$/i)) {
       await sleep(750);
       continue;
@@ -2239,6 +2245,57 @@ async function main(ownerSignal) {
       console.log(
         `[desktop-smoke] Separately opened Personal New and read history: ${JSON.stringify(newPanel)}`
       );
+      const launcherPresentation = await nativeRpc(
+        page,
+        { kind: "workspace", workspaceId: personal.workspaceId },
+        "view.getLocalPresentation",
+        [newPanel.panelId]
+      );
+      const launcherUrl = await evaluateElectron(
+        electronApp,
+        ({ webContents }, id) => webContents.fromId(id)?.getURL(),
+        launcherPresentation.presentation.webContentsId,
+        "finding the actual launcher renderer"
+      );
+      const launcher = await until(
+        async () => {
+          ownerSignal.throwIfAborted();
+          return electronApp.context().pages().find(
+            (candidate) => !candidate.isClosed() && candidate.url() === launcherUrl
+          );
+        },
+        "finding the native Personal launcher page",
+        deadlineMs
+      );
+      const launcherInput = launcher.getByRole("combobox");
+      await launcherInput.fill("@Help");
+      const launcherState = await launcher.evaluate(() => ({
+        input: document.querySelector("textarea")?.value,
+        titles: [...document.querySelectorAll(".launcher-title")].map((entry) => entry.textContent),
+        selected: document.querySelector('[aria-selected="true"]')?.textContent,
+        links: [...document.querySelectorAll("a.launcher-row")].map((entry) => entry.getAttribute("href")),
+      }));
+      console.log(`[desktop-smoke] Filtered launcher: ${JSON.stringify(launcherState)}`);
+      await launcher.locator("a.launcher-row").filter({
+        has: launcher.locator(".launcher-title").filter({ hasText: /^Help$/ }),
+      }).waitFor({
+        state: "visible",
+        timeout: Math.min(15_000, Math.max(1_000, deadlineMs - Date.now())),
+      });
+      await launcherInput.press("Enter");
+      await until(
+        async () => {
+          ownerSignal.throwIfAborted();
+          for (const candidate of electronApp.context().pages()) {
+            if (candidate.isClosed() || !candidate.url().includes("/about/help/")) continue;
+            if (await candidate.getByText("Getting Started", { exact: true }).isVisible()) return true;
+          }
+          return false;
+        },
+        "launching Help with the keyboard",
+        deadlineMs
+      );
+      console.log("[desktop-smoke] Personal New launched Help with the keyboard");
       await assertCleanDesktopDiagnostics(electronApp);
       console.log(
         "[desktop-smoke] PASS account-only local startup; exactly Personal/System; one initial onboarding chat auto-submitted its configured prompt and rendered setup inline at full width; separately opened Personal New and read history; both workspace icons decoded"

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 
 import { GitClient } from "@vibestudio/git";
@@ -63,12 +63,80 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (previousSharedCache === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
   else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedCache;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("development template selection", () => {
+  it("preserves selection order when independent checkpoints finish out of order", async () => {
+    const first = fixture();
+    const second = fixture();
+    git(second.checkout, "remote", "set-url", "origin", "https://example.test/second.git");
+    const original = GitClient.prototype.getCurrentCommit;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(GitClient.prototype, "getCurrentCommit").mockImplementation(async function (
+      this: GitClient,
+      dir
+    ) {
+      if (dir === path.join(first.checkpointRoot, "0")) await held;
+      else release();
+      return original.call(this, dir);
+    });
+    const selections = await inspectWorkspaceSources({
+      checkouts: [first.checkout, second.checkout],
+      checkpointRoot: first.checkpointRoot,
+    });
+    expect(selections.map((selection) => selection.sourceCheckout)).toEqual([
+      fs.realpathSync(first.checkout),
+      fs.realpathSync(second.checkout),
+    ]);
+    expect(selections[1]!.pin.url).toBe("git+https://example.test/second.git");
+  });
+
+  it("joins another in-flight checkpoint before reporting an admission failure", async () => {
+    const first = fixture();
+    const second = fixture();
+    git(second.checkout, "remote", "set-url", "origin", "https://example.test/second.git");
+    fs.appendFileSync(path.join(first.checkout, "meta/vibestudio.yml"), "templates: {}\n");
+    const original = GitClient.prototype.getCurrentCommit;
+    let release!: () => void;
+    let started!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    vi.spyOn(GitClient.prototype, "getCurrentCommit").mockImplementation(async function (
+      this: GitClient,
+      dir
+    ) {
+      if (dir === path.join(first.checkpointRoot, "1")) {
+        started();
+        await held;
+      }
+      return original.call(this, dir);
+    });
+    let settled = false;
+    const inspection = inspectWorkspaceSources({
+      checkouts: [first.checkout, second.checkout],
+      checkpointRoot: first.checkpointRoot,
+    }).finally(() => {
+      settled = true;
+    });
+    const failure = expect(inspection).rejects.toThrow(/unrecognized key.*templates/iu);
+    await startedPromise;
+    expect(settled).toBe(false);
+    release();
+    await failure;
+    expect(fs.existsSync(path.join(first.checkpointRoot, "1/panels/example/index.ts"))).toBe(true);
+  });
+
   it.each([
     { dependencies: [] },
     { dependencies: [{ url: "git+https://example.test/base.git", track: "stable" }] },
