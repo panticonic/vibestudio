@@ -10154,6 +10154,148 @@
       ]
     },
     "methods": {
+      "browserOperation": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.browserOperation"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.browserOperation"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.browserOperation"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.browserOperation"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
+          },
+          "prepared": {
+            "resolver": "panelCdp.browserOperation.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated",
+                    "critical"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "cdp.native-effect",
+          "rationale": "The owning provider observes popups and reads only its own panel download records"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "consoleHistory": {
         "authority": {
           "requirement": {
@@ -12153,6 +12295,23 @@
         "presentation": null
       },
       "deleteRemote": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "forConversation": {
         "authority": {
           "inherits": true
         },

@@ -272,7 +272,9 @@ function installHardlinkSync(
   if (!existingBlobSync(finalPath, digest, sourceStat.size, sourceStat)) {
     throw new Error(`CAS object disappeared during installation: ${finalPath}`);
   }
-  if (raced) syncFileSync(finalPath);
+  // Every durable publisher flushes its private inode before linking. A losing
+  // publisher verifies the winner and persists its namespace; reopening the
+  // immutable winning inode for write can conflict with native Windows readers.
   if (raced) syncDirectoryChainSync(rootDir, finalDir);
   else for (const dir of directorySyncOrder(finalDir, missing)) syncDirectorySync(dir);
 }
@@ -301,7 +303,9 @@ async function installHardlink(
   if (!(await existingBlob(finalPath, digest, sourceStat.size, sourceStat))) {
     throw new Error(`CAS object disappeared during installation: ${finalPath}`);
   }
-  if (raced) await syncFile(finalPath);
+  // The winning durable publisher already flushed its inode before linking.
+  // Verify it and persist the namespace without reopening published bytes for
+  // write while another workspace may be copying or reading them.
   if (raced) await syncDirectoryChain(rootDir, finalDir);
   else for (const dir of directorySyncOrder(finalDir, missing)) await syncDirectory(dir);
 }

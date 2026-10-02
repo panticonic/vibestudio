@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:919a7adcae7ac7397814b46283ac8d31356993af27d97b0a8636da5cae08b75c",
+  "censusDigest": "sha256:7415d1f64487b7e3af375455fba9b5333cb811bf728eea3eda19101f06401782",
   "decisions": {
     "host:build.buildWebsite": {
       "review": "scoped-website-public-workspace-rpc",
@@ -1473,6 +1473,14 @@
     "host:problemReports.usageTransport": {
       "review": "trusted-shell-desktop-usage-forwarding",
       "change": "Forwards identifier-free aggregate usage from the paired desktop through the server; it requires verified shell identity and contains no report contents."
+    },
+    "host:panelCdp.browserOperation": {
+      "review": "receiver-owned-native-browser-operation",
+      "change": "The existing native browser provider lists, inspects, cancels, or reads bounded chunks from download records owned by the selected panel. The server derives the live target and prepares its context-boundary authority before dispatch; websites remain closed. Adding the missing method to the generated census preserves that requirement and introduces no generic filesystem or raw CDP access."
+    },
+    "host:problemReports.forConversation": {
+      "review": "owner-scoped-report-draft-transfer",
+      "change": "The existing service reads one caller-owned workspace draft at its exact revision and prepares that draft for the reporting agent, returning only its agent-side identity and revision. It does not submit a report, change consent, or grant external reporting authority. The generated census now includes the declared operation; draft ownership and revision checks remain authoritative."
     }
   }
 }

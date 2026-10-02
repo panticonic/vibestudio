@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { CapabilityScopeSchema } from "./build.js";
-export { mapEvalResultLeaves } from "./evalResultTree.js";
+export { mapEvalResultLeaves } from "./eval/resultTree.js";
 
 /**
  * Maximum serialized return preview carried in one terminal eval result.

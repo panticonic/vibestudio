@@ -48,7 +48,17 @@ describe("host Android native primitive", () => {
     fs.mkdirSync(path.dirname(apk), { recursive: true });
     fs.writeFileSync(apk, "apk");
     const gradlew = path.join(android, "gradlew");
-    fs.writeFileSync(gradlew, "#!/bin/sh\nprintf '%s\\n' \"$@\" > gradle-args.txt\n");
+
+    const installer = path.join(root, "packages/iroh-transport/native/install-android-maven.mjs");
+    fs.mkdirSync(path.dirname(installer), { recursive: true });
+    fs.writeFileSync(
+      installer,
+      'import { writeFileSync } from "node:fs"; writeFileSync("native-installed", "ready");'
+    );
+    fs.writeFileSync(
+      gradlew,
+      "#!/bin/sh\ntest -f ../../../native-installed || exit 17\nprintf '%s\\n' \"$@\" > gradle-args.txt\n"
+    );
     fs.chmodSync(gradlew, 0o755);
 
     const receipt = await buildAndroidApp({
@@ -69,5 +79,12 @@ describe("host Android native primitive", () => {
         "",
       ].join("\n")
     );
+
+    fs.rmSync(path.join(android, "gradle-args.txt"));
+    fs.writeFileSync(installer, 'throw new Error("Native artifact acquisition failed");');
+    await expect(buildAndroidApp({ appRoot: root, architectures: ["arm64-v8a"] })).rejects.toThrow(
+      /install-android-maven.*exited 1/
+    );
+    expect(fs.existsSync(path.join(android, "gradle-args.txt"))).toBe(false);
   });
 });

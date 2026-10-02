@@ -62,8 +62,8 @@ describe("runtime surface schemaRef parity", () => {
     if (openExternal.kind !== "callable") throw new Error("openExternal must be callable");
     expect(openExternal.schemaRef).toBe("externalOpen");
     expect(openExternal.schemaMethod).toBe("openExternal");
-    expect(openExternal.description).toContain("server-side eval");
-    expect(openExternal.description).toContain("panel/client eval");
+    expect(openExternal.description).toContain("initialized panel, plain-worker, or eval runtime");
+    expect(openExternal.description).toContain('this.rpc.call("main", "externalOpen.openExternal"');
     expect(openExternal.description).toContain("owns the approval prompt");
   });
 

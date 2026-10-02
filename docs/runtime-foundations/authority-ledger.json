@@ -22023,6 +22023,102 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelCdp.browserOperation",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "browserOperation",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "The owning provider observes popups and reads only its own panel download records",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelCdp.browserOperation\"}]}",
+      "r3b": {
+        "review": "receiver-owned-native-browser-operation",
+        "change": "The existing native browser provider lists, inspects, cancels, or reads bounded chunks from download records owned by the selected panel. The server derives the live target and prepares its context-boundary authority before dispatch; websites remain closed. Adding the missing method to the generated census preserves that requirement and introduces no generic filesystem or raw CDP access."
+      },
+      "capability": "service:panelCdp.browserOperation",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelCdp.browserOperation#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "browserOperation",
+      "tier": "gated|critical",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "The owning provider observes popups and reads only its own panel download records",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "panelCdp.browserOperation.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelCdp.consoleHistory",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
@@ -24688,6 +24784,52 @@
         "change": "Requires verified human shell identity and the owner's stored receipt secret to request remote deletion; validates the returned receipt."
       },
       "capability": "service:problemReports.deleteRemote",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:problemReports.forConversation",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "forConversation",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.forConversation"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.forConversation),allOf(capability(user,service:problemReports.forConversation),workspace-member),allOf(capability(code,service:problemReports.forConversation),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-report-draft-transfer",
+        "change": "The existing service reads one caller-owned workspace draft at its exact revision and prepares that draft for the reporting agent, returning only its agent-side identity and revision. It does not submit a report, change consent, or grant external reporting authority. The generated census now includes the declared operation; draft ownership and revision checks remain authoritative."
+      },
+      "capability": "service:problemReports.forConversation",
       "parityAssertion": "generated-census:host-authority"
     },
     {

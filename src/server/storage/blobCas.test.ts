@@ -48,6 +48,31 @@ describe("blobCas", () => {
     );
   });
 
+  it("joins a competing durable publisher without reopening its published inode for flush", async () => {
+    const bytes = Buffer.from("concurrent immutable content");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const destination = blobCasPath(rootDir, digest);
+    const link = fsp.link.bind(fsp);
+    vi.spyOn(fsp, "link").mockImplementationOnce(async (source, target) => {
+      // The independent synchronous publisher flushes its private inode before
+      // installing the winning link, as another workspace process would.
+      putBlobBytesSync(rootDir, bytes);
+      await link(source, target);
+    });
+    const open = fsp.open.bind(fsp);
+    vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+      if (String(file) === destination) {
+        throw Object.assign(new Error("A native reader owns the immutable inode"), {
+          code: "EBUSY",
+        });
+      }
+      return open(file, flags, mode);
+    });
+    await expect(putBlobBytes(rootDir, bytes)).resolves.toEqual({ digest, size: bytes.length });
+    expect(await fsp.readFile(destination)).toEqual(bytes);
+    expect(await fsp.readdir(path.join(rootDir, "tmp"))).toEqual([]);
+  });
+
   it("publishes readonly reconstructable content without a writable flush handle", async () => {
     const bytes = Buffer.from("immutable reconstructable content");
     const digest = createHash("sha256").update(bytes).digest("hex");

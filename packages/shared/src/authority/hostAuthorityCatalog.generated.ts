@@ -5054,6 +5054,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "panelCdp.browserOperation": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "The owning provider observes popups and reads only its own panel download records",
+    },
+    capability: null,
+    presentation: null,
+  },
   "panelCdp.consoleHistory": {
     tier: {
       tier: "open",
@@ -5770,6 +5782,18 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "problemReports.deleteRemote": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.forConversation": {
     tier: {
       tier: "open",
       session: "family",
@@ -9061,6 +9085,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
   "hubControl.createWorkspace": ["workspaces.create"],
+  "panelCdp.browserOperation": ["context.boundary"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],

@@ -85,7 +85,10 @@ it("derives explicit Personal and ordinary project roots from canonical template
     );
   }
   const [base, personal, system] = await inspectWorkspaceSources({
-    checkouts: [sourceRoots.base!, sourceRoots.personal!, sourceRoots.system!],
+    sources: ["base", "personal", "system"].map((role) => ({
+      checkout: sourceRoots[role]!,
+      url: `git+https://example.test/${role}.git`,
+    })),
     checkpointRoot: path.join(root, "checkpoints"),
   });
   if (!base || !personal || !system) throw new Error("Template fixture inspection failed");

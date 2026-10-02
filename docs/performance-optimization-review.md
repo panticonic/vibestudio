@@ -157,6 +157,23 @@ is otherwise validated.
     forwards the canonical coordinate unchanged. The real URL-helper-to-route
     regression fails before the repair; 77 focused tests and all 11 native
     remote end-to-end tests pass afterward.
+  - **CI contract follow-up:** The full host suite passes 7,418 tests with 25
+    declared skips after fixing the missed source-inspection caller, using the
+    shared shell-surface catalog for response validation, and bringing fixtures
+    and generated authority records into line with the existing owner contracts.
+    Recovery failures propagate their original error and await the next explicit
+    generation; native acquisition failure prevents Gradle execution. The two
+    previously omitted service declarations retain receiver context-boundary
+    and caller-owned draft checks, recorded explicitly in the authority review.
+  - **Windows publication follow-up:** Windows native desktop acceptance
+    reported EBUSY while multiple workspaces published identical artifact bytes.
+    Each durable CAS publisher flushes its private inode before linking it into
+    the immutable namespace. A losing publisher was redundantly reopening the
+    winning inode for writable flushing while native readers copied it. It now
+    verifies the winner and flushes the namespace without reopening the published
+    inode. The held competing-publisher regression fails before this repair;
+    all 92 CAS, build-store, and blob-service tests pass afterward. Windows native
+    acceptance remains required to establish that all observed failures are fixed.
   - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. The Apple artifact now retains the matching

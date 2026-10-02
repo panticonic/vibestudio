@@ -138,6 +138,7 @@ describe("trusted display source chooser", () => {
   });
 
   it("closing the chooser cancels the request and cleans up owner listeners", async () => {
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     const { picker, request, owner } = harness();
     const result = picker.pick(request);
     await vi.waitFor(() => expect(native.windows).toHaveLength(1));

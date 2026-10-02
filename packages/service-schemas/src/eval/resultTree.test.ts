@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runInNewContext } from "node:vm";
-import { mapEvalResultLeaves } from "./evalResultTree.js";
+import { mapEvalResultLeaves } from "./resultTree.js";
 
 describe("eval result projection", () => {
   it("projects repeated nested leaves once without mutating the heap", async () => {

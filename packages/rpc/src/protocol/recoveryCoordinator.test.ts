@@ -48,33 +48,34 @@ describe("DefaultRecoveryCoordinator", () => {
     expect(events).toEqual(["start-1", "end-1", "start-2", "end-2"]);
   });
 
-  it("retries a throwing handler up to 3 times, then gives up without throwing", async () => {
+  it("propagates the original handler failure and does not retry on elapsed time", async () => {
     vi.useFakeTimers();
     const coord = createRecoveryCoordinator();
-    let attempts = 0;
-    coord.registerResubscribeHandler("flaky", () => {
-      attempts++;
-      throw new Error("boom");
+    const failure = new Error("boom");
+    const failed = vi.fn(() => {
+      throw failure;
     });
-    const run = coord.run("resubscribe");
-    // Backoff between attempts: 250ms, then 500ms (capped at 1000ms).
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(run).resolves.toBeUndefined(); // exhausting attempts never rejects
-    expect(attempts).toBe(3);
+    const following = vi.fn();
+    coord.registerResubscribeHandler("failed", failed);
+    coord.registerResubscribeHandler("following", following);
+    await expect(coord.run("resubscribe")).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(following).not.toHaveBeenCalled();
   });
 
-  it("stops retrying as soon as a handler succeeds", async () => {
-    vi.useFakeTimers();
+  it("allows the next explicit recovery generation after the original failure", async () => {
     const coord = createRecoveryCoordinator();
+    const failure = new Error("transient");
     let attempts = 0;
     coord.registerResubscribeHandler("recovers", () => {
       attempts++;
-      if (attempts < 2) throw new Error("transient");
+      if (attempts === 1) throw failure;
     });
-    const run = coord.run("resubscribe");
-    await vi.advanceTimersByTimeAsync(2_000);
-    await run;
-    expect(attempts).toBe(2); // succeeded on the 2nd attempt, no 3rd
+    await expect(coord.run("resubscribe")).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+    await expect(coord.run("resubscribe")).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
   });
 
   it("defers an interrupted generation until the host signals recovery again", async () => {
@@ -82,19 +83,19 @@ describe("DefaultRecoveryCoordinator", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const coord = createRecoveryCoordinator();
     let offline = true;
+    const cause = new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
+    const failure = Object.assign(new Error("subscription unavailable"), {
+      code: "connection",
+      errorCode: "CONNECTION_LOST",
+      cause,
+    });
     const subscription = vi.fn(() => {
-      if (!offline) return;
-      const cause = new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
-      throw Object.assign(new Error("subscription unavailable"), {
-        code: "connection",
-        errorCode: "CONNECTION_LOST",
-        cause,
-      });
+      if (offline) throw failure;
     });
     coord.registerResubscribeHandler("subscription", subscription);
     const following = vi.fn();
     coord.registerResubscribeHandler("following", following);
-    await coord.run("resubscribe");
+    await expect(coord.run("resubscribe")).rejects.toBe(failure);
     const late = vi.fn();
     coord.registerResubscribeHandler("late", late);
     await vi.advanceTimersByTimeAsync(10_000);

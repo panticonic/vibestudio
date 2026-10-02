@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "./identityDb.js";
+import { IDENTITY_DATABASE_SCHEMA_VERSION } from "./identitySchema.js";
 
 // Historical fixtures must keep the shipped ownership table, not the current one.
 const RESTORE_LEGACY_HUB_LEASE = `DROP TABLE hub_process_owner;
@@ -157,11 +158,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 18/
+      new RegExp(`schema version is 0, expected ${IDENTITY_DATABASE_SCHEMA_VERSION}`)
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 18/
+      new RegExp(`schema version is 0, expected ${IDENTITY_DATABASE_SCHEMA_VERSION}`)
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 

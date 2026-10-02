@@ -66,14 +66,14 @@ export type ShellSurfaceDescriptor =
 
 export type ShellSurfaceTarget = ManagementSurface | ShellSurfaceDescriptor;
 export type ShellSurfaceKind = ShellSurfaceDescriptor["kind"];
-export const SHELL_SURFACE_KINDS: readonly ShellSurfaceKind[] = [
+export const SHELL_SURFACE_KINDS = [
   "settings",
   "workspace-chooser",
   "command-agent",
   "about",
   "panel-command",
   "problem-report",
-];
+] as const satisfies readonly ShellSurfaceKind[];
 
 export type ShellSurfaceCarrier = "scheme" | "https";
 

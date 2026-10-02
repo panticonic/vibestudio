@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { SETTINGS_SECTIONS } from "@vibestudio/shared/shellSurface";
+import { SETTINGS_SECTIONS, SHELL_SURFACE_KINDS } from "@vibestudio/shared/shellSurface";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AppInfoSchema } from "@vibestudio/shared/panelContracts";
@@ -64,13 +64,7 @@ export const ShellSurfaceTargetSchema = z.union([
 ]);
 export type ShellSurfaceTarget = z.infer<typeof ShellSurfaceTargetSchema>;
 
-export const ShellSurfaceKindSchema = z.enum([
-  "settings",
-  "workspace-chooser",
-  "command-agent",
-  "about",
-  "panel-command",
-]);
+export const ShellSurfaceKindSchema = z.enum(SHELL_SURFACE_KINDS);
 
 export const appMethods = defineServiceMethods({
   getInfo: {
