@@ -5119,12 +5119,15 @@ function externalLibraryBuildKey(
     | { kind: "platform"; specifier: string },
   externals: readonly string[]
 ): string {
-  return sha256Canonical({
-    schema: "vibestudio/build-v2/external-library/v2",
-    artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
-    source,
-    externals: [...externals].sort(),
-  });
+  return computeBuildKey(
+    `external-library:${source.kind}:${source.specifier}`,
+    sha256Canonical({
+      artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
+      source,
+      externals: [...externals].sort(),
+    }),
+    false
+  );
 }
 
 /**

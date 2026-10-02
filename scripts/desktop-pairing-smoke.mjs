@@ -1657,8 +1657,9 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
         "skills/onboarding/SetupHub.tsx",
       ];
       const sourceTarget = { kind: "workspace", workspaceId };
-      const sourceState = await nativeRpc(chrome, sourceTarget, "vcs.mainState", []);
+      const sourceStatePromise = nativeRpc(chrome, sourceTarget, "vcs.mainState", []);
       const sourceResults = await Promise.allSettled(sourcePaths.map(async (sourcePath) => {
+        const sourceState = await sourceStatePromise;
         const [category, unit, ...relativePath] = sourcePath.split("/");
         const repository = await nativeRpc(chrome, sourceTarget, "vcs.resolveRepository", [
           { state: sourceState, repoPath: `${category}/${unit}` },
