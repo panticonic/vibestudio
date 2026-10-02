@@ -139,6 +139,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       eventService: deps.eventService,
       shellCore: deps.shellCore,
       callServer: (service, method, args) => deps.serverClient.call(service, method, args),
+      isClientClosed: () => deps.serverClient.isClosed(),
       getPanelView: () => deps.getPanelView?.() ?? null,
       cdpHost: deps.cdpHost,
       panelHttpServer: deps.panelHttpServer,

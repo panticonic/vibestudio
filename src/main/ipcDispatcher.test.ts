@@ -130,6 +130,7 @@ function makeDispatcher(opts: {
     onRecovery: vi.fn(() => () => {}),
     onConnectionStatusChange: vi.fn(() => () => {}),
     isConnected: vi.fn(() => true),
+    isClosed: vi.fn(() => false),
     getConnectionStatus: vi.fn(() => "connected" as const),
     transportDiagnostics: vi.fn(() => null),
     onDirectEvent: vi.fn(() => () => {}),

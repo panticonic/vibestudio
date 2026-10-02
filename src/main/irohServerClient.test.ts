@@ -19,6 +19,7 @@ const reach: IrohReach = {
 };
 
 class FakeSession implements IrohClientSession {
+  closed = false;
   constructor(private readonly closeOrder: string[]) {}
 
   callerId(): string {
@@ -26,7 +27,7 @@ class FakeSession implements IrohClientSession {
   }
 
   isClosed(): boolean {
-    return false;
+    return this.closed;
   }
 
   ready(): Promise<void> {
@@ -50,6 +51,7 @@ class FakeSession implements IrohClientSession {
   }
 
   close(): Promise<void> {
+    this.closed = true;
     this.closeOrder.push("session");
     return Promise.resolve();
   }
@@ -147,6 +149,7 @@ describe("Iroh server client lifecycle", () => {
 
     await client.close();
     expect(closeOrder).toEqual(["session", "pipe"]);
+    expect(client.isClosed()).toBe(true);
   });
 });
 

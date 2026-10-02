@@ -87,9 +87,9 @@ describe("wsClientTransport", () => {
     vi.useRealTimers();
   });
 
-  it("keeps the default first-connect timeout", async () => {
+  it("cancels and joins connection work at an explicit first-connect deadline", async () => {
     const { transport } = createTransportHarness();
-    const promise = transport.connectAndWait();
+    const promise = transport.connectAndWait(10_000);
     const assertion = expect(promise).rejects.toThrow(
       "Server WS connection timeout (10000ms): wss://server.example/rpc"
     );
@@ -100,10 +100,10 @@ describe("wsClientTransport", () => {
     await assertion;
   });
 
-  it("waits without a first-connect deadline when timeout is null", async () => {
+  it("waits for readiness without a default first-connect deadline", async () => {
     const { sockets, transport } = createTransportHarness();
     let settled = false;
-    const promise = transport.connectAndWait(null).finally(() => {
+    const promise = transport.connectAndWait().finally(() => {
       settled = true;
     });
 
@@ -181,11 +181,21 @@ describe("wsClientTransport", () => {
 
   it("aborts an in-flight admission attempt when the transport closes", async () => {
     let admissionSignal: AbortSignal | undefined;
+    let releaseAdmission!: () => void;
+    let joined = false;
     const transport = wsClientTransport({
       adapter: {
         requestAdmission: async (_url, _request, options) => {
           admissionSignal = options?.signal;
-          return await new Promise(() => {});
+          return await new Promise((_, reject) => {
+            options?.signal?.addEventListener(
+              "abort",
+              () => {
+                releaseAdmission = () => reject(options.signal?.reason);
+              },
+              { once: true }
+            );
+          });
         },
         createSocket: () => new FakeSocket(),
         getAuthToken: async () => "token",
@@ -199,8 +209,15 @@ describe("wsClientTransport", () => {
     await flushAsyncWork();
     expect(admissionSignal?.aborted).toBe(false);
 
-    await transport.close();
+    const closing = transport.close().then(() => {
+      joined = true;
+    });
     expect(admissionSignal?.aborted).toBe(true);
+    await flushAsyncWork();
+    expect(joined).toBe(false);
+    releaseAdmission();
+    await closing;
+    expect(joined).toBe(true);
   });
 
   it("closes a socket whose upgrade is still connecting", async () => {
@@ -239,6 +256,20 @@ describe("wsClientTransport", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(sockets).toHaveLength(1);
+    expect(transport.isClosed()).toBe(true);
+  });
+
+  it("keeps ownership across transient transport loss", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    sockets[0]?.open();
+    sockets[0]?.authenticate();
+    await connected;
+    sockets[0]?.close(1006, "Disconnected");
+    expect(transport.isClosed()).toBe(false);
+    await transport.close();
+    expect(transport.isClosed()).toBe(true);
   });
 
   it("does not spin when auth refresh returns the rejected token", async () => {

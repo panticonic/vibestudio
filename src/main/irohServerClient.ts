@@ -464,6 +464,9 @@ export async function createIrohServerClient(
     isConnected(): boolean {
       return effectiveConnectionStatus() === "connected";
     },
+    isClosed(): boolean {
+      return closing || mainSession.isClosed();
+    },
     getConnectionStatus(): ConnectionStatus {
       return effectiveConnectionStatus();
     },

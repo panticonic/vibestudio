@@ -364,9 +364,23 @@ export class PanelRuntimeCoordinator {
   }
 
   unregisterClient(clientSessionId: string): void {
-    const client = this.clients.get(clientSessionId);
-    if (!client) return;
-    this.clients.delete(clientSessionId);
+    this.unregisterClients([clientSessionId]);
+  }
+
+  /** Retire every registration owned by an authenticated caller's terminal lifecycle. */
+  unregisterClientsForCaller(ownerCallerId: string): void {
+    this.unregisterClients(
+      [...this.clients.values()]
+        .filter((client) => client.ownerCallerId === ownerCallerId)
+        .map((client) => client.clientSessionId)
+    );
+  }
+
+  private unregisterClients(clientSessionIds: readonly string[]): void {
+    const retired = new Set(clientSessionIds);
+    // Remove all admission before reassigning leases, so another registration
+    // belonging to the same retired caller cannot become the replacement host.
+    for (const clientSessionId of retired) this.clients.delete(clientSessionId);
 
     const released: Array<{
       entityId: PanelEntityId;
@@ -374,7 +388,7 @@ export class PanelRuntimeCoordinator {
       wasDefaultCdpLease: boolean;
     }> = [];
     for (const [entityId, lease] of this.leases) {
-      if (lease.clientSessionId !== clientSessionId) continue;
+      if (!retired.has(lease.clientSessionId)) continue;
       this.clearExpiry(entityId);
       this.leases.delete(entityId);
       const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(lease.connectionId);

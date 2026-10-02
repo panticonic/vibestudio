@@ -156,6 +156,8 @@ export interface HostUiSession extends Omit<PanelSession, "close"> {
 }
 
 export interface ServerClient {
+  /** Permanent session retirement; transient transport loss does not close the owner. */
+  isClosed(): boolean;
   onRecovery(listener: (kind: "resubscribe" | "cold-recover") => void | Promise<void>): () => void;
   onConnectionStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   openHostUiSession(): Promise<HostUiSession>;
@@ -617,6 +619,9 @@ export async function createServerClient(
     },
     isConnected(): boolean {
       return transport.status?.() === "connected";
+    },
+    isClosed(): boolean {
+      return closing || transport.isClosed();
     },
     getConnectionStatus(): ConnectionStatus {
       return transport.status?.() ?? "disconnected";

@@ -74,6 +74,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   connect(): void;
   connectAndWait(timeoutMs?: number | null): Promise<void>;
   close(): Promise<void>;
+  isClosed(): boolean;
   onRecovery(kind: RecoveryKind, handler: () => void | Promise<void>): () => void;
 } {
   const connectionId = config.connectionId ?? randomId();
@@ -621,6 +622,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         ? new Set(config.terminalCloseCodes)
         : TERMINAL_CLOSE_CODES;
       if (closed || terminalCodes.has(event.code ?? 0) || config.reconnect === false) {
+        closed = true;
         firstConnectReject?.(
           connectionLostError(event.reason || `RPC socket closed (${event.code ?? "unknown"})`)
         );
@@ -649,6 +651,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   };
 
   return {
+    isClosed: () => closed,
     connect(): void {
       if (closePromise) throw connectionLostError("RPC client is closed");
       closed = false;

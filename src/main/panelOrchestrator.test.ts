@@ -238,6 +238,7 @@ function createOrchestrator(
     return undefined;
   };
   const serverClient = {
+    isClosed: vi.fn(() => false),
     call: vi.fn(handleServerCall),
     callAs: vi.fn(
       async (
@@ -364,7 +365,12 @@ describe("PanelOrchestrator.closePanel", () => {
       },
     });
     await orchestrator.registerRuntimeClient();
-    serverClient.call.mockRejectedValueOnce(new Error("transport closing"));
+    serverClient.call.mockRejectedValueOnce(
+      Object.assign(new Error("transport closing"), {
+        errorKind: "transport",
+        code: "CONNECTION_LOST",
+      })
+    );
     await expect(orchestrator.unregisterRuntimeClient()).rejects.toThrow("transport closing");
     await orchestrator.unregisterRuntimeClient();
     expect(
@@ -373,6 +379,30 @@ describe("PanelOrchestrator.closePanel", () => {
       )
     ).toHaveLength(2);
   });
+
+  it.each([false, true])(
+    "retires local registration when its session closes (raced=%s)",
+    async (raced) => {
+      const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+      const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn());
+      await orchestrator.registerRuntimeClient();
+      serverClient.call.mockClear();
+      if (raced) {
+        serverClient.call.mockImplementationOnce(async () => {
+          serverClient.isClosed.mockReturnValue(true);
+          throw Object.assign(new Error("Token revoked"), {
+            errorKind: "transport",
+            code: "CONNECTION_LOST",
+          });
+        });
+      } else {
+        serverClient.isClosed.mockReturnValue(true);
+      }
+      await orchestrator.unregisterRuntimeClient();
+      await orchestrator.unregisterRuntimeClient();
+      expect(serverClient.call).toHaveBeenCalledTimes(raced ? 1 : 0);
+    }
+  );
 
   it("navigates away when closing a root that contains the focused panel", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });

@@ -5014,6 +5014,7 @@ async function main() {
           // once it expires, pending approvals and open fs handles must not
           // survive an abandoned client.
           approvalQueue.cancelForCaller(callerId);
+          panelRuntimeCoordinator.unregisterClientsForCaller(callerId);
           fsService.closeHandlesForCaller(callerId);
         },
         capabilityGrantStore,

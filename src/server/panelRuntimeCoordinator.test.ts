@@ -48,6 +48,40 @@ function reportFor(phase: AttemptPhase): {
 
 afterEach(() => vi.useRealTimers());
 
+it("retires only the closed caller's registrations, leases, and pending attempts", () => {
+  const coordinator = new PanelRuntimeCoordinator();
+  for (const [session, owner] of [
+    ["retired-a", "removed"],
+    ["retired-b", "removed"],
+    ["retained", "neighbor"],
+  ]) {
+    coordinator.registerClient({
+      clientSessionId: session!,
+      ownerCallerId: owner!,
+      label: session!,
+      platform: "desktop",
+    });
+    coordinator.acquire(`panel:nav-${session}`, {
+      slotId: `panel:tree/${session}`,
+      clientSessionId: session!,
+      connectionId: `route-${session}`,
+    });
+  }
+  const pending = coordinator.currentAttemptForSlot("panel:tree/retired-a")!;
+  coordinator.unregisterClientsForCaller("removed");
+  coordinator.unregisterClientsForCaller("removed");
+  expect(coordinator.ownsClientSession("retired-a", "removed")).toBe(false);
+  expect(coordinator.ownsClientSession("retired-b", "removed")).toBe(false);
+  expect(coordinator.ownsClientSession("retained", "neighbor")).toBe(true);
+  expect(coordinator.getSnapshot().leases.map((lease) => lease.clientSessionId)).toEqual([
+    "retained",
+  ]);
+  expect(coordinator.getAttempt(pending)).toMatchObject({
+    kind: "report",
+    attempt: { phase: "stopped" },
+  });
+});
+
 describe("PanelRuntimeCoordinator attempt state machine", () => {
   it.each([
     ["pending", "loading", true],

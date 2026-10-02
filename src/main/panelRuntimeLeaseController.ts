@@ -60,6 +60,7 @@ export interface PanelPresentationControllerDeps {
   eventService: EventService;
   shellCore: PanelManager;
   callServer: (service: string, method: string, args: unknown[]) => Promise<unknown>;
+  isClientClosed(): boolean;
   getPanelView: () => PanelViewLike | null;
   cdpHost: {
     registerTarget?(panelId: string, contentsId: number): void;
@@ -563,7 +564,17 @@ export class PanelPresentationController {
       this.resourcesStopped = true;
     }
     if (!this.clientRegistered) return;
-    await this.panelRuntime.unregisterClient(this.clientSessionId);
+    // Registration belongs to the authenticated session. The server retires
+    // it when that session ends; a revoked caller cannot unregister over RPC.
+    // A transient disconnect still owes a remote receipt and must remain an
+    // error, including when it races an in-flight unregister.
+    if (!this.deps.isClientClosed()) {
+      try {
+        await this.panelRuntime.unregisterClient(this.clientSessionId);
+      } catch (error) {
+        if (!isRpcConnectionLost(error) || !this.deps.isClientClosed()) throw error;
+      }
+    }
     this.clientRegistered = false;
   }
 

@@ -28,7 +28,7 @@ import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
 const { createOwnedProcessLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
 const { OwnedProcessGroup } = await tsImport("@vibestudio/shared/ownedProcessGroup", import.meta.url);
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
@@ -1650,8 +1650,25 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
         "capturing the stalled Personal onboarding boundary"
       );
       const rendererDiagnostics = unexpectedDesktopDiagnostics(await readDesktopDiagnostics(app));
+      const chrome = await chromePage(app, Date.now() + 15_000);
+      const sourcePaths = [
+        "packages/eval/src/sandbox.ts",
+        "packages/agentic-core/src/panel-import-loader.ts",
+        "skills/onboarding/SetupHub.tsx",
+      ];
+      const sourceResults = await Promise.allSettled(sourcePaths.map(async (sourcePath) => {
+        const source = await nativeRpc(chrome, { kind: "workspace", workspaceId },
+          "fs.readFile", [sourcePath, "utf8"]);
+        if (typeof source !== "string") throw new Error("Source read did not return text");
+        return { path: sourcePath, sha256: createHash("sha256").update(source).digest("hex"),
+          bytes: Buffer.byteLength(source),
+          ...(sourcePath === "packages/eval/src/sandbox.ts"
+            ? { linksCompilerDependencies: source.includes("artifact.requiredModules") } : {}) };
+      }));
+      const sourceContracts = sourceResults.map((result, index) => result.status === "fulfilled"
+        ? result.value : { path: sourcePaths[index], error: String(result.reason).slice(0, 1000) });
       const packet = { workspaceId, observation: latestObservation, panel: diagnostics,
-        rendererDiagnostics: rendererDiagnostics.slice(-30), mainProcessErrors: await readMainProcessErrors(app) };
+        sourceContracts, rendererDiagnostics: rendererDiagnostics.slice(-30), mainProcessErrors: await readMainProcessErrors(app) };
       await fsp.mkdir(screenshotDir, { recursive: true, mode: 0o700 });
       const diagnosticPath = path.join(screenshotDir, `onboarding-diagnostics-${Date.now()}.json`);
       await fsp.writeFile(diagnosticPath, `${JSON.stringify(packet, null, 2)}\n`, { mode: 0o600 });
