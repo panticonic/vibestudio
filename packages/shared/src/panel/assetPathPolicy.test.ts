@@ -168,9 +168,9 @@ describe("unit icon targets", () => {
 
   it("carries an exact source state separately from the content identity", () => {
     const version = "a".repeat(64);
-    const state = "b".repeat(64);
+    const state = `state:${"b".repeat(64)}`;
     expect(unitIconTarget(SOURCE, "./assets/icon.svg", version, state)).toBe(
-      `__vibestudio/unit-icon?source=about%2Fhelp&path=assets%2Ficon.svg&v=${version}&s=${state}`
+      `__vibestudio/unit-icon?source=about%2Fhelp&path=assets%2Ficon.svg&v=${version}&s=${encodeURIComponent(state)}`
     );
   });
 
@@ -205,12 +205,7 @@ describe("unit icon targets", () => {
   });
 
   it("keys an exact-state icon independently of forwarded headers", () => {
-    const target = `/${unitIconTarget(
-      SOURCE,
-      "./assets/icon.svg",
-      undefined,
-      "a".repeat(64)
-    )}`;
+    const target = `/${unitIconTarget(SOURCE, "./assets/icon.svg", undefined, "a".repeat(64))}`;
     expect(panelAssetCacheKey(target, { accept: "image/svg+xml" })).toBe(target);
     expect(panelAssetCacheKey(target, { accept: "image/webp" })).toBe(target);
   });

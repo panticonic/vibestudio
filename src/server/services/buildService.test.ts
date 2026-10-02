@@ -429,7 +429,7 @@ describe("build service extension diagnostics", () => {
     ).resolves.toMatchObject({
       source: "panels/hello-svelte",
       icon: "./assets/icon.svg",
-      iconState: "a".repeat(64),
+      iconState: `state:${"a".repeat(64)}`,
     });
     expect(buildSystem.getUnitIcon).not.toHaveBeenCalled();
   });

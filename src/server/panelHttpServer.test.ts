@@ -13,6 +13,7 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
+import { unitIconTarget } from "@vibestudio/shared/panel/assetPathPolicy";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 
 // ---------------------------------------------------------------------------
@@ -703,7 +704,7 @@ describe("PanelHttpServer build cache", () => {
     // launcher render — measured at 20 of 57 round trips for one panel open.
     const stateOnly = await handlePanelRequest(
       server,
-      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&s=${"a".repeat(64)}`
+      `/${unitIconTarget("workers/mail", "./assets/icon.svg", undefined, `state:${"a".repeat(64)}`)}`
     );
     expect(getUnitIcon).toHaveBeenLastCalledWith(
       "workers/mail",
@@ -716,7 +717,7 @@ describe("PanelHttpServer build cache", () => {
     // A content version can additionally verify the bytes selected by that state.
     const versioned = await handlePanelRequest(
       server,
-      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash}&s=${"a".repeat(64)}`
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash}&s=${encodeURIComponent(`state:${"a".repeat(64)}`)}`
     );
     expect(getUnitIcon).toHaveBeenLastCalledWith(
       "workers/mail",
@@ -728,9 +729,15 @@ describe("PanelHttpServer build cache", () => {
 
     const mismatched = await handlePanelRequest(
       server,
-      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${"f".repeat(64)}&s=${"a".repeat(64)}`
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${"f".repeat(64)}&s=${encodeURIComponent(`state:${"a".repeat(64)}`)}`
     );
     expect(mismatched.statusCodeWritten).toBe(404);
+
+    const rawDigest = await handlePanelRequest(
+      server,
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&s=${"a".repeat(64)}`
+    );
+    expect(rawDigest.statusCodeWritten).toBe(400);
 
     // A malformed selector must not be interpreted as mutable current state.
     const bogus = await handlePanelRequest(

@@ -34,16 +34,11 @@ export async function resolvePanelMetadata(
   );
   if (!node) return null;
   const declaredIcon = node.manifest.icon;
-  const stateDigest = node.stateHash.startsWith("state:")
-    ? node.stateHash.slice(6)
-    : node.stateHash;
   return {
     source: node.unitPath,
     title: node.manifest.title ?? node.unitName,
     icon: declaredIcon,
-    ...(declaredIcon?.startsWith("./") && /^[0-9a-f]{64}$/u.test(stateDigest)
-      ? { iconState: stateDigest }
-      : {}),
+    ...(declaredIcon?.startsWith("./") ? { iconState: node.stateHash } : {}),
     description: node.manifest.description,
     hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
     stateArgs: node.manifest.stateArgs,

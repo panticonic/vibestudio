@@ -44,12 +44,19 @@ is otherwise validated.
     35 host import/cache tests, and all eight composition typechecks. Artifact
     format and RPC contract versions advance with this required field.
     Fresh desktop and Android onboarding passed with the compiler contract.
-    macOS and Windows acceptance still fail after the compiler repair; the
-    macOS packet shows a loader registry different from the current Base
-    manifest. Onboarding failure packets now include loaded source fingerprints
-    to distinguish template composition from linker behavior. Windows additionally failed
-    while locating paired workspace chrome; every desktop failure now captures
-    the exact main-process, hosted-shell, and module-owner state for diagnosis.
+    The subsequent macOS failure packet proved that CI was executing released
+    Base v0.3.59: its sandbox source hash exactly matched that tag and lacked the
+    compiler dependency linker. CI's Git checkout origin omits `.git`, while the
+    registry declares it. Source inspection had replaced the declared template
+    coordinate with that origin, so dependency selection missed the designated
+    checkout. Source descriptors now preserve the registry coordinate; freely
+    selected local repositories still discover their origin normally. The held
+    coordinate regression and all 15 focused source-selection tests pass.
+    A fresh production desktop run using CI's origin spelling passes onboarding,
+    server restart, and shared-member revocation. Native macOS and Windows CI
+    acceptance remains pending after this repair; earlier failures do not prove
+    that the current linker was executed. Failure packets retain loaded source
+    fingerprints and main-process, hosted-shell, and module-owner diagnostics.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
     two declared skips). Agent launch ownership also survives elapsed time until
     the launch RPC or worker lifecycle settles: its slow-launch regressions,
@@ -127,13 +134,40 @@ is otherwise validated.
     caches were retired. A separately fresh-cache Linux desktop acceptance also
     passed onboarding and server restart. These establish current cold/warm
     behavior; they do not measure WAN readiness or establish an improvement.
+  - **Module and receipt follow-up / 2026-10-02:** Module registries now use
+    own-property presence rather than export truthiness. Valid exports include
+    `undefined`, `null`, `false`, zero, and empty strings; prototype properties
+    do not become modules. Real generated-loader and held-library regressions
+    pass. External library cache keys also include the canonical host dependency
+    realm, so editing a platform package under its unchanged package coordinate
+    rebuilds its bundle. The real source-mutation regression and 26 focused
+    host tests pass. PubSub acknowledgments carry the journaled payload, allowing
+    a retry to return the accepted message identity across owner restart instead
+    of returning a new client UUID. Publisher and payload-type ownership are
+    checked before acknowledgment or broadcast, including the CLI send path.
+    The sequence-only SQL receipt cache and its expiry alarm are retired; the
+    durable journal remains the single authority. All eight compositions passed
+    6,184 tests with 11 declared skips and their typechecks before the final
+    ownership guard; afterward, 209 relevant chat/channel tests and the Base
+    typecheck pass. These changes preserve speculative asset prewarming.
+  - **Icon coordinate follow-up:** Catalog and panel metadata now carry the
+    same canonical `state:…` address into immutable icon requests. The HTTP
+    route had expected a bare digest, returning 400 for catalog icons, while
+    panel metadata separately stripped the prefix. The route now validates and
+    forwards the canonical coordinate unchanged. The real URL-helper-to-route
+    regression fails before the repair; 77 focused tests and all 11 native
+    remote end-to-end tests pass afterward.
   - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. The Apple artifact now retains the matching
     generated Swift source and its receipt hash alongside the XCFramework.
     Relevant main-branch pushes now run the native repair build matrix too.
-    All seven targets passed: five desktop bindings, Android AAR, and the iOS
-    XCFramework with its generated Swift wrapper. Android shell builds and the
+    All seven targets passed again with regenerated dial bindings: five desktop
+    Node packages, Android AAR, and the iOS XCFramework with its generated Swift
+    wrapper. Each desktop target installed its actual matching root/platform
+    tarballs and passed all 18 native endpoint, stream, and dial regressions.
+    The cross-platform gate confirmed identical generated JavaScript and
+    declarations, exact platform versions, and matching source receipts. Android shell builds and the
     iOS shell simulator tests also passed in CI.
     Production dependency pins are unchanged.
   - **Remaining design work:** An interrupted mutation with no acceptance

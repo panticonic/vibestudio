@@ -447,17 +447,13 @@ export class PanelHttpServer {
         res.end("Invalid unit icon version");
         return;
       }
-      if (state !== null && !/^[0-9a-f]{64}$/u.test(state)) {
+      if (state !== null && !/^state:[0-9a-f]{64}$/u.test(state)) {
         res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Invalid unit icon state");
         return;
       }
       try {
-        const icon = await this.callbacks?.getUnitIcon(
-          source,
-          artifactPath,
-          state ? `state:${state}` : undefined
-        );
+        const icon = await this.callbacks?.getUnitIcon(source, artifactPath, state ?? undefined);
         if (!icon) {
           res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
           res.end("Unit icon not found");
