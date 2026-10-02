@@ -63,7 +63,10 @@ either published repair version or substitute a local development binary for
 the shipping artifact.
 
 The Apple builder retains the generated `IrohLib.swift` alongside the archive
-and records both hashes in its receipt. CI uploads that binding too: publishing
+and records both hashes in its receipt. It also extracts that retained archive
+into a fresh Swift consumer, installs the matching generated wrapper, and runs
+upstream Swift tests plus endpoint-readiness and owned dial cancellation
+regressions. This checks the package consumer boundary as well as Rust compilation. CI uploads that binding too: publishing
 the archive without its matching Swift source loses the generated API and FFI
 checksums. A release must install that source in the Swift package and update
 its binary target to the actual published archive URL and checksum. Retaining

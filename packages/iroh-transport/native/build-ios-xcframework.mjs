@@ -9,8 +9,9 @@
  * own `make_swift.sh` + `package_swift.sh` over the pinned patched tree, so it
  * needs macOS with Xcode.
  */
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pinnedSource, preparePatchedSource, runIn, sha256 } from "./patchedSource.mjs";
 
 /** The five slices upstream's xcframework carries: iOS device, both simulator
@@ -42,7 +43,10 @@ runIn("rustup", ["target", "add", ...TARGETS], source, env);
 runIn("bash", ["./make_swift.sh"], source, env);
 // package_swift.sh zips the framework and prints the SPM checksum, which is
 // what Package.swift's binaryTarget verifies.
-const checksum = runIn("bash", ["./package_swift.sh"], source, env, true)?.trim().split("\n").at(-1);
+const checksum = runIn("bash", ["./package_swift.sh"], source, env, true)
+  ?.trim()
+  .split("\n")
+  .at(-1);
 if (!checksum || !/^[a-f0-9]{64}$/.test(checksum)) {
   throw new Error(`package_swift.sh did not produce a checksum: ${checksum ?? "none"}`);
 }
@@ -53,6 +57,20 @@ copyFileSync(join(source, "IrohLib.xcframework.zip"), archive);
 // native slices. The archive alone cannot carry a new API to Swift consumers.
 const swiftBindings = join(output, "IrohLib.swift");
 copyFileSync(join(source, "IrohLib", "Sources", "IrohLib", "IrohLib.swift"), swiftBindings);
+// Compile and exercise the generated Swift wrapper against the retained
+// archive, in a fresh consumer that has none of the Rust build's libraries.
+// Upstream's manifest selects its local binary target when this archive is
+// present. Its ordinary tests and our lifecycle cases use that exact target.
+const consumer = join(output, "swift-consumer");
+mkdirSync(consumer);
+copyFileSync(join(source, "Package.swift"), join(consumer, "Package.swift"));
+cpSync(join(source, "IrohLib"), join(consumer, "IrohLib"), { recursive: true });
+runIn("ditto", ["-x", "-k", archive, consumer], output);
+copyFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "swift-cancellation.tests.swift"),
+  join(consumer, "IrohLib", "Tests", "IrohLibTests", "CancellationTests.swift")
+);
+runIn("swift", ["test"], consumer);
 const receipt = {
   ...pinnedSource,
   version,
@@ -66,6 +84,10 @@ const receipt = {
   builder: { platform: process.platform, arch: process.arch, node: process.version },
   rustc: runIn("rustc", ["--version", "--verbose"], source, {}, true),
   scope: "Apple acceptance artifact; consuming it needs a Package.swift pointing at this archive",
+  validation: [
+    "Fresh Swift package compiles the matching generated wrapper and XCFramework",
+    "Upstream Swift tests and endpoint-readiness/dial cancellation regressions",
+  ],
 };
 writeFileSync(join(output, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
 console.log(JSON.stringify(receipt, null, 2));

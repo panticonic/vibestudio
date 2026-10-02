@@ -56,7 +56,8 @@ is otherwise validated.
     server restart, and shared-member revocation. Native macOS 14 and macOS 26
     CI acceptance both pass with the corrected source coordinate. Windows
     acceptance exposed the separate immutable CAS publication race described
-    below; verification of that repair remains pending. Failure packets retain loaded source
+    below; native and installed Windows acceptance subsequently pass at
+    `4dd78d56`. Failure packets retain loaded source
     fingerprints and main-process, hosted-shell, and module-owner diagnostics.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
     two declared skips). Agent launch ownership also survives elapsed time until
@@ -183,7 +184,8 @@ is otherwise validated.
     verifies the winner and flushes the namespace without reopening the published
     inode. The held competing-publisher regression fails before this repair;
     all 92 CAS, build-store, and blob-service tests pass afterward. Windows native
-    acceptance remains required to establish that all observed failures are fixed.
+    acceptance subsequently passes at `4dd78d56`, including onboarding and
+    retained-credential server restart; that pass does not isolate this race.
   - **Stream-opening ownership:** Both native wrappers now expose an attempt
     that cancels and joins a wait for peer stream credit without closing sibling
     streams or the connection. A fresh installed Linux x64 root/platform package
@@ -206,6 +208,23 @@ is otherwise validated.
     declarations, exact platform versions, and matching source receipts. Android shell builds and the
     iOS shell simulator tests also passed in CI.
     Production dependency pins are unchanged.
+  - **Coherent release candidate / 2026-10-02:** Native repair workflow
+    `36997635984` at `1688d9ad7` passes all seven targets and the Node coherence
+    gate, stamping every artifact `1.1.0-cancel.3`. Downloaded receipts match the
+    reviewed patch and source locks. All five root npm tarballs are byte-identical;
+    the existing package-set checker verifies their generated API, exact optional
+    dependency versions, and native digests. Android's generated Kotlin includes
+    both new attempt APIs, and the AAR contains all four required ABIs. Apple
+    retains matching generated Swift and the four XCFramework slices representing
+    all five Rust targets; its archive and Swift Package Manager checksum are
+    `92d62ee6603f874834864e16b9bf4b3a83e91f60c53f1e57d4f5ca15aadf663f`.
+    Eight unpublished release inputs and a matching patched Swift package source
+    are retained privately, with a release manifest recording their digests.
+    The Apple builder previously did not compile its generated wrapper. Its
+    follow-up now installs that wrapper and retained archive into a fresh Swift
+    consumer and runs upstream tests plus readiness and dial failure propagation
+    regressions. This stronger Apple acceptance remains pending CI. Publication
+    and production adoption remain separate outstanding steps.
   - **Cancelled receive EOF:** A real-QUIC CI ownership case failed, and an
     isolated run exposed a response read resolving as EOF after an upload
     failure. The response adapter now checks the request owner's original
@@ -245,7 +264,7 @@ is otherwise validated.
     existing bytes are rejected and remain untouched. No published file is
     reopened for writing or replaced. This removes the open-file replacement
     operation that is invalid on Windows. All 41 cache/facade tests pass.
-    Windows desktop pairing at `d9e976df` now passes onboarding, System icon and native-controller assertions, and retained-credential server restart. That run includes EOF error propagation but precedes immutable-inode publication; acceptance of the later publication commit still needs verification.
+    Windows desktop pairing at `d9e976df` now passes onboarding, System icon and native-controller assertions, and retained-credential server restart. That run includes EOF error propagation but precedes immutable-inode publication; the later immutable-publication commit `4dd78d56` also passes native Windows pairing, installed Windows acceptance, and CI Quality Checks.
   - **Concurrent schema validation:** The Linux desktop server-restart run at
     `07ac025d` fails because current-schema validation takes `BEGIN IMMEDIATE`
     on the installation-shared reporting database. A held WAL writer reproduces
@@ -272,6 +291,52 @@ is otherwise validated.
     signal alone does not establish conversation readiness. No deadline or
     retry policy was changed. The exact app/emulator/server processes and
     private scratch were retired; server-restart acceptance was not reached.
+  - **Channel connection ownership / 2026-10-02:** The retained-chat failure
+    is reproduced with the actual RPC client while service resolution is held:
+    ConnectionManager supplies an implicit 15-second deadline despite the
+    service remaining owned and valid. Its separate replay timer likewise
+    cancels a valid held replay. Both implicit deadlines are removed; provider
+    failure, subscription-stream termination, supersession, and explicit
+    cancellation remain terminal. Disconnect now joins the pending connection
+    task and its subscription leave receipt, including a held unsubscribe
+    acknowledgment. A pre-aborted replacement leaves the older owner's cleanup
+    join intact. The first broader run passes 197 tests but exposes two mock
+    fixtures that await the successor before releasing its predecessor; the
+    repaired fixtures explicitly hold replay/leave and verify joined retirement.
+    Their three ownership cases pass, establishing 199 relevant passes across
+    the combined runs, and the Base composition typecheck passes. The three-file
+    repair is pushed as Base `5703168` after integrating the newer remote commits
+    in a private Git worktree, which has been retired.
+  - **Cooperative subscription leave:** The actual RPC client also reproduces
+    a manufactured 15-second close failure while the unsubscribe acknowledgment
+    is held. PubSub no longer supplies that implicit deadline. Its close receipt
+    remains shared and pending until leave acknowledges or the original RPC
+    failure arrives, then subscription cancellation and stream retirement join.
+    The held acknowledgment regression fails before the repair and passes after
+    it. The original-failure case verifies error identity and stream retirement;
+    all 75 focused PubSub/connection tests and the Base composition typecheck
+    pass. The former timeout-policy fixture now supplies an actual owner failure
+    after demonstrating that elapsed time preserves the pending subscription.
+    The five-file change is committed and pushed as Base `c3464e2`.
+  - **Android timing investigation:** A broader temporary native RPC stage
+    trace passes onboarding, cold restart, and server restart with zero recovery
+    asset-pipe misses. The preceding uninstrumented run fails, so the trace's
+    pass establishes timing sensitivity rather than a causal fix. All temporary
+    instrumentation, exact processes, and private scratch are retired. A fresh
+    uninstrumented run after the channel repair stops before pairing because
+    concurrent speech source changes request an unreviewed microphone authority
+    presentation. It does not exercise the channel repair. Acceptance is being
+    repeated from isolated committed host/template sources; concurrent working
+    tree edits are preserved. The first isolated setup omitted a configured
+    catalog checkout; the second retained local clone origins instead of the
+    catalog Git coordinates. Both setup failures retired their processes and
+    private scratch. The corrected isolated run at host `1688d9ad7` / Base
+    `5703168` pairs, activates the served mobile target, connects the workspace,
+    and reaches panel readiness. It is explicitly cancelled and joined at the
+    user's wrap-up request before complete rendered-onboarding and restart
+    acceptance. Its private worktree, template clones, caches, app/emulator/server
+    processes, and scratch are retired. This is partial evidence, not an
+    end-to-end pass, and it precedes the cooperative-leave follow-up.
   - **Native mobile retirement cause:** React Native's actual AbortController
     implementation has neither `AbortSignal.reason` nor an abort reason argument.
     Mobile materialization now owns its first retirement cause directly, checks
