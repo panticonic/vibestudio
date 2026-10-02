@@ -1026,6 +1026,10 @@ export function irohReceiveStreamBody(
     async pull(controller) {
       try {
         const chunk = Uint8Array.from(await recv.read(MAX_STREAM_CHUNK_BYTES));
+        // Local stop may settle a native read as EOF. The owner's original
+        // failure remains authoritative over that terminal receive result.
+        const failure = owner.failure();
+        if (failure !== undefined && failure !== null) throw failure;
         if (chunk.byteLength === 0) {
           settle();
           controller.close();

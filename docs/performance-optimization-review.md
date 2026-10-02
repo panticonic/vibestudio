@@ -205,6 +205,23 @@ is otherwise validated.
     declarations, exact platform versions, and matching source receipts. Android shell builds and the
     iOS shell simulator tests also passed in CI.
     Production dependency pins are unchanged.
+  - **Cancelled receive EOF:** A real-QUIC CI ownership case failed, and an
+    isolated run exposed a response read resolving as EOF after an upload
+    failure. The response adapter now checks the request owner's original
+    failure after the native read settles, before accepting EOF or data. A
+    deterministic boundary regression fails before the fix. All 148 Iroh
+    integration tests, 12 native end-to-end tests, and 26 remote operation tests
+    pass afterward; the two slow-head ownership cases also pass in five isolated
+    repetitions. CI acceptance remains required for its original timeout case.
+  - **Latest Android acceptance:** Pairing, app cold restart, and server restart
+    pass with zero recovery panel-asset pipe misses. Initial embedded-host
+    compilation includes a 97-second dependency install. During its initial
+    handoff, System information follows authentication by about 105 seconds;
+    the subsequent cold restart completes that boundary in about 0.3 seconds.
+    Native lifecycle evidence shows successful dials and clean closure of the
+    bootstrap endpoint, so this sample does not establish abandoned dialing as
+    the cause. The initial handoff stall remains unresolved. Owned emulator,
+    server, readers, and scratch state are retired after the acceptance run.
   - **Remaining design work:** An interrupted mutation with no acceptance
     receipt still has an unknown outcome. Recovering it requires a stable
     operation identity and authoritative status/replay at the operation owner;

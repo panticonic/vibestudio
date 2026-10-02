@@ -29,7 +29,11 @@ import {
   IROH_SESSION_OPEN_RESULT,
 } from "../protocol/irohSession.js";
 import type { RpcEnvelope, RpcRequest } from "../types.js";
-import { createIrohClientPipe, IrohResponseHeadTimeoutError } from "./irohClient.js";
+import {
+  createIrohClientPipe,
+  irohReceiveStreamBody,
+  IrohResponseHeadTimeoutError,
+} from "./irohClient.js";
 
 const { SecretKey } = loadIrohNodeBinding();
 
@@ -46,6 +50,37 @@ describe("Iroh RPC client over real local QUIC", () => {
     endpoints.add(endpoint);
     return endpoint;
   }
+
+  it("propagates the owner failure when a cancelled native read resolves as EOF", async () => {
+    let finishRead!: (bytes: Uint8Array) => void;
+    const pendingRead = new Promise<Uint8Array>((resolve) => {
+      finishRead = resolve;
+    });
+    let failure: unknown;
+    const cancel = vi.fn(async () => {});
+    const settled = vi.fn();
+    const reader = irohReceiveStreamBody(
+      {
+        read: vi
+          .fn()
+          .mockResolvedValueOnce(new Uint8Array([1]))
+          .mockReturnValue(pendingRead),
+        readExact: vi.fn(),
+        stop: vi.fn(),
+        receivedReset: vi.fn(),
+      },
+      { cancel, failure: () => failure, settled }
+    ).getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+    const original = new Error("Original duplex upload failure");
+    const rejected = expect(reader.read()).rejects.toBe(original);
+    failure = original;
+    finishRead(new Uint8Array());
+    await rejected;
+    expect(cancel).toHaveBeenCalledWith(original);
+    expect(settled).toHaveBeenCalledOnce();
+    reader.releaseLock();
+  });
 
   it("rejects session readiness when the pipe closes during credential refresh", async () => {
     const serverEndpoint = await bind();
