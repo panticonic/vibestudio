@@ -10,6 +10,8 @@ import { PageHost } from "../../apps/headless-host/src/pageHost";
 import { ConsoleHistoryStore } from "../../apps/headless-host/src/consoleHistory";
 import { HeadlessBrowserDownloads } from "../../apps/headless-host/src/browserDownloads";
 import { BrowserImpl } from "@exact-userland/packages/cdp-client/src/worker";
+import { executeSandbox } from "@exact-userland/packages/eval/src/sandbox";
+import { formatEvalResult } from "@exact-userland/packages/harness/src/tools/eval";
 
 // Native browser evidence is explicit opt-in; ordinary unit runs need no installed browser.
 describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
@@ -18,6 +20,7 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
     it("uploads bytes, observes network, targets same-origin and cross-origin frames, and owns downloads/popups", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "vibestudio-cdp-sdk-"));
       const peers = new Set<WebSocket>();
+      let inputDispatches = 0;
       let pages: PageHost | undefined;
       const server = createServer((request, response) => {
         if (request.url === "/file") {
@@ -33,7 +36,7 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
           response.end('{"ok":true}');
           return;
         }
-        response.setHeader("Content-Type", "text/html");
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
         if (request.url === "/nested") {
           response.end(
             "<button onclick=\"document.body.dataset.clicked='yes'\">Nested action</button>"
@@ -48,7 +51,7 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
         }
         const address = server.address() as { port: number };
         response.end(
-          `<h1>SDK evidence</h1><input type="file" hidden id="upload"><a download href="/file">Download</a><button onclick="window.open('/popup')">Popup</button><iframe id="same" src="/frame"></iframe><iframe id="cross" src="http://localhost:${address.port}/frame"></iframe>`
+          `<h1>SDK evidence</h1><button onclick="document.body.dataset.clicks=String(Number(document.body.dataset.clicks||0)+1);setTimeout(()=>document.getElementById('created').hidden=false,100)">＋ Create new</button><div id="created" role="dialog" hidden>Created</div><input type="file" hidden id="upload"><a download href="/file">Download</a><button onclick="window.open('/popup')">Popup</button><iframe id="same" src="/frame"></iframe><iframe id="cross" src="http://localhost:${address.port}/frame"></iframe>`
         );
       });
       await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
@@ -59,6 +62,7 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
         socket.on("close", () => peers.delete(socket));
         socket.on("message", async (raw) => {
           const command = JSON.parse(String(raw));
+          if (command.method.startsWith("Input.")) inputDispatches += 1;
           try {
             const result = await pages!.relaySend(
               "panel-main",
@@ -136,6 +140,44 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
             downloads!.operation("panel-main", request, signal ?? new AbortController().signal),
         });
         const page = sdk.contexts()[0]!.pages()[0]!;
+        console.info("native SDK stage: readiness failure through eval");
+        const failure = await executeSandbox(
+          "await page.getByRole('button', { name: 'Create new' }).click()",
+          {
+            syntax: "javascript",
+            bindings: { page },
+            moduleMap: {},
+            require: (id) => {
+              throw new Error(`Unexpected native test import: ${id}`);
+            },
+          }
+        );
+        expect(failure).toMatchObject({
+          success: false,
+          failureKind: "user-code",
+          failureCode: "cdp_locator_not_actionable",
+          errorData: {
+            observations: 100,
+            maxObservations: 100,
+            evidence: { status: "captured", matchCount: 0 },
+          },
+        });
+        expect(inputDispatches).toBe(0);
+        const toolResult = await formatEvalResult({ ...failure, console: failure.consoleOutput });
+        expect(toolResult.isError).toBe(true);
+        expect(
+          toolResult.content.some(
+            (content) => content.type === "text" && content.text.includes("＋ Create new")
+          )
+        ).toBe(true);
+        // The connection remains usable. A semantic postcondition waits for
+        // this click's delayed UI transition without replaying the input.
+        const receipt = await page.getByRole("button", { name: "＋ Create new" }).click({
+          expect: { locator: page.getByRole("dialog"), state: "visible" },
+        });
+        expect(receipt.effect.status).toBe("observed");
+        expect(await page.evaluate(() => document.body.dataset.clicks)).toBe("1");
+        expect(inputDispatches).toBe(3);
         console.info("native SDK stage: upload");
         await page.locator("#upload").setInputFiles({
           name: "upload.txt",
