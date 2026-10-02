@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
 import * as esbuild from "esbuild";
 import {
   generateModuleMapBootstrap,
@@ -37,6 +38,36 @@ describe("generatePanelEntry", () => {
       expect(code.match(/__vibestudioPanelMarkReady/g)).toHaveLength(1);
     }
   );
+});
+
+describe.each(["panel", "worker"] as const)("%s module ownership", (target) => {
+  it.each([false, null, 0, "", undefined])("retains the module export %j", async (value) => {
+    const map = Object.create({ inherited: "not a module" });
+    map.present = value;
+    let loads = 0;
+    const realm = {
+      __vibestudioModuleMap__: map,
+      __vibestudioModuleLoaders__: {
+        lazy: async () => {
+          loads++;
+          return value;
+        },
+      },
+    };
+    runInNewContext(generateModuleMapBootstrap(target), realm);
+    const require = (realm as unknown as { __vibestudioRequire__: (id: string) => unknown })
+      .__vibestudioRequire__;
+    const requireAsync = (
+      realm as unknown as { __vibestudioRequireAsync__: (id: string) => Promise<unknown> }
+    ).__vibestudioRequireAsync__;
+    expect(require("present")).toBe(value);
+    expect(await requireAsync("present")).toBe(value);
+    expect(await requireAsync("lazy")).toBe(value);
+    expect(await requireAsync("lazy")).toBe(value);
+    expect(loads).toBe(1);
+    expect(() => require("inherited")).toThrow("not available");
+    await expect(requireAsync("toString")).rejects.toThrow("no generated");
+  });
 });
 
 describe("generateModuleMapBootstrap (panel target)", () => {

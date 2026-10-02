@@ -1685,8 +1685,8 @@ export function generateModuleMapBootstrap(
 ): string {
   const base = `globalThis.__vibestudioModuleMap__ = globalThis.__vibestudioModuleMap__ || {};
 globalThis.__vibestudioRequire__ = function(id) {
-  const mod = globalThis.__vibestudioModuleMap__[id];
-  if (mod) return mod;
+  const map = globalThis.__vibestudioModuleMap__;
+  if (Object.hasOwn(map, id)) return map[id];
   throw new Error('Module "' + id + '" not available. Workspace packages (@workspace/*, @vibestudio/*) are auto-resolved. For npm packages, use imports: { "' + id + '": "npm:latest" }');
 };`;
 
@@ -1695,9 +1695,10 @@ globalThis.__vibestudioRequire__ = function(id) {
 globalThis.__vibestudioModuleLoaders__ = globalThis.__vibestudioModuleLoaders__ || {};
 globalThis.__vibestudioModuleLoadingPromises__ = globalThis.__vibestudioModuleLoadingPromises__ || {};
 globalThis.__vibestudioRequireAsync__ = async function(id) {
-  if (globalThis.__vibestudioModuleMap__[id]) return globalThis.__vibestudioModuleMap__[id];
-  if (globalThis.__vibestudioModuleLoadingPromises__[id]) return globalThis.__vibestudioModuleLoadingPromises__[id];
-  const loader = globalThis.__vibestudioModuleLoaders__[id];
+  if (Object.hasOwn(globalThis.__vibestudioModuleMap__, id)) return globalThis.__vibestudioModuleMap__[id];
+  if (Object.hasOwn(globalThis.__vibestudioModuleLoadingPromises__, id)) return globalThis.__vibestudioModuleLoadingPromises__[id];
+  const loaders = globalThis.__vibestudioModuleLoaders__;
+  const loader = Object.hasOwn(loaders, id) ? loaders[id] : undefined;
   if (!loader) throw new Error('Module "' + id + '" has no generated worker loader');
   const loadPromise = loader().then((mod) => {
     globalThis.__vibestudioModuleMap__[id] = mod;
@@ -1726,9 +1727,10 @@ ${nativeImportSpecifiers
   )
   .join("\n")}
 globalThis.__vibestudioRequireAsync__ = async function(id) {
-  if (globalThis.__vibestudioModuleMap__[id]) return globalThis.__vibestudioModuleMap__[id];
-  if (globalThis.__vibestudioModuleLoadingPromises__[id]) return globalThis.__vibestudioModuleLoadingPromises__[id];
-  const loader = globalThis.__vibestudioModuleLoaders__[id];
+  if (Object.hasOwn(globalThis.__vibestudioModuleMap__, id)) return globalThis.__vibestudioModuleMap__[id];
+  if (Object.hasOwn(globalThis.__vibestudioModuleLoadingPromises__, id)) return globalThis.__vibestudioModuleLoadingPromises__[id];
+  const loaders = globalThis.__vibestudioModuleLoaders__;
+  const loader = Object.hasOwn(loaders, id) ? loaders[id] : undefined;
   const canImportNatively = globalThis.__vibestudioNativeImportSpecifiers__.has(id) ||
     /^(?:https?:|data:|blob:|\\/|\\.{1,2}\\/)/.test(id);
   if (!loader && !canImportNatively) {
