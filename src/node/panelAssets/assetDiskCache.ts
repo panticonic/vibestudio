@@ -30,8 +30,27 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+
+/** Publish completed bytes without replacing an immutable inode held by readers. */
+async function publishAssetBlob(source: string, destination: string, size: number): Promise<void> {
+  try {
+    await fsp.link(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const stat = await fsp.lstat(destination);
+    if (!stat.isFile() || stat.size !== size) {
+      throw new Error("Published asset blob has an invalid file type or size");
+    }
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(destination)) hash.update(chunk);
+    if (hash.digest("hex") !== path.basename(destination)) {
+      throw new Error("Published asset blob does not match its content digest");
+    }
+  }
+}
 
 // Retained-cache budget, not a response-size limit. Live bodies stream to disk
 // and never occupy this many bytes in JavaScript memory.
@@ -409,10 +428,10 @@ class AssetPopulation {
       this.stage = "publication";
       const blobPath = path.join(path.dirname(this.tmp), digest);
       if (this.written <= this.maxBytes) {
-        // Every reader uses the population-owned handle with an explicit file
-        // position. Rename preserves that handle, including for late readers,
-        // without copying bytes or waiting for slow consumers to finish.
-        await fsp.rename(this.tmp, blobPath);
+        // Readers keep the population-owned handle. Linking completed bytes
+        // publishes one immutable inode without replacing an existing winner,
+        // including when Windows still has readers of that winner open.
+        await publishAssetBlob(this.tmp, blobPath, this.written);
         await this.publish({ digest, blobPath, size: this.written });
       }
       this.resolvePublication();
@@ -779,23 +798,10 @@ export class AssetDiskCache {
   }
 
   private async writeBlobIfAbsent(blobPath: string, body: Buffer): Promise<void> {
-    try {
-      await fsp.access(blobPath);
-      return;
-    } catch {
-      // Missing: write below.
-    }
     const tmp = `${blobPath}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await fsp.writeFile(tmp, body);
-      await fsp.rename(tmp, blobPath);
-    } catch (err) {
-      try {
-        await fsp.access(blobPath);
-        return;
-      } catch {
-        throw err;
-      }
+      await fsp.writeFile(tmp, body, { flag: "wx" });
+      await publishAssetBlob(tmp, blobPath, body.byteLength);
     } finally {
       await fsp.rm(tmp, { force: true }).catch(() => undefined);
     }

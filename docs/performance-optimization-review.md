@@ -237,6 +237,15 @@ is otherwise validated.
     but does not yet establish the cause of the Windows capture. Native failure
     packets now include bounded snapshots of active transfers and cache owners
     through the existing test API, without querying a remote server or page.
+  - **Immutable asset publication:** A real-filesystem regression shows that two
+    different asset paths with identical bytes replace the same digest's inode
+    while the first response still owns a reader. Both streamed populations and
+    verified batches now use one atomic hardlink publisher. An existing winner
+    is reused only after file-type, size, and streamed digest validation; corrupt
+    existing bytes are rejected and remain untouched. No published file is
+    reopened for writing or replaced. This removes the open-file replacement
+    operation that is invalid on Windows. All 41 cache/facade tests pass.
+    Native Windows acceptance remains the final platform verification.
   - **Concurrent schema validation:** The Linux desktop server-restart run at
     `07ac025d` fails because current-schema validation takes `BEGIN IMMEDIATE`
     on the installation-shared reporting database. A held WAL writer reproduces
@@ -245,7 +254,7 @@ is otherwise validated.
     migrations still re-read and validate under their exclusive writer lock.
     No busy timeout or retry policy is introduced or extended. All 20 SQLite
     and problem-reporting store tests pass, including exact schema rejection,
-    migration rollback, and concurrent validation without exposing uncommitted
+    declared migrations, and concurrent validation without exposing uncommitted
     data. Native restart acceptance still needs rerunning.
   - **Native mobile retirement cause:** React Native's actual AbortController
     implementation has neither `AbortSignal.reason` nor an abort reason argument.

@@ -373,6 +373,55 @@ describe("AssetDiskCache", () => {
     expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
   });
 
+  it("rejects a corrupt existing winner without replacing its bytes or publishing an index", async () => {
+    const cache = await newCache();
+    const bytes = Buffer.from("verified immutable bytes");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const blob = path.join(dir, "blobs", digest);
+    const corrupt = Buffer.alloc(bytes.length, 42);
+    await fsp.writeFile(blob, corrupt);
+    await expect(
+      cache.putVerifiedBatch([
+        {
+          cacheKey: "/corrupt-winner.js",
+          bytes,
+          payloadDigest: digest,
+          gzip: false,
+          contentType: "text/javascript",
+        },
+      ])
+    ).rejects.toThrow("does not match its content digest");
+    expect(await cache.get("/corrupt-winner.js")).toBeNull();
+    expect(await fsp.readFile(blob)).toEqual(corrupt);
+    await cache.close();
+  });
+
+  it("reuses a published immutable inode while another response still reads it", async () => {
+    const cache = await newCache();
+    const bytes = "identical immutable bytes";
+    const blob = path.join(dir, "blobs", createHash("sha256").update(bytes).digest("hex"));
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const first = await cache.serve("/first.js", async () => immutableResponse(bytes));
+      if (first.kind !== "passthrough") throw new Error("Expected first transfer");
+      reader = first.response.body!.getReader();
+      await reader.read();
+      let inode = 0;
+      await vi.waitFor(async () => {
+        inode = (await fsp.stat(blob)).ino;
+        expect(inode).toBeGreaterThan(0);
+      });
+      const second = await cache.serve("/second.js", async () => immutableResponse(bytes));
+      if (second.kind !== "passthrough") throw new Error("Expected independently paced transfer");
+      await expect(readStream(second.response.body!)).resolves.toEqual(Buffer.from(bytes));
+      expect((await fsp.stat(blob)).ino).toBe(inode);
+      await expect(reader.read()).resolves.toMatchObject({ done: true });
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      await cache.close();
+    }
+  });
+
   it("settles a publication failure at EOF and retires its failed transfer", async () => {
     const cache = await newCache();
     const failure = new Error("Immutable spool publication failed");
