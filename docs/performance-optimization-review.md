@@ -53,9 +53,10 @@ is otherwise validated.
     selected local repositories still discover their origin normally. The held
     coordinate regression and all 15 focused source-selection tests pass.
     A fresh production desktop run using CI's origin spelling passes onboarding,
-    server restart, and shared-member revocation. Native macOS and Windows CI
-    acceptance remains pending after this repair; earlier failures do not prove
-    that the current linker was executed. Failure packets retain loaded source
+    server restart, and shared-member revocation. Native macOS 14 and macOS 26
+    CI acceptance both pass with the corrected source coordinate. Windows
+    acceptance exposed the separate immutable CAS publication race described
+    below; verification of that repair remains pending. Failure packets retain loaded source
     fingerprints and main-process, hosted-shell, and module-owner diagnostics.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
     two declared skips). Agent launch ownership also survives elapsed time until
@@ -174,7 +175,15 @@ is otherwise validated.
     inode. The held competing-publisher regression fails before this repair;
     all 92 CAS, build-store, and blob-service tests pass afterward. Windows native
     acceptance remains required to establish that all observed failures are fixed.
-  - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
+  - **Stream-opening ownership:** Both native wrappers now expose an attempt
+    that cancels and joins a wait for peer stream credit without closing sibling
+    streams or the connection. A fresh installed Linux x64 root/platform package
+    passed all 22 native tests, including four stream-opening ownership cases,
+    CommonJS/ESM export checks, and strict declaration typechecking. UniFFI also
+    checks successfully. The regenerated cross-platform artifacts still need
+    matrix acceptance and publication before application adoption.
+  - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial and
+    stream-opening
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. The Apple artifact now retains the matching
     generated Swift source and its receipt hash alongside the XCFramework.

@@ -83,11 +83,20 @@ Read/write ordering remains serialized. Partial data from an interrupted
 operation is discarded because the corresponding stream half is terminal.
 
 The only dependency change makes already-locked `tokio-util` a direct dependency
-of the two bindings. There is no Rust dependency version update, foreign API
-change, application cancellation channel, or JavaScript transport workaround.
+of the two bindings. There is no Rust dependency version update, application cancellation channel,
+or JavaScript transport workaround.
 The reviewed patch also corrects the Node package-manager declaration to
 Yarn 4.4.0, matching its checked-in Yarn executable and lockfile. Node package
 builds use an immutable install and private package caches.
+
+`Connection.beginOpenBi()` returns a `BiStreamOpenAttempt` that owns the wait
+for peer stream credit. Its `cancel()` interrupts and joins that wait without
+closing the shared connection. An attempt is consumed once; cancellation before
+opening is terminal. After opening succeeds, the returned stream belongs to its
+caller and cancelling the attempt leaves that stream usable. Connection closure
+propagates the original native opening failure. Both Node and UniFFI expose this
+contract. The regression exhausts real QUIC stream credit and checks repeated
+cancellation, connection closure, and continued traffic on sibling streams.
 
 ## Reproduce locally
 
@@ -183,8 +192,8 @@ a substitute for this repair or an available coherent dependency release.
 platform package from the reviewed inputs. The workflow builds the five desktop
 targets enforced by `check-electron-package-boundary.mjs`. Each target installs
 its actual root and platform tarballs in a fresh consumer, checks CommonJS and
-ESM exports, typechecks the generated dial API, and runs the endpoint, stream,
-and dial cancellation suites through the installed loader. The final workflow
+ESM exports, typechecks the generated dial and stream-opening APIs, and runs the endpoint,
+stream, dial, and stream-opening cancellation suites through the installed loader. The final workflow
 gate requires identical generated JavaScript and declarations across all five
 targets, matching source receipts, and exactly matching platform versions.
 
@@ -198,7 +207,7 @@ one shared root tarball and all five matching platform tarballs only after the
 coherence gate passes. The root package selects those platform packages through
 exact optional dependency versions. Adopting the new API requires switching the
 root dependency too: the currently pinned upstream root loader and declarations
-do not expose `DialAttempt`. Then regenerate `src/releaseSet.ts` integrities and
+do not expose `DialAttempt` or `BiStreamOpenAttempt`. Then regenerate `src/releaseSet.ts` integrities and
 `scripts/cli/lib/connect-grammar.generated.mjs` through the ordinary release
 process. Do not land pins before the packages exist or overwrite a published
 version.

@@ -136,26 +136,31 @@ export function buildNodePackages({
     platformTarball
   );
   const probe =
-    `const { Endpoint, DialAttempt } = require(${JSON.stringify(rootName)});\n` +
-    `if (typeof DialAttempt !== 'function' || typeof Endpoint.prototype.beginConnect !== 'function') throw new Error('Installed dial API is incomplete');\n`;
+    `const { Endpoint, DialAttempt, Connection, BiStreamOpenAttempt } = require(${JSON.stringify(rootName)});\n` +
+    `if (typeof DialAttempt !== 'function' || typeof Endpoint.prototype.beginConnect !== 'function') throw new Error('Installed dial API is incomplete');\n` +
+    `if (typeof BiStreamOpenAttempt !== 'function' || typeof Connection.prototype.beginOpenBi !== 'function') throw new Error('Installed stream opening API is incomplete');\n`;
   runIn(process.execPath, ["-e", probe], consumer, env);
   runIn(
     process.execPath,
     [
       "--input-type=module",
       "-e",
-      `import { Endpoint, DialAttempt } from ${JSON.stringify(rootName)};\n` +
-        `if (typeof DialAttempt !== 'function' || typeof Endpoint.prototype.beginConnect !== 'function') throw new Error('Installed ESM dial API is incomplete');\n`,
+      `import { Endpoint, DialAttempt, Connection, BiStreamOpenAttempt } from ${JSON.stringify(rootName)};\n` +
+        `if (typeof DialAttempt !== 'function' || typeof Endpoint.prototype.beginConnect !== 'function') throw new Error('Installed ESM dial API is incomplete');\n` +
+        `if (typeof BiStreamOpenAttempt !== 'function' || typeof Connection.prototype.beginOpenBi !== 'function') throw new Error('Installed ESM stream opening API is incomplete');\n`,
     ],
     consumer,
     env
   );
   writeFileSync(
     join(consumer, "probe.ts"),
-    `import { Endpoint, EndpointAddr, DialAttempt, Connection } from ${JSON.stringify(rootName)};\n` +
+    `import { Endpoint, EndpointAddr, DialAttempt, Connection, BiStreamOpenAttempt, BiStream } from ${JSON.stringify(rootName)};\n` +
       `export const begin = (endpoint: Endpoint, addr: EndpointAddr): DialAttempt => endpoint.beginConnect(addr, [1]);\n` +
       `export const cancel = (attempt: DialAttempt): Promise<void> => attempt.cancel();\n` +
-      `export const connect = (attempt: DialAttempt): Promise<Connection> => attempt.connect();\n`
+      `export const connect = (attempt: DialAttempt): Promise<Connection> => attempt.connect();\n` +
+      `export const beginOpen = (connection: Connection): BiStreamOpenAttempt => connection.beginOpenBi();\n` +
+      `export const open = (attempt: BiStreamOpenAttempt): Promise<BiStream> => attempt.open();\n` +
+      `export const cancelOpen = (attempt: BiStreamOpenAttempt): Promise<void> => attempt.cancel();\n`
   );
   runIn(
     process.execPath,
@@ -175,7 +180,12 @@ export function buildNodePackages({
   // Run the unchanged upstream/regression suites beside the installed loader.
   // Their relative imports now exercise the shipped root API and its declared
   // platform dependency, with no test-only native-library selection.
-  const tests = ["endpoint.mjs", "stream-cancellation.mjs", "dial-cancellation.mjs"];
+  const tests = [
+    "endpoint.mjs",
+    "stream-cancellation.mjs",
+    "dial-cancellation.mjs",
+    "stream-open-cancellation.mjs",
+  ];
   const installedTests = join(consumer, "node_modules", rootName, "iroh-js", "test");
   mkdirSync(installedTests);
   for (const test of tests) copyFileSync(join(project, "test", test), join(installedTests, test));
@@ -195,9 +205,9 @@ export function buildNodePackages({
     javascriptSha256: sha256(readFileSync(join(rootDirectory, "iroh-js/index.js"))),
     declarationsSha256: sha256(readFileSync(join(rootDirectory, "iroh-js/index.d.ts"))),
     validation: [
-      "Installed root and platform tarballs expose the native dial API",
-      "Generated declarations typecheck beginConnect/connect/cancel",
-      "Installed package endpoint, stream, and request-owned dial cancellation suites",
+      "Installed root and platform tarballs expose native dial and stream opening APIs",
+      "Generated declarations typecheck dial and stream opening ownership",
+      "Installed package endpoint, stream, dial, and stream opening cancellation suites",
     ],
   };
 }

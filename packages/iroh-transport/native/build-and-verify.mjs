@@ -25,7 +25,13 @@ copyFileSync(join(target, profile === "dev" ? "debug" : "release", library), art
 // This is an explicit test-only loader selection, never application configuration.
 runIn(
   process.execPath,
-  ["--test", "test/endpoint.mjs", "test/stream-cancellation.mjs", "test/dial-cancellation.mjs"],
+  [
+    "--test",
+    "test/endpoint.mjs",
+    "test/stream-cancellation.mjs",
+    "test/dial-cancellation.mjs",
+    "test/stream-open-cancellation.mjs",
+  ],
   join(source, "iroh-js"),
   { NAPI_RS_NATIVE_LIBRARY_PATH: artifact }
 );
@@ -43,6 +49,7 @@ const receipt = {
     "endpoint tests including readiness cancellation",
     "native stream cancellation tests",
     "request-owned dial cancellation with a healthy sibling connection",
+    "request-owned stream opening cancellation with sibling streams",
     "UniFFI cargo check",
   ],
   scope: "Local acceptance artifact; not a published or installed binding release",

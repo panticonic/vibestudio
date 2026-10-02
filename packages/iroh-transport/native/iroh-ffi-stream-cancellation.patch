@@ -42,8 +42,21 @@ index cc85295..029caa1 100644
  url = "2.4"
  tracing = "0.1.40"
  tracing-subscriber = { version = "0.3.17" }
+diff --git a/iroh-js/package.json b/iroh-js/package.json
+index 05f27f0..3148900 100644
+--- a/iroh-js/package.json
++++ b/iroh-js/package.json
+@@ -54,7 +54,7 @@
+     "test": "node --test test/*.mjs",
+     "version": "napi version"
+   },
+-  "packageManager": "yarn@1.22.22",
++  "packageManager": "yarn@4.4.0",
+   "optionalDependencies": {
+     "@number0/iroh-android-arm-eabi": "1.0.0",
+     "@number0/iroh-android-arm64": "1.0.0",
 diff --git a/iroh-js/src/endpoint.rs b/iroh-js/src/endpoint.rs
-index d4fb502..12028af 100644
+index d4fb502..dc9fefd 100644
 --- a/iroh-js/src/endpoint.rs
 +++ b/iroh-js/src/endpoint.rs
 @@ -4,6 +4,7 @@ use iroh::endpoint::{self, presets, presets::Preset as _};
@@ -51,13 +64,13 @@ index d4fb502..12028af 100644
  use napi_derive::napi;
  use tokio::sync::Mutex;
 +use tokio_util::sync::CancellationToken;
- 
+
  use crate::{EndpointAddr, RelayMode, SecretKey, WatchHandle, path, watch};
- 
+
 @@ -392,10 +393,14 @@ impl Endpoint {
              .collect()
      }
- 
+
 -    /// Resolves once the endpoint has a usable home relay.
 +    /// Resolves once the endpoint has a usable home relay, or rejects on close.
      #[napi]
@@ -70,12 +83,12 @@ index d4fb502..12028af 100644
 +            _ = self.inner.online() => Ok(()),
 +        }
      }
- 
+
      /// Insert (or replace) a relay configuration at runtime.
 @@ -438,6 +443,18 @@ impl Endpoint {
          Ok(Connecting(Mutex::new(Some(connecting))))
      }
- 
+
 +    /// Own a cancellable dial before address resolution or handshake starts.
 +    #[napi]
 +    pub fn begin_connect(&self, addr: &EndpointAddr, alpn: Vec<u8>) -> Result<DialAttempt> {
@@ -94,7 +107,7 @@ index d4fb502..12028af 100644
 @@ -476,6 +493,41 @@ impl Endpoint {
      }
  }
- 
+
 +/// Request-owned cancellation of the complete dial, leaving sibling connections alive.
 +#[napi]
 +pub struct DialAttempt {
@@ -133,21 +146,74 @@ index d4fb502..12028af 100644
  /// An incoming connection that has not yet begun its server-side handshake.
  #[napi]
  pub struct Incoming(Mutex<Option<iroh::endpoint::Incoming>>);
-@@ -842,11 +894,11 @@ impl BiStream {
+@@ -671,6 +723,16 @@ impl Connection {
+         Ok(RecvStream::new(r))
+     }
+
++    /// Own a cancellable stream opening before waiting for peer stream credit.
++    #[napi]
++    pub fn begin_open_bi(&self) -> BiStreamOpenAttempt {
++        BiStreamOpenAttempt {
++            connection: self.0.clone(),
++            cancelled: CancellationToken::new(),
++            consumed: Mutex::new(false),
++        }
++    }
++
+     #[napi]
+     pub async fn open_bi(&self) -> Result<BiStream> {
+         let (s, r) = self
+@@ -839,14 +901,47 @@ impl BiStream {
+     }
+ }
+
++/// Request-owned cancellation while waiting for peer stream credit.
++#[napi]
++pub struct BiStreamOpenAttempt {
++    connection: Arc<endpoint::Connection>,
++    cancelled: CancellationToken,
++    consumed: Mutex<bool>,
++}
++
++#[napi]
++impl BiStreamOpenAttempt {
++    #[napi]
++    pub async fn open(&self) -> Result<BiStream> {
++        let mut consumed = self.consumed.lock().await;
++        if *consumed { return Err(anyhow::anyhow!("Stream opening already consumed").into()); }
++        *consumed = true;
++        tokio::select! {
++            biased;
++            _ = self.cancelled.cancelled() => Err(anyhow::anyhow!("Stream opening cancelled").into()),
++            stream = self.connection.open_bi() => {
++                let (send, recv) = stream.map_err(|e| anyhow::anyhow!("{e:?}"))?;
++                Ok(BiStream { send: SendStream::new(send), recv: RecvStream::new(recv) })
++            }
++        }
++    }
++
++    /// Drop and join only this opening. A returned stream belongs to its caller.
++    #[napi]
++    pub async fn cancel(&self) {
++        self.cancelled.cancel();
++        let _joined = self.consumed.lock().await;
++    }
++}
++
  /// The outgoing half of a QUIC stream.
  #[derive(Clone)]
  #[napi]
 -pub struct SendStream(Arc<Mutex<endpoint::SendStream>>);
 +pub struct SendStream(Arc<Mutex<endpoint::SendStream>>, CancellationToken);
- 
+
  impl SendStream {
      fn new(s: endpoint::SendStream) -> Self {
 -        SendStream(Arc::new(Mutex::new(s)))
 +        SendStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -854,18 +906,32 @@ impl SendStream {
+
+@@ -854,18 +949,32 @@ impl SendStream {
  impl SendStream {
      #[napi]
      pub async fn write(&self, buf: Vec<u8>) -> Result<i64> {
@@ -165,7 +231,7 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn write_all(&self, buf: Vec<u8>) -> Result<()> {
 -        let mut s = self.0.lock().await;
@@ -186,9 +252,9 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -879,6 +945,11 @@ impl SendStream {
+@@ -879,6 +988,11 @@ impl SendStream {
      pub async fn reset(&self, error_code: BigInt) -> Result<()> {
          let code =
              endpoint::VarInt::from_u64(error_code.get_u64().1).map_err(anyhow::Error::from)?;
@@ -200,8 +266,8 @@ index d4fb502..12028af 100644
          let mut s = self.0.lock().await;
          s.reset(code).map_err(|e| anyhow::anyhow!("{e:?}"))?;
          Ok(())
-@@ -899,9 +970,15 @@ impl SendStream {
- 
+@@ -899,9 +1013,15 @@ impl SendStream {
+
      #[napi]
      pub async fn stopped(&self) -> Result<Option<i64>> {
 -        let s = self.0.lock().await;
@@ -217,23 +283,23 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -913,11 +990,11 @@ impl SendStream {
+@@ -913,11 +1033,11 @@ impl SendStream {
  /// The incoming half of a QUIC stream.
  #[derive(Clone)]
  #[napi]
 -pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>);
 +pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>, CancellationToken);
- 
+
  impl RecvStream {
      fn new(s: endpoint::RecvStream) -> Self {
 -        RecvStream(Arc::new(Mutex::new(s)))
 +        RecvStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -925,35 +1002,56 @@ impl RecvStream {
+
+@@ -925,35 +1045,56 @@ impl RecvStream {
  impl RecvStream {
      #[napi]
      pub async fn read(&self, size_limit: u32) -> Result<Vec<u8>> {
@@ -263,7 +329,7 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn read_exact(&self, size: u32) -> Result<Vec<u8>> {
 -        let mut buf = vec![0u8; size as usize];
@@ -286,7 +352,7 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
      pub async fn read_to_end(&self, size_limit: u32) -> Result<Vec<u8>> {
 -        let mut r = self.0.lock().await;
@@ -309,9 +375,9 @@ index d4fb502..12028af 100644
 +            } => result,
 +        }
      }
- 
+
      #[napi]
-@@ -971,6 +1069,11 @@ impl RecvStream {
+@@ -971,6 +1112,11 @@ impl RecvStream {
      pub async fn stop(&self, error_code: BigInt) -> Result<()> {
          let code =
              endpoint::VarInt::from_u64(error_code.get_u64().1).map_err(anyhow::Error::from)?;
@@ -323,8 +389,8 @@ index d4fb502..12028af 100644
          let mut r = self.0.lock().await;
          r.stop(code).map_err(|e| anyhow::anyhow!("{e:?}"))?;
          Ok(())
-@@ -978,11 +1081,19 @@ impl RecvStream {
- 
+@@ -978,11 +1124,19 @@ impl RecvStream {
+
      #[napi]
      pub async fn received_reset(&self) -> Result<Option<i64>> {
 -        let mut r = self.0.lock().await;
@@ -455,7 +521,7 @@ index 7093797..3f3fb26 100644
 +++ b/iroh-js/test/endpoint.mjs
 @@ -29,6 +29,15 @@ async function bindClient() {
  }
- 
+
  suite('endpoint', () => {
 +  test('close cancels pending online waits, including calls after close', async () => {
 +    const ep = await bindMinimal()
@@ -563,8 +629,115 @@ index 0000000..08c123a
 +  assert.equal(await bounded(incoming.send.stopped()), 55)
 +  await proveConnectionAlive(local, remote)
 +}))
+diff --git a/iroh-js/test/stream-open-cancellation.mjs b/iroh-js/test/stream-open-cancellation.mjs
+new file mode 100644
+index 0000000..649202a
+--- /dev/null
++++ b/iroh-js/test/stream-open-cancellation.mjs
+@@ -0,0 +1,101 @@
++import assert from 'node:assert/strict';
++import { test } from 'node:test';
++import { Endpoint, SecretKey, RelayMode } from '../index.js';
++
++const ALPN = Array.from(Buffer.from('iroh-ffi/stream-open-cancellation'));
++async function bind() {
++  const builder = Endpoint.builder();
++  builder.applyMinimal();
++  builder.secretKey(SecretKey.generate().toBytes());
++  builder.alpns([ALPN]);
++  builder.relayMode(RelayMode.disabled());
++  return builder.bind();
++}
++async function fixture() {
++  const client = await bind();
++  const peer = await bind();
++  try {
++    const accepting = peer.acceptNext();
++    const outgoing = client.connect(peer.addr(), ALPN);
++    const incoming = await (await accepting).accept();
++    const [server, local] = await Promise.all([incoming.connect(), outgoing]);
++    return { client, peer, server, local,
++      async close() { await Promise.all([client.close(), peer.close()]); }
++    };
++  } catch (error) {
++    await Promise.all([client.close(), peer.close()]);
++    throw error;
++  }
++}
++async function exhaustCredit(f) {
++  // The locked noq 1.0.1 transport default advertises 100 bidirectional streams.
++  // Retain all of them: no FIN/reset or peer acceptance can replenish credit.
++  const held = [];
++  for (let i = 0; i < 100; i++) held.push(await f.local.openBi());
++  return held;
++}
++async function transfer(stream, remote, byte) {
++  await stream.send.writeAll([byte]);
++  await stream.send.finish();
++  const incoming = await remote;
++  assert.deepEqual(await incoming.recv.readExact(1), [byte]);
++}
++
++test('cancel joins a credit-blocked stream opening and preserves sibling streams', { timeout: 10000 }, async () => {
++  const f = await fixture();
++  try {
++    const held = await exhaustCredit(f);
++    for (let i = 0; i < 4; i++) {
++      const attempt = f.local.beginOpenBi();
++      let settled = false;
++      const outcome = attempt.open().then(
++        stream => ({ stream }), error => ({ error }),
++      ).finally(() => { settled = true; });
++      await new Promise(setImmediate);
++      assert.equal(settled, false, 'opening must be waiting for peer credit');
++      await attempt.cancel();
++      assert.match((await outcome).error.message, /Stream opening cancelled/);
++      await attempt.cancel();
++      await assert.rejects(attempt.open(), /already consumed/);
++    }
++    await transfer(held[0], f.server.acceptBi(), 42);
++    await transfer(await f.server.openBi(), f.local.acceptBi(), 43);
++    assert.equal(f.local.closeReason(), null);
++  } finally { await f.close(); }
++});
++
++test('stream opening cancelled before consumption is terminal', { timeout: 10000 }, async () => {
++  const f = await fixture();
++  try {
++    const attempt = f.local.beginOpenBi();
++    await attempt.cancel();
++    await assert.rejects(attempt.open(), /Stream opening cancelled/);
++    await assert.rejects(attempt.open(), /already consumed/);
++    await transfer(await f.local.openBi(), f.server.acceptBi(), 44);
++  } finally { await f.close(); }
++});
++
++test('connection closure settles a credit-blocked opening', { timeout: 10000 }, async () => {
++  const f = await fixture();
++  try {
++    const held = await exhaustCredit(f);
++    assert.equal(held.length, 100);
++    const attempt = f.local.beginOpenBi();
++    const rejected = assert.rejects(attempt.open());
++    await new Promise(setImmediate);
++    f.local.close(0n, []);
++    await rejected;
++    await attempt.cancel();
++  } finally { await f.close(); }
++});
++
++test('a returned stream belongs to its caller after its opening is cancelled', { timeout: 10000 }, async () => {
++  const f = await fixture();
++  try {
++    const attempt = f.local.beginOpenBi();
++    const stream = await attempt.open();
++    await assert.rejects(attempt.open(), /already consumed/);
++    await attempt.cancel();
++    await transfer(stream, f.server.acceptBi(), 45);
++  } finally { await f.close(); }
++});
 diff --git a/src/endpoint.rs b/src/endpoint.rs
-index 46ac9a8..91f125b 100644
+index 46ac9a8..b2902a7 100644
 --- a/src/endpoint.rs
 +++ b/src/endpoint.rs
 @@ -5,6 +5,7 @@ use iroh::{
@@ -572,13 +745,13 @@ index 46ac9a8..91f125b 100644
  };
  use tokio::sync::Mutex;
 +use tokio_util::sync::CancellationToken;
- 
+
  use crate::{
      AddrChangeCallback, CallbackError, Connecting, EndpointAddr, EndpointId, HomeRelayCallback,
 @@ -171,6 +172,41 @@ pub fn preset_n0_disable_relay() -> Arc<dyn Preset> {
      Arc::new(N0DisableRelayPreset)
  }
- 
+
 +/// Request-owned cancellation of the complete dial, leaving sibling connections alive.
 +#[derive(Debug, uniffi::Object)]
 +pub struct DialAttempt {
@@ -620,7 +793,7 @@ index 46ac9a8..91f125b 100644
 @@ -388,6 +424,17 @@ impl Endpoint {
          Ok(Connection(conn))
      }
- 
+
 +    /// Own a cancellable dial before address resolution or handshake starts.
 +    pub fn begin_connect(&self, addr: &EndpointAddr, alpn: Vec<u8>) -> Result<Arc<DialAttempt>, IrohError> {
 +        Ok(Arc::new(DialAttempt {
@@ -638,7 +811,7 @@ index 46ac9a8..91f125b 100644
 @@ -440,10 +487,14 @@ impl Endpoint {
              .collect()
      }
- 
+
 -    /// Resolves once the endpoint has a usable home relay.
 +    /// Resolves once the endpoint has a usable home relay, or rejects on close.
      #[uniffi::method(async_runtime = "tokio")]
@@ -651,23 +824,74 @@ index 46ac9a8..91f125b 100644
 +            _ = self.inner.online() => Ok(()),
 +        }
      }
- 
+
      /// Insert (or replace) a relay configuration at runtime.
-@@ -724,11 +775,11 @@ impl BiStream {
- 
+@@ -553,6 +604,15 @@ impl Connection {
+         Ok(RecvStream::new(r))
+     }
+
++    /// Own a cancellable stream opening before waiting for peer stream credit.
++    pub fn begin_open_bi(&self) -> Arc<BiStreamOpenAttempt> {
++        Arc::new(BiStreamOpenAttempt {
++            connection: self.0.clone(),
++            cancelled: CancellationToken::new(),
++            consumed: Mutex::new(false),
++        })
++    }
++
+     /// Open a new bidirectional outgoing stream.
+     #[uniffi::method(async_runtime = "tokio")]
+     pub async fn open_bi(&self) -> Result<BiStream, IrohError> {
+@@ -722,13 +782,46 @@ impl BiStream {
+     }
+ }
+
++/// Request-owned cancellation while waiting for peer stream credit.
++#[derive(uniffi::Object)]
++pub struct BiStreamOpenAttempt {
++    connection: endpoint::Connection,
++    cancelled: CancellationToken,
++    consumed: Mutex<bool>,
++}
++
++#[uniffi::export]
++impl BiStreamOpenAttempt {
++    #[uniffi::method(async_runtime = "tokio")]
++    pub async fn open(&self) -> Result<BiStream, IrohError> {
++        let mut consumed = self.consumed.lock().await;
++        if *consumed { return Err(anyhow::anyhow!("Stream opening already consumed").into()); }
++        *consumed = true;
++        tokio::select! {
++            biased;
++            _ = self.cancelled.cancelled() => Err(anyhow::anyhow!("Stream opening cancelled").into()),
++            stream = self.connection.open_bi() => {
++                let (send, recv) = stream?;
++                Ok(BiStream { send: SendStream::new(send), recv: RecvStream::new(recv) })
++            }
++        }
++    }
++
++    /// Drop and join only this opening. A returned stream belongs to its caller.
++    #[uniffi::method(async_runtime = "tokio")]
++    pub async fn cancel(&self) {
++        self.cancelled.cancel();
++        let _joined = self.consumed.lock().await;
++    }
++}
++
  /// The outgoing half of a QUIC stream.
  #[derive(Clone, uniffi::Object)]
 -pub struct SendStream(Arc<Mutex<endpoint::SendStream>>);
 +pub struct SendStream(Arc<Mutex<endpoint::SendStream>>, CancellationToken);
- 
+
  impl SendStream {
      fn new(s: endpoint::SendStream) -> Self {
 -        SendStream(Arc::new(Mutex::new(s)))
 +        SendStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -737,17 +788,31 @@ impl SendStream {
+
+@@ -737,17 +830,31 @@ impl SendStream {
      /// Write some bytes, returning the number actually written.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn write(&self, buf: &[u8]) -> Result<u64, IrohError> {
@@ -685,7 +909,7 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      /// Write all bytes, looping as needed.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn write_all(&self, buf: &[u8]) -> Result<(), IrohError> {
@@ -703,9 +927,9 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      /// Signal that no more data will be sent on this stream.
-@@ -762,6 +827,11 @@ impl SendStream {
+@@ -762,6 +869,11 @@ impl SendStream {
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn reset(&self, error_code: u64) -> Result<(), IrohError> {
          let error_code = endpoint::VarInt::from_u64(error_code)?;
@@ -717,8 +941,8 @@ index 46ac9a8..91f125b 100644
          let mut s = self.0.lock().await;
          s.reset(error_code)?;
          Ok(())
-@@ -783,9 +853,15 @@ impl SendStream {
- 
+@@ -783,9 +895,15 @@ impl SendStream {
+
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn stopped(&self) -> Result<Option<u64>, IrohError> {
 -        let s = self.0.lock().await;
@@ -734,23 +958,23 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      #[uniffi::method(async_runtime = "tokio")]
-@@ -797,11 +873,11 @@ impl SendStream {
- 
+@@ -797,11 +915,11 @@ impl SendStream {
+
  /// The incoming half of a QUIC stream.
  #[derive(Clone, uniffi::Object)]
 -pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>);
 +pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>, CancellationToken);
- 
+
  impl RecvStream {
      fn new(s: endpoint::RecvStream) -> Self {
 -        RecvStream(Arc::new(Mutex::new(s)))
 +        RecvStream(Arc::new(Mutex::new(s)), CancellationToken::new())
      }
  }
- 
-@@ -810,29 +886,50 @@ impl RecvStream {
+
+@@ -810,29 +928,50 @@ impl RecvStream {
      /// Read up to `size_limit` bytes into a fresh buffer.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read(&self, size_limit: u32) -> Result<Vec<u8>, IrohError> {
@@ -774,7 +998,7 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      /// Read exactly `size` bytes, erroring if the stream ends early.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read_exact(&self, size: u32) -> Result<Vec<u8>, IrohError> {
@@ -794,7 +1018,7 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      /// Read until end-of-stream, with `size_limit` as a maximum.
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn read_to_end(&self, size_limit: u32) -> Result<Vec<u8>, IrohError> {
@@ -812,9 +1036,9 @@ index 46ac9a8..91f125b 100644
 +            } => result,
 +        }
      }
- 
+
      #[uniffi::method(async_runtime = "tokio")]
-@@ -852,6 +949,11 @@ impl RecvStream {
+@@ -852,6 +991,11 @@ impl RecvStream {
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn stop(&self, error_code: u64) -> Result<(), IrohError> {
          let error_code = endpoint::VarInt::from_u64(error_code)?;
@@ -826,8 +1050,8 @@ index 46ac9a8..91f125b 100644
          let mut r = self.0.lock().await;
          r.stop(error_code)?;
          Ok(())
-@@ -859,9 +961,17 @@ impl RecvStream {
- 
+@@ -859,8 +1003,16 @@ impl RecvStream {
+
      #[uniffi::method(async_runtime = "tokio")]
      pub async fn received_reset(&self) -> Result<Option<u64>, IrohError> {
 -        let mut r = self.0.lock().await;
@@ -846,16 +1070,3 @@ index 46ac9a8..91f125b 100644
 +        }
      }
  }
- 
-diff --git a/iroh-js/package.json b/iroh-js/package.json
---- a/iroh-js/package.json
-+++ b/iroh-js/package.json
-@@ -54,7 +54,7 @@
-     "test": "node --test test/*.mjs",
-     "version": "napi version"
-   },
--  "packageManager": "yarn@1.22.22",
-+  "packageManager": "yarn@4.4.0",
-   "optionalDependencies": {
-     "@number0/iroh-android-arm-eabi": "1.0.0",
-     "@number0/iroh-android-arm64": "1.0.0",
