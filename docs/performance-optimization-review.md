@@ -51,6 +51,15 @@ is otherwise validated.
     2,029,308 initial bytes over 31 resources; CSS accounts for 750,061 bytes.
     These are individual runs with inherited validated caches, not a controlled
     WAN cold/warm comparison or evidence of a speedup from these changes.
+  - **Controlled build follow-up / 2026-10-02:** A fresh disk-backed instance
+    and private derived/npm caches produced a chat build during the native
+    profile in 11,113 ms. Its verified repeat took 135 ms with identical build
+    keys. Initial delivery is 2,029,480 bytes across 31 resources, including
+    750,061 CSS bytes. Native startup measured 4,107 ms, with 3,866 ms spent
+    importing the semantic snapshot. The exact instance and both caller-owned
+    caches were retired. A separately fresh-cache Linux desktop acceptance also
+    passed onboarding and server restart. These establish current cold/warm
+    behavior; they do not measure WAN readiness or establish an improvement.
   - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. Production dependency pins are unchanged.
