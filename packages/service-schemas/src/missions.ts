@@ -122,7 +122,25 @@ const runFailureSchema = z
 
 const runEffectFailureSchema = z
   .object({
-    invocationId: z.string().min(1),
+    source: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("native-tool"),
+          invocationId: z.string().min(1),
+          nativeTaskId: z.number().int().nonnegative(),
+          nativeEntryId: z.number().int().nonnegative(),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("provider-call"),
+          nativeTaskId: z.number().int().nonnegative(),
+          nativeEntryId: z.number().int().nonnegative(),
+          assistantEntryId: z.number().int().nonnegative(),
+          callId: z.string().min(1),
+        })
+        .strict(),
+    ]),
     name: z.string().min(1),
     outcome: z.enum([
       "tool_error",

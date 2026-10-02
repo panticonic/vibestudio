@@ -442,6 +442,7 @@ type ResolvedExtensionInvocation = Pick<ExtensionInvocation, "caller" | "chainCa
 };
 
 interface ResolvedCausalInvocation {
+  nativeInvocation: import("@vibestudio/rpc").NativeInvocationIdentity | null;
   parent: RpcCausalParent;
   /** Host-resolved turn author. This is attribution, never the authorizing principal. */
   initiatingUser: UserSubject | null;
@@ -708,7 +709,9 @@ export class RpcServer {
         ): Promise<import("./services/acquisitionCoordinator.js").AcquisitionOutcome>;
         consume(grantId: string): boolean;
         touch?(grantId: string): boolean;
-        invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+        invalidate(
+          inputs: readonly import("./services/acquisitionCoordinator.js").AcquisitionRequestInput[]
+        ): void;
       };
       /** Durable server-observed context latch for direct userland calls. */
       /** Admit schema-declared hidden system-test receiver seams. */
@@ -859,6 +862,7 @@ export class RpcServer {
       ) => Promise<{
         initiatingUser: UserSubject | null;
         taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
+        nativeInvocation?: import("@vibestudio/rpc").NativeInvocationIdentity | null;
       } | null>;
       /**
        * Host-level relay boundary composed with RpcServer's invariant transport
@@ -1442,6 +1446,7 @@ export class RpcServer {
     let resolved: {
       initiatingUser: UserSubject | null;
       taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
+      nativeInvocation?: import("@vibestudio/rpc").NativeInvocationIdentity | null;
     } | null;
     try {
       resolved = await resolver(causalParent, binding ?? null);
@@ -1462,6 +1467,7 @@ export class RpcServer {
     }
     return {
       parent: causalParent,
+      nativeInvocation: resolved.nativeInvocation ?? null,
       initiatingUser: resolved.initiatingUser,
       taskAuthority: resolved.taskAuthority ?? null,
     };
@@ -1494,6 +1500,13 @@ export class RpcServer {
     }
     return {
       ...caller,
+      causalParent: {
+        kind: causal.parent.kind,
+        logId: causal.parent.logId,
+        head: causal.parent.head,
+        invocationId: causal.parent.invocationId,
+      },
+      ...(causal.nativeInvocation ? { nativeInvocation: causal.nativeInvocation } : {}),
       ...(executionAuthority ? { executionAuthority } : {}),
       ...(causal.initiatingUser ? { subject: causal.initiatingUser } : {}),
       ...(!taskAuthority && causal.taskAuthority ? { taskAuthority: causal.taskAuthority } : {}),
@@ -4386,6 +4399,10 @@ export class RpcServer {
     const leaves = [...staticLeaves, ...preparedLeaves];
     const snapshotFor = (leaf: (typeof leaves)[number]) =>
       createInvocationSnapshot({
+        ...(input.caller.causalParent ? { causalParent: input.caller.causalParent } : {}),
+        ...(input.caller.nativeInvocation
+          ? { nativeInvocation: input.caller.nativeInvocation }
+          : {}),
         workspaceId,
         sourceWorkspaceId: leaf.context.sourceWorkspaceId ?? workspaceId,
         service: `direct:${input.ref.source}:${input.ref.className}`,
@@ -4611,11 +4628,7 @@ export class RpcServer {
                 }
               : {}),
       } as const;
-      this.deps.directAuthorityAcquirer.invalidate(
-        denied.snapshotDigest,
-        denied.leaf.caller.runtime.id,
-        denied.snapshot.callerPrincipal
-      );
+      this.deps.directAuthorityAcquirer.invalidate([acquisitionInput]);
       if (input.waitForAuthority) {
         const outcome = await this.deps.directAuthorityAcquirer.acquire(
           acquisitionInput,

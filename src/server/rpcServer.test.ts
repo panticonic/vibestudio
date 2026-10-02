@@ -1693,6 +1693,7 @@ describe("RpcServer relay behavior", () => {
       )
     );
     vi.stubGlobal("fetch", fetchMock);
+    const admit = vi.spyOn(testServer(server), "directDOAuthorization");
     const binding = {
       entityId: "entity:agent",
       contextId: "context:agent",
@@ -1734,6 +1735,18 @@ describe("RpcServer relay behavior", () => {
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     const relayed = JSON.parse(String(init.body)) as { message: { causalParent?: unknown } };
     expect(relayed.message.causalParent).toEqual(causalParent);
+    expect(admit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: expect.objectContaining({
+          causalParent: {
+            kind: causalParent.kind,
+            logId: causalParent.logId,
+            head: causalParent.head,
+            invocationId: causalParent.invocationId,
+          },
+        }),
+      })
+    );
   });
 
   it.each(["request", "stream-request"] as const)(
@@ -2885,6 +2898,13 @@ describe("RpcServer relay behavior", () => {
       ],
     });
     delete caller.codeApproved;
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:channel:one",
+      head: "main",
+      invocationId: "native:exact",
+    };
+    caller.causalParent = causalParent;
 
     await expect(
       testServer(server).directDOAuthorization({
@@ -2916,6 +2936,7 @@ describe("RpcServer relay behavior", () => {
           summary: "Remove a person from a shared conversation: Conversations",
         }),
         snapshot: expect.objectContaining({
+          causalParent,
           capability: "channel.members.remove",
           targetCapability: "workspace-service:channel",
         }),
