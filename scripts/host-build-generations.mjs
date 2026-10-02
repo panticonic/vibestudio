@@ -5,6 +5,7 @@ import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts
 
 const NON_COMPILER_ENTRIES = new Set([
   "node",
+  "phonon",
   "mxc",
   "baked-app",
   "source-server-prerequisites.lock",

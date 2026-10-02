@@ -6,6 +6,7 @@ const PRESERVED_DIST_ENTRIES = new Set([
   // publisher. Live instances still launch from these
   // paths; they are not disposable compiler output.
   "node",
+  "phonon",
   // The sandbox launcher is likewise staged atomically by its own publisher.
   "mxc",
   // An app bake is an explicit, separately produced packaging input.

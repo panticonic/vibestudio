@@ -7085,6 +7085,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "speech.transcribe": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "speech.transcribe",
+      rationale:
+        "Installed CPU inference over caller-supplied bytes; no workspace or host data is disclosed and no microphone is accessed by this operation.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "vcs.blame": {
     tier: {
       tier: "open",

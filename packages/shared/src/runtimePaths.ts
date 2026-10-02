@@ -40,6 +40,30 @@ export function getPhysicalAppPath(appRoot: string, relativePath: string): strin
   return path.join(createRuntimeLayout(appRoot).appUnpackedRoot, relativePath);
 }
 
+/** Installed speech resources use immutable vendor and code coordinates, so
+ * a running workspace never loses a library to a later source build. */
+export function getInstalledSpeechRuntime(appRoot: string): {
+  readRoot: string;
+  entryRoot: string;
+} {
+  const root = getPhysicalAppPath(appRoot, "dist/phonon");
+  const coordinate = JSON.parse(fs.readFileSync(path.join(root, "runtime.json"), "utf8")) as {
+    version?: unknown;
+    vendor?: unknown;
+    code?: unknown;
+  };
+  if (
+    coordinate.version !== 1 ||
+    typeof coordinate.vendor !== "string" ||
+    typeof coordinate.code !== "string" ||
+    !/^[a-f0-9]{64}$/.test(coordinate.vendor) ||
+    !/^[a-f0-9]{64}$/.test(coordinate.code)
+  )
+    throw new Error("Invalid installed speech runtime coordinate");
+  const readRoot = path.join(root, coordinate.vendor);
+  return { readRoot, entryRoot: path.join(readRoot, "code", coordinate.code) };
+}
+
 export function getPhysicalPathForAsarPath(filePath: string): string {
   return filePath.replace(/\.asar([/\\])/, ".asar.unpacked$1");
 }

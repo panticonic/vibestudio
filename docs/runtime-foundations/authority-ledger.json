@@ -29527,6 +29527,53 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:speech.transcribe",
+      "rpcPlane": "host-service",
+      "owner": "speech",
+      "method": "transcribe",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "speech.transcribe",
+      "reviewRationale": "Installed CPU inference over caller-supplied bytes; no workspace or host data is disclosed and no microphone is accessed by this operation.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:speech.transcribe"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:speech.transcribe),allOf(capability(user,service:speech.transcribe),workspace-member),allOf(capability(code,service:speech.transcribe),workspace-member))",
+      "r3b": {
+        "review": "supplied-audio-native-inference",
+        "change": "Adds a host-owned Phonon-2 inference primitive for caller-supplied mono PCM. The caller cannot select an executable, model, filesystem path, environment, or another caller's recording. Only supplied audio becomes the progress/transcript response; nothing is persisted. The open native-effect method grants no microphone access, credential use, workspace disclosure, or external egress. Browser capture remains separately permission-gated. Cancellation, connection loss, native failure, and service shutdown retire owned work without deadlines or automatic retries."
+      },
+      "capability": "service:speech.transcribe",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:vcs.blame",
       "rpcPlane": "host-service",
       "owner": "vcs",

@@ -10,6 +10,7 @@ directories:
 files:
   - "dist/**/*"
   - "!dist/node/**/*"
+  - "!dist/phonon/**/*"
   - "!dist/host-generations/**/*"
   - "!dist/source-server-prerequisites.lock"
   - "!dist/host-build.lock"
@@ -49,6 +50,12 @@ asarUnpack:
   - "packages/**/*"
 
 extraResources:
+  # Preserve the complete offline payload, including the explicitly pinned
+  # cross-platform FFI packages, independently of npm dependency filtering.
+  - from: "dist/phonon"
+    to: "app.asar.unpacked/dist/phonon"
+    filter:
+      - "**/*"
   # Exact external Base release pointer. The Base source itself is never
   # packaged; first-run acquisition uses only this immutable coordinate.
   - from: "build-resources/workspace-template-release.json"
@@ -85,7 +92,7 @@ mac:
   extendInfo:
     NSCameraUsageDescription: "Allow websites you approve in Vibestudio to use the camera."
     NSAudioCaptureUsageDescription: "Allow websites you approve in Vibestudio to share system audio."
-    NSMicrophoneUsageDescription: "Allow websites you approve in Vibestudio to use the microphone."
+    NSMicrophoneUsageDescription: "Use the microphone for dictation and websites you approve in Vibestudio."
     NSLocationWhenInUseUsageDescription: "Allow websites you approve in Vibestudio to use your location."
 
 # DMG configuration

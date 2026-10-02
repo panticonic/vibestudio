@@ -1,5 +1,6 @@
 import * as esbuild from "esbuild";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
+import { stagePhononRuntime } from "./scripts/phonon-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
 import * as fs from "fs";
@@ -756,6 +757,7 @@ async function build() {
     await buildVibestudioPackages();
     buildNativeIsolation();
     await stageNodeRuntime();
+    await stagePhononRuntime();
 
     // ========================================================================
     // STEP 1: Build standalone headless panel host
@@ -935,6 +937,7 @@ async function buildSourceServerPrerequisites() {
     await buildVibestudioPackages();
     buildNativeIsolation();
     await stageNodeRuntime();
+    await stagePhononRuntime();
     await buildHeadlessHost();
     // Injected into every non-Electron/headless panel by PanelHttpServer. It
     // embeds the RPC WebSocket client, so leaving it stale can make panels use

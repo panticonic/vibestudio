@@ -594,6 +594,16 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
 
+## `speech`
+
+Bundled offline speech recognition
+
+Authority principals: `code`, `host`, `user`, `website`
+
+| Method | Description |
+|--------|-------------|
+| `speech.transcribe` | Transcribe supplied mono audio locally using the bundled English Phonon-2 model. Returns an NDJSON progress/result stream. |
+
 ## `vcs`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.

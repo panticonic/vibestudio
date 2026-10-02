@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7415d1f64487b7e3af375455fba9b5333cb811bf728eea3eda19101f06401782",
+  "censusDigest": "sha256:c5cd40211e75602d022e7f231a3fdfd1aa48cd4f5721adf73901ec63f64c6284",
   "decisions": {
     "host:build.buildWebsite": {
       "review": "scoped-website-public-workspace-rpc",
@@ -1481,6 +1481,10 @@
     "host:problemReports.forConversation": {
       "review": "owner-scoped-report-draft-transfer",
       "change": "The existing service reads one caller-owned workspace draft at its exact revision and prepares that draft for the reporting agent, returning only its agent-side identity and revision. It does not submit a report, change consent, or grant external reporting authority. The generated census now includes the declared operation; draft ownership and revision checks remain authoritative."
+    },
+    "host:speech.transcribe": {
+      "review": "supplied-audio-native-inference",
+      "change": "Adds a host-owned Phonon-2 inference primitive for caller-supplied mono PCM. The caller cannot select an executable, model, filesystem path, environment, or another caller's recording. Only supplied audio becomes the progress/transcript response; nothing is persisted. The open native-effect method grants no microphone access, credential use, workspace disclosure, or external egress. Browser capture remains separately permission-gated. Cancellation, connection loss, native failure, and service shutdown retire owned work without deadlines or automatic retries."
     }
   }
 }

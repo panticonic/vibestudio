@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "bindings": { "koffi": "3.3.2", "fft.js": "4.0.4" },
+  "wheel": {
+    "url": "https://files.pythonhosted.org/packages/b8/31/12aeded101d90f9a5fbe8aa77efe48a63e079e0371372ba8d2c523ad79bf/fermion_research-0.2.7-py3-none-any.whl",
+    "sha256": "e018427004fd51f83739dca61524b9d91ff012288f778f5cf3791ab938c9b41d"
+  },
+  "model": {
+    "url": "https://huggingface.co/FermionResearch/Phonon-2/resolve/9c7fef3584499a88fe8d394427f45851bbb8b446/phonon-2.bps.tar.zst",
+    "sha256": "98125795b6dda72f5c6eee9ba33d19815df65dcb18b50a357bf9f73c9935309e",
+    "files": {
+      "model.fermion": "4b6bfa3a12cc3c4e0a54f2ab3ec4ca7a842b09e5c7ecfc8e7ca0ac6cc8c11468",
+      "config.json": "d0daad3b2a182893844f4abdc11e4f5b7083f7d42c8ad7e8203f71559785a31b"
+    }
+  },
+  "kernels": {
+    "libphonon2_tdt-macos-arm64.dylib": "7172a198eb8a24075771df7c6157f62f4ac16935afc059d3249526ec399f74de",
+    "libphonon2_enc-macos-arm64.dylib": "7ca2c72b6d1b686608b3ab1370f8b317b9638e774ddfa854b33c7cdf6ca43e09",
+    "libphonon2_tdt-linux-x86_64.so": "83c022691223be3e7fbf6a447c26f03e437cef3cee6e186ea7557cb35d450903",
+    "libphonon2_enc-linux-x86_64.so": "8b0beb8c7dc4e4239b4f3348b28750530739711e9204a411e8ff8eceeabe20a3",
+    "libphonon2_tdt-linux-aarch64.so": "73d6b4344579612974229a774d70113fd507d2c255c1f4cfd28a71a7a9e6db09",
+    "libphonon2_enc-linux-aarch64.so": "084de96e3f623fb1b35d390b54d57db67f1c2ab8c6abecdbd48d261ac58c5f08",
+    "phonon2_tdt-windows-x64.dll": "ab2d0ae71fae711d573db46c23aefc01e0da14835b7e42ffc332d98cd3c235b9",
+    "phonon2_enc-windows-x64.dll": "66c62e71db231202fd2cf3a9eb3a7fb0346eaab2cf021f37b626df041ea9d1fe",
+    "libphonon2_enc-linux-aarch64-base.so": "72c9d1916f32f00fddd172126cfaa2e51ae4aaaa391e96fbcb716b12dd856758",
+    "libphonon2_tdt-linux-aarch64-base.so": "d901776e514475e99ab41e723c774154e852105f714055256012f9418f3869c3",
+    "libphonon2_enc-linux-x86_64-base.so": "c5eca3010708249edb4165356689e6b93dcaed75dc27c24f0b4b7471f6025b81",
+    "phonon2_enc-windows-x64-base.dll": "c0437a8a90c078a6319c666d470f58b44f9bfc712f82e9bb6f78a86a20b6a397"
+  },
+  "targets": [
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "encoder": "libphonon2_enc-linux-x86_64.so",
+      "decoder": "libphonon2_tdt-linux-x86_64.so",
+      "baselineEncoder": "libphonon2_enc-linux-x86_64-base.so",
+      "baselineDecoder": "libphonon2_tdt-linux-x86_64.so",
+      "ffi": {
+        "name": "@koromix/koffi-linux-x64",
+        "url": "https://registry.npmjs.org/@koromix/koffi-linux-x64/-/koffi-linux-x64-3.3.2.tgz",
+        "integrity": "sha512-78qO1oqd9GYfzcKOxIaRiN0KgvzQzgbPfdClf0/jErlWYdxnr8gB4i9KOFvsYMdnc7kTIa/wnubl1lPCiQnqvA=="
+      }
+    },
+    {
+      "platform": "linux",
+      "arch": "arm64",
+      "encoder": "libphonon2_enc-linux-aarch64.so",
+      "decoder": "libphonon2_tdt-linux-aarch64.so",
+      "baselineEncoder": "libphonon2_enc-linux-aarch64-base.so",
+      "baselineDecoder": "libphonon2_tdt-linux-aarch64-base.so",
+      "ffi": {
+        "name": "@koromix/koffi-linux-arm64",
+        "url": "https://registry.npmjs.org/@koromix/koffi-linux-arm64/-/koffi-linux-arm64-3.3.2.tgz",
+        "integrity": "sha512-adabETUHezNDJ6jpqpJV01oJRW8rI4KWH3xV6EpFlIAXCtj6l4aLCbJ6DbGH8fNmsJBLnWiuLkyoNm8zkVotCw=="
+      }
+    },
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "encoder": "libphonon2_enc-macos-arm64.dylib",
+      "decoder": "libphonon2_tdt-macos-arm64.dylib",
+      "baselineEncoder": null,
+      "baselineDecoder": "libphonon2_tdt-macos-arm64.dylib",
+      "ffi": {
+        "name": "@koromix/koffi-darwin-arm64",
+        "url": "https://registry.npmjs.org/@koromix/koffi-darwin-arm64/-/koffi-darwin-arm64-3.3.2.tgz",
+        "integrity": "sha512-gQKOkA/4tkOxXP3hdau2MrvVvTYlKQiXd86hK+B2FKErV0QcwqrWt6DWZ3FtJUYGB1scenT0srS9VfsWmbgeMQ=="
+      }
+    },
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "encoder": "phonon2_enc-windows-x64.dll",
+      "decoder": "phonon2_tdt-windows-x64.dll",
+      "baselineEncoder": "phonon2_enc-windows-x64-base.dll",
+      "baselineDecoder": "phonon2_tdt-windows-x64.dll",
+      "ffi": {
+        "name": "@koromix/koffi-win32-x64",
+        "url": "https://registry.npmjs.org/@koromix/koffi-win32-x64/-/koffi-win32-x64-3.3.2.tgz",
+        "integrity": "sha512-OWc6s6gziEabkQj+xc+ZNaf5g69hc/DQJLBcmbhxJAifAdXDgj9vB5d8hcjS2mTHjBeAIqQ4nkd9d/Jc7OUuHw=="
+      }
+    }
+  ]
+}

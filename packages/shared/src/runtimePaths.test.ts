@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { collectInstalledRuntimeReadRoots } from "./runtimePaths.js";
+import { collectInstalledRuntimeReadRoots, getInstalledSpeechRuntime } from "./runtimePaths.js";
 
 const fixtures: string[] = [];
 afterEach(() => {
@@ -13,6 +13,23 @@ function fixture(): string {
   fixtures.push(root);
   return root;
 }
+
+it("resolves an immutable installed speech coordinate and rejects path traversal", () => {
+  const root = fixture();
+  const appRoot = path.join(root, "app.asar");
+  const resources = path.join(root, "app.asar.unpacked", "dist/phonon");
+  mkdirSync(resources, { recursive: true });
+  const vendor = "a".repeat(64),
+    code = "b".repeat(64);
+  const pointer = path.join(resources, "runtime.json");
+  writeFileSync(pointer, JSON.stringify({ version: 1, vendor, code }));
+  expect(getInstalledSpeechRuntime(appRoot)).toEqual({
+    readRoot: path.join(resources, vendor),
+    entryRoot: path.join(resources, vendor, "code", code),
+  });
+  writeFileSync(pointer, JSON.stringify({ version: 1, vendor: "../outside", code }));
+  expect(() => getInstalledSpeechRuntime(appRoot)).toThrow(/coordinate/);
+});
 
 describe("installed runtime directory admission", () => {
   it.runIf(process.platform !== "win32")(

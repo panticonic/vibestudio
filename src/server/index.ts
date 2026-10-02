@@ -3497,6 +3497,17 @@ async function main() {
     );
   }
 
+  {
+    const { createSpeechService } = await import("./services/speechService.js");
+    const speech = createSpeechService({ appRoot });
+    container.registerManaged({
+      name: "speech",
+      start: async () => speech,
+      stop: (service: typeof speech) => service.stop(),
+      getServiceDefinition: () => speech,
+    });
+  }
+
   // Explicit host terminals are native effects, separately approved from shell
   // extension execution. The receiver owns their lifetime and launch settings.
   const { createHostTerminalService } = await import("./services/hostTerminalService.js");
