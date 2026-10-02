@@ -76,6 +76,21 @@ but the currently pinned binding does not expose that API. Application adoption
 requires matching published Node and mobile bindings; the local proof binary
 does not satisfy that boundary.
 
+## Library initialization
+
+The compiler records static external imports in every library artifact's
+`requiredModules` contract. Workspace, npm, and platform libraries use the same
+contract. The evaluator links those dependencies in its own module registry
+before executing the library. Dependencies remain lazy until their library is
+requested; dynamic imports acquire their dependency when invoked, through the
+same module owner. Private registries cannot borrow ambient panel modules.
+
+Runtime scanning cannot establish this contract: esbuild can lower CommonJS
+imports to generated require helpers that a direct-call parser cannot see.
+Library artifact format 3 and the versioned external build key invalidate old
+artifacts. RPC contract version 5 rejects incompatible client/server pairs
+before redeeming a pairing credential.
+
 ## Observability
 
 The client reports the selected Iroh path (`direct` or `relay`), selected remote

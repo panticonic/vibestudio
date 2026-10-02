@@ -32,18 +32,19 @@ is otherwise validated.
     tests across eight compositions and every composition typecheck using the
     repository's pinned Node 22.23.2. Declared skips remain. The iOS simulator
     CI subsequently passed all 15 native tests.
-    Both macOS CI runners and Windows failed after prompt submission while
-    waiting for onboarding. The retained diagnostics identified synchronous
-    library initialization before its lazy host React peer was loaded. Base now
-    links a library's declared host dependencies before initialization, retaining
-    the panel singleton and propagating chunk failures. All 223 eval/source-hook
-    tests and the Base typecheck pass, including both library formats and private
-    registry isolation. A fresh-cache Linux desktop run passed onboarding and
-    server restart after the repair; its owned processes and caches were retired.
-    Updated macOS runs still fail to resolve React, so this repair is
-    incomplete. The failure packet now includes loaded-module, generated-loader,
-    and native-import names to identify the remaining boundary. Cross-platform
-    acceptance is pending.
+    Cross-platform onboarding exposed a compiler/linker defect: esbuild lowers
+    CommonJS imports to generated require helpers, so scanning the emitted code
+    misses React even when its lazy host loader exists. Workspace, npm, and
+    platform library artifacts now carry compiler-reported static dependencies.
+    The evaluator links them before execution in its own registry; dynamic peers
+    remain lazy and use the same module owner when actually imported. The real
+    compiler regression failed before this repair and passes afterward, along
+    with 16 library-build tests, 250 focused Base tests, 58 final sandbox tests,
+    35 host import/cache tests, and all eight composition typechecks. Artifact
+    format and RPC contract versions advance with this required field.
+    Updated native acceptance remains pending. Windows additionally failed
+    while locating paired workspace chrome; every desktop failure now captures
+    the exact main-process, hosted-shell, and module-owner state for diagnosis.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
     two declared skips). Agent launch ownership also survives elapsed time until
     the launch RPC or worker lifecycle settles: its slow-launch regressions,
@@ -73,7 +74,11 @@ is otherwise validated.
     build, typecheck, and 52 isolation tests pass. Native client acceptance
     passed on Linux desktop and Android after removing the implicit head
     deadline, including onboarding and server restart. Acceptance after the
-    shutdown follow-up remains pending.
+    shutdown follow-up passed on desktop, including shared-member revocation.
+    Android's subsequent cold restart failed during System browser-permission
+    refresh with native QUIC `ConnectionLost(TimedOut)` propagated to its caller.
+    The exact processes and scratch directory were retired; this failure still
+    requires investigation and updated acceptance.
   - **Unresolved observation:** One Android run restored the durable onboarding
     event but missed its inline UI after server restart; a subsequent full run
     passed. Long native RPC and inline-module compilation latency still need

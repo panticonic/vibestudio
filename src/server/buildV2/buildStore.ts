@@ -178,7 +178,11 @@ export type BuildMetadataDetails =
         contractVersion: string;
       } | null;
     }
-  | { kind: "library"; format: "cjs" | "async-cjs" | "stylesheet" }
+  | {
+      kind: "library";
+      format: "cjs" | "async-cjs" | "stylesheet";
+      requiredModules: readonly string[];
+    }
   | {
       kind: "website-bundle";
       entryArtifact: string;

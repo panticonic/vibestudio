@@ -1236,6 +1236,48 @@ async function getHostViewDebugInfo(app) {
   );
 }
 
+async function captureDesktopFailureDiagnostics(app, failure) {
+  const observations = await Promise.allSettled([
+    evaluateElectron(app, ({ webContents }) => ({
+      host: globalThis.__testApi?.getHostViewDebugInfo?.() ?? null,
+      contents: webContents.getAllWebContents().filter(contents => !contents.isDestroyed())
+        .slice(0, 50).map(contents => ({
+          id: contents.id, type: contents.getType(), url: contents.getURL(),
+          loading: contents.isLoading(), loadingMainFrame: contents.isLoadingMainFrame(),
+        })),
+    }), undefined, "capturing native desktop view ownership"),
+    evaluateElectron(app, async ({ webContents }) => {
+      const host = globalThis.__testApi?.getHostViewDebugInfo?.();
+      const contents = host?.hostedShellUrl && webContents.getAllWebContents()
+        .find(contents => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl);
+      if (!contents) return { available: false };
+      return contents.executeJavaScript(`(() => ({
+        available: true,
+        rootChildren: document.getElementById('root')?.childElementCount ?? null,
+        workspaceIds: [...document.querySelectorAll('[data-workspace-id]')]
+          .slice(0, 50).map(element => element.dataset.workspaceId),
+        workspaceSelectors: document.querySelectorAll('.workspace-section-select').length,
+        loadedModules: Object.keys(window.__vibestudioModuleMap__ ?? {}).slice(0, 100),
+        loadingModules: Object.keys(window.__vibestudioModuleLoadingPromises__ ?? {}).slice(0, 50),
+      }))()`);
+    }, undefined, "capturing hosted chrome readiness"),
+    readDesktopDiagnostics(app).then(diagnostics => unexpectedDesktopDiagnostics(diagnostics).slice(-30)),
+    readMainProcessErrors(app),
+  ]);
+  const names = ["nativeViews", "hostedChrome", "rendererDiagnostics", "mainProcessErrors"];
+  const packet = { failure: failure instanceof Error ? failure.message : String(failure) };
+  observations.forEach((observation, index) => {
+    packet[names[index]] = observation.status === "fulfilled" ? observation.value : {
+      error: observation.reason instanceof Error ? observation.reason.message : String(observation.reason),
+    };
+  });
+  const directory = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
+  await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+  const artifact = path.join(directory, `desktop-diagnostics-${Date.now()}-${randomUUID()}.json`);
+  await fsp.writeFile(artifact, `${JSON.stringify(packet, null, 2)}\n`, { mode: 0o600 });
+  console.error(`[desktop-smoke] Desktop failure diagnostics: ${JSON.stringify(packet)}`);
+}
+
 async function readInitialPanelHistory(app, webContentsId, workspaceId) {
   return evaluateElectron(
     app,
@@ -2734,6 +2776,15 @@ async function main(ownerSignal) {
     await cleanup();
   } catch (error) {
     if (!ownerSignal.aborted) console.error(`[desktop-smoke] ${error instanceof Error ? error.message : String(error)}`);
+    if (!ownerSignal.aborted) {
+      for (const app of desktopApps) {
+        try {
+          await captureDesktopFailureDiagnostics(app, error);
+        } catch (diagnosticError) {
+          console.error(`[desktop-smoke] Could not retain desktop failure diagnostics: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
+        }
+      }
+    }
     await cleanup();
     if (!ownerSignal.aborted) process.exitCode = 1;
   } finally {

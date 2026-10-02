@@ -52,7 +52,6 @@ import * as buildStore from "./buildStore.js";
 import {
   contentTypeForPath,
   primaryArtifactFilePath,
-  primaryTextArtifactContent,
   type BuildArtifactInput,
   type BuildArtifactWithContent,
   type BuildArtifacts,
@@ -1964,7 +1963,7 @@ export interface BuildUnitOptions {
 // Bump whenever the generated sandbox test entry or its execution metadata
 // changes. Test artifacts are immutable and must never reuse an older recipe.
 const TEST_ARTIFACT_FORMAT_VERSION = 2;
-const LIBRARY_ARTIFACT_FORMAT_VERSION = 2;
+const LIBRARY_ARTIFACT_FORMAT_VERSION = 3;
 
 export function effectiveBuildVersion(
   node: GraphNode,
@@ -4890,6 +4889,29 @@ async function materializeExtensionRuntimeDeps(
 // Library Build
 // ---------------------------------------------------------------------------
 
+function libraryBuildDetails(
+  format: "cjs" | "async-cjs" | "stylesheet",
+  metafile: esbuild.Metafile | undefined
+): Extract<buildStore.BuildMetadataDetails, { kind: "library" }> {
+  if (!metafile) throw new Error("Library compiler did not report module dependencies");
+  // Compiler imports retain the original specifiers even when esbuild rewrites
+  // CommonJS require() to a generated helper. Conditional dynamic imports stay
+  // lazy and are acquired by the same linker when they actually execute.
+  const requiredModules = [
+    ...new Set(
+      Object.values(metafile.outputs).flatMap((output) =>
+        output.imports
+          .filter(
+            (entry) =>
+              entry.external && (entry.kind === "import-statement" || entry.kind === "require-call")
+          )
+          .map((entry) => entry.path)
+      )
+    ),
+  ].sort();
+  return { kind: "library", format, requiredModules };
+}
+
 async function buildLibraryBundle(
   node: GraphNode,
   ev: string,
@@ -4925,6 +4947,7 @@ async function buildLibraryBundle(
     const result = await buildWithEsbuild({
       entryPoints: [entryFile],
       bundle: true,
+      metafile: true,
       // Preserve async-module semantics across the complete dependency graph.
       // A second syntax-only pass lowers imports/exports to require/exports
       // without touching top-level await; the eval linker executes that output
@@ -4996,7 +5019,7 @@ async function buildLibraryBundle(
       sourceStateHash,
       authority,
       {
-        details: { kind: "library", format },
+        details: libraryBuildDetails(format, result.metafile),
       },
       artifacts
     );
@@ -5095,7 +5118,8 @@ function externalLibraryBuildKey(
   externals: readonly string[]
 ): string {
   return sha256Canonical({
-    schema: "vibestudio/build-v2/external-library/v1",
+    schema: "vibestudio/build-v2/external-library/v2",
+    artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
     source,
     externals: [...externals].sort(),
   });
@@ -5120,7 +5144,7 @@ export async function buildNpmLibrary(
   specifier: string,
   version: string,
   externals: string[]
-): Promise<string> {
+): Promise<BuildResult> {
   validateNpmSpecifier(specifier);
   validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
@@ -5129,17 +5153,17 @@ export async function buildNpmLibrary(
 
   // Check store cache
   const cached = await buildStore.getOrHydrate(buildKey);
-  if (cached) return primaryTextArtifactContent(cached);
+  if (cached) return cached;
 
   // Check in-flight builds (coalescing)
   const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return primaryTextArtifactContent(await inFlight);
+  if (inFlight) return inFlight;
 
   const buildPromise = doNpmBuild(specifier, version, externals, buildKey);
   inFlightBuilds.set(buildKey, buildPromise);
 
   try {
-    return primaryTextArtifactContent(await buildPromise);
+    return await buildPromise;
   } finally {
     inFlightBuilds.delete(buildKey);
   }
@@ -5172,9 +5196,10 @@ async function doNpmBuild(
     fs.writeFileSync(entryFile, `module.exports = require(${JSON.stringify(specifier)});\n`);
 
     try {
-      await buildWithEsbuild({
+      const result = await buildWithEsbuild({
         entryPoints: [entryFile],
         bundle: true,
+        metafile: true,
         format: "cjs",
         platform: "browser",
         outfile: path.join(outdir, "bundle.js"),
@@ -5207,7 +5232,7 @@ async function doNpmBuild(
         ev: `npm:${version}`,
         sourceStateHash: null,
         sourcemap: false,
-        details: { kind: "generic" },
+        details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
       return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);
@@ -5236,7 +5261,7 @@ async function doNpmBuild(
 export async function buildPlatformLibrary(
   specifier: string,
   externals: string[]
-): Promise<string> {
+): Promise<BuildResult> {
   if (_appNodeModules.length === 0) {
     throw new Error("App node_modules not configured — cannot build @vibestudio/* packages");
   }
@@ -5245,17 +5270,17 @@ export async function buildPlatformLibrary(
 
   // Check cache
   const cached = await buildStore.getOrHydrate(buildKey);
-  if (cached) return primaryTextArtifactContent(cached);
+  if (cached) return cached;
 
   // Check in-flight
   const inFlight = inFlightLibraryBuilds.get(buildKey);
-  if (inFlight) return primaryTextArtifactContent(await inFlight);
+  if (inFlight) return inFlight;
 
   const buildPromise = doPlatformBuild(specifier, externals, buildKey);
   inFlightLibraryBuilds.set(buildKey, buildPromise);
 
   try {
-    return primaryTextArtifactContent(await buildPromise);
+    return await buildPromise;
   } finally {
     inFlightLibraryBuilds.delete(buildKey);
   }
@@ -5276,9 +5301,10 @@ async function doPlatformBuild(
     fs.writeFileSync(entryFile, `module.exports = require(${JSON.stringify(specifier)});\n`);
 
     try {
-      await buildWithEsbuild({
+      const result = await buildWithEsbuild({
         entryPoints: [entryFile],
         bundle: true,
+        metafile: true,
         format: "cjs",
         // Use "neutral" not "browser" — @vibestudio/* packages (like git wrapping
         // isomorphic-git) work with injected fs, not Node.js builtins.
@@ -5307,7 +5333,7 @@ async function doPlatformBuild(
         ev: buildKey,
         sourceStateHash: null,
         sourcemap: false,
-        details: { kind: "generic" },
+        details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
       return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);

@@ -1,3 +1,4 @@
+import type { BuildBundleResult } from "@vibestudio/service-schemas/build";
 import { conditionsForLibraryTarget, conditionsForRuntimeUnit } from "./moduleConditions.js";
 import { serviceAuthorityDigest } from "../services/unitAdmissionStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -350,11 +351,7 @@ export interface BuildSystemV2 {
     unitPath: string,
     ref: string | undefined,
     options: BuildUnitOptions & { library: true }
-  ): Promise<{
-    bundle: string;
-    format: "cjs" | "async-cjs";
-    execution?: ExecutionArtifactRefV1;
-  }>;
+  ): Promise<BuildBundleResult>;
   getBuild(
     unitPath: string,
     ref?: string,
@@ -452,11 +449,7 @@ export interface BuildSystemV2 {
   bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
 
   /** Build an npm package as a CJS library bundle for sandbox use. */
-  getBuildNpm(
-    specifier: string,
-    version: string,
-    externals?: string[]
-  ): Promise<{ bundle: string; format: "cjs" }>;
+  getBuildNpm(specifier: string, version: string, externals?: string[]): Promise<BuildBundleResult>;
 
   /** Get effective version by package name or workspace-relative source path. */
   getEffectiveVersion(unitNameOrPath: string): string | null;
@@ -1406,15 +1399,11 @@ export async function initBuildSystemV2(
   // Public API
   // ---------------------------------------------------------------------------
 
-  const libraryBuildResult = (
-    build: BuildResult
-  ): {
-    bundle: string;
-    format: "cjs" | "async-cjs";
-    execution?: ExecutionArtifactRefV1;
-  } => {
-    const format =
-      build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs";
+  const libraryBuildResult = (build: BuildResult): BuildBundleResult => {
+    if (build.metadata.details.kind !== "library") {
+      throw new Error(`Build ${build.buildKey} does not contain a library module contract`);
+    }
+    const { format, requiredModules } = build.metadata.details;
     if (format === "stylesheet") {
       throw new BuildRequestError(
         "unsupported_module_format",
@@ -1428,6 +1417,7 @@ export async function initBuildSystemV2(
     return {
       bundle: primaryTextArtifactContent(build),
       format,
+      requiredModules,
       ...(execution ? { execution } : {}),
     };
   };
@@ -2143,7 +2133,7 @@ export async function initBuildSystemV2(
     unitPath: string,
     ref?: string,
     options?: BuildUnitOptions
-  ): Promise<BuildResult | { bundle: string; format: "cjs" | "async-cjs" }> {
+  ): Promise<BuildResult | BuildBundleResult> {
     ref = validateBuildRef(ref);
     // ── Exact state / semantic-context build selector ──
     if (ref && ref !== MAIN_HEAD) {
@@ -2171,8 +2161,8 @@ export async function initBuildSystemV2(
         const manifestError = manifestIssueBuildError(graphAtState, unitPath);
         if (manifestError) throw manifestError;
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
-          const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
-          return { bundle, format: "cjs" };
+          const build = await buildPlatformLibrary(unitPath, options.externals ?? []);
+          return libraryBuildResult(build);
         }
         throw new BuildRequestError(
           "package_not_found",
@@ -2227,8 +2217,8 @@ export async function initBuildSystemV2(
         // platform packages in node_modules. Build them as library bundles
         // so eval can import them.
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
-          const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
-          return { bundle, format: "cjs" };
+          const build = await buildPlatformLibrary(unitPath, options.externals ?? []);
+          return libraryBuildResult(build);
         }
         throw new BuildRequestError("package_not_found", `Unknown build unit: ${unitPath}`, {
           specifier: unitPath,
@@ -2723,9 +2713,9 @@ export async function initBuildSystemV2(
       specifier: string,
       version: string,
       externals?: string[]
-    ): Promise<{ bundle: string; format: "cjs" }> {
-      const bundle = await buildNpmLibrary(specifier, version, externals ?? []);
-      return { bundle, format: "cjs" };
+    ): Promise<BuildBundleResult> {
+      const build = await buildNpmLibrary(specifier, version, externals ?? []);
+      return libraryBuildResult(build);
     },
 
     getBuildByKey(key: string): BuildResult | null {

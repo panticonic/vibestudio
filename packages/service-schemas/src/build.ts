@@ -101,6 +101,8 @@ export const buildBundleResultSchema = z
   .object({
     bundle: z.string(),
     format: z.enum(["cjs", "async-cjs"]),
+    /** Static external imports reported by the compiler, before module initialization. */
+    requiredModules: z.array(z.string()).readonly(),
     /** Present for workspace-derived bundles; absent for external npm products. */
     execution: z.lazy(() => executionArtifactRefSchema).optional(),
   })
@@ -295,7 +297,10 @@ export const buildMetadataSchema = z
       )
       .optional(),
     authority: UnitAuthorityManifestSchema.optional(),
-    serviceAuthorityDigest: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+    serviceAuthorityDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
     executableModules: z.array(executableModuleSchema).optional(),
     stateArgsSchema: z
       .record(z.unknown())
@@ -340,52 +345,55 @@ const sha256Schema = z
   .regex(/^[0-9a-f]{64}$/u)
   .transform((value): Sha256 => value as Sha256);
 
-export const executionArtifactRefSchema = z
-  .object({
-    version: z.literal(1),
-    sourceState: z.discriminatedUnion("kind", [
-      z
-        .object({
-          kind: z.literal("workspace"),
-          workspaceId: z.string().min(1),
-          effectiveVersion: sha256Schema,
-          state: z.discriminatedUnion("kind", [
-            z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
-            z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
-            z
-              .object({
-                kind: z.literal("bootstrap-snapshot"),
-                snapshotHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
-              })
-              .strict(),
-          ]),
-          contentRoots: z.array(executionSourceContentRootSchema).min(1),
-          sourceClosureDigest: sha256Schema,
-        })
-        .strict(),
-      z
-        .object({
-          kind: z.literal("product-seed"),
-          workspaceId: z.string().min(1),
-          effectiveVersion: sha256Schema,
-          state: z.null(),
-          contentRoots: z
-            .array(
-              executionSourceContentRootSchema.extend({
-                repoPath: z.null(),
-              })
-            )
-            .min(1),
-          sourceClosureDigest: sha256Schema,
-        })
-        .strict(),
-    ]),
-    recipeDigest: sha256Schema,
-    buildKey: sha256Schema,
-    artifactDigest: sha256Schema,
-    executionDigest: sha256Schema,
-  })
-  .strict() satisfies z.ZodType<ExecutionArtifactRefV1, z.ZodTypeDef, unknown>;
+export const executionArtifactRefSchema: z.ZodType<ExecutionArtifactRefV1, z.ZodTypeDef, unknown> =
+  z
+    .object({
+      version: z.literal(1),
+      sourceState: z.discriminatedUnion("kind", [
+        z
+          .object({
+            kind: z.literal("workspace"),
+            workspaceId: z.string().min(1),
+            effectiveVersion: sha256Schema,
+            state: z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+              z
+                .object({ kind: z.literal("application"), applicationId: z.string().min(1) })
+                .strict(),
+              z
+                .object({
+                  kind: z.literal("bootstrap-snapshot"),
+                  snapshotHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+                })
+                .strict(),
+            ]),
+            contentRoots: z.array(executionSourceContentRootSchema).min(1),
+            sourceClosureDigest: sha256Schema,
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal("product-seed"),
+            workspaceId: z.string().min(1),
+            effectiveVersion: sha256Schema,
+            state: z.null(),
+            contentRoots: z
+              .array(
+                executionSourceContentRootSchema.extend({
+                  repoPath: z.null(),
+                })
+              )
+              .min(1),
+            sourceClosureDigest: sha256Schema,
+          })
+          .strict(),
+      ]),
+      recipeDigest: sha256Schema,
+      buildKey: sha256Schema,
+      artifactDigest: sha256Schema,
+      executionDigest: sha256Schema,
+    })
+    .strict();
 
 export const buildChangeSetSchema = z
   .object({

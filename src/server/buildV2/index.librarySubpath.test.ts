@@ -181,6 +181,43 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(result.bundle).not.toContain("Buffer.from");
   });
 
+  it("records static external peers when the compiler generates a require helper", async () => {
+    const dir = path.join(workspaceRoot, "packages", "cjs-peer");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/cjs-peer",
+        version: "1.0.0",
+        exports: { ".": "./index.cjs" },
+        peerDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(dir, "index.cjs"),
+      'exports.peer = require("react"); exports.lazy = () => import("react-dom");\n'
+    );
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      APP_NODE_MODULES,
+      buildRoots(workspaceRoot)
+    );
+    const result = await buildSystem.getBuild("@workspace/cjs-peer", undefined, {
+      library: true,
+      libraryTarget: "panel",
+    });
+    expect(result.bundle).toContain('__require("react")');
+    expect(result).toMatchObject({ requiredModules: ["react"] });
+    // A warm artifact must retain the compiler's dependency contract too.
+    expect(
+      await buildSystem.getBuild("@workspace/cjs-peer", undefined, {
+        library: true,
+        libraryTarget: "panel",
+      })
+    ).toEqual(result);
+  });
+
   it("builds a requested package wildcard export subpath", async () => {
     const pkgDir = path.join(workspaceRoot, "skills", "test-suite");
     fs.mkdirSync(path.join(pkgDir, "tests"), { recursive: true });
@@ -258,10 +295,18 @@ describe("BuildSystemV2 library package subpaths", () => {
       );
       if (target.exportPath === "./styles.css") {
         expect(css.role).toBe("primary");
-        expect(built.metadata.details).toEqual({ kind: "library", format: "stylesheet" });
+        expect(built.metadata.details).toEqual({
+          kind: "library",
+          format: "stylesheet",
+          requiredModules: [],
+        });
       } else {
         expect(css.role).toBe("css");
-        expect(built.metadata.details).toEqual({ kind: "library", format: "async-cjs" });
+        expect(built.metadata.details).toEqual({
+          kind: "library",
+          format: "async-cjs",
+          requiredModules: [],
+        });
       }
     }
     await expect(

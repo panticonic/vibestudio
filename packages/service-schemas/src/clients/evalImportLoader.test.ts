@@ -3,28 +3,39 @@ import { createBuildServiceClient, createEvalImportLoader } from "./evalImportLo
 
 describe("createEvalImportLoader", () => {
   it("loads npm refs through getBuildNpm", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
+    const call = vi.fn(async () => ({
+      bundle: "npm-bundle",
+      format: "cjs" as const,
+      requiredModules: [],
+    }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("left-pad", "npm:1.3.0", ["react"])).resolves.toEqual({
       bundle: "npm-bundle",
       format: "cjs",
+      requiredModules: [],
     });
 
     expect(call).toHaveBeenCalledWith("build", "getBuildNpm", ["left-pad", "1.3.0", ["react"]]);
   });
 
   it("accepts package-qualified npm refs when the package matches the import key", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
+    const call = vi.fn(async () => ({
+      bundle: "npm-bundle",
+      format: "cjs" as const,
+      requiredModules: [],
+    }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("left-pad", "npm:left-pad@1.3.0", [])).resolves.toEqual({
       bundle: "npm-bundle",
       format: "cjs",
+      requiredModules: [],
     });
     await expect(loadImport("@scope/pkg", "npm:@scope/pkg@2.0.0", [])).resolves.toEqual({
       bundle: "npm-bundle",
       format: "cjs",
+      requiredModules: [],
     });
 
     expect(call).toHaveBeenNthCalledWith(1, "build", "getBuildNpm", ["left-pad", "1.3.0", []]);
@@ -32,7 +43,11 @@ describe("createEvalImportLoader", () => {
   });
 
   it("rejects package-qualified npm refs when the package does not match the import key", async () => {
-    const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
+    const call = vi.fn(async () => ({
+      bundle: "npm-bundle",
+      format: "cjs" as const,
+      requiredModules: [],
+    }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("left-pad", "npm:lodash@4.17.21", [])).rejects.toThrow(
@@ -42,12 +57,17 @@ describe("createEvalImportLoader", () => {
   });
 
   it("loads workspace refs as library builds tagged with the host target", async () => {
-    const call = vi.fn(async () => ({ bundle: "workspace-bundle", format: "cjs" as const }));
+    const call = vi.fn(async () => ({
+      bundle: "workspace-bundle",
+      format: "cjs" as const,
+      requiredModules: [],
+    }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("@workspace/pkg", "abc123", ["react"])).resolves.toEqual({
       bundle: "workspace-bundle",
       format: "cjs",
+      requiredModules: [],
     });
 
     expect(call).toHaveBeenCalledWith("build", "getBuild", [
@@ -61,6 +81,7 @@ describe("createEvalImportLoader", () => {
     const call = vi.fn(async (_service: string, _method: string, _args: unknown[]) => ({
       bundle: "workspace-bundle",
       format: "cjs" as const,
+      requiredModules: [],
     }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker", {
       defaultWorkspaceRef: () => "ctx:eval-context",
@@ -70,6 +91,7 @@ describe("createEvalImportLoader", () => {
       await expect(loadImport("@workspace/pkg", ref, [])).resolves.toEqual({
         bundle: "workspace-bundle",
         format: "cjs",
+        requiredModules: [],
       });
     }
 
@@ -86,6 +108,7 @@ describe("createEvalImportLoader", () => {
     const call = vi.fn(async (_service: string, _method: string, _args: unknown[]) => ({
       bundle: "workspace-bundle",
       format: "cjs" as const,
+      requiredModules: [],
     }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker", {
       defaultWorkspaceRef: "ctx:eval-context",

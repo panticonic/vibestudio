@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
+import { primaryTextArtifactContent } from "./buildStore.js";
 import { buildPlatformLibrary, closeBuilder, initBuilder } from "./builder.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
@@ -34,6 +35,6 @@ describe("buildPlatformLibrary", () => {
   it("builds package export subpaths without using the specifier as a cache path", async () => {
     const bundle = await buildPlatformLibrary("@vibestudio/shared/shellSurface", []);
 
-    expect(bundle).toContain("validateShellSurfaceTarget");
+    expect(primaryTextArtifactContent(bundle)).toContain("validateShellSurfaceTarget");
   });
 });
