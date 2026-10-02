@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
+import { createAuthorityService } from "./services/authorityService.js";
 import { CapabilityGrantStore } from "./services/capabilityGrantStore.js";
 import { mintUnitClearanceGrants } from "./services/unitClearanceGrants.js";
 import { WebSocket } from "ws";
@@ -132,6 +133,7 @@ function makeRecord(
       effectiveVersion: opts?.effectiveVersion ?? (executable ? "ev-test" : ""),
     },
     contextId: opts?.contextId ?? "",
+    ...(executable ? { authoritySessionId: `lifetime:${id}` } : {}),
     ...(opts?.agentBinding ? { agentBinding: opts.agentBinding } : {}),
     ...(opts?.activeBuildKey
       ? { activeBuildKey: opts.activeBuildKey }
@@ -1702,6 +1704,7 @@ describe("RpcServer relay behavior", () => {
       userId: "user:one",
     };
     const client = createClient("do:agents:Agent:one");
+    entityCache._onActivate(makeRecord(client.caller.runtime.id, "do"));
     client.caller = createVerifiedCaller(client.caller.runtime.id, "do", null, binding);
     registerClient(server, client);
     const causalParent = {
@@ -2014,6 +2017,12 @@ describe("RpcServer relay behavior", () => {
       { userId: "usr_root", handle: "root" }
     );
     exactCausalCaller.codeApproved = true;
+    entityCache._onActivate(
+      makeRecord(exactCausalCaller.runtime.id, "do", {
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-agent",
+      })
+    );
     const ambientAuthorityCaller = createVerifiedCaller("server", "server", null, null, {
       userId: "system",
       handle: "system",
@@ -3270,7 +3279,7 @@ describe("RpcServer relay behavior", () => {
 
   it("treats a declared workspace-service binding as wiring, not another consent", async () => {
     const request = vi.fn();
-    const { server } = createServer({
+    const { server, entityCache } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
@@ -3314,6 +3323,12 @@ describe("RpcServer relay behavior", () => {
       ],
     });
 
+    entityCache._onActivate(
+      makeRecord(caller.runtime.id, "do", {
+        repoPath: "workers/pubsub-channel",
+        effectiveVersion: "ev-channel",
+      })
+    );
     const attestation = await testServer(server).directDOAuthorization({
       caller,
       ref: {
@@ -3703,11 +3718,20 @@ describe("RpcServer relay behavior", () => {
       code: "EACCES",
     });
 
-    const admitted = createServer({
+    const admittedHost = createServer({
       isSystemTestInstance: () => true,
       resolveWorkspaceDirectAuthority: async () => [workspaceAuthority],
-    }).server;
-    await expect(testServer(admitted).directDOAuthorization(invocation)).resolves.toMatchObject({
+    });
+    admittedHost.entityCache._onActivate(
+      makeRecord(caller.runtime.id, "do", {
+        repoPath: "workers/system-test-runner",
+        effectiveVersion: "ev-runner",
+        activeExecutionDigest: "c".repeat(64),
+      })
+    );
+    await expect(
+      testServer(admittedHost.server).directDOAuthorization(invocation)
+    ).resolves.toMatchObject({
       capability,
     });
   });
@@ -3757,7 +3781,13 @@ describe("RpcServer relay behavior", () => {
       (candidateRuntimeId: string, candidateNonce: string) =>
         candidateRuntimeId === runtimeId && candidateNonce === nonce ? session : null
     );
-    const { server, entityCache } = createServer({ executionSessionForRuntime });
+    const { server, entityCache } = createServer({
+      executionSessionForRuntime,
+      userSubjectSource: {
+        resolve: () => null,
+        resolveUserId: (userId) => (userId === "user-1" ? { userId, handle: "user1" } : null),
+      },
+    });
     entityCache._onActivate(
       makeRecord(runtimeId, "do", {
         contextId: session.contextId,
@@ -3796,6 +3826,166 @@ describe("RpcServer relay behavior", () => {
       })
     );
   });
+
+  it.each(["system", "unattributed", "real-account"] as const)(
+    "attributes a verified mission admission's owner through live deputies for a %s runtime",
+    async (transport) => {
+      const runtimeId = "do:workers/mission-agent:MissionAgent:isolated-run";
+      const owner = { userId: "usr_alice", handle: "alice" };
+      const direct = { userId: "usr_bob", handle: "bob" };
+      const channelId = "automation:isolated-run";
+      const session: import("@vibestudio/rpc").ExecutionAdmissionFact = {
+        ...createTestExecutionSession({
+          runtimeId,
+          repoPath: "workers/mission-agent",
+          contextId: "ctx:mission-run",
+          agentBinding: { entityId: runtimeId, channelId },
+          mode: "mission",
+        }),
+        workspaceId: "test-workspace",
+        ownerUser: "user:usr_alice",
+        mission: {
+          subject: `mission:isolated@${"a".repeat(64)}`,
+          missionId: "isolated",
+          revision: 1,
+          revisionDigest: "a".repeat(64),
+        },
+        executor: {
+          kind: "agent-turn",
+          runtimeId,
+          entityId: runtimeId,
+          channelId,
+          turnId: "run:isolated",
+        },
+      };
+      let active = true;
+      let retainedAdmission = session;
+      let ownerAvailable = true;
+      const resolveOwner = vi.fn((userId: string) =>
+        ownerAvailable && userId === owner.userId ? owner : null
+      );
+      const { server, entityCache } = createServer({
+        userSubjectSource: {
+          resolve: (callerId) =>
+            callerId === runtimeId && transport === "real-account"
+              ? direct
+              : transport === "unattributed"
+                ? null
+                : { userId: "system", handle: "system" },
+          resolveUserId: resolveOwner,
+        },
+        executionSessionForRuntime: (id, nonce) =>
+          active && id === runtimeId && nonce === session.nonce ? retainedAdmission : null,
+      });
+      entityCache._onActivate({
+        ...makeRecord(runtimeId, "do", {
+          contextId: session.contextId,
+          repoPath: "workers/mission-agent",
+        }),
+        agentBinding: { entityId: runtimeId, contextId: session.contextId, channelId },
+      });
+      const deputy = "do:workers/mission-control-store:MissionControlStore:workspace";
+      const missions = "do:workers/missions:MissionsDO:workspace";
+      for (const id of [deputy, missions])
+        entityCache._onActivate(
+          makeRecord(id, "do", {
+            repoPath: id === deputy ? "workers/mission-control-store" : "workers/missions",
+          })
+        );
+      const contexts: ServiceContext[] = [];
+      testServer(server).dispatcher.dispatch.mockImplementation(async (context: ServiceContext) => {
+        contexts.push(context);
+      });
+      const invoke = (id: string, admission?: string, parent?: string) => {
+        const message: InternalRpcRequest = {
+          type: "request",
+          requestId: `mission:${contexts.length}`,
+          fromId: id,
+          method: "missions.get",
+          args: ["isolated"],
+          ...(admission ? { executionSessionNonce: admission } : {}),
+          ...(parent ? { authorityParentNonce: parent } : {}),
+        };
+        return testServer(server).handleEnvelopeRequest(
+          id,
+          "do",
+          undefined,
+          envelopeFromMessage({ selfId: id, from: id, target: "main", callerKind: "do", message }),
+          message,
+          new AbortController().signal
+        );
+      };
+      await invoke(runtimeId, session.nonce);
+      const expected = transport === "real-account" ? direct : owner;
+      expect(contexts[0]!.caller.subject).toEqual(expected);
+      expect(contexts[0]!.caller.executionSession).toBe(session);
+      expect(resolveOwner).toHaveBeenCalledTimes(transport === "real-account" ? 0 : 1);
+      let authorizingCaller = contexts[0]!.caller;
+      for (const receiver of [deputy, missions]) {
+        const nonce = `verified-live-mission-owner-${receiver}`;
+        const release = testServer(server).beginAuthorityParent(
+          receiver,
+          {
+            nonce,
+            method: "taskDetail",
+            context: {},
+          } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+          authorizingCaller
+        );
+        try {
+          await invoke(receiver, undefined, nonce);
+          authorizingCaller = contexts.at(-1)!.caller;
+          expect(authorizingCaller.subject).toEqual(expected);
+          expect(authorizingCaller.executionSession).toBeUndefined();
+          expect(authorizingCaller.runtime.id).toBe(receiver);
+          const authorization = authorizeVerifiedCaller(authorizingCaller, {
+            workspaceId: "test-workspace",
+            workspaceMember: true,
+            sessionId: "deputy:session",
+            audience: "service:missions",
+            capability: "workspace-service:missions",
+            resourceKey: "workspace",
+            tier: "open",
+          });
+          expect(authorization.context.actingUser).toBe(`user:${expected.userId}`);
+          expect(authorization.context.authorizingOrigin.kind).toBe("code");
+        } finally {
+          release();
+        }
+        await expect(invoke(receiver, undefined, nonce)).rejects.toThrow(/not active/);
+      }
+      const ownerResolutions = resolveOwner.mock.calls.length;
+      retainedAdmission = { ...session, contextId: "ctx:foreign" };
+      await expect(invoke(runtimeId, session.nonce)).rejects.toMatchObject({
+        code: "EVALUATED_EXECUTION_SESSION_STALE",
+      });
+      expect(resolveOwner).toHaveBeenCalledTimes(ownerResolutions);
+      retainedAdmission = session;
+      if (transport !== "real-account") {
+        ownerAvailable = false;
+        await expect(invoke(runtimeId, session.nonce)).rejects.toMatchObject({
+          code: "EXECUTION_OWNER_NOT_AVAILABLE",
+        });
+        ownerAvailable = true;
+      }
+      active = false;
+      await expect(invoke(runtimeId, session.nonce)).rejects.toMatchObject({
+        code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
+      });
+      await expect(invoke(runtimeId, "unknown-mission-admission-nonce")).rejects.toMatchObject({
+        code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
+      });
+      const ordinary = testServer(server).verifiedCallerFor(runtimeId, "do");
+      expect(ordinary.executionSession).toBeUndefined();
+      expect(ordinary.subject).toEqual(
+        transport === "real-account"
+          ? direct
+          : transport === "system"
+            ? { userId: "system", handle: "system" }
+            : undefined
+      );
+    }
+  );
 
   it("delegates a test policy only for the exact active invocation without mutating receiver context", () => {
     const { server, entityCache } = createServer({
@@ -6266,4 +6456,267 @@ describe("website dynamic endpoint admission", () => {
     host.connections.addClient(createClient("panel:nav-b"));
     expect(allowed()).toBe(false);
   });
+});
+
+describe("delegated Durable Object authority lifetime", () => {
+  it("carries a verified account through live system-owned deputies without changing code identity or leaking to later calls", async () => {
+    const receiver = "do:workers/mission-control-store:MissionControlStore:main";
+    const secondReceiver = "do:workers/mission-agent:MissionAgent:installer";
+    const { server, entityCache } = createServer();
+    for (const [id, repoPath] of [
+      [receiver, "workers/mission-control-store"],
+      [secondReceiver, "workers/mission-agent"],
+    ] as const) {
+      entityCache._onActivate({
+        ...makeRecord(id, "do", { repoPath }),
+        authoritySessionId: `lifetime:${id}`,
+      });
+    }
+    const contexts: ServiceContext[] = [];
+    testServer(server).dispatcher.dispatch.mockImplementation(async (context: ServiceContext) => {
+      contexts.push(context);
+    });
+    const invoke = (id: string, nonce?: string) => {
+      const message: InternalRpcRequest = {
+        type: "request",
+        requestId: `nested:${contexts.length}`,
+        fromId: id,
+        method: "missions.get",
+        args: ["task"],
+        ...(nonce ? { authorityParentNonce: nonce } : {}),
+      };
+      return testServer(server).handleEnvelopeRequest(
+        id,
+        "do",
+        undefined,
+        envelopeFromMessage({ selfId: id, from: id, target: "main", callerKind: "do", message }),
+        message,
+        new AbortController().signal
+      );
+    };
+    const user = createVerifiedCaller("panel:mission-control", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const firstNonce = "verified-mission-control-user-delegation";
+    const releaseFirst = testServer(server).beginAuthorityParent(
+      receiver,
+      {
+        nonce: firstNonce,
+        method: "startTask",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      user
+    );
+    try {
+      await invoke(receiver, firstNonce);
+      expect(contexts[0]!.caller).toMatchObject({
+        runtime: { id: receiver, kind: "do" },
+        subject: { userId: "usr_alice" },
+        code: { repoPath: "workers/mission-control-store" },
+      });
+      const secondNonce = "verified-task-installer-user-delegation";
+      const releaseSecond = testServer(server).beginAuthorityParent(
+        secondReceiver,
+        {
+          nonce: secondNonce,
+          method: "installTaskAutomation",
+          context: {},
+        } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+        contexts[0]!.caller
+      );
+      try {
+        await invoke(secondReceiver, secondNonce);
+        expect(contexts[1]!.caller).toMatchObject({
+          runtime: { id: secondReceiver, kind: "do" },
+          subject: { userId: "usr_alice" },
+          code: { repoPath: "workers/mission-agent" },
+        });
+      } finally {
+        releaseSecond();
+      }
+    } finally {
+      releaseFirst();
+    }
+    await invoke(receiver);
+    expect(contexts.at(-1)!.caller.subject?.userId).not.toBe("usr_alice");
+    await expect(invoke(receiver, firstNonce)).rejects.toThrow(/not active/);
+  });
+
+  it("preserves the deputy's own account when a different account invokes it", async () => {
+    const receiver = "do:workers/agent-worker:AiChatWorker:alice";
+    const { server, entityCache } = createServer({
+      userSubjectSource: { resolve: () => ({ userId: "usr_alice", handle: "alice" }) },
+    });
+    entityCache._onActivate({
+      ...makeRecord(receiver, "do", { repoPath: "workers/agent-worker" }),
+      authoritySessionId: "lifetime:alice",
+    });
+    let actual: ServiceContext | undefined;
+    testServer(server).dispatcher.dispatch.mockImplementation(async (context: ServiceContext) => {
+      actual = context;
+    });
+    const user = createVerifiedCaller("panel:bob", "panel", null, null, {
+      userId: "usr_bob",
+      handle: "bob",
+    });
+    const nonce = "verified-different-account-live-delegation";
+    const release = testServer(server).beginAuthorityParent(
+      receiver,
+      {
+        nonce,
+        method: "ping",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      user
+    );
+    try {
+      const message: InternalRpcRequest = {
+        type: "request",
+        requestId: "own-account",
+        fromId: receiver,
+        method: "credentials.connect",
+        args: [],
+        authorityParentNonce: nonce,
+      };
+      await testServer(server).handleEnvelopeRequest(
+        receiver,
+        "do",
+        undefined,
+        envelopeFromMessage({
+          selfId: receiver,
+          from: receiver,
+          target: "main",
+          callerKind: "do",
+          message,
+        }),
+        message,
+        new AbortController().signal
+      );
+      expect(actual!.caller).toMatchObject({
+        runtime: { id: receiver },
+        subject: { userId: "usr_alice" },
+        code: { repoPath: "workers/agent-worker" },
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it.each(["entity", "execution"] as const)(
+    "uses the canonical %s lifetime for a direct acquisition and its subsequent owner wait",
+    async (kind) => {
+      const runtimeId = "do:workers/mission-control-store:MissionControlStore:main";
+      const request = vi.fn((_input: { snapshot: { sessionId: string } }) => ({
+        acquisitionId: "acq:canonical",
+        ownerRuntimeId: runtimeId,
+        snapshotDigest: "d".repeat(64),
+        capability: "workspace-service:probe",
+        resourceKey: "do:workers/probe:ProbeDO:main",
+        tier: "gated" as const,
+        cardType: "permission.gated" as const,
+        renderedAction: "use probe",
+        pending: true,
+      }));
+      const { server, entityCache } = createServer({
+        resolveWorkspaceDirectAuthority: async () => [
+          {
+            methodWebsite: { kind: "eligible", rationale: "Reviewed fixture" } as const,
+            capability: "workspace-service:probe",
+            methodEffect: { kind: "open" },
+            methodCapability: "workspace-service:probe",
+            methodTier: "open",
+            principals: ["code", "session"],
+            presentation: { domain: "automation", verb: "manage" },
+            title: "Probe",
+            action: "use probe",
+            declaredBy: "workers/probe",
+          },
+        ],
+        directAuthorityAcquirer: {
+          request,
+          acquire: vi.fn(),
+          consume: vi.fn(() => true),
+          invalidate: vi.fn(),
+        },
+      });
+      entityCache._onActivate({
+        ...makeRecord(runtimeId, "do", { repoPath: "workers/mission-control-store" }),
+        authoritySessionId: "lifetime:task-store",
+      });
+      const executionSession =
+        kind === "execution"
+          ? {
+              ...createTestExecutionSession({
+                runtimeId,
+                repoPath: "workers/mission-control-store",
+                effectiveVersion: "ev-test",
+                executionDigest: "a".repeat(64),
+                agentBinding: null,
+              }),
+              workspaceId: "test-workspace",
+            }
+          : null;
+      const caller = createVerifiedCaller(
+        runtimeId,
+        "do",
+        {
+          callerId: runtimeId,
+          callerKind: "do",
+          repoPath: "workers/mission-control-store",
+          effectiveVersion: "ev-test",
+          executionDigest: "a".repeat(64),
+          requested: [
+            { capability: "workspace-service:probe", resource: { kind: "prefix", prefix: "" } },
+          ],
+        },
+        null,
+        { userId: "usr_alice", handle: "alice" },
+        executionSession
+      );
+      await expect(
+        testServer(server).directDOAuthorization({
+          caller,
+          ref: { source: "workers/probe", className: "ProbeDO", objectKey: "main" },
+          method: "read",
+          args: [],
+        })
+      ).rejects.toMatchObject({ code: "EACQUIRE" });
+      const expected = executionSession?.authoritySessionId ?? "lifetime:task-store";
+      expect(expected).not.toBe(runtimeId);
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caller: expect.objectContaining({ runtime: { id: runtimeId, kind: "do" } }),
+          snapshot: expect.objectContaining({ sessionId: expected }),
+        })
+      );
+      const acquisitionSession = request.mock.calls[0]![0].snapshot.sessionId;
+      const awaitDecision = vi.fn(async (owner: { ownerRuntimeId: string; sessionId: string }) => {
+        if (owner.ownerRuntimeId !== runtimeId || owner.sessionId !== acquisitionSession) {
+          throw new Error("Acquisition is not owned by this task");
+        }
+        return { state: "decided" as const, decision: "once" as const };
+      });
+      const authority = createAuthorityService({
+        dispatcher: {} as never,
+        acquisitions: { awaitDecision } as never,
+      });
+      const authorization = authorizeVerifiedCaller(caller, {
+        workspaceId: "test-workspace",
+        workspaceMember: true,
+        sessionId: expected,
+        audience: "service:authority",
+        capability: "authority.awaitDecision",
+        resourceKey: "-",
+      }).context;
+      await expect(
+        authority.handler({ caller, authorization }, "awaitDecision", [
+          { acquisitionId: "acq:canonical" },
+        ])
+      ).resolves.toEqual({ state: "decided", decision: "once" });
+      expect(awaitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerRuntimeId: runtimeId, sessionId: expected })
+      );
+    }
+  );
 });

@@ -370,6 +370,10 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
     agentFacing: true,
   },
+  cancel: {
+    ...lifecycle("Cancel", "cancel"),
+    description: "Pause scheduling and cancel and join every live run, preserving the automation and its history.",
+  },
   pause: lifecycle("Pause", "pause"),
   resume: lifecycle("Resume", "resume"),
   retire: {

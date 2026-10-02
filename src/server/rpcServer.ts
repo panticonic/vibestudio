@@ -111,6 +111,7 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { authoritySessionIdForCaller } from "./services/callerAuthoritySession.js";
 import {
   workspaceServiceBindingTier,
   type WorkspaceServiceBinding,
@@ -493,6 +494,7 @@ type RelayErrorCode =
   | "EACCES"
   | "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE"
   | "EVALUATED_EXECUTION_SESSION_STALE"
+  | "EXECUTION_OWNER_NOT_AVAILABLE"
   | "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
@@ -1054,7 +1056,7 @@ export class RpcServer {
           : null;
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
-    const resolvedSubject =
+    let resolvedSubject =
       subject ??
       this.resolveSubject(
         callerId,
@@ -1087,6 +1089,20 @@ export class RpcServer {
         "Evaluated execution admission no longer matches live state",
         "EVALUATED_EXECUTION_SESSION_STALE"
       );
+    }
+    // An isolated execution carries its verified stored owner even when its
+    // runtime is system-owned. Resolve the live account only after validating
+    // the exact admission; ownership does not replace code or grant authority.
+    if (executionSession && !isAccountUserId(resolvedSubject?.userId)) {
+      const ownerUserId = executionSession.ownerUser.slice(5);
+      const owner = this.deps.userSubjectSource?.resolveUserId?.(ownerUserId);
+      if (!owner || owner.userId !== ownerUserId || !isAccountUserId(owner.userId)) {
+        throw createRelayError(
+          "Execution owner account is unavailable",
+          "EXECUTION_OWNER_NOT_AVAILABLE"
+        );
+      }
+      resolvedSubject = owner;
     }
     const code = executionSession
       ? executionHarnessCodeIdentity({
@@ -1174,7 +1190,7 @@ export class RpcServer {
     };
   }
 
-  /** Carry task membership and sealed test policy through a verified live
+  /** Carry account attribution, task membership, and sealed test policy through a verified live
    * invocation, never onto the shared runtime or connection. The deputy keeps
    * its own code, manifest, and execution admission. */
   private callerWithParentInvocation(
@@ -1189,8 +1205,14 @@ export class RpcServer {
       caller.testPolicy ?? caller.executionSession?.testPolicy,
       parent?.testPolicy ?? parent?.executionSession?.testPolicy
     );
+    const subject = isAccountUserId(caller.subject?.userId)
+      ? caller.subject
+      : isAccountUserId(parent?.subject?.userId)
+        ? parent!.subject
+        : caller.subject;
     return {
       ...caller,
+      ...(subject ? { subject } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
       ...(testPolicy ? { testPolicy } : {}),
     };
@@ -4132,7 +4154,10 @@ export class RpcServer {
         "EACCES"
       );
     const preparedDeclaration = productPolicy?.prepared;
-    const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
+    if (!this.deps.entityCache) {
+      throw new Error("Direct authority requires the runtime entity registry");
+    }
+    const sessionId = authoritySessionIdForCaller(input.caller, this.deps.entityCache);
     const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
     const methodTier = workspaceAuthority?.methodTier;
     let resolvedHandle:
@@ -4753,14 +4778,7 @@ export class RpcServer {
       const attributedCaller =
         callerKind === "server"
           ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
-          : transportCaller.subject
-            ? transportCaller
-            : relayCallerScope?.authorizingCaller.subject
-              ? {
-                  ...transportCaller,
-                  subject: relayCallerScope.authorizingCaller.subject,
-                }
-              : transportCaller;
+          : this.callerWithParentInvocation(transportCaller, relayCallerScope?.authorizingCaller);
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
