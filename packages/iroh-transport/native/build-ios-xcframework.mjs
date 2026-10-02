@@ -49,6 +49,10 @@ if (!checksum || !/^[a-f0-9]{64}$/.test(checksum)) {
 
 const archive = join(output, "IrohLib.xcframework.zip");
 copyFileSync(join(source, "IrohLib.xcframework.zip"), archive);
+// UniFFI's Swift declarations and checksum functions must match these exact
+// native slices. The archive alone cannot carry a new API to Swift consumers.
+const swiftBindings = join(output, "IrohLib.swift");
+copyFileSync(join(source, "IrohLib", "Sources", "IrohLib", "IrohLib.swift"), swiftBindings);
 const receipt = {
   ...pinnedSource,
   version,
@@ -57,6 +61,8 @@ const receipt = {
   archiveSha256: sha256(readFileSync(archive)),
   // Package.swift verifies this, not the sha256 above.
   swiftPackageChecksum: checksum,
+  swiftBindings,
+  swiftBindingsSha256: sha256(readFileSync(swiftBindings)),
   builder: { platform: process.platform, arch: process.arch, node: process.version },
   rustc: runIn("rustc", ["--version", "--verbose"], source, {}, true),
   scope: "Apple acceptance artifact; consuming it needs a Package.swift pointing at this archive",

@@ -31,10 +31,15 @@ is otherwise validated.
     tests passed. The complete host-owned template projection passed 6,164
     tests across eight compositions and every composition typecheck using the
     repository's pinned Node 22.23.2. Declared skips remain; iOS was not tested.
-    Both macOS CI runners failed after prompt submission while waiting for the
-    onboarding UI; Linux and local desktop passes do not resolve that failure.
-    The acceptance harness now retains bounded onboarding/renderer diagnostics
-    to distinguish durable execution from inline compilation and presentation.
+    Both macOS CI runners and Windows failed after prompt submission while
+    waiting for onboarding. The retained diagnostics identified synchronous
+    library initialization before its lazy host React peer was loaded. Base now
+    links a library's declared host dependencies before initialization, retaining
+    the panel singleton and propagating chunk failures. All 223 eval/source-hook
+    tests and the Base typecheck pass, including both library formats and private
+    registry isolation. A fresh-cache Linux desktop run passed onboarding and
+    server restart after the repair; its owned processes and caches were retired.
+    Cross-platform acceptance after this repair is pending.
   - **Additional repairs:** Positioned spool writes prevent Windows readers
     from moving the writer's file cursor. Native presentation withdrawal belongs
     to the exact workspace-view owner. Authenticated catalog changes retire
@@ -62,7 +67,9 @@ is otherwise validated.
     behavior; they do not measure WAN readiness or establish an improvement.
   - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial
     bindings and matching native artifacts, then adopt request-owned cancellation
-    in the endpoint-generation owner. Production dependency pins are unchanged.
+    in the endpoint-generation owner. The Apple artifact now retains the matching
+    generated Swift source and its receipt hash alongside the XCFramework.
+    Production dependency pins are unchanged.
   - **Remaining design work:** An interrupted mutation with no acceptance
     receipt still has an unknown outcome. Recovering it requires a stable
     operation identity and authoritative status/replay at the operation owner;

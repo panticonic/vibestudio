@@ -54,6 +54,13 @@ the XCFramework; the app's Apple dependency remains upstream. Never overwrite
 either published repair version or substitute a local development binary for
 the shipping artifact.
 
+The Apple builder retains the generated `IrohLib.swift` alongside the archive
+and records both hashes in its receipt. CI uploads that binding too: publishing
+the archive without its matching Swift source loses the generated API and FFI
+checksums. A release must install that source in the Swift package and update
+its binary target to the actual published archive URL and checksum. Retaining
+these inputs alone does not publish or adopt the package.
+
 ## Stream cancellation
 
 The pinned Iroh FFI 1.1.0 binding holds each stream mutex across network waits.

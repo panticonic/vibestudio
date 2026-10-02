@@ -175,5 +175,6 @@ jobs:
           name: iroh-ios-xcframework
           path: |
             ${{ runner.temp }}/iroh-ios/IrohLib.xcframework.zip
+            ${{ runner.temp }}/iroh-ios/IrohLib.swift
             ${{ runner.temp }}/iroh-ios/receipt.json
           if-no-files-found: error
