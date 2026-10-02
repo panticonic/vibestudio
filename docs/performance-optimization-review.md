@@ -216,11 +216,27 @@ is otherwise validated.
     repetitions. CI Quality Checks at `ae019a66` also passes the original
     timeout case, production Linux desktop pairing, and the complete host suite.
     Both macOS desktop pairing jobs and all three installed-app jobs pass.
-    Windows desktop pairing still fails before Personal mounts a native panel;
-    the captured shell overlay is active, with no reported asset or renderer
-    errors. Worker builds complete after a slow dependency install. Further
-    evidence now retains visible shell dialogs, button readiness, and screenshots.
-    DOM probes avoid queuing execution behind a pending initial navigation.
+    Windows desktop pairing remains failing. At `140b9980`, Personal onboarding
+    passes, but System's native view remains navigating despite successful asset
+    response headers. Its coordinator manufactures a boot-stall failure while
+    the view still loads; elapsed probe rounds do not establish a failed owner.
+    At `07ac025d`, Personal itself remains loading. Captured chrome and screenshots
+    show no pending approval, and asset/renderer error ledgers remain empty.
+    These captures do not establish completed response bodies. Linux and both
+    macOS native pairing jobs pass; all three installed-application jobs at
+    `140b9980` also pass. Further diagnostics must distinguish stream admission,
+    response-body completion, and actual native lifecycle termination.
+  - **Asset EOF failure propagation:** A deterministic publication-failure test
+    reproduces an unfinished browser body after EOF. The reader retired before
+    awaiting cache publication; its catch then mistook retirement for caller
+    cancellation and suppressed the original failure. Reader cancellation now
+    has its own explicit lifecycle state, and a rejected publication settles
+    the pending body with the original error. Joined failed populations retire
+    from both ownership maps. All 43 focused cache, facade, session, and test-API
+    tests and host types pass. This establishes a real failure-propagation fix,
+    but does not yet establish the cause of the Windows capture. Native failure
+    packets now include bounded snapshots of active transfers and cache owners
+    through the existing test API, without querying a remote server or page.
   - **Native mobile retirement cause:** React Native's actual AbortController
     implementation has neither `AbortSignal.reason` nor an abort reason argument.
     Mobile materialization now owns its first retirement cause directly, checks
@@ -237,8 +253,15 @@ is otherwise validated.
     artifact uses a key containing the provider implementation. Build reports
     now record the completed artifact's key. A held backend-key regression fails
     before this repair; all 39 build-report and build-service tests pass afterward.
-    The earlier empty-target profile establishes source validation only, not
-    payload size or verified artifact reuse. Fresh native profiling remains needed.
+    The earlier empty-target profile established source validation only. A fresh
+    canonical native build profile now resolves 51 artifacts totaling 11,009,949
+    bytes, including a 5,367,687-byte Android bundle. The cold provider build takes
+    144,455 ms; its identical-key repeat takes 113 ms. A second profile reuses
+    the preexisting artifact in 44 ms and verifies it in 54 ms. Diagnostics are
+    empty. This proves build-cache reuse, not WAN delivery latency. Its managed
+    instance is stopped. Scratch retirement initially reported ENOTEMPTY; after
+    verifying no owned writer remained, the owned cache was removed and its
+    absence verified. No shared cache was removed.
     The same identity mismatch also made ordinary native app cache lookup miss
     completed artifacts. Provider activation and identity resolution now precede
     cache lookup, in-flight coalescing, and acquisition of a compilation slot;
@@ -252,7 +275,21 @@ is otherwise validated.
     0.15 seconds for Personal; earlier System icon delivery also takes about
     129 seconds despite a 19 ms server handler. The stall is still unresolved.
     This failed run's owned processes and scratch data are retired.
-  - **Latest Android acceptance:** Pairing, app cold restart, and server restart
+  - **Native stream stage investigation:** Two private temporary traces reproduce
+    the System delay during app cold restart. In one, the client completes its
+    request writes immediately but the server dispatches about 89 seconds later.
+    In the next, the server accepts the request stream about 62 seconds after
+    the client writes it; parsing, dispatch, and reply then complete promptly.
+    An initial request in that second run spends about 16 seconds reading its
+    preamble after acceptance. Personal information remains prompt. The second
+    cold restart reaches panel ready but chat reports its existing 15-second RPC
+    deadline, so end-to-end acceptance still fails. These are transport delivery
+    observations, not evidence for a new application deadline or retry policy.
+    Both runs, their scratch paths, and temporary source instrumentation are
+    retired. `07ac025d` CI additionally exposes a concurrent SQLite schema-open
+    failure in the shared problem-reporting store during server restart; both
+    native mobile shell builds and all installed-application jobs pass.
+  - **Earlier Android acceptance:** Pairing, app cold restart, and server restart
     pass with zero recovery panel-asset pipe misses. Initial embedded-host
     compilation includes a 97-second dependency install. During its initial
     handoff, System information follows authentication by about 105 seconds;

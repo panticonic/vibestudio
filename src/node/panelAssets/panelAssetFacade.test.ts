@@ -47,6 +47,55 @@ afterEach(() => {
 });
 
 describe("startPanelAssetFacade", () => {
+  it("observes an unfinished immutable body without reading or interrupting it", async () => {
+    const entered = deferred<void>();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = vi.fn<GatewayStream>(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              source = controller;
+              controller.enqueue(new TextEncoder().encode("prefix"));
+              entered.resolve();
+            },
+          }),
+          { headers: { "cache-control": "public, immutable" } }
+        )
+    );
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${facade.port}/panels/chat/bundle.js?contextId=private-context`
+      );
+      await entered.promise;
+      expect(facade.diagnostics()).toMatchObject({
+        requests: [
+          { routeClass: "panels", stage: "body", headersSent: true, writableEnded: false },
+        ],
+        cache: {
+          inFlight: 1,
+          populations: [{ writtenBytes: 6, readers: 1, ended: false, stage: "upstream" }],
+        },
+      });
+      expect(JSON.stringify(facade.diagnostics())).not.toContain("private-context");
+      source.enqueue(new TextEncoder().encode("suffix"));
+      source.close();
+      await expect(response.text()).resolves.toBe("prefixsuffix");
+      await vi.waitFor(() =>
+        expect(facade.diagnostics()).toMatchObject({
+          requests: [],
+          cache: { inFlight: 0, populations: [] },
+        })
+      );
+      expect(stream).toHaveBeenCalledOnce();
+    } finally {
+      await facade.close();
+    }
+  });
+
   it("streams the body, status, and forwarded headers from gateway.fetch", async () => {
     const body = "<!DOCTYPE html><html><body>shell panel</body></html>";
 

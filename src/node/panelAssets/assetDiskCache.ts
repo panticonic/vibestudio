@@ -184,6 +184,7 @@ function ownAssetBody(
 
 /** One producer and independently paced readers of a growing immutable file. */
 class AssetPopulation {
+  private stage: "upstream" | "spool" | "publication" | "retirement" = "upstream";
   private written = 0;
   private ended = false;
   private failure: unknown;
@@ -255,10 +256,22 @@ class AssetPopulation {
     return this.ended && this.readers === 0;
   }
 
+  diagnostics() {
+    return {
+      id: path.basename(this.tmp),
+      stage: this.stage,
+      writtenBytes: this.written,
+      readers: this.readers,
+      ended: this.ended,
+      failed: this.failure !== undefined,
+    };
+  }
+
   serve(release: () => void, signal?: AbortSignal): ServeOutcome {
     this.readers++;
     let offset = 0;
     let retired = false;
+    let cancelled = false;
     let retiring: Promise<void> | undefined;
     let reading: Promise<{ bytes: Buffer; bytesRead: number }> | undefined;
     let wake: (() => void) | null = null;
@@ -283,6 +296,7 @@ class AssetPopulation {
     let bodyController!: ReadableStreamDefaultController<Uint8Array>;
     const aborted = () => {
       if (retired) return;
+      cancelled = true;
       bodyController.error(signal?.reason);
       void retire().catch(() => undefined);
     };
@@ -323,12 +337,17 @@ class AssetPopulation {
               wake = null;
             }
           } catch (error) {
-            const cancelled = retired;
             await retire();
+            // EOF retires the file reader before joining publication. That is
+            // successful reader retirement, not cancellation of this response:
+            // a publication failure must still settle its pending body read.
             if (!cancelled) controller.error(error);
           }
         },
-        cancel: retire,
+        cancel: () => {
+          cancelled = true;
+          return retire();
+        },
       },
       { highWaterMark: 0 }
     );
@@ -351,11 +370,13 @@ class AssetPopulation {
     try {
       try {
         for (;;) {
+          this.stage = "upstream";
           const next = await this.source.read();
           if (this.failure !== undefined) throw this.failure;
           if (next.done) break;
           let offset = 0;
           while (offset < next.value.byteLength) {
+            this.stage = "spool";
             // Readers and the producer share this handle. Positioned reads on
             // Windows restore its cursor, so writes must also name their offset.
             const { bytesWritten } = await this.writer.write(
@@ -385,6 +406,7 @@ class AssetPopulation {
         return;
       }
       const digest = hash.digest("hex");
+      this.stage = "publication";
       const blobPath = path.join(path.dirname(this.tmp), digest);
       if (this.written <= this.maxBytes) {
         // Every reader uses the population-owned handle with an explicit file
@@ -396,9 +418,11 @@ class AssetPopulation {
       this.resolvePublication();
       // The retention budget is not a response-size limit. Oversized spools retire below.
     } catch (error) {
+      this.failure ??= error;
       this.rejectPublication(error);
       throw error;
     } finally {
+      this.stage = "retirement";
       try {
         while (this.readers > 0) await new Promise<void>((resolve) => this.changed.add(resolve));
       } finally {
@@ -433,6 +457,13 @@ export class AssetDiskCache {
   /** Serializes index writes + prune so concurrent persists don't clobber index.json. */
   private writeChain: Promise<void> = Promise.resolve();
   private ready = false;
+
+  diagnostics() {
+    return {
+      inFlight: this.inflight.size,
+      populations: [...this.populations].slice(0, 50).map((population) => population.diagnostics()),
+    };
+  }
 
   constructor(opts: { dir: string; maxBytes?: number }) {
     this.blobsDir = path.join(opts.dir, "blobs");
@@ -500,12 +531,11 @@ export class AssetDiskCache {
           this.populations.add(population);
           // Every waiting caller acquires its reader before the producer starts.
           queueMicrotask(() => population.start());
-          void population.done
-            .then(() => {
-              if (this.inflight.get(cacheKey) === flight) this.inflight.delete(cacheKey);
-              this.populations.delete(population);
-            })
-            .catch(() => undefined);
+          const retire = () => {
+            if (this.inflight.get(cacheKey) === flight) this.inflight.delete(cacheKey);
+            this.populations.delete(population);
+          };
+          void population.done.then(retire, retire);
           return population;
         }),
       };

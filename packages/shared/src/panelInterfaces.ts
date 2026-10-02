@@ -150,10 +150,36 @@ export interface PanelViewLike {
 /**
  * HTTP panel server abstraction — optional in both modes.
  */
+/** Bounded snapshots of the owners serving panel assets, without URLs or credentials. */
+export interface PanelAssetDiagnostics {
+  requests: Array<{
+    routeClass: string;
+    startedAt: number;
+    stage: "opening" | "cache" | "body";
+    headersSent: boolean;
+    writableEnded: boolean;
+    destroyed: boolean;
+    bufferedBytes: number;
+  }>;
+  prewarmBuilds: string[];
+  cache: {
+    inFlight: number;
+    populations: Array<{
+      id: string;
+      stage: "upstream" | "spool" | "publication" | "retirement";
+      writtenBytes: number;
+      readers: number;
+      ended: boolean;
+      failed: boolean;
+    }>;
+  } | null;
+}
+
 export interface PanelHttpServerLike {
   getBuildRevision?(source: string, ref?: string): number | undefined;
   invalidateBuild(source: string): void;
   getPort(): number;
+  getAssetDiagnostics?(): PanelAssetDiagnostics;
 }
 
 /**

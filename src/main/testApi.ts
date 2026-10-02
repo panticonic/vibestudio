@@ -57,6 +57,13 @@ export interface TestApi {
   forWorkspace(workspaceId: string): Promise<TestApi>;
   listWorkspaces(): Promise<import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]>;
   getServerConnectionStatus(): "connected" | "connecting" | "disconnected";
+  getPanelAssetDiagnostics():
+    | import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics
+    | null;
+  getActiveWorkspaceAssetDiagnostics(): Array<{
+    workspaceId: string;
+    transfers: import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
+  }>;
 
   /** Get the full panel tree as a flat array */
   getPanelTree(): Panel[];
@@ -212,6 +219,7 @@ export interface TestWorkspaceOwner {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
   getPanelView(): PanelView | null;
+  getAssetDiagnostics?(): import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
 }
 
 export function setupTestApi(
@@ -220,6 +228,7 @@ export function setupTestApi(
     resolveWorkspace(workspaceId: string): Promise<TestWorkspaceOwner>;
     listWorkspaces(): ReturnType<TestApi["listWorkspaces"]>;
     getServerConnectionStatus(): ReturnType<TestApi["getServerConnectionStatus"]>;
+    getActiveWorkspaceAssetDiagnostics?: TestApi["getActiveWorkspaceAssetDiagnostics"];
   }
 ): void {
   if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") return;
@@ -237,6 +246,8 @@ export function setupTestApi(
           forWorkspace: async (id) => getApi(await selectors.resolveWorkspace(id)),
           listWorkspaces: selectors.listWorkspaces,
           getServerConnectionStatus: selectors.getServerConnectionStatus,
+          getActiveWorkspaceAssetDiagnostics:
+            selectors.getActiveWorkspaceAssetDiagnostics ?? (() => []),
         },
         assertHostedChrome
       );
@@ -248,8 +259,14 @@ export function setupTestApi(
 }
 
 function createWorkspaceTestApi(
-  { panelOrchestrator, panelRegistry, getPanelView }: TestWorkspaceOwner,
-  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces" | "getServerConnectionStatus">,
+  { panelOrchestrator, panelRegistry, getPanelView, getAssetDiagnostics }: TestWorkspaceOwner,
+  selectors: Pick<
+    TestApi,
+    | "forWorkspace"
+    | "listWorkspaces"
+    | "getServerConnectionStatus"
+    | "getActiveWorkspaceAssetDiagnostics"
+  >,
   assertHostedChrome: () => void
 ): TestApi {
   const panelDiagnostics = new Map<
@@ -278,6 +295,7 @@ function createWorkspaceTestApi(
   };
 
   return {
+    getPanelAssetDiagnostics: () => getAssetDiagnostics?.() ?? null,
     ...selectors,
     getPanelTree(): Panel[] {
       const result: Panel[] = [];

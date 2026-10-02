@@ -883,6 +883,7 @@ async function shapeRemoteWorkspaceConnection(
       getBuildRevision: () => undefined,
       invalidateBuild: () => {},
       getPort: () => facade.port,
+      getAssetDiagnostics: () => facade.diagnostics(),
     };
 
     // Local consumers (shellCore, app state, diagnostics) WRITE to statePath, so it

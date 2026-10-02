@@ -898,6 +898,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     serverClient: connection.serverClient,
     dispatcher,
     container,
+    getAssetDiagnostics: () => connection.panelHttpServer.getAssetDiagnostics?.() ?? null,
     get personalBrowser() {
       return personalBrowser;
     },

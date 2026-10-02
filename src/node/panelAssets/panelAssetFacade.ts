@@ -52,6 +52,7 @@ import {
   panelAssetCacheKey,
 } from "@vibestudio/shared/panel/assetPathPolicy";
 import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
+import type { PanelAssetDiagnostics } from "@vibestudio/shared/panelInterfaces";
 
 /** Minimal streaming seam shared by Electron and headless Node hosts. */
 export interface PanelAssetStreamClient {
@@ -152,7 +153,7 @@ function buildResponseHeaders(
 export async function startPanelAssetFacade(
   serverClient: PanelAssetStreamClient,
   options: PanelAssetFacadeOptions = {}
-): Promise<{ port: number; close(): Promise<void> }> {
+): Promise<{ port: number; diagnostics(): PanelAssetDiagnostics; close(): Promise<void> }> {
   let cache: AssetDiskCache | null = null;
   let portFile: string | undefined;
   if (options.stateDir) {
@@ -164,6 +165,14 @@ export async function startPanelAssetFacade(
 
   const lifetime = new AbortController();
   const requests = new Set<Promise<void>>();
+  const transfers = new Map<
+    http.ServerResponse,
+    {
+      routeClass: string;
+      startedAt: number;
+      stage: "opening" | "cache" | "body";
+    }
+  >();
   const prewarmFlights = new Map<string, Promise<void>>();
   const prewarmCompletedBuilds = new Map<string, true>();
   const ensureBuildPrewarm = (entry: PinnedEntry): void => {
@@ -198,17 +207,30 @@ export async function startPanelAssetFacade(
   };
 
   const server = http.createServer((req, res) => {
+    const transfer: Pick<
+      PanelAssetDiagnostics["requests"][number],
+      "routeClass" | "startedAt" | "stage"
+    > = {
+      routeClass: "unclassified",
+      startedAt: Date.now(),
+      stage: "opening",
+    };
+    transfers.set(res, transfer);
     const request = handleRequest(
       serverClient,
       cache,
       ensureBuildPrewarm,
       lifetime.signal,
       req,
-      res
+      res,
+      transfer
     );
     requests.add(request);
     void request
-      .finally(() => requests.delete(request))
+      .finally(() => {
+        requests.delete(request);
+        transfers.delete(res);
+      })
       .catch((error: unknown) => {
         log.warn(`Panel asset request failed: ${String(error)}`);
         res.destroy(error instanceof Error ? error : new Error(String(error)));
@@ -220,6 +242,17 @@ export async function startPanelAssetFacade(
   let closing: Promise<void> | null = null;
   return {
     port,
+    diagnostics: () => ({
+      requests: [...transfers].slice(0, 50).map(([res, transfer]) => ({
+        ...transfer,
+        headersSent: res.headersSent,
+        writableEnded: res.writableEnded,
+        destroyed: res.destroyed,
+        bufferedBytes: res.writableLength,
+      })),
+      prewarmBuilds: [...prewarmFlights.keys()].slice(0, 50),
+      cache: cache?.diagnostics() ?? null,
+    }),
     close: () =>
       (closing ??= (async () => {
         lifetime.abort(new Error("Panel asset facade closed"));
@@ -294,7 +327,8 @@ async function handleRequest(
   ensureBuildPrewarm: (entry: PinnedEntry) => void,
   lifetime: AbortSignal,
   req: http.IncomingMessage,
-  res: http.ServerResponse
+  res: http.ServerResponse,
+  transfer: Pick<PanelAssetDiagnostics["requests"][number], "routeClass" | "startedAt" | "stage">
 ): Promise<void> {
   const reqPath = req.url ?? "/";
   const method = (req.method ?? "GET").toUpperCase();
@@ -323,6 +357,7 @@ async function handleRequest(
     return;
   }
   const gatewayPath = decision.target;
+  transfer.routeClass = gatewayPath.split(/[/?]/u)[1] ?? "root";
   const pinnedEntry = parsePinnedEntry(gatewayPath);
   if (pinnedEntry) ensureBuildPrewarm(pinnedEntry);
 
@@ -356,12 +391,14 @@ async function handleRequest(
 
   try {
     if (cache) {
+      transfer.stage = "cache";
       const outcome = await cache.serve(
         panelAssetCacheKey(gatewayPath, forwardHeaders),
         fetcher,
         controller.signal
       );
       if (outcome.kind === "asset") {
+        transfer.stage = "body";
         const { asset } = outcome;
         res.writeHead(
           asset.status,
@@ -370,11 +407,14 @@ async function handleRequest(
         await pipeline(fs.createReadStream(asset.bodyPath), res, { signal: controller.signal });
         return;
       }
+      transfer.stage = "body";
       await writePassthrough(res, outcome.response, controller.signal);
       return;
     }
 
-    await writePassthrough(res, await fetcher(), controller.signal);
+    const response = await fetcher();
+    transfer.stage = "body";
+    await writePassthrough(res, response, controller.signal);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A webview cancel aborts the controller too; that's not an error worth a body.

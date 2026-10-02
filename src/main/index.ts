@@ -2763,6 +2763,7 @@ app.on("ready", async () => {
     const testOwner = (runtime: DesktopUiWorkspaceRuntime) => ({
       panelOrchestrator: runtime.orchestrator,
       panelRegistry: runtime.registry,
+      getAssetDiagnostics: () => runtime.getAssetDiagnostics(),
       getPanelView: () => {
         if (openNativeControllers.get(runtime.workspaceId) !== runtime)
           throw new Error("Workspace runtime is no longer active");
@@ -2770,6 +2771,11 @@ app.on("ready", async () => {
       },
     });
     setupTestApi(testOwner(workspaceController), {
+      getActiveWorkspaceAssetDiagnostics: () =>
+        [...openNativeControllers.values()].slice(0, 50).map((runtime) => ({
+          workspaceId: runtime.workspaceId,
+          transfers: runtime.getAssetDiagnostics(),
+        })),
       resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
       getServerConnectionStatus: () => conn.serverClient.getConnectionStatus(),
       listWorkspaces: () =>

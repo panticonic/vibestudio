@@ -373,6 +373,73 @@ describe("AssetDiskCache", () => {
     expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
   });
 
+  it("settles a publication failure at EOF and retires its failed transfer", async () => {
+    const cache = await newCache();
+    const failure = new Error("Immutable spool publication failed");
+    const rename = vi.spyOn(fsp, "rename").mockRejectedValueOnce(failure);
+    const fetcher = vi.fn(async () => immutableResponse("complete"));
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const first = await cache.serve("/publication-failure.js", fetcher);
+      if (first.kind !== "passthrough") throw new Error("Expected streamed transfer");
+      reader = first.response.body!.getReader();
+      await expect(reader.read()).resolves.toMatchObject({ done: false });
+      let outcome: unknown;
+      const completion = reader.read().then(
+        (result) => {
+          outcome = result;
+        },
+        (error) => {
+          outcome = { error };
+        }
+      );
+      await vi.waitFor(() => expect(outcome).toEqual({ error: failure }));
+      await completion;
+      await vi.waitFor(() => expect(cache.diagnostics()).toEqual({ inFlight: 0, populations: [] }));
+      const next = await cache.serve("/publication-failure.js", fetcher);
+      if (next.kind !== "passthrough") throw new Error("Expected fresh transfer");
+      await expect(readStream(next.response.body!)).resolves.toEqual(Buffer.from("complete"));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      await cache.close().catch((error) => {
+        expect(error).toBe(failure);
+      });
+      rename.mockRestore();
+    }
+  });
+
+  it("retires a failed population so a later demand owns a fresh transfer", async () => {
+    const cache = await newCache();
+    const failure = new Error("Original upstream reset");
+    const fetcher = vi.fn(async () =>
+      immutableResponse(
+        "complete",
+        fetcher.mock.calls.length === 1
+          ? {
+              body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.error(failure);
+                },
+              }),
+            }
+          : {}
+      )
+    );
+    try {
+      const first = await cache.serve("/recovered.js", fetcher);
+      if (first.kind !== "passthrough") throw new Error("Expected first transfer");
+      await expect(readStream(first.response.body!)).rejects.toBe(failure);
+      const next = await cache.serve("/recovered.js", fetcher);
+      if (next.kind !== "passthrough") throw new Error("Expected fresh transfer");
+      await expect(readStream(next.response.body!)).resolves.toEqual(Buffer.from("complete"));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      await cache.close();
+    }
+    expect(cache.diagnostics()).toEqual({ inFlight: 0, populations: [] });
+  });
+
   it("caches ONLY immutable-cacheable responses (no-store passes through, refetches)", async () => {
     const cache = await newCache();
     const fetcher = vi.fn(async () =>

@@ -1335,8 +1335,14 @@ async function captureDesktopFailureDiagnostics(app, failure) {
       unexpectedDesktopDiagnostics(diagnostics).slice(-30)
     ),
     readMainProcessErrors(app),
+    evaluateElectron(
+      app,
+      () => globalThis.__testApi?.getActiveWorkspaceAssetDiagnostics() ?? [],
+      undefined,
+      "capturing owned panel asset transfers"
+    ),
   ]);
-  const names = ["nativeViews", "hostedChrome", "rendererDiagnostics", "mainProcessErrors"];
+  const names = ["nativeViews", "hostedChrome", "rendererDiagnostics", "mainProcessErrors", "assetTransfers"];
   const packet = {
     failure: failure instanceof Error ? failure.message : String(failure),
     assetFailures: desktopAssetFailures.get(app) ?? [],
