@@ -1,6 +1,6 @@
 name: Build Iroh Native Repair
 
-# Builds replacement `@number0/iroh-<platform>` binaries carrying the reviewed
+# Builds matching root API and native platform packages carrying the reviewed
 # stream-cancellation repair. Upstream 1.1.0 holds each stream mutex across
 # network waits, so `RecvStream.stop()` cannot interrupt a pending read; the
 # RPC client's response-head cancellation therefore never reaches the peer.
@@ -89,25 +89,39 @@ jobs:
             --version "${{ inputs.version || '0.0.0-ci' }}" \
             --scope "${{ inputs.scope || '@panticonic' }}"
 
-      # Every matrix runner executes its target natively, including ARM64.
-      - name: Verify endpoint, stream, and dial cancellation
-        shell: bash
-        env:
-          NAPI_RS_NATIVE_LIBRARY_PATH: ${{ runner.temp }}/iroh-${{ matrix.platform }}/package/iroh.${{ matrix.platform }}.node
-        run: |
-          node --test \
-            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/endpoint.mjs" \
-            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/stream-cancellation.mjs" \
-            "${RUNNER_TEMP}/iroh-${{ matrix.platform }}/source/iroh-js/test/dial-cancellation.mjs"
-
       - name: Upload the platform package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iroh-${{ matrix.platform }}
           path: |
             ${{ runner.temp }}/iroh-${{ matrix.platform }}/package
+            ${{ runner.temp }}/iroh-${{ matrix.platform }}/root-package
+            ${{ runner.temp }}/iroh-${{ matrix.platform }}/tarballs
             ${{ runner.temp }}/iroh-${{ matrix.platform }}/receipt.json
           if-no-files-found: error
+
+  node-api-contract:
+    name: Coherent Node package set
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Download native Node packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: iroh-*
+          path: node-package-set
+      - name: Verify the shared generated API and all matching native receipts
+        run: node packages/iroh-transport/native/check-node-package-set.mjs node-package-set
 
   android:
     name: android-aar

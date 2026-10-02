@@ -847,3 +847,15 @@ index 46ac9a8..91f125b 100644
      }
  }
  
+diff --git a/iroh-js/package.json b/iroh-js/package.json
+--- a/iroh-js/package.json
++++ b/iroh-js/package.json
+@@ -54,7 +54,7 @@
+     "test": "node --test test/*.mjs",
+     "version": "napi version"
+   },
+-  "packageManager": "yarn@1.22.22",
++  "packageManager": "yarn@4.4.0",
+   "optionalDependencies": {
+     "@number0/iroh-android-arm-eabi": "1.0.0",
+     "@number0/iroh-android-arm64": "1.0.0",

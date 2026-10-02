@@ -1656,10 +1656,20 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
         "packages/agentic-core/src/panel-import-loader.ts",
         "skills/onboarding/SetupHub.tsx",
       ];
+      const sourceTarget = { kind: "workspace", workspaceId };
+      const sourceState = await nativeRpc(chrome, sourceTarget, "vcs.mainState", []);
       const sourceResults = await Promise.allSettled(sourcePaths.map(async (sourcePath) => {
-        const source = await nativeRpc(chrome, { kind: "workspace", workspaceId },
-          "fs.readFile", [sourcePath, "utf8"]);
-        if (typeof source !== "string") throw new Error("Source read did not return text");
+        const [category, unit, ...relativePath] = sourcePath.split("/");
+        const repository = await nativeRpc(chrome, sourceTarget, "vcs.resolveRepository", [
+          { state: sourceState, repoPath: `${category}/${unit}` },
+        ]);
+        if (!repository) throw new Error(`Source repository is missing: ${category}/${unit}`);
+        const file = await nativeRpc(chrome, sourceTarget, "vcs.readFile", [{
+          state: sourceState, repositoryId: repository.repositoryId,
+          file: { kind: "path", path: relativePath.join("/") },
+        }]);
+        if (file?.content.kind !== "text") throw new Error("Source read did not return text");
+        const source = file.content.text;
         return { path: sourcePath, sha256: createHash("sha256").update(source).digest("hex"),
           bytes: Buffer.byteLength(source),
           ...(sourcePath === "packages/eval/src/sandbox.ts"

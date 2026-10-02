@@ -15,10 +15,13 @@ cancellation before connect, single consumption, and endpoint closure.
 
 This API is **not shipped** by the currently pinned `1.1.0-cancel.2` release.
 The application still needs the matching published release before its endpoint
-generation owner can use this contract. Publishing requires regenerating the
-Node JavaScript/type exports and Kotlin/Swift bindings in addition to building
-the native artifacts. The existing platform-only replacement workflow keeps
-upstream's API declarations and therefore cannot publish this API on its own.
+generation owner can use this contract. The Node package builder regenerates
+JavaScript and declarations with the source's locked NAPI compiler, produces
+matching root and platform tarballs, and installs both into a fresh consumer.
+It checks CommonJS and ESM exports and typechecks the dial API. CI retains
+the root package, platform package, tarballs, and their binding hashes.
+Publishing requires those matching Node packages and the generated Kotlin/Swift
+bindings alongside the native artifacts.
 Do not add feature detection, cast an unsupported API, or substitute the proof
 binary into production to bypass that dependency boundary.
 
@@ -82,6 +85,9 @@ operation is discarded because the corresponding stream half is terminal.
 The only dependency change makes already-locked `tokio-util` a direct dependency
 of the two bindings. There is no Rust dependency version update, foreign API
 change, application cancellation channel, or JavaScript transport workaround.
+The reviewed patch also corrects the Node package-manager declaration to
+Yarn 4.4.0, matching its checked-in Yarn executable and lockfile. Node package
+builds use an immutable install and private package caches.
 
 ## Reproduce locally
 
@@ -173,30 +179,29 @@ a substitute for this repair or an available coherent dependency release.
 
 ## Reviewed fork release
 
-`build-platform-package.mjs` builds one publishable replacement for an upstream
-`@number0/iroh-<platform>` package from the same reviewed inputs, and
-`.github/workflows/iroh-native-repair.yml` runs it across the five desktop
-targets `check-electron-package-boundary.mjs` enforces. Only the native artifact
-differs: `@number0/iroh` requires its platform package _by name_ and returns
-whatever that package exports, so the JavaScript, types, and API surface stay
-upstream's. The emitted manifest reproduces upstream's shape exactly apart from
-name and version.
+`build-platform-package.mjs` regenerates a root Node API and one matching native
+platform package from the reviewed inputs. The workflow builds the five desktop
+targets enforced by `check-electron-package-boundary.mjs`. Each target installs
+its actual root and platform tarballs in a fresh consumer, checks CommonJS and
+ESM exports, typechecks the generated dial API, and runs the endpoint, stream,
+and dial cancellation suites through the installed loader. The final workflow
+gate requires identical generated JavaScript and declarations across all five
+targets, matching source receipts, and exactly matching platform versions.
 
 ```sh
 node packages/iroh-transport/native/build-platform-package.mjs OUT \
-  --target x86_64-unknown-linux-gnu --version 1.1.0-cancel.1 --scope @panticonic
+  --target x86_64-unknown-linux-gnu --version 1.1.0-cancel.3 --scope @panticonic
 ```
 
-Matching this repository's npm convention, CI builds and uploads; a developer
-publishes. After every platform package is published, the cutover is one
-coherent change: alias each upstream platform name under root `pnpm.overrides`
-(`"@number0/iroh-linux-x64-gnu": "npm:@panticonic/iroh-linux-x64-gnu@<version>"`,
-and so on), then regenerate `src/releaseSet.ts` integrities and
-`scripts/cli/lib/connect-grammar.generated.mjs`. Do not land the overrides
-before publication: an alias to an unpublished version breaks installation for
-everyone. The napi loader's version check is opt-in through
-`NAPI_RS_ENFORCE_VERSION_CHECK`, which this repository does not set, so a
-provenance-bearing version such as `1.1.0-cancel.1` is safe.
+CI retains the root package, platform package, tarballs, and receipt. Publish
+one shared root tarball and all five matching platform tarballs only after the
+coherence gate passes. The root package selects those platform packages through
+exact optional dependency versions. Adopting the new API requires switching the
+root dependency too: the currently pinned upstream root loader and declarations
+do not expose `DialAttempt`. Then regenerate `src/releaseSet.ts` integrities and
+`scripts/cli/lib/connect-grammar.generated.mjs` through the ordinary release
+process. Do not land pins before the packages exist or overwrite a published
+version.
 
 This pipeline covers the desktop Node bindings only. The Android AAR, its
 Kotlin/JVM JAR, the Apple XCFramework, and the musl and ARMv7 Node targets are

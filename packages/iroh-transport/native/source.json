@@ -5,5 +5,5 @@
   "baseCargoLockSha256": "3e0dbd3b87ba9a85833ace8802661128c6965766566655607981eadc6df719b4",
   "patchedCargoLockSha256": "799f7a1add403031f3703379647e86bb2be44cfe1823f0a2b099a63bd7ee3c45",
   "patch": "iroh-ffi-stream-cancellation.patch",
-  "patchSha256": "4f292d661b8c67f0a1f2cb93acad206a928243b5361b8e8aab0128597678135d"
+  "patchSha256": "b9a2e164a7b5d2f44b0734496f6fdd3c57e0297947a668e4bc5e67c9ba79fb85"
 }

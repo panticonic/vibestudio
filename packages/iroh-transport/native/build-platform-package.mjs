@@ -1,53 +1,37 @@
 #!/usr/bin/env node
 /**
- * Build one publishable replacement for an upstream `@number0/iroh-<platform>`
- * package from the reviewed cancellation patch.
- *
- * Only the native artifact differs from upstream: `@number0/iroh`'s own loader
- * requires the platform package by name and returns whatever it exports, so
- * republishing the platform packages alone repairs the binding without forking
- * upstream's JavaScript, types, or API surface. Root `pnpm.overrides` aliases
- * each upstream platform name to the package this script emits.
+ * Build a matching root API and native platform package from the reviewed
+ * source. Regenerating the loader and declarations is part of the same build;
+ * a platform-only artifact cannot publish the new native dial API.
  */
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pinnedSource, preparePatchedSource, runIn, sha256 } from "./patchedSource.mjs";
+import { buildNodePackages } from "./nodeBindings.mjs";
 
 /** Upstream's napi target -> platform package identity. `platform` reproduces
  * upstream's package-name suffix and artifact name exactly; the loader derives
  * both from the running process, so they are not ours to choose. */
 const TARGETS = {
-  "aarch64-apple-darwin": { platform: "darwin-arm64", os: "darwin", cpu: "arm64", ext: "dylib" },
+  "aarch64-apple-darwin": { platform: "darwin-arm64", os: "darwin", cpu: "arm64" },
   "x86_64-unknown-linux-gnu": {
     platform: "linux-x64-gnu",
     os: "linux",
     cpu: "x64",
     libc: "glibc",
-    ext: "so",
   },
   "aarch64-unknown-linux-gnu": {
     platform: "linux-arm64-gnu",
     os: "linux",
     cpu: "arm64",
     libc: "glibc",
-    ext: "so",
   },
-  "x86_64-unknown-linux-musl": {
-    platform: "linux-x64-musl",
-    os: "linux",
-    cpu: "x64",
-    libc: "musl",
-    ext: "so",
-  },
-  "aarch64-unknown-linux-musl": {
-    platform: "linux-arm64-musl",
-    os: "linux",
+  "x86_64-pc-windows-msvc": { platform: "win32-x64-msvc", os: "win32", cpu: "x64" },
+  "aarch64-pc-windows-msvc": {
+    platform: "win32-arm64-msvc",
+    os: "win32",
     cpu: "arm64",
-    libc: "musl",
-    ext: "so",
   },
-  "x86_64-pc-windows-msvc": { platform: "win32-x64-msvc", os: "win32", cpu: "x64", ext: "dll" },
-  "aarch64-pc-windows-msvc": { platform: "win32-arm64-msvc", os: "win32", cpu: "arm64", ext: "dll" },
 };
 
 function usage() {
@@ -70,36 +54,17 @@ const descriptor = target && TARGETS[target];
 if (!outputDirectory || outputDirectory.startsWith("--") || !descriptor || !version) usage();
 
 const { output, source, target: cargoTarget } = preparePatchedSource(outputDirectory);
-const env = { CARGO_TARGET_DIR: cargoTarget };
-runIn(
-  "cargo",
-  ["build", "--locked", "--release", "--target", target, "-p", "number0_iroh"],
+const bindings = buildNodePackages({
+  output,
   source,
-  env
-);
-const library = descriptor.ext === "dll" ? "number0_iroh.dll" : `libnumber0_iroh.${descriptor.ext}`;
-const artifactName = `iroh.${descriptor.platform}.node`;
-const packageDirectory = join(output, "package");
-mkdirSync(packageDirectory, { recursive: true });
-copyFileSync(join(cargoTarget, target, "release", library), join(packageDirectory, artifactName));
-
-const manifest = {
-  name: `${scope}/iroh-${descriptor.platform}`,
+  cargoTarget,
+  target,
+  descriptor,
+  targets: TARGETS,
   version,
-  os: [descriptor.os],
-  cpu: [descriptor.cpu],
-  main: artifactName,
-  files: [artifactName],
-  license: "MIT",
-  engines: { node: ">= 10" },
-  repository: { type: "git", url: pinnedSource.repository },
-  ...(descriptor.libc ? { libc: [descriptor.libc] } : {}),
-};
-writeFileSync(
-  join(packageDirectory, "package.json"),
-  `${JSON.stringify(manifest, null, 2)}\n`,
-  "utf8"
-);
+  scope,
+});
+const { manifest, packageDirectory, artifactName } = bindings;
 writeFileSync(
   join(packageDirectory, "README.md"),
   `# ${manifest.name}\n\n` +
@@ -108,7 +73,8 @@ writeFileSync(
     `${pinnedSource.commit} with the reviewed stream-cancellation repair applied.\n\n` +
     "Upstream holds each stream mutex across network waits, so `RecvStream.stop()` cannot " +
     "interrupt a pending read and `SendStream.reset()` cannot interrupt a flow-controlled " +
-    "write. Only the native artifact differs; the JavaScript API is upstream's.\n",
+    "write. The matching root package regenerates JavaScript and declarations " +
+    "from this native build, including request-owned dial cancellation.\n",
   "utf8"
 );
 
@@ -123,6 +89,12 @@ const receipt = {
   cargo: runIn("cargo", ["--version"], source, {}, true),
   artifact: join(packageDirectory, artifactName),
   artifactSha256: sha256(readFileSync(join(packageDirectory, artifactName))),
+  rootPackage: bindings.rootPackage,
+  rootTarball: bindings.rootTarball,
+  platformTarball: bindings.platformTarball,
+  javascriptSha256: bindings.javascriptSha256,
+  declarationsSha256: bindings.declarationsSha256,
+  validation: bindings.validation,
 };
 writeFileSync(join(output, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
 console.log(JSON.stringify(receipt, null, 2));

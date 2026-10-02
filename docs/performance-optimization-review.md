@@ -44,7 +44,10 @@ is otherwise validated.
     35 host import/cache tests, and all eight composition typechecks. Artifact
     format and RPC contract versions advance with this required field.
     Fresh desktop and Android onboarding passed with the compiler contract.
-    Cross-platform acceptance remains pending. Windows additionally failed
+    macOS and Windows acceptance still fail after the compiler repair; the
+    macOS packet shows a loader registry different from the current Base
+    manifest. Onboarding failure packets now include loaded source fingerprints
+    to distinguish template composition from linker behavior. Windows additionally failed
     while locating paired workspace chrome; every desktop failure now captures
     the exact main-process, hosted-shell, and module-owner state for diagnosis.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
@@ -52,6 +55,18 @@ is otherwise validated.
     the launch RPC or worker lifecycle settles: its slow-launch regressions,
     worker failure regression, and Base typecheck pass. Fresh-cache desktop
     onboarding and server restart passed with both repairs together.
+    A held initial-template inspection also exposed the fresh-workspace form
+    before the selected source was ready. Selecting the supplied source from
+    the beginning fixes the race; its regression, all 19 template-browser tests,
+    four System chooser tests, and the Base typecheck pass.
+    Shared-member revocation diagnostics exposed an unregister RPC sent over
+    an already revoked session. Panel registrations now retire with their
+    authenticated caller; local cleanup distinguishes permanent session closure
+    from transient transport loss. All 244 focused lifecycle tests, 147 Iroh
+    integration tests, 12 end-to-end tests, and 26 remote-operation tests pass.
+    A fresh production-mode native desktop run passes onboarding, server
+    restart, and shared-member revocation without the earlier cleanup error.
+    Its exact processes and private caches were retired.
   - **Additional repairs:** Positioned spool writes prevent Windows readers
     from moving the writer's file cursor. Native presentation withdrawal belongs
     to the exact workspace-view owner. Authenticated catalog changes retire
