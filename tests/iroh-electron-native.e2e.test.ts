@@ -17,11 +17,16 @@ interface FixtureResult {
 
 function runElectronFixture(): Promise<FixtureResult> {
   return new Promise((resolve, reject) => {
+    // The fixture's Xvfb process owns its X11 display. An inherited Wayland
+    // session can otherwise strand Electron before app readiness.
+    const env = { ...process.env };
+    delete env["WAYLAND_DISPLAY"];
+    delete env["XDG_SESSION_TYPE"];
     const child = spawn("xvfb-run", ["-a", electronPath, "--no-sandbox", fixturePath], {
       cwd: process.cwd(),
       detached: true,
       env: {
-        ...process.env,
+        ...env,
         ELECTRON_DISABLE_GPU: "1",
         ELECTRON_DISABLE_SANDBOX: "1",
         VIBESTUDIO_TEST_IROH_STREAM_WINDOW: IROH_CONCURRENT_BI_STREAM_WINDOW.toString(),
@@ -38,7 +43,7 @@ function runElectronFixture(): Promise<FixtureResult> {
     });
     const timeout = setTimeout(() => {
       timeoutError = new Error(
-        `Electron Iroh fixture timed out\n${Buffer.concat(output).toString("utf8")}`,
+        `Electron Iroh fixture timed out\n${Buffer.concat(output).toString("utf8")}`
       );
       if (!child.pid) return;
       try {
