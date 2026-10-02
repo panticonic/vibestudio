@@ -10,6 +10,11 @@ name: Build Iroh Native Repair
 # for the publish and cutover steps.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/iroh-transport/native/**"
+      - ".github/workflows/iroh-native-repair.yml"
   workflow_dispatch:
     inputs:
       version:

@@ -40,6 +40,11 @@ is otherwise validated.
     registry isolation. A fresh-cache Linux desktop run passed onboarding and
     server restart after the repair; its owned processes and caches were retired.
     Cross-platform acceptance after this repair is pending.
+    The dependency parser follow-up passed the complete Base suite (3,516 tests,
+    two declared skips). Agent launch ownership also survives elapsed time until
+    the launch RPC or worker lifecycle settles: its slow-launch regressions,
+    worker failure regression, and Base typecheck pass. Fresh-cache desktop
+    onboarding and server restart passed with both repairs together.
   - **Additional repairs:** Positioned spool writes prevent Windows readers
     from moving the writer's file cursor. Native presentation withdrawal belongs
     to the exact workspace-view owner. Authenticated catalog changes retire
@@ -69,6 +74,7 @@ is otherwise validated.
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. The Apple artifact now retains the matching
     generated Swift source and its receipt hash alongside the XCFramework.
+    Relevant main-branch pushes now run the native repair build matrix too.
     Production dependency pins are unchanged.
   - **Remaining design work:** An interrupted mutation with no acceptance
     receipt still has an unknown outcome. Recovering it requires a stable
