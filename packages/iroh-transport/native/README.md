@@ -21,7 +21,12 @@ matching root and platform tarballs, and installs both into a fresh consumer.
 It checks CommonJS and ESM exports and typechecks the dial API. CI retains
 the root package, platform package, tarballs, and their binding hashes.
 Publishing requires those matching Node packages and the generated Kotlin/Swift
-bindings alongside the native artifacts.
+bindings alongside the native artifacts. Main-branch repair builds now stamp
+all five Node targets, the Android AAR, and the Apple archive with the matching
+`1.1.0-cancel.3` candidate version. The workflow uploads these candidates and
+verifies the Node package set; it does not publish them or change application
+dependency pins. Use the receipts from one successful complete workflow run
+when reviewing the release, rather than combining binaries from different runs.
 Do not add feature detection, cast an unsupported API, or substitute the proof
 binary into production to bypass that dependency boundary.
 

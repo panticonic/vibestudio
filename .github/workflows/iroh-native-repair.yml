@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to stamp on the platform packages (e.g. 1.1.0-cancel.1)"
+        description: "Version to stamp on the platform packages (e.g. 1.1.0-cancel.3)"
         required: true
         type: string
       scope:
@@ -32,6 +32,11 @@ on:
       - ".github/workflows/iroh-native-repair.yml"
 
 permissions: {}
+
+# Build matching release candidates on every reviewed source change. This
+# workflow uploads artifacts only; publication remains a separate action.
+env:
+  IROH_REPAIR_VERSION: ${{ inputs.version || '1.1.0-cancel.3' }}
 
 jobs:
   build:
@@ -86,7 +91,7 @@ jobs:
           node packages/iroh-transport/native/build-platform-package.mjs \
             "${RUNNER_TEMP}/iroh-${{ matrix.platform }}" \
             --target ${{ matrix.target }} \
-            --version "${{ inputs.version || '0.0.0-ci' }}" \
+            --version "${IROH_REPAIR_VERSION}" \
             --scope "${{ inputs.scope || '@panticonic' }}"
 
       - name: Upload the platform package
@@ -152,7 +157,7 @@ jobs:
         run: |
           node packages/iroh-transport/native/build-android-aar.mjs \
             "${RUNNER_TEMP}/iroh-android" \
-            --version "${{ inputs.version || '0.0.0-ci' }}"
+            --version "${IROH_REPAIR_VERSION}"
 
       - name: Upload the AAR
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -186,7 +191,7 @@ jobs:
         run: |
           node packages/iroh-transport/native/build-ios-xcframework.mjs \
             "${RUNNER_TEMP}/iroh-ios" \
-            --version "${{ inputs.version || '0.0.0-ci' }}"
+            --version "${IROH_REPAIR_VERSION}"
 
       - name: Upload the XCFramework
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

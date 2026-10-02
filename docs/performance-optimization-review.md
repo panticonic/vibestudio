@@ -234,7 +234,7 @@ is otherwise validated.
     the pending body with the original error. Joined failed populations retire
     from both ownership maps. All 43 focused cache, facade, session, and test-API
     tests and host types pass. This establishes a real failure-propagation fix,
-    but does not yet establish the cause of the Windows capture. Native failure
+    and the first Windows native desktop run after this change passes onboarding and server restart. That pass does not isolate the original publication error. Native failure
     packets now include bounded snapshots of active transfers and cache owners
     through the existing test API, without querying a remote server or page.
   - **Immutable asset publication:** A real-filesystem regression shows that two
@@ -245,7 +245,7 @@ is otherwise validated.
     existing bytes are rejected and remain untouched. No published file is
     reopened for writing or replaced. This removes the open-file replacement
     operation that is invalid on Windows. All 41 cache/facade tests pass.
-    Native Windows acceptance remains the final platform verification.
+    Windows desktop pairing at `d9e976df` now passes onboarding, System icon and native-controller assertions, and retained-credential server restart. That run includes EOF error propagation but precedes immutable-inode publication; acceptance of the later publication commit still needs verification.
   - **Concurrent schema validation:** The Linux desktop server-restart run at
     `07ac025d` fails because current-schema validation takes `BEGIN IMMEDIATE`
     on the installation-shared reporting database. A held WAL writer reproduces
@@ -255,7 +255,23 @@ is otherwise validated.
     No busy timeout or retry policy is introduced or extended. All 20 SQLite
     and problem-reporting store tests pass, including exact schema rejection,
     declared migrations, and concurrent validation without exposing uncommitted
-    data. Native restart acceptance still needs rerunning.
+    data. A fresh production-mode Linux desktop run at `4dd78d56` passes onboarding, server restart, and shared-member revocation with these asset and SQLite repairs. The exact processes and private cold caches were retired.
+  - **Abrupt peer restart diagnostic:** A standalone native diagnostic keeps
+    three server endpoints alive while killing and replacing a client process
+    four times with the same endpoint identity. All 36 complete 8 KiB response
+    bodies transfer in 3–76 ms through the configured production relay. Its
+    endpoints, native accept loops, and child processes are joined and retired.
+    This does not reproduce the Android emulator delay or establish a mobile
+    fix; the full Android cold-restart path remains required.
+  - **Latest Android acceptance:** The uninstrumented run at `4dd78d56`
+    passes automatic onboarding, permission handling, and System/Personal
+    browser-cookie isolation. Cold restart delays System workspace information
+    by about 51 seconds after authentication; Personal's corresponding read
+    completes promptly. The retained chat then reports a 15-second RPC failure
+    and does not restore its rendered conversation. The panel's boot-ready
+    signal alone does not establish conversation readiness. No deadline or
+    retry policy was changed. The exact app/emulator/server processes and
+    private scratch were retired; server-restart acceptance was not reached.
   - **Native mobile retirement cause:** React Native's actual AbortController
     implementation has neither `AbortSignal.reason` nor an abort reason argument.
     Mobile materialization now owns its first retirement cause directly, checks
