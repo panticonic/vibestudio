@@ -237,6 +237,16 @@ is otherwise validated.
     but does not yet establish the cause of the Windows capture. Native failure
     packets now include bounded snapshots of active transfers and cache owners
     through the existing test API, without querying a remote server or page.
+  - **Concurrent schema validation:** The Linux desktop server-restart run at
+    `07ac025d` fails because current-schema validation takes `BEGIN IMMEDIATE`
+    on the installation-shared reporting database. A held WAL writer reproduces
+    the exact database-locked error. Canonical schema opening now validates the
+    committed current schema in one read snapshot; initialization and declared
+    migrations still re-read and validate under their exclusive writer lock.
+    No busy timeout or retry policy is introduced or extended. All 20 SQLite
+    and problem-reporting store tests pass, including exact schema rejection,
+    migration rollback, and concurrent validation without exposing uncommitted
+    data. Native restart acceptance still needs rerunning.
   - **Native mobile retirement cause:** React Native's actual AbortController
     implementation has neither `AbortSignal.reason` nor an abort reason argument.
     Mobile materialization now owns its first retirement cause directly, checks

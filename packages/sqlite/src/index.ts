@@ -206,9 +206,9 @@ function unsupportedVersionError(
 /**
  * Initialize or validate one host SQLite database.
  *
- * Writers hold `BEGIN IMMEDIATE` across initialization and exact validation.
- * This makes simultaneous startup deterministic: a waiter observes and
- * validates the winner's committed schema.
+ * Validate a current schema in a consistent read snapshot. Initialization and
+ * migrations hold `BEGIN IMMEDIATE` and re-read the schema under their writer
+ * lock, so validation never takes ownership of an unrelated writer's work.
  */
 export function openCanonicalSqliteDatabase(
   db: DatabaseSync,
@@ -216,18 +216,26 @@ export function openCanonicalSqliteDatabase(
   options: CanonicalSqliteOpenOptions
 ): CanonicalSqliteOpenResult {
   validateSchema(schema);
-  const initiallyTrulyEmpty = isTrulyEmptySqliteDatabase(db);
-
-  if (options.readOnly) {
-    if (initiallyTrulyEmpty) {
+  db.exec("BEGIN");
+  let snapshotOpen = true;
+  let initiallyTrulyEmpty = false;
+  try {
+    initiallyTrulyEmpty = isTrulyEmptySqliteDatabase(db);
+    if (options.readOnly && initiallyTrulyEmpty) {
       throw new Error(`Unsupported ${options.description}: a read-only owner cannot initialize it`);
     }
     const actualVersion = readSqliteUserVersion(db);
-    if (actualVersion !== schema.version) {
+    if (actualVersion === schema.version) {
+      assertCanonicalSqliteSchema(db, schema, options.description);
+      db.exec("COMMIT");
+      snapshotOpen = false;
+      return { kind: "current", version: schema.version };
+    }
+    if (options.readOnly) {
       throw unsupportedVersionError(options.description, actualVersion, schema.version);
     }
-    assertCanonicalSqliteSchema(db, schema, options.description);
-    return { kind: "current", version: schema.version };
+  } finally {
+    if (snapshotOpen) db.exec("ROLLBACK");
   }
 
   db.exec("BEGIN IMMEDIATE");

@@ -1,4 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "./index.js";
 
@@ -26,6 +29,33 @@ function memoryDatabase(): DatabaseSync {
 }
 
 describe("openCanonicalSqliteDatabase", () => {
+  it("validates a committed current schema while another connection owns a write transaction", () => {
+    const directory = mkdtempSync(join(tmpdir(), "canonical-schema-reader-"));
+    const writer = new DatabaseSync(join(directory, "shared.db"));
+    let reader: DatabaseSync | undefined;
+    let writing = false;
+    try {
+      openCanonicalSqliteDatabase(writer, SCHEMA, { description: "shared database" });
+      writer.exec("PRAGMA journal_mode=WAL");
+      reader = new DatabaseSync(join(directory, "shared.db"));
+      writer.exec("BEGIN IMMEDIATE");
+      writing = true;
+      writer.prepare("INSERT INTO notes VALUES (?, ?)").run(1, "uncommitted");
+      expect(
+        openCanonicalSqliteDatabase(reader, SCHEMA, { description: "shared database" })
+      ).toEqual({ kind: "current", version: 9 });
+      expect(reader.prepare("SELECT * FROM notes").all()).toEqual([]);
+      writer.exec("COMMIT");
+      writing = false;
+      expect(reader.prepare("SELECT body FROM notes").get()).toEqual({ body: "uncommitted" });
+    } finally {
+      if (writing) writer.exec("ROLLBACK");
+      reader?.close();
+      writer.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("initializes a truly empty database at the exact current schema", () => {
     const db = memoryDatabase();
     expect(openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })).toEqual({
