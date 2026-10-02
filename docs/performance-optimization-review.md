@@ -31,7 +31,10 @@ is otherwise validated.
     tests passed. The complete host-owned template projection passed 6,164
     tests across eight compositions and every composition typecheck using the
     repository's pinned Node 22.23.2. Declared skips remain; iOS was not tested.
-    Cross-platform desktop CI remains a separate verification boundary.
+    Both macOS CI runners failed after prompt submission while waiting for the
+    onboarding UI; Linux and local desktop passes do not resolve that failure.
+    The acceptance harness now retains bounded onboarding/renderer diagnostics
+    to distinguish durable execution from inline compilation and presentation.
   - **Additional repairs:** Positioned spool writes prevent Windows readers
     from moving the writer's file cursor. Native presentation withdrawal belongs
     to the exact workspace-view owner. Authenticated catalog changes retire

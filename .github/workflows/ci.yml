@@ -327,9 +327,19 @@ jobs:
 
       # Source bootstrap can rebuild dist; capture the production candidate first.
       - name: Desktop pairing, approvals, panels, relaunch, and recovery
+        id: desktop_smoke
         if: ${{ !cancelled() && steps.desktop_templates.outcome == 'success' }}
         shell: bash
         run: node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
+
+      - name: Retain desktop onboarding failure evidence
+        if: ${{ !cancelled() && steps.desktop_smoke.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-onboarding-diagnostics-${{ matrix.target }}-${{ matrix.runner }}
+          path: test-results/desktop-pairing-smoke/onboarding-diagnostics-*.json
+          if-no-files-found: warn
+          retention-days: 3
 
   packaged-acceptance:
     name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})

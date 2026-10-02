@@ -1295,6 +1295,7 @@ async function readInitialPanelHistory(app, webContentsId, workspaceId) {
 
 async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) {
   let latestObservation = null;
+  let latestWebContentsId;
   while (Date.now() < deadline) {
     const reportingFailure = await evaluateHostedChrome(
       app,
@@ -1360,6 +1361,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
         await sleep(250);
         continue;
       }
+      latestWebContentsId = snapshot.presentation.webContentsId;
       const slot = await evaluateElectron(
         app,
         ({ BaseWindow }, webContentsId) => {
@@ -1485,6 +1487,57 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
       }
     }
     await sleep(250);
+  }
+  if (latestWebContentsId) {
+    try {
+      const diagnostics = await evaluateElectron(
+        app,
+        async ({ webContents }, id) => {
+          const contents = webContents.fromId(id);
+          if (!contents) throw new Error("Personal panel WebContents is missing");
+          return contents.executeJavaScript(`(() => {
+            const root = document.getElementById('root');
+            let fiber = root?.[Object.keys(root).find(key => key.startsWith('__reactContainer$'))];
+            fiber = fiber?.stateNode?.current || fiber;
+            const seen = new Set(), inline = [], messages = [];
+            function visit(node) {
+              if (!node || seen.has(node) || seen.size >= 20000) return;
+              seen.add(node);
+              const props = node.memoizedProps;
+              const entry = props?.inlineUiComponents?.get('onboarding-setup-overview');
+              if (entry) inline.push({ component: Boolean(entry.Component), error: entry.error ?? null });
+              if (props?.data?.id === 'onboarding-setup-overview') {
+                inline.push({ card: props.data.id, source: props.data.source,
+                  component: Boolean(props.compiledComponent), error: props.compilationError ?? null });
+              }
+              if (Array.isArray(props?.messages) && messages.length === 0) {
+                messages.push(...props.messages.slice(-100).map(message => ({
+                  role: message.role, contentType: message.contentType, inlineId: message.inlineUi?.id
+                })));
+              }
+              visit(node.child); visit(node.sibling);
+            }
+            visit(fiber);
+            return { source: window.__vibestudioSourceRepo, inline, messages,
+              alerts: [...document.querySelectorAll('[role="alert"], [data-inline-ui-error]')]
+                .slice(0, 10).map(element => element.textContent?.slice(0, 1000)),
+              loadingModules: Object.keys(window.__vibestudioModuleLoadingPromises__ ?? {}).slice(0, 50),
+              messageElements: document.querySelectorAll('[data-message-role]').length };
+          })()`);
+        },
+        latestWebContentsId,
+        "capturing the stalled Personal onboarding boundary"
+      );
+      const rendererDiagnostics = unexpectedDesktopDiagnostics(await readDesktopDiagnostics(app));
+      const packet = { workspaceId, observation: latestObservation, panel: diagnostics,
+        rendererDiagnostics: rendererDiagnostics.slice(-30), mainProcessErrors: await readMainProcessErrors(app) };
+      await fsp.mkdir(screenshotDir, { recursive: true, mode: 0o700 });
+      const diagnosticPath = path.join(screenshotDir, `onboarding-diagnostics-${Date.now()}.json`);
+      await fsp.writeFile(diagnosticPath, `${JSON.stringify(packet, null, 2)}\n`, { mode: 0o600 });
+      console.error(`[desktop-smoke] Onboarding failure diagnostics: ${JSON.stringify(packet)}`);
+    } catch (error) {
+      console.error(`[desktop-smoke] Onboarding diagnostic capture failed: ${error.message}`);
+    }
   }
   const failureScreenshot = await saveScreenshot(app).catch(() => null);
   throw new Error(
