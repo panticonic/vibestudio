@@ -351,10 +351,10 @@ index d4fb502..12028af 100644
  }
 diff --git a/iroh-js/test/dial-cancellation.mjs b/iroh-js/test/dial-cancellation.mjs
 new file mode 100644
-index 0000000..79866ce
+index 0000000..8fc3496
 --- /dev/null
 +++ b/iroh-js/test/dial-cancellation.mjs
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,94 @@
 +import assert from 'node:assert/strict';
 +import { test } from 'node:test';
 +import net from 'node:net';
@@ -432,10 +432,21 @@ index 0000000..79866ce
 +  try {
 +    const attempt = f.client.beginConnect(f.unknown, ALPN);
 +    const result = attempt.connect();
-+    const rejected = assert.rejects(result, /Endpoint closed during dial/);
++    let settled = false;
++    const outcome = result.then(
++      connection => ({ connection }),
++      error => ({ error }),
++    ).finally(() => { settled = true; });
++    await new Promise(setImmediate);
++    assert.equal(settled, false, 'the dial must be pending before its endpoint closes');
 +    await f.client.close();
-+    await rejected;
++    // Shutdown can settle via closed() or connect's original endpoint-stopping
++    // failure. Preserve that error rather than requiring a translated string.
++    const terminal = await outcome;
++    assert.ok(terminal.error instanceof Error, 'endpoint closure must reject the pending dial');
++    assert.equal(f.client.isClosed(), true);
 +    await attempt.cancel();
++    await assert.rejects(attempt.connect(), /already consumed/);
 +  } finally { await f.close(); }
 +});
 diff --git a/iroh-js/test/endpoint.mjs b/iroh-js/test/endpoint.mjs
