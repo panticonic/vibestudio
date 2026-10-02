@@ -2869,7 +2869,7 @@ app.on("ready", async () => {
         );
       };
       catalogTail = catalogTail.then(reconcile, reconcile).catch((error: unknown) => {
-        console.error("Workspace membership cleanup failed:", error);
+        console.error("Workspace membership cleanup failed:", formatUnknownError(error));
       });
     });
     const stopCatalogRecovery = conn.hubControlClient.onRecovery(() => catalogEvents.recover());
@@ -3408,7 +3408,7 @@ app.on("will-quit", (event) => {
       try {
         await unregister;
       } catch (error) {
-        console.error("[App] Failed to unregister runtime client:", error);
+        console.error("[App] Failed to unregister runtime client:", formatUnknownError(error));
         cleanupFailures.push(error);
       }
 

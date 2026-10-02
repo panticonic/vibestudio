@@ -30,7 +30,8 @@ is otherwise validated.
     restart asset-pipe misses. Two Android native lifecycle instrumentation
     tests passed. The complete host-owned template projection passed 6,164
     tests across eight compositions and every composition typecheck using the
-    repository's pinned Node 22.23.2. Declared skips remain. The iOS simulator
+    repository's pinned Node 22.23.2. The compiler-contract follow-up subsequently
+    passed 6,177 tests with 11 declared skips across the same eight compositions. The iOS simulator
     CI subsequently passed all 15 native tests.
     Cross-platform onboarding exposed a compiler/linker defect: esbuild lowers
     CommonJS imports to generated require helpers, so scanning the emitted code
@@ -42,7 +43,8 @@ is otherwise validated.
     with 16 library-build tests, 250 focused Base tests, 58 final sandbox tests,
     35 host import/cache tests, and all eight composition typechecks. Artifact
     format and RPC contract versions advance with this required field.
-    Updated native acceptance remains pending. Windows additionally failed
+    Fresh desktop and Android onboarding passed with the compiler contract.
+    Cross-platform acceptance remains pending. Windows additionally failed
     while locating paired workspace chrome; every desktop failure now captures
     the exact main-process, hosted-shell, and module-owner state for diagnosis.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
@@ -77,8 +79,20 @@ is otherwise validated.
     shutdown follow-up passed on desktop, including shared-member revocation.
     Android's subsequent cold restart failed during System browser-permission
     refresh with native QUIC `ConnectionLost(TimedOut)` propagated to its caller.
-    The exact processes and scratch directory were retired; this failure still
-    requires investigation and updated acceptance.
+    A later run rebuilt the embedded bootstrap for RPC version 5 and passed
+    onboarding, app restart, and server restart with zero restart asset-pipe
+    misses. Cold restart still delayed System's workspace-info read by about
+    118 seconds. The latest fresh desktop run passed onboarding, recovery, and
+    revocation assertions, then failed its diagnostic gate on a dynamic chunk
+    fetch in the member's retained Personal workspace. Network failure capture
+    and nested cleanup-error formatting now retain evidence for the next run.
+    All completed runs retired their exact processes and scratch directories.
+  - **Creation readiness follow-up:** A supplied template now selects its Git
+    source immediately while inspection is pending. The previous fresh-workspace
+    form could accept a name before template review replaced it, causing a CI
+    creation to submit the template's default name. A held-inspection regression
+    failed before this repair; all 19 template-browser tests, four System chooser
+    tests, and the Base typecheck pass afterward.
   - **Unresolved observation:** One Android run restored the durable onboarding
     event but missed its inline UI after server restart; a subsequent full run
     passed. Long native RPC and inline-module compilation latency still need

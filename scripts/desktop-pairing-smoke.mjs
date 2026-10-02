@@ -606,6 +606,30 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
   const child = app.process();
   desktopProcessOwners.set(app, OwnedProcessGroup.create(child));
   register(app);
+  // Observe asset failures without intercepting requests or replacing the
+  // application's session webRequest handlers. Keep only loopback asset paths;
+  // pairing material and browser URLs never belong in this failure packet.
+  const assetFailures = [];
+  desktopAssetFailures.set(app, assetFailures);
+  const recordAssetFailure = (request, details) => {
+    const url = new URL(request.url());
+    if (url.hostname !== "127.0.0.1" || !url.pathname.startsWith("/__vibestudio/panel-build/"))
+      return;
+    assetFailures.push({
+      url: `${url.origin}${url.pathname}`,
+      resourceType: request.resourceType(),
+      timestamp: Date.now(),
+      ...details,
+    });
+    if (assetFailures.length > 100) assetFailures.shift();
+  };
+  app.context().on("requestfailed", (request) => {
+    recordAssetFailure(request, { error: request.failure()?.errorText ?? "Request failed" });
+  });
+  app.context().on("response", (response) => {
+    if (response.status() >= 400)
+      recordAssetFailure(response.request(), { status: response.status() });
+  });
   child.stdout?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stdout));
   child.stderr?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stderr));
   await installDesktopDiagnostics(app);
@@ -1236,22 +1260,60 @@ async function getHostViewDebugInfo(app) {
   );
 }
 
+const desktopAssetFailures = new WeakMap();
+
 async function captureDesktopFailureDiagnostics(app, failure) {
   const observations = await Promise.allSettled([
-    evaluateElectron(app, ({ webContents }) => ({
-      host: globalThis.__testApi?.getHostViewDebugInfo?.() ?? null,
-      contents: webContents.getAllWebContents().filter(contents => !contents.isDestroyed())
-        .slice(0, 50).map(contents => ({
-          id: contents.id, type: contents.getType(), url: contents.getURL(),
-          loading: contents.isLoading(), loadingMainFrame: contents.isLoadingMainFrame(),
-        })),
-    }), undefined, "capturing native desktop view ownership"),
-    evaluateElectron(app, async ({ webContents }) => {
-      const host = globalThis.__testApi?.getHostViewDebugInfo?.();
-      const contents = host?.hostedShellUrl && webContents.getAllWebContents()
-        .find(contents => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl);
-      if (!contents) return { available: false };
-      return contents.executeJavaScript(`(() => ({
+    evaluateElectron(
+      app,
+      ({ webContents }) => {
+        const debug = globalThis.__testApi?.getHostViewDebugInfo?.();
+        return {
+          host: debug
+            ? {
+                visibleHostChromeAppId: debug.visibleHostChromeAppId,
+                shellOverlayActive: debug.shellOverlayActive,
+                hostedShellUrl: debug.hostedShellUrl,
+                hostedShell: debug.hostedShell
+                  ? {
+                      workspaceIdentity: debug.hostedShell.workspaceIdentity,
+                      visible: debug.hostedShell.visible,
+                    }
+                  : null,
+                nativeSlots: debug.nativeSlots?.slice(0, 50),
+              }
+            : null,
+          contents: webContents
+            .getAllWebContents()
+            .filter((contents) => !contents.isDestroyed())
+            .slice(0, 50)
+            .map((contents) => ({
+              id: contents.id,
+              type: contents.getType(),
+              url: contents.getURL().startsWith("data:")
+                ? "data:"
+                : contents.getURL().slice(0, 512),
+              loading: contents.isLoading(),
+              loadingMainFrame: contents.isLoadingMainFrame(),
+            })),
+        };
+      },
+      undefined,
+      "capturing native desktop view ownership"
+    ),
+    evaluateElectron(
+      app,
+      async ({ webContents }) => {
+        const host = globalThis.__testApi?.getHostViewDebugInfo?.();
+        const contents =
+          host?.hostedShellUrl &&
+          webContents
+            .getAllWebContents()
+            .find(
+              (contents) => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl
+            );
+        if (!contents) return { available: false };
+        return contents.executeJavaScript(`(() => ({
         available: true,
         rootChildren: document.getElementById('root')?.childElementCount ?? null,
         workspaceIds: [...document.querySelectorAll('[data-workspace-id]')]
@@ -1260,16 +1322,30 @@ async function captureDesktopFailureDiagnostics(app, failure) {
         loadedModules: Object.keys(window.__vibestudioModuleMap__ ?? {}).slice(0, 100),
         loadingModules: Object.keys(window.__vibestudioModuleLoadingPromises__ ?? {}).slice(0, 50),
       }))()`);
-    }, undefined, "capturing hosted chrome readiness"),
-    readDesktopDiagnostics(app).then(diagnostics => unexpectedDesktopDiagnostics(diagnostics).slice(-30)),
+      },
+      undefined,
+      "capturing hosted chrome readiness"
+    ),
+    readDesktopDiagnostics(app).then((diagnostics) =>
+      unexpectedDesktopDiagnostics(diagnostics).slice(-30)
+    ),
     readMainProcessErrors(app),
   ]);
   const names = ["nativeViews", "hostedChrome", "rendererDiagnostics", "mainProcessErrors"];
-  const packet = { failure: failure instanceof Error ? failure.message : String(failure) };
+  const packet = {
+    failure: failure instanceof Error ? failure.message : String(failure),
+    assetFailures: desktopAssetFailures.get(app) ?? [],
+  };
   observations.forEach((observation, index) => {
-    packet[names[index]] = observation.status === "fulfilled" ? observation.value : {
-      error: observation.reason instanceof Error ? observation.reason.message : String(observation.reason),
-    };
+    packet[names[index]] =
+      observation.status === "fulfilled"
+        ? observation.value
+        : {
+            error:
+              observation.reason instanceof Error
+                ? observation.reason.message
+                : String(observation.reason),
+          };
   });
   const directory = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
   await fsp.mkdir(directory, { recursive: true, mode: 0o700 });

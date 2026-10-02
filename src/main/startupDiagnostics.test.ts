@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
   createStartupErrorReport,
+  formatUnknownError,
   resolveStartupErrorPaths,
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
 
 describe("startup diagnostics policy", () => {
+  it("retains original failures inside nested cleanup aggregates", () => {
+    const original = new Error("Runtime registration was rejected by its owner");
+    const sibling = new Error("Panel log write failed");
+    const runtime = new AggregateError([original, sibling], "Workspace runtime cleanup failed");
+    const membership = new AggregateError([runtime], "Workspace membership cleanup failed");
+    const detail = formatUnknownError(membership);
+    expect(detail).toContain(original.stack);
+    expect(detail).toContain(sibling.stack);
+    expect(detail).toContain(runtime.stack);
+    expect(detail).toContain(membership.stack);
+  });
+
+  it("settles diagnostic formatting when an error cause refers to itself", () => {
+    const error = new Error("Recursive provider failure");
+    error.cause = error;
+    expect(formatUnknownError(error)).toContain("[already reported: Recursive provider failure]");
+  });
+
   it("stores bootstrap failures under userData before a workspace is known", () => {
     expect(resolveStartupErrorPaths("/config/vibestudio")).toEqual({
       directory: "/config/vibestudio",

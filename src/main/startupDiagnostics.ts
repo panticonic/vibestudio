@@ -26,8 +26,21 @@ export interface StartupPathDiagnostics {
 }
 
 export function formatUnknownError(error: unknown): string {
-  if (error instanceof Error) return error.stack ?? error.message;
-  return String(error);
+  const seen = new Set<Error>();
+  const format = (failure: unknown): string => {
+    if (!(failure instanceof Error)) return String(failure);
+    if (seen.has(failure)) return `[already reported: ${failure.message}]`;
+    seen.add(failure);
+    const causes = [
+      ...(failure instanceof AggregateError ? failure.errors : []),
+      ...(failure.cause === undefined ? [] : [failure.cause]),
+    ];
+    return [
+      failure.stack ?? failure.message,
+      ...causes.map((cause) => `Caused by: ${format(cause)}`),
+    ].join("\n");
+  };
+  return format(error);
 }
 
 /** Resolve startup-report locations without consulting Electron or process globals. */
