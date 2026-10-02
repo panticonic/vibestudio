@@ -239,6 +239,19 @@ is otherwise validated.
     before this repair; all 39 build-report and build-service tests pass afterward.
     The earlier empty-target profile establishes source validation only, not
     payload size or verified artifact reuse. Fresh native profiling remains needed.
+    The same identity mismatch also made ordinary native app cache lookup miss
+    completed artifacts. Provider activation and identity resolution now precede
+    cache lookup, in-flight coalescing, and acquisition of a compilation slot;
+    the operation retains that resolved provider through compilation. A held
+    runtime regression rebuilds unnecessarily before this repair; afterward
+    parallel warm requests reuse the artifact, and a changed provider identity
+    produces a new artifact. All 48 app-builder, report, and build-service tests pass.
+    The Android retry passes onboarding, browser permissions, and workspace
+    isolation, but fails cold restart while waiting for `workspace-connected`.
+    System information arrives about 121 seconds after authentication versus
+    0.15 seconds for Personal; earlier System icon delivery also takes about
+    129 seconds despite a 19 ms server handler. The stall is still unresolved.
+    This failed run's owned processes and scratch data are retired.
   - **Latest Android acceptance:** Pairing, app cold restart, and server restart
     pass with zero recovery panel-asset pipe misses. Initial embedded-host
     compilation includes a 97-second dependency install. During its initial

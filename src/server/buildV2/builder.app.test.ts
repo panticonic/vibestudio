@@ -398,6 +398,8 @@ describe("buildUnit app builds", () => {
 
   it("activates a dormant provider before building a React Native app", async () => {
     let providerInput: BuildProviderInput | null = null;
+    let providerBuilds = 0;
+    let providerEv = "ev-provider";
     let projectedPlatformSource = "";
     const testNodeModules = path.join(root, "node_modules");
     const platformPackage = path.join(testNodeModules, "@platform", "fake");
@@ -454,9 +456,10 @@ describe("buildUnit app builds", () => {
           name: "@workspace-extensions/react-native-provider",
           target: "react-native",
           contractVersion: "1",
-          activeEv: "ev-provider",
+          activeEv: providerEv,
           activeBuildKey: "provider-build",
           build: async (input) => {
+            providerBuilds++;
             providerInput = input;
             expect(fs.readFileSync(path.join(input.sourcePath, "index.tsx"), "utf8")).toContain(
               "function App"
@@ -501,6 +504,30 @@ describe("buildUnit app builds", () => {
         workspaceRoot,
         SOURCE_STATE_HASH
       );
+      const repeats = await Promise.all(
+        Array.from({ length: 3 }, () =>
+          buildUnit(
+            graph.get("@workspace-apps/mobile"),
+            "c".repeat(64),
+            graph,
+            workspaceRoot,
+            SOURCE_STATE_HASH
+          )
+        )
+      );
+      expect(repeats.map((build) => build.buildKey)).toEqual(Array(3).fill(result.buildKey));
+      expect(providerBuilds).toBe(1);
+
+      providerEv = "ev-provider-2";
+      const changedProvider = await buildUnit(
+        graph.get("@workspace-apps/mobile"),
+        "c".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      );
+      expect(changedProvider.buildKey).not.toBe(result.buildKey);
+      expect(providerBuilds).toBe(2);
     } finally {
       initBuilder(
         path.resolve(__dirname, "../../../node_modules"),

@@ -2048,7 +2048,31 @@ export async function buildUnit(
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
   const sourcemap = buildSourcemapForNode(node, options);
-  const buildKey = computeBuildUnitKey(node, ev, options);
+  let provider: BuildProvider | null = null;
+  let buildKey = computeBuildUnitKey(node, ev, options);
+  if (
+    !options?.library &&
+    !options?.test &&
+    !options?.website &&
+    node.kind === "app" &&
+    node.manifest.app?.target === "react-native"
+  ) {
+    // The provider is an input to the artifact, so resolve it before cache
+    // lookup, coalescing, or taking a compilation slot.
+    await _ensureBuildProvider?.("react-native");
+    provider = resolveBuildProvider("react-native");
+    buildKey = computeBuildKey(
+      node.name,
+      [
+        ev,
+        `provider:${provider.name}`,
+        `provider-ev:${provider.activeEv ?? ""}`,
+        `provider-build:${provider.activeBuildKey ?? ""}`,
+        `provider-contract:${provider.contractVersion}`,
+      ].join(":"),
+      sourcemap
+    );
+  }
 
   // Check store first
   let cached = await buildStore.getOrHydrate(buildKey, stateRef);
@@ -2079,6 +2103,7 @@ export async function buildUnit(
     workspaceRoot,
     sourcemap,
     stateRef,
+    provider,
     options
   );
   inFlightBuilds.set(buildKey, buildPromise);
@@ -2139,6 +2164,7 @@ async function doBuild(
   workspaceRoot: string,
   sourcemap: boolean,
   stateRef: string,
+  provider: BuildProvider | null,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
   const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
@@ -2241,7 +2267,8 @@ async function doBuild(
           sourcemap,
           extracted.sourceRoot,
           stateRef,
-          authority
+          authority,
+          provider
         );
       } else if (node.kind === "template") {
         throw new Error(`Templates are not buildable: ${node.name}`);
@@ -4029,7 +4056,8 @@ async function buildApp(
   sourcemap: boolean,
   sourceRoot: string,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  provider: BuildProvider | null
 ): Promise<BuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
@@ -4055,22 +4083,10 @@ async function buildApp(
     );
   }
   if (appManifest["target"] === "react-native") {
-    await _ensureBuildProvider?.("react-native");
-    const provider = resolveBuildProvider("react-native");
-    const providerBuildKey = computeBuildKey(
-      node.name,
-      [
-        ev,
-        `provider:${provider.name}`,
-        `provider-ev:${provider.activeEv ?? ""}`,
-        `provider-build:${provider.activeBuildKey ?? ""}`,
-        `provider-contract:${provider.contractVersion}`,
-      ].join(":"),
-      sourcemap
-    );
+    if (!provider) throw new Error("React Native build identity has no resolved provider");
     const env = await prepareBuildEnv(
       node,
-      providerBuildKey,
+      buildKey,
       graph,
       workspaceRoot,
       sourceRoot,
@@ -4114,7 +4130,7 @@ async function buildApp(
       const metadata: BuildMetadata = {
         kind: "app",
         name: node.name,
-        buildKey: providerBuildKey,
+        buildKey,
         sourcePath: node.relativePath,
         ev,
         sourceStateHash,
@@ -4135,7 +4151,7 @@ async function buildApp(
         },
         builtAt: new Date().toISOString(),
       };
-      return buildStore.put(providerBuildKey, { entries }, metadata);
+      return buildStore.put(buildKey, { entries }, metadata);
     } finally {
       try {
         await resources?.dispose();
