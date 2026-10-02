@@ -5,6 +5,7 @@ import { PRINCIPAL_KINDS } from "@vibestudio/rpc";
  */
 
 import { z } from "zod";
+import { STATE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 import type {
   ApprovalOperationDescriptor,
   ApprovalRequesterIdentity,
@@ -314,10 +315,7 @@ const installReviewPartSchema = z
     name: z.string(),
     displayName: z.string().min(1).optional(),
     icon: z.string().min(1).max(256).optional(),
-    iconState: z
-      .string()
-      .regex(/^state:[0-9a-f]{64}$/u)
-      .optional(),
+    iconState: z.string().regex(STATE_HASH_RE).optional(),
     title: z.string(),
     purpose: z.string(),
     repoPath: z.string(),

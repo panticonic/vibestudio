@@ -1,5 +1,8 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
+import {
+  panelMetadataSchema,
+  type BuildPerformanceProfileWire,
+} from "@vibestudio/service-schemas/build";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
@@ -345,12 +348,12 @@ describe("build service extension diagnostics", () => {
       getCallerContextId: () => null,
     });
 
-    await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
-        "panels/hello-svelte",
-        "ctx:feature",
-      ])
-    ).resolves.toMatchObject({
+    const metadata = await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "getPanelMetadata",
+      ["panels/hello-svelte", "ctx:feature"]
+    );
+    expect(panelMetadataSchema.parse(metadata)).toMatchObject({
       source: "panels/hello-svelte",
       title: "Hello Svelte",
       placement: { disposition: "split-below", preferredWidth: 480 },
@@ -421,12 +424,12 @@ describe("build service extension diagnostics", () => {
       getCallerContextId: () => null,
     });
 
-    await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
-        "panels/hello-svelte",
-        "ctx:feature",
-      ])
-    ).resolves.toMatchObject({
+    const metadata = await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "getPanelMetadata",
+      ["panels/hello-svelte", "ctx:feature"]
+    );
+    expect(panelMetadataSchema.parse(metadata)).toMatchObject({
       source: "panels/hello-svelte",
       icon: "./assets/icon.svg",
       iconState: `state:${"a".repeat(64)}`,

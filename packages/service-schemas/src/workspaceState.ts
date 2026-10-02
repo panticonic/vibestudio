@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { STATE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { UnitAuthorityManifestSchema } from "./build.js";
@@ -229,7 +230,7 @@ export const PanelDetailSchema = z
       .optional(),
     iconState: z
       .string()
-      .regex(/^[0-9a-f]{64}$/u)
+      .regex(STATE_HASH_RE)
       .optional(),
     slot: SlotRowSchema,
     currentHistory: SlotHistoryRowSchema,
@@ -268,7 +269,7 @@ const PanelTreeNodeSchema = RawPanelTreeNodeSchema.omit({ options: true })
       .optional(),
     iconState: z
       .string()
-      .regex(/^[0-9a-f]{64}$/u)
+      .regex(STATE_HASH_RE)
       .optional(),
     kind: z.enum(["workspace", "browser"]).optional(),
     ref: z.string().nullable().optional(),

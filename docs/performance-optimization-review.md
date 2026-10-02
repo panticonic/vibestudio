@@ -150,14 +150,23 @@ is otherwise validated.
     durable journal remains the single authority. All eight compositions passed
     6,184 tests with 11 declared skips and their typechecks before the final
     ownership guard; afterward, 209 relevant chat/channel tests and the Base
-    typecheck pass. These changes preserve speculative asset prewarming.
+    typecheck pass. The subsequent CI run passed all eight complete template
+    suites (6,201 tests, 11 declared skips), including the final ownership guard.
+    These changes preserve speculative asset prewarming.
   - **Icon coordinate follow-up:** Catalog and panel metadata now carry the
     same canonical `state:…` address into immutable icon requests. The HTTP
     route had expected a bare digest, returning 400 for catalog icons, while
     panel metadata separately stripped the prefix. The route now validates and
     forwards the canonical coordinate unchanged. The real URL-helper-to-route
     regression fails before the repair; 77 focused tests and all 11 native
-    remote end-to-end tests pass afterward.
+    remote end-to-end tests pass afterward. Native macOS acceptance then exposed
+    RPC schemas that still required a bare digest. Panel metadata, panel tree,
+    panel detail, panel snapshot, and approval schemas now share the existing
+    canonical state-address validator. The service-result-to-wire-schema
+    regression reproduces the rejection before the fix; all 80 related tests
+    pass afterward. Fresh production desktop acceptance passes icon rendering,
+    onboarding, server restart, and shared-member revocation with no icon-state
+    RPC rejection. Its owned processes and cold cache have been retired.
   - **CI contract follow-up:** The full host suite passes 7,418 tests with 25
     declared skips after fixing the missed source-inspection caller, using the
     shared shell-surface catalog for response validation, and bringing fixtures

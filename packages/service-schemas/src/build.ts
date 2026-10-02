@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { STATE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityScope } from "@vibestudio/rpc";
@@ -609,10 +610,7 @@ export const panelMetadataSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/u)
       .optional(),
-    iconState: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/u)
-      .optional(),
+    iconState: z.string().regex(STATE_HASH_RE).optional(),
     description: z.string().optional(),
     hiddenInLauncher: z.boolean(),
     stateArgs: z.unknown().optional(),

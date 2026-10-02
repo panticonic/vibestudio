@@ -60,7 +60,7 @@ it("delivers late icon decoration through each workspace's existing presentation
     });
     system.registry.updateIconDecoration("panel:tree/about~new/initial", {
       icon: "./assets/icon.svg",
-      iconState: "a".repeat(64),
+      iconState: `state:${"a".repeat(64)}`,
     });
     await vi.runOnlyPendingTimersAsync();
     const update = await systemReader.read();
@@ -72,15 +72,15 @@ it("delivers late icon decoration through each workspace's existing presentation
     expect(personalNotified).toBe(false);
     personal.registry.updateIconDecoration("panel:tree/about~new/initial", {
       icon: "./assets/icon.svg",
-      iconState: "b".repeat(64),
+      iconState: `state:${"b".repeat(64)}`,
     });
     await vi.runOnlyPendingTimersAsync();
     expect((await personalUpdate).done).toBe(false);
     expect(system.registry.getPanel("panel:tree/about~new/initial")?.iconState).toBe(
-      "a".repeat(64)
+      `state:${"a".repeat(64)}`
     );
     expect(personal.registry.getPanel("panel:tree/about~new/initial")?.iconState).toBe(
-      "b".repeat(64)
+      `state:${"b".repeat(64)}`
     );
   } finally {
     await systemReader.cancel();

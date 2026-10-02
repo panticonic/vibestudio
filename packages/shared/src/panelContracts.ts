@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { STATE_HASH_RE } from "./contentTree/treeObjects.js";
 import { PanelEntityIdSchema, PanelSlotIdSchema } from "./panel/ids.js";
 import type { PanelRuntimeLease } from "./panel/panelLease.js";
 import type {
@@ -458,10 +459,7 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
       .string()
       .regex(/^[0-9a-f]{64}$/u)
       .optional(),
-    iconState: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/u)
-      .optional(),
+    iconState: z.string().regex(STATE_HASH_RE).optional(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
     buildKey: z

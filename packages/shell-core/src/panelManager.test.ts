@@ -531,10 +531,10 @@ describe("PanelManager", () => {
       source: "panels/chat",
       title: "Chat",
       icon: "./assets/icon.svg",
-      iconState: "a".repeat(64),
+      iconState: `state:${"a".repeat(64)}`,
     });
     await vi.waitFor(() =>
-      expect(firstPanel).toMatchObject({ icon: "./assets/icon.svg", iconState: "a".repeat(64) })
+      expect(firstPanel).toMatchObject({ icon: "./assets/icon.svg", iconState: `state:${"a".repeat(64)}` })
     );
     expect(secondPanel?.icon).toBeUndefined();
     await reader.getPanel(first.panelId);
