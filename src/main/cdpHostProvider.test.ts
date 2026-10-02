@@ -75,7 +75,7 @@ function createHarness(
   const captureView = vi.fn(async (_id: string, capture: (contents: never) => Promise<unknown>) =>
     capture(contents as never)
   );
-  const setAutomationSurfaceActive = vi.fn(async () => undefined);
+  const setAutomationSurfaceActive = vi.fn(async (): Promise<void> => undefined);
   const provider = new CdpHostProvider({
     serverUrl,
     transport: {
@@ -143,6 +143,117 @@ describe("CdpHostProvider", () => {
     await provider.handleProviderMessageForTest({ type: "cdp:detach", targetId: "panel-1" });
     expect(provider.isTargetUnderAutomation("panel-1")).toBe(false);
     expect(setAutomationSurfaceActive).toHaveBeenCalledWith("panel-1", false);
+  });
+
+  it("holds input until the new document's native compositor frame completes", async () => {
+    const { provider, socket, debuggerApi, contents } = createHarness();
+    provider.start();
+    socket.emit("open");
+    provider.registerTarget("panel-1", 42);
+    let frameReady!: () => void;
+    debuggerApi.sendCommand.mockImplementation(async (method) => {
+      if (method === "Page.captureScreenshot") {
+        await new Promise<void>((resolve) => {
+          frameReady = resolve;
+        });
+        return { data: Buffer.from("frame").toString("base64") };
+      }
+      return {};
+    });
+    await provider.handleProviderMessageForTest({
+      type: "cdp:control",
+      targetId: "panel-1",
+      active: true,
+    });
+    await vi.waitFor(() => expect(frameReady).toBeTypeOf("function"));
+    const input = {
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "input",
+      method: "Input.dispatchMouseEvent",
+      params: { type: "mousePressed", x: 10, y: 20 },
+    };
+    const pending = provider.handleProviderMessageForTest(input);
+    await Promise.resolve();
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalledWith(input.method, input.params, undefined);
+    frameReady();
+    await pending;
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith(input.method, input.params, undefined);
+
+    debuggerApi.sendCommand.mockClear();
+    contents.emit("did-navigate", {}, "https://example.com/rebuilt");
+    const rebuilt = provider.handleProviderMessageForTest({ ...input, requestId: "rebuilt" });
+    await vi.waitFor(() =>
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
+        format: "png",
+      })
+    );
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalledWith(input.method, input.params, undefined);
+    frameReady();
+    await rebuilt;
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith(input.method, input.params, undefined);
+    provider.stop();
+  });
+
+  it("propagates the original compositor failure without dispatching input", async () => {
+    const { provider, socket, debuggerApi } = createHarness();
+    provider.start();
+    socket.emit("open");
+    debuggerApi.sendCommand.mockRejectedValueOnce(new Error("native surface destroyed"));
+    await provider.handleProviderMessageForTest({
+      type: "cdp:control",
+      targetId: "panel-1",
+      active: true,
+    });
+    await provider.handleProviderMessageForTest({
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "input",
+      method: "Input.dispatchMouseEvent",
+    });
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "cdp:error",
+      targetId: "panel-1",
+      requestId: "input",
+      error: "native surface destroyed",
+    });
+    expect(debuggerApi.sendCommand).toHaveBeenCalledTimes(1);
+    provider.stop();
+  });
+
+  it("does not dispatch input when its surface lease is released during preparation", async () => {
+    const { provider, socket, setAutomationSurfaceActive, debuggerApi } = createHarness();
+    provider.start();
+    socket.emit("open");
+    let residencyReady!: () => void;
+    setAutomationSurfaceActive.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          residencyReady = resolve;
+        })
+    );
+    await provider.handleProviderMessageForTest({
+      type: "cdp:control",
+      targetId: "panel-1",
+      active: true,
+    });
+    const pending = provider.handleProviderMessageForTest({
+      type: "cdp:command",
+      targetId: "panel-1",
+      requestId: "input",
+      method: "Input.dispatchMouseEvent",
+    });
+    await provider.handleProviderMessageForTest({ type: "cdp:detach", targetId: "panel-1" });
+    residencyReady();
+    await pending;
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "cdp:error",
+      targetId: "panel-1",
+      requestId: "input",
+      error: "CDP automation surface ownership changed: panel-1",
+    });
+    provider.stop();
   });
 
   it("authenticates during upgrade and registers targets when the socket opens", () => {

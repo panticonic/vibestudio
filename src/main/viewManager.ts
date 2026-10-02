@@ -1795,9 +1795,9 @@ export class ViewManager {
     this.automationSurfaceIds.add(id);
     if (managed.visible) return;
     this.presentAutomationSurface(managed);
-    // This lease owns native geometry and residency. Frame readiness belongs
-    // to the screenshot command: a view covered by the shell may not receive
-    // animation or presentation callbacks even while its renderer is healthy.
+    // This lease owns native geometry and residency. CdpHostProvider obtains
+    // the compositor frame before releasing automation commands: a covered
+    // view may not receive animation callbacks even while its DOM is ready.
   }
 
   private presentAutomationSurface(managed: ManagedView): void {

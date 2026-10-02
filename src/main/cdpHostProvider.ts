@@ -181,7 +181,7 @@ export class CdpHostProvider {
       nextSeq: number;
     }
   >();
-  private readonly consoleListeners = new Map<
+  private readonly targetListeners = new Map<
     string,
     {
       contents: Electron.WebContents;
@@ -283,7 +283,7 @@ export class CdpHostProvider {
     if (previousWebContentsId !== webContentsId) {
       this.sentRegistrations.delete(targetId);
     }
-    this.attachConsoleHistory(targetId);
+    this.attachTargetListeners(targetId);
     this.sendRegistration(targetId, webContentsId);
   }
 
@@ -294,7 +294,7 @@ export class CdpHostProvider {
     this.targets.delete(targetId);
     this.sentRegistrations.delete(targetId);
     this.releaseAutomationSurface(targetId);
-    this.detachConsoleHistory(targetId);
+    this.detachTargetListeners(targetId);
     this.send({ type: "cdp:unregister", targetId, tabId: webContentsId });
     this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
   }
@@ -516,7 +516,7 @@ export class CdpHostProvider {
             const contents = this.getTargetContents(message.targetId);
             this.targets.delete(message.targetId);
             this.releaseAutomationSurface(message.targetId);
-            this.detachConsoleHistory(message.targetId);
+            this.detachTargetListeners(message.targetId);
             this.detachDebuggerIfIdle(message.targetId, contents, { force: true });
           }
         }
@@ -640,12 +640,12 @@ export class CdpHostProvider {
     return HOST_COMMAND_NOT_BUILT_IN;
   }
 
-  private attachConsoleHistory(targetId: string): void {
+  private attachTargetListeners(targetId: string): void {
     const contents = this.getTargetContents(targetId);
     if (!contents || contents.isDestroyed()) return;
-    const existing = this.consoleListeners.get(targetId);
+    const existing = this.targetListeners.get(targetId);
     if (existing?.contents === contents) return;
-    this.detachConsoleHistory(targetId);
+    this.detachTargetListeners(targetId);
     this.historyFor(targetId);
     const consoleMessage = (
       event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>
@@ -680,6 +680,11 @@ export class CdpHostProvider {
     const unresponsive = () => {
       this.recordLifecycleDiagnostic(targetId, contents, "error", "unresponsive");
     };
+    const didNavigate = () => {
+      // A new document needs its own compositor surface even when Electron
+      // retains the WebContents and existing CDP clients across navigation.
+      if (this.activeCdpTargets.has(targetId)) this.acquireAutomationSurface(targetId);
+    };
     const emitter = contents as unknown as EventEmitter;
     const handlers = [
       // consoleMessage uses the typed Event<...> signature; the registry stores
@@ -688,17 +693,18 @@ export class CdpHostProvider {
       { event: "render-process-gone", handler: renderProcessGone },
       { event: "did-fail-load", handler: didFailLoad },
       { event: "unresponsive", handler: unresponsive },
+      { event: "did-navigate", handler: didNavigate },
     ];
     for (const entry of handlers) emitter.on(entry.event, entry.handler);
-    this.consoleListeners.set(targetId, { contents, handlers });
+    this.targetListeners.set(targetId, { contents, handlers });
   }
 
-  private detachConsoleHistory(targetId: string): void {
-    const existing = this.consoleListeners.get(targetId);
+  private detachTargetListeners(targetId: string): void {
+    const existing = this.targetListeners.get(targetId);
     if (!existing) return;
     const emitter = existing.contents as unknown as EventEmitter;
     for (const entry of existing.handlers) emitter.off(entry.event, entry.handler);
-    this.consoleListeners.delete(targetId);
+    this.targetListeners.delete(targetId);
   }
 
   private recordConsoleMessage(
@@ -991,15 +997,29 @@ export class CdpHostProvider {
     for (const targetId of this.debuggerAttached.keys()) {
       this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
     }
-    for (const targetId of this.consoleListeners.keys()) {
-      this.detachConsoleHistory(targetId);
+    for (const targetId of this.targetListeners.keys()) {
+      this.detachTargetListeners(targetId);
     }
   }
 
   private acquireAutomationSurface(targetId: string): void {
-    const ready = Promise.resolve(
-      this.options.getViewManager()?.setAutomationSurfaceActive(targetId, true)
-    ).then(() => undefined);
+    const assertOwned = () => {
+      if (this.automationSurfaceReady.get(targetId) !== ready) {
+        throw new Error(`CDP automation surface ownership changed: ${targetId}`);
+      }
+    };
+    const ready = Promise.resolve().then(async () => {
+      assertOwned();
+      await this.options.getViewManager()?.setAutomationSurfaceActive(targetId, true);
+      assertOwned();
+      // setVisible/setBounds only establish native residency. Chromium can
+      // acknowledge input without delivering it until the new document has
+      // submitted a compositor frame. Chrome's capture reply establishes that
+      // frame through the same owned native capture path as screenshots; rAF
+      // can remain suspended on covered panels and is not a presentation ack.
+      await this.captureScreenshot(targetId);
+      assertOwned();
+    });
     this.automationSurfaceReady.set(targetId, ready);
     void ready.catch((error: unknown) => {
       log.warn(
