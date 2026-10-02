@@ -23,13 +23,25 @@ is otherwise validated.
     before publishing workspace readiness. In Base's chat hook, distinguish
     accepted publication from transcript refresh: show the original refresh
     error without restoring or requeuing the accepted mutation.
-  - **Evidence:** 77 focused host tests passed. The host typecheck, lint, build contracts,
-    and template-checkout hygiene passed. A real Electron Iroh pairing/restart
-    smoke passed with retained System/Personal panel trees, rendered onboarding,
-    native menu/title checks, and no repeat pairing. The native prototype passed
-    18 real endpoint/stream/dial tests and a UniFFI cargo check. Eighteen focused
-    Base tests and the composition typecheck passed through the host-owned
-    userland projection, never a template tool workspace.
+  - **Evidence:** The follow-up passed 146 Iroh integration tests, 11 remote
+    end-to-end tests, and the native Electron end-to-end test. Full desktop
+    pairing/restart/shared-member revocation and Android pairing/cold restart/
+    server restart passed, including retained onboarding and zero Android
+    restart asset-pipe misses. Two Android native lifecycle instrumentation
+    tests passed. The complete host-owned template projection passed 6,164
+    tests across eight compositions and every composition typecheck using the
+    repository's pinned Node 22.23.2. Declared skips remain; iOS was not tested.
+    Cross-platform desktop CI remains a separate verification boundary.
+  - **Additional repairs:** Positioned spool writes prevent Windows readers
+    from moving the writer's file cursor. Native presentation withdrawal belongs
+    to the exact workspace-view owner. Authenticated catalog changes retire
+    revoked workspace sessions and approvals. The PubSub replay cursor advances
+    only after hydration and delivery complete; its regression proves a failed
+    blob read is replayed after reconnect instead of silently skipped.
+  - **Unresolved observation:** One Android run restored the durable onboarding
+    event but missed its inline UI after server restart; a subsequent full run
+    passed. Long native RPC and inline-module compilation latency still need
+    attribution. No application deadline was extended to obtain the pass.
   - **Performance boundary:** Native startup profiling measured 3,861 ms for
     System semantic activation, including 3,739 ms of snapshot import. Chat's
     build profile measured 11,170 ms and a 17.35 ms identical-key repeat, with
