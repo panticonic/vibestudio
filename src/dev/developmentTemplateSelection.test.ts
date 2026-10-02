@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import {
+  inspectWorkspaceSources,
+  workspaceSourceFromCheckout,
+} from "../workspaceTemplateSource.js";
 
 import { GitClient } from "@vibestudio/git";
 import { sha256Hex } from "@vibestudio/content-addressing";
@@ -88,7 +91,7 @@ describe("development template selection", () => {
       return original.call(this, dir);
     });
     const selections = await inspectWorkspaceSources({
-      checkouts: [first.checkout, second.checkout],
+      sources: [first.checkout, second.checkout].map(workspaceSourceFromCheckout),
       checkpointRoot: first.checkpointRoot,
     });
     expect(selections.map((selection) => selection.sourceCheckout)).toEqual([
@@ -124,7 +127,7 @@ describe("development template selection", () => {
     });
     let settled = false;
     const inspection = inspectWorkspaceSources({
-      checkouts: [first.checkout, second.checkout],
+      sources: [first.checkout, second.checkout].map(workspaceSourceFromCheckout),
       checkpointRoot: first.checkpointRoot,
     }).finally(() => {
       settled = true;
@@ -150,7 +153,7 @@ describe("development template selection", () => {
     );
 
     const [selection] = await inspectWorkspaceSources({
-      checkouts: [fx.checkout],
+      sources: [fx.checkout].map(workspaceSourceFromCheckout),
       checkpointRoot: fx.checkpointRoot,
     });
 
@@ -189,7 +192,7 @@ describe("development template selection", () => {
     const source = path.join(fx.checkout, "panels/example/index.ts");
     fs.writeFileSync(source, "export const v = 'reviewed local state';\n");
     const [selection] = await inspectWorkspaceSources({
-      checkouts: [fx.checkout],
+      sources: [fx.checkout].map(workspaceSourceFromCheckout),
       checkpointRoot: fx.checkpointRoot,
     });
     fs.writeFileSync(source, "export const v = 'later edit';\n");
@@ -223,7 +226,7 @@ describe("development template selection", () => {
 
     await expect(
       inspectWorkspaceSources({
-        checkouts: [fx.checkout],
+        sources: [fx.checkout].map(workspaceSourceFromCheckout),
         checkpointRoot: fx.checkpointRoot,
       })
     ).rejects.toThrow(/unrecognized key.*templates/iu);

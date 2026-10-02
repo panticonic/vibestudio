@@ -12,7 +12,10 @@ import {
   productDesktopEnvironment,
 } from "./productDesktopLaunch.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
-import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import {
+  inspectWorkspaceSources,
+  workspaceSourceFromCheckout,
+} from "../workspaceTemplateSource.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
@@ -60,7 +63,7 @@ async function main(): Promise<void> {
       );
     }
     const developmentTemplates = await inspectWorkspaceSources({
-      checkouts: templateOptions.checkouts,
+      sources: templateOptions.checkouts.map(workspaceSourceFromCheckout),
       checkpointRoot: path.join(temporaryRoot, "template-checkpoints"),
     });
 

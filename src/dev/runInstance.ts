@@ -23,7 +23,10 @@ import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
-import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import {
+  inspectWorkspaceSources,
+  workspaceSourceFromCheckout,
+} from "../workspaceTemplateSource.js";
 
 const require = createRequire(import.meta.url);
 const tsxLoader = require.resolve("tsx");
@@ -357,14 +360,14 @@ async function main(): Promise<void> {
         : `[instance:${id}] Template sources: complete local set (${defaultTemplates!.sources.length} official templates)`
     );
     const developmentTemplates = await inspectWorkspaceSources({
-      checkouts: [
+      sources: [
         ...new Set(
           [
             ...templateOptions.checkouts,
             ...(templateOptions.workspaceCheckout ? [templateOptions.workspaceCheckout] : []),
           ].map((checkout) => fs.realpathSync(path.resolve(checkout)))
         ),
-      ],
+      ].map(workspaceSourceFromCheckout),
       checkpointRoot: templateCheckpointRoot,
     });
     const targetWorkspace = templateOptions.workspaceCheckout

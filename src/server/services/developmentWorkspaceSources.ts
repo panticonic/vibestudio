@@ -31,7 +31,7 @@ export async function sealDevelopmentWorkspaceSources(input: {
   await fs.rm(inputRoot, { recursive: true, force: true });
   await fs.mkdir(inputRoot, { recursive: true, mode: 0o700 });
   try {
-    const checkouts: string[] = [];
+    const sources: { checkout: string; url: string }[] = [];
     for (const role of roles) {
       const checkout = path.join(inputRoot, role);
       await fs.mkdir(checkout, { mode: 0o700 });
@@ -56,9 +56,9 @@ export async function sealDevelopmentWorkspaceSources(input: {
       // tracked files a native .gitignore would otherwise omit.
       await git(["add", "--force", "--all"]);
       await git(["commit", "--no-gpg-sign", "-m", "Exact development template source"]);
-      checkouts.push(checkout);
+      sources.push({ checkout, url: designated[role].url });
     }
-    const workspaceSources = (await inspectWorkspaceSources({ checkouts, checkpointRoot })).map(
+    const workspaceSources = (await inspectWorkspaceSources({ sources, checkpointRoot })).map(
       ({ pin, checkout, review }) => ({ pin, checkout, review })
     );
     const workspaceTemplates = Object.fromEntries(

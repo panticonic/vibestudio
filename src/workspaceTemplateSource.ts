@@ -44,6 +44,11 @@ export function canonicalTemplateUrlFromCheckout(checkout: string): string {
   }
 }
 
+/** Discover the address of a freely selected local repository. */
+export function workspaceSourceFromCheckout(checkout: string): { checkout: string; url: string } {
+  return { checkout, url: canonicalTemplateUrlFromCheckout(checkout) };
+}
+
 /**
  * Declare one more template dependency on a checkpointed checkout.
  *
@@ -86,17 +91,17 @@ function declareCheckpointDependency(checkout: string, url: string): void {
 }
 
 export async function inspectWorkspaceSources(input: {
-  checkouts: readonly string[];
+  sources: readonly { checkout: string; url: string }[];
   checkpointRoot: string;
   /** Template URLs to declare as dependencies of the named source checkouts. */
   declareDependencies?: ReadonlyMap<string, readonly string[]>;
 }): Promise<WorkspaceSourceInspection[]> {
   const gitClient = new GitClient();
-  const selections = new Array<WorkspaceSourceInspection>(input.checkouts.length);
+  const selections = new Array<WorkspaceSourceInspection>(input.sources.length);
   const selectedUrls = new Set<string>();
-  const checkouts = input.checkouts.map((requested) => {
-    const sourceCheckout = fs.realpathSync(path.resolve(requested));
-    const url = canonicalTemplateUrlFromCheckout(sourceCheckout);
+  const checkouts = input.sources.map((requested) => {
+    const sourceCheckout = fs.realpathSync(path.resolve(requested.checkout));
+    const url = normalizeTemplateGitUrl(requested.url);
     if (selectedUrls.has(url)) {
       throw new Error(`Template checkout selected more than once for ${url}`);
     }

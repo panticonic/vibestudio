@@ -3097,9 +3097,10 @@ app.on("ready", async () => {
       });
       const checkout = result.canceled ? null : (result.filePaths[0] ?? null);
       if (!checkout) return null;
-      const { inspectWorkspaceSources } = await import("../workspaceTemplateSource.js");
+      const { inspectWorkspaceSources, workspaceSourceFromCheckout } =
+        await import("../workspaceTemplateSource.js");
       const [source] = await inspectWorkspaceSources({
-        checkouts: [checkout],
+        sources: [workspaceSourceFromCheckout(checkout)],
         checkpointRoot: path.join(
           getCentralDataPath(),
           "workspace-source-inspections",

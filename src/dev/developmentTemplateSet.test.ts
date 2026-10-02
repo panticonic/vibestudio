@@ -78,6 +78,20 @@ afterEach(() => {
 });
 
 describe("resolveDevelopmentTemplateSet", () => {
+  it("keeps registry coordinates when checkout tooling omits the Git suffix", async () => {
+    const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
+    git(path.join(templates, "base"), "remote", "set-url", "origin", "https://example.test/base");
+    const selected = await resolveDevelopmentTemplateSet({
+      repoRoot: host,
+      checkpointRoot: checkpoint,
+      explicitRoot: templates,
+    });
+    expect(selected?.pins.base.url).toBe("git+https://example.test/base.git");
+    expect(selected?.sourcePins["base"]?.url).toBe(
+      selected?.sources.find((source) => source.id === "base")?.url
+    );
+  });
+
   it("snapshots the complete official template universe without projecting a source superset", async () => {
     const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
     await expect(

@@ -55,9 +55,10 @@ export async function resolveDevelopmentTemplateSet(input: {
     }
   }
   const inspected = await inspectWorkspaceSources({
-    checkouts: selected.sources.map((source) =>
-      requiredEntry(selected.checkouts, source.id, "checkout")
-    ),
+    sources: selected.sources.map((source) => ({
+      checkout: requiredEntry(selected.checkouts, source.id, "checkout"),
+      url: source.url,
+    })),
     checkpointRoot: input.checkpointRoot,
     declareDependencies,
   });
