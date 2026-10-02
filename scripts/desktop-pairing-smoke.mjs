@@ -1522,6 +1522,9 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
               alerts: [...document.querySelectorAll('[role="alert"], [data-inline-ui-error]')]
                 .slice(0, 10).map(element => element.textContent?.slice(0, 1000)),
               loadingModules: Object.keys(window.__vibestudioModuleLoadingPromises__ ?? {}).slice(0, 50),
+              loadedModules: Object.keys(window.__vibestudioModuleMap__ ?? {}).slice(0, 100),
+              generatedLoaders: Object.keys(window.__vibestudioModuleLoaders__ ?? {}).slice(0, 100),
+              nativeImports: [...(window.__vibestudioNativeImportSpecifiers__ ?? [])].slice(0, 100),
               messageElements: document.querySelectorAll('[data-message-role]').length };
           })()`);
         },

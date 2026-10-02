@@ -346,7 +346,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     await pipe.close();
   });
 
-  it("carries a streaming upload, bounded response head, and raw body on one QUIC stream", async () => {
+  it("owns slow streaming heads until completion and honors explicit caller deadlines", async () => {
     const serverEndpoint = await bind();
     const clientEndpoint = await bind();
     const incomingPromise = serverEndpoint.acceptNext();
@@ -365,6 +365,14 @@ describe("Iroh RPC client over real local QUIC", () => {
 
     const server = new NodePhysicalConnection(serverNative);
     const client = new NodePhysicalConnection(clientNative);
+    let headRequested!: () => void;
+    let releaseHead!: () => void;
+    const waitingForHead = new Promise<void>((resolve) => {
+      headRequested = resolve;
+    });
+    const headAdmission = new Promise<void>((resolve) => {
+      releaseHead = resolve;
+    });
     const serverTask = (async () => {
       const control = await server.acceptBi();
       expect((await readIrohStreamPreamble(control.recv)).k).toBe("control");
@@ -417,6 +425,8 @@ describe("Iroh RPC client over real local QUIC", () => {
         upload.push(...chunk);
       }
       expect(new TextDecoder().decode(Uint8Array.from(upload))).toBe("request-body");
+      headRequested();
+      await headAdmission;
 
       const responseBody = new TextEncoder().encode("response-body");
       await writeFrame(
@@ -431,6 +441,12 @@ describe("Iroh RPC client over real local QUIC", () => {
       );
       await requestStream.send.writeAll(responseBody);
       await requestStream.send.finish();
+
+      const failedUpload = await server.acceptBi();
+      // An immediate upload failure may reset before buffered envelope bytes
+      // reach the peer. Its authoritative outcome is both halves' cancellation.
+      expect(await failedUpload.send.stopped()).toBe(0x202);
+      expect(await failedUpload.recv.receivedReset()).toBe(0x202);
 
       const bodyless = await server.acceptBi();
       expect(await readIrohStreamPreamble(bodyless.recv)).toMatchObject({
@@ -479,7 +495,11 @@ describe("Iroh RPC client over real local QUIC", () => {
       // application preamble was sent. It must carry only cancellation.
       const abortedOpen = await server.acceptBi();
       await expect(readIrohStreamPreamble(abortedOpen.recv)).rejects.toThrow();
-      for (const finishResponse of [true, false]) {
+      for (const [finishResponse, cancellationCode] of [
+        [true, 0x202],
+        [false, 0x202],
+        [false, 0x201],
+      ] as const) {
         const duplex = await server.acceptBi();
         expect(await readIrohStreamPreamble(duplex.recv)).toMatchObject({
           body: true,
@@ -498,7 +518,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         );
         if (finishResponse) await duplex.send.finish();
         else await duplex.send.writeAll(new Uint8Array([1]));
-        expect(await duplex.recv.receivedReset()).toBe(finishResponse ? 0x202 : 0x201);
+        expect(await duplex.recv.receivedReset()).toBe(cancellationCode);
       }
     })();
 
@@ -509,88 +529,157 @@ describe("Iroh RPC client over real local QUIC", () => {
       callerKind: "shell",
       transport: session,
     });
-    const uploadBytes = new TextEncoder().encode("request-body");
-    const response = await rpc.stream("main", "upload-and-download", [], {
-      body: new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(uploadBytes.subarray(0, 4));
-          controller.enqueue(uploadBytes.subarray(4));
-          controller.close();
-        },
-      }),
-    });
-    expect(response.status).toBe(201);
-    expect(response.url).toBe("https://example.test/result");
-    expect(await response.text()).toBe("response-body");
-    const download = await rpc.stream("main", "download-only", []);
-    const reader = download.body!.getReader();
-    const first = await reader.read();
-    expect(new TextDecoder().decode(first.value)).toBe("hello");
-    reader.releaseLock();
-    await expect(
-      rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
-    ).rejects.toMatchObject({
-      code: "IROH_RESPONSE_HEAD_TIMEOUT",
-    });
-    const cancelUpload = vi.fn();
-    const pendingUpload = new ReadableStream<Uint8Array>({ cancel: cancelUpload });
-    await expect(
-      rpc.stream("main", "no-response-upload", [], {
-        headTimeoutMs: 100,
-        body: pendingUpload,
-      })
-    ).rejects.toMatchObject({ code: "IROH_RESPONSE_HEAD_TIMEOUT" });
-    await expect.poll(() => cancelUpload.mock.calls.length).toBe(1);
-    await expect.poll(() => pendingUpload.locked).toBe(false);
-    await expect.poll(() => pipe.diagnostics()?.activeRequests).toBe(0);
-    expect(session.isClosed()).toBe(false);
-    const abort = new AbortController();
-    const openBi = client.openBi.bind(client);
-    vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
-      const opened = await openBi();
-      abort.abort();
-      return opened;
-    });
-    await expect(
-      rpc.stream("main", "aborted-during-open", [], { signal: abort.signal })
-    ).rejects.toThrow("Streaming RPC aborted by caller");
-    expect(pipe.diagnostics()?.activeRequests).toBe(0);
-    expect(session.isClosed()).toBe(false);
+    const clientTask = (async () => {
+      await session.ready?.();
+      const uploadBytes = new TextEncoder().encode("request-body");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let responseSettled = false;
+      const pendingResponse = rpc
+        .stream("main", "upload-and-download", [], {
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(uploadBytes.subarray(0, 4));
+              controller.enqueue(uploadBytes.subarray(4));
+              controller.close();
+            },
+          }),
+        })
+        .finally(() => {
+          responseSettled = true;
+        });
+      void pendingResponse.catch(() => {});
+      try {
+        await waitingForHead;
+        vi.advanceTimersByTime(30_000);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(responseSettled).toBe(false);
+        expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      } finally {
+        vi.useRealTimers();
+        releaseHead();
+      }
+      const response = await pendingResponse;
+      expect(response.status).toBe(201);
+      expect(response.url).toBe("https://example.test/result");
+      expect(await response.text()).toBe("response-body");
+      const uploadFailure = new Error("Original upload provider failure");
+      await expect(
+        rpc.stream("main", "failed-upload", [], {
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(uploadFailure);
+            },
+          }),
+        })
+      ).rejects.toBe(uploadFailure);
+      expect(pipe.diagnostics()?.activeRequests).toBe(0);
+      const download = await rpc.stream("main", "download-only", []);
+      const reader = download.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toBe("hello");
+      reader.releaseLock();
+      await expect(
+        rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
+      ).rejects.toMatchObject({
+        code: "IROH_RESPONSE_HEAD_TIMEOUT",
+      });
+      let releaseUploadCancellation!: () => void;
+      const cancellationReceipt = new Promise<void>((resolve) => {
+        releaseUploadCancellation = resolve;
+      });
+      const cancelUpload = vi.fn(() => cancellationReceipt);
+      const pendingUpload = new ReadableStream<Uint8Array>({ cancel: cancelUpload });
+      let deadlineSettled = false;
+      const deadline = rpc
+        .stream("main", "no-response-upload", [], {
+          headTimeoutMs: 100,
+          body: pendingUpload,
+        })
+        .finally(() => {
+          deadlineSettled = true;
+        });
+      const rejectedDeadline = expect(deadline).rejects.toMatchObject({
+        code: "IROH_RESPONSE_HEAD_TIMEOUT",
+      });
+      await expect.poll(() => cancelUpload.mock.calls.length).toBe(1);
+      expect(deadlineSettled).toBe(false);
+      expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      releaseUploadCancellation();
+      await rejectedDeadline;
+      await expect.poll(() => pendingUpload.locked).toBe(false);
+      await expect.poll(() => pipe.diagnostics()?.activeRequests).toBe(0);
+      expect(session.isClosed()).toBe(false);
+      const abort = new AbortController();
+      const abortReason = new Error("Request canceled during native stream opening");
+      const openBi = client.openBi.bind(client);
+      vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
+        const opened = await openBi();
+        abort.abort(abortReason);
+        return opened;
+      });
+      await expect(
+        rpc.stream("main", "aborted-during-open", [], { signal: abort.signal })
+      ).rejects.toBe(abortReason);
+      expect(pipe.diagnostics()?.activeRequests).toBe(0);
+      expect(session.isClosed()).toBe(false);
 
-    const afterEofAbort = new AbortController();
-    const eofCancelUpload = vi.fn();
-    const eofUpload = new ReadableStream<Uint8Array>({ cancel: eofCancelUpload });
-    const earlyResponse = await rpc.stream("main", "response-before-upload", [], {
-      body: eofUpload,
-      signal: afterEofAbort.signal,
-    });
-    expect(await earlyResponse.text()).toBe("");
-    expect(pipe.diagnostics()?.activeRequests).toBe(1);
-    expect(eofCancelUpload).not.toHaveBeenCalled();
-    afterEofAbort.abort();
-    await expect.poll(() => eofCancelUpload.mock.calls.length).toBe(1);
-    await expect.poll(() => eofUpload.locked).toBe(false);
+      const afterEofAbort = new AbortController();
+      const eofCancelUpload = vi.fn();
+      const eofUpload = new ReadableStream<Uint8Array>({ cancel: eofCancelUpload });
+      const earlyResponse = await rpc.stream("main", "response-before-upload", [], {
+        body: eofUpload,
+        signal: afterEofAbort.signal,
+      });
+      expect(await earlyResponse.text()).toBe("");
+      expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      expect(eofCancelUpload).not.toHaveBeenCalled();
+      afterEofAbort.abort();
+      await expect.poll(() => eofCancelUpload.mock.calls.length).toBe(1);
+      await expect.poll(() => eofUpload.locked).toBe(false);
 
-    const sessionCancelUpload = vi.fn();
-    const sessionUpload = new ReadableStream<Uint8Array>({ cancel: sessionCancelUpload });
-    await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
-    expect(pipe.diagnostics()?.activeRequests).toBe(1);
-    vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
-      const opened = await openBi();
-      await session.close();
-      return opened;
-    });
-    const openingCancelUpload = vi.fn();
-    await expect(
-      rpc.stream("main", "closed-during-open", [], {
-        body: new ReadableStream<Uint8Array>({ cancel: openingCancelUpload }),
-      })
-    ).rejects.toThrow("closed while opening request");
-    await expect.poll(() => sessionCancelUpload.mock.calls.length).toBe(1);
-    await expect.poll(() => sessionUpload.locked).toBe(false);
-    expect(openingCancelUpload).toHaveBeenCalledOnce();
-    expect(pipe.diagnostics()?.activeRequests).toBe(0);
-    await serverTask;
-    await pipe.close();
+      let uploadController!: ReadableStreamDefaultController<Uint8Array>;
+      const failedResponse = await rpc.stream("main", "upload-fails-after-head", [], {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            uploadController = controller;
+          },
+        }),
+      });
+      const failedReader = failedResponse.body!.getReader();
+      expect((await failedReader.read()).value).toEqual(new Uint8Array([1]));
+      const bodyFailure = new Error("Original duplex upload failure");
+      const failedRead = expect(failedReader.read()).rejects.toBe(bodyFailure);
+      uploadController.error(bodyFailure);
+      await failedRead;
+      failedReader.releaseLock();
+      expect(pipe.diagnostics()?.activeRequests).toBe(0);
+      expect(session.isClosed()).toBe(false);
+
+      const sessionCancelUpload = vi.fn();
+      const sessionUpload = new ReadableStream<Uint8Array>({ cancel: sessionCancelUpload });
+      await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
+      expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
+        const opened = await openBi();
+        await session.close();
+        return opened;
+      });
+      const openingCancelUpload = vi.fn();
+      await expect(
+        rpc.stream("main", "closed-during-open", [], {
+          body: new ReadableStream<Uint8Array>({ cancel: openingCancelUpload }),
+        })
+      ).rejects.toThrow("closed while opening request");
+      await expect.poll(() => sessionCancelUpload.mock.calls.length).toBe(1);
+      await expect.poll(() => sessionUpload.locked).toBe(false);
+      expect(openingCancelUpload).toHaveBeenCalledOnce();
+      expect(pipe.diagnostics()?.activeRequests).toBe(0);
+    })();
+    try {
+      await Promise.all([serverTask, clientTask]);
+    } finally {
+      await pipe.close();
+      await Promise.allSettled([serverTask, clientTask]);
+    }
   });
 });

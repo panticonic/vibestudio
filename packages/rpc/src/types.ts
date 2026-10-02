@@ -358,7 +358,7 @@ export interface RpcCallOptions extends RpcTargetOptions {
 export interface RpcStreamOptions extends RpcTargetOptions {
   signal?: AbortSignal;
   idempotencyKey?: string;
-  /** Override the transport's deadline for receiving response headers. */
+  /** Explicit caller deadline for response headers; Iroh has no default deadline. */
   headTimeoutMs?: number;
   /**
    * Maximum silence between response-body frames. `null` explicitly disables

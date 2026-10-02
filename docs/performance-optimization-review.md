@@ -30,7 +30,8 @@ is otherwise validated.
     restart asset-pipe misses. Two Android native lifecycle instrumentation
     tests passed. The complete host-owned template projection passed 6,164
     tests across eight compositions and every composition typecheck using the
-    repository's pinned Node 22.23.2. Declared skips remain; iOS was not tested.
+    repository's pinned Node 22.23.2. Declared skips remain. The iOS simulator
+    CI subsequently passed all 15 native tests.
     Both macOS CI runners and Windows failed after prompt submission while
     waiting for onboarding. The retained diagnostics identified synchronous
     library initialization before its lazy host React peer was loaded. Base now
@@ -39,7 +40,10 @@ is otherwise validated.
     tests and the Base typecheck pass, including both library formats and private
     registry isolation. A fresh-cache Linux desktop run passed onboarding and
     server restart after the repair; its owned processes and caches were retired.
-    Cross-platform acceptance after this repair is pending.
+    Updated macOS runs still fail to resolve React, so this repair is
+    incomplete. The failure packet now includes loaded-module, generated-loader,
+    and native-import names to identify the remaining boundary. Cross-platform
+    acceptance is pending.
     The dependency parser follow-up passed the complete Base suite (3,516 tests,
     two declared skips). Agent launch ownership also survives elapsed time until
     the launch RPC or worker lifecycle settles: its slow-launch regressions,
@@ -51,6 +55,21 @@ is otherwise validated.
     revoked workspace sessions and approvals. The PubSub replay cursor advances
     only after hydration and delivery complete; its regression proves a failed
     blob read is replayed after reconnect instead of silently skipped.
+  - **Lifecycle follow-up / 2026-10-02:** System mobile materialization now
+    owns acquisition and takeover through actual completion, slot retirement,
+    or disconnect, with explicit retry after a reported failure. Registry
+    publication drives readiness; elapsed-time watchdogs and polling retries
+    are removed. Android onboarding, permissions, cookie isolation, app restart,
+    and server restart passed; all 465 mobile unit tests and the composition
+    typecheck passed. Owned processes and scratch directories were retired.
+    Iroh response admission likewise has no implicit head deadline. Explicit
+    caller deadlines cancel and join upload hooks and native reads, retaining
+    original upload failures before and after response headers. The current
+    146 integration, 12 end-to-end, and 26 operational tests and host typecheck
+    pass. The host-only production-build fixture now projects installed
+    package-local dependencies rather than substituting root versions; its
+    build, typecheck, and 52 isolation tests pass. Native client acceptance
+    after this last transport change remains pending.
   - **Unresolved observation:** One Android run restored the durable onboarding
     event but missed its inline UI after server restart; a subsequent full run
     passed. Long native RPC and inline-module compilation latency still need

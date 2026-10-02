@@ -9,36 +9,50 @@ const checkout = path.join(temporaryParent, "checkout");
 const omitted = new Set([".git", "dist", "node_modules", "workspace"]);
 
 function linkInstalledDependencies(checkoutRoot) {
-  const installedRoot = path.join(repositoryRoot, "node_modules");
-  const targetRoot = path.join(checkoutRoot, "node_modules");
-  fs.mkdirSync(targetRoot);
-  for (const entry of fs.readdirSync(installedRoot, { withFileTypes: true })) {
-    const source = path.join(installedRoot, entry.name);
-    const target = path.join(targetRoot, entry.name);
-    if (entry.name === "@workspace") {
-      continue;
-    }
-    if (entry.name !== "@vibestudio") {
-      fs.symlinkSync(source, target, entry.isDirectory() ? "dir" : "file");
-      continue;
-    }
-    fs.mkdirSync(target);
-    const localPackages = new Map();
-    for (const directory of fs.readdirSync(path.join(checkoutRoot, "packages"))) {
-      const manifestPath = path.join(checkoutRoot, "packages", directory, "package.json");
+  const localPackages = new Map();
+  const unitRoots = [];
+  for (const category of ["packages", "apps"]) {
+    for (const entry of fs.readdirSync(path.join(repositoryRoot, category), {
+      withFileTypes: true,
+    })) {
+      if (!entry.isDirectory()) continue;
+      const relativeRoot = path.join(category, entry.name);
+      const manifestPath = path.join(repositoryRoot, relativeRoot, "package.json");
       if (!fs.existsSync(manifestPath)) continue;
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      if (typeof manifest.name === "string") {
-        localPackages.set(manifest.name.slice("@vibestudio/".length), path.dirname(manifestPath));
+      if (typeof manifest.name !== "string") continue;
+      localPackages.set(manifest.name, path.join(checkoutRoot, relativeRoot));
+      unitRoots.push(relativeRoot);
+    }
+  }
+
+  function projectDirectory(installedRoot, targetRoot, scope = "") {
+    fs.mkdirSync(targetRoot, { recursive: true });
+    for (const entry of fs.readdirSync(installedRoot, { withFileTypes: true })) {
+      // Workspace userland remains absent from this host isolation fixture.
+      if (entry.name === "@workspace") continue;
+      const source = path.join(installedRoot, entry.name);
+      const target = path.join(targetRoot, entry.name);
+      if (entry.name.startsWith("@") && entry.isDirectory()) {
+        projectDirectory(source, target, `${entry.name}/`);
+        continue;
       }
+      const local = localPackages.get(`${scope}${entry.name}`);
+      fs.symlinkSync(local ?? source, target, local || entry.isDirectory() ? "dir" : "file");
     }
-    for (const [name, packageRoot] of localPackages) {
-      fs.symlinkSync(packageRoot, path.join(target, name), "dir");
-    }
-    for (const dependency of fs.readdirSync(source, { withFileTypes: true })) {
-      if (localPackages.has(dependency.name)) continue;
-      fs.symlinkSync(path.join(source, dependency.name), path.join(target, dependency.name), "dir");
-    }
+  }
+
+  projectDirectory(
+    path.join(repositoryRoot, "node_modules"),
+    path.join(checkoutRoot, "node_modules")
+  );
+  // Package-local dependency versions are part of the installed boundary.
+  // Hoisting only the root map silently substituted root TypeScript 7 for
+  // Svelte's declared TypeScript 6 parser (and can split any other dependency).
+  for (const relativeRoot of unitRoots) {
+    const installedRoot = path.join(repositoryRoot, relativeRoot, "node_modules");
+    if (fs.existsSync(installedRoot))
+      projectDirectory(installedRoot, path.join(checkoutRoot, relativeRoot, "node_modules"));
   }
 }
 

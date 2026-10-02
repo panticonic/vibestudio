@@ -456,7 +456,7 @@ class ClientSession implements IrohClientSession {
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
     body?: ReadableStream<Uint8Array> | null,
-    headTimeoutMs = 20_000
+    headTimeoutMs?: number
   ): Promise<DecodedFramedStream> {
     workspaceRpcDestination(envelope.destination);
     await this.ready();
@@ -465,7 +465,7 @@ class ClientSession implements IrohClientSession {
     if (request.type !== "stream-request") {
       throw new Error(`stream() requires a stream-request envelope, got ${request.type}`);
     }
-    if (signal?.aborted) throw new Error("Streaming RPC aborted by caller");
+    if (signal?.aborted) throw signal.reason ?? new Error("Streaming RPC aborted by caller");
     if (this.outboundRequests.has(request.requestId)) {
       throw new Error(`Streaming RPC request id ${request.requestId} is already active`);
     }
@@ -475,20 +475,28 @@ class ClientSession implements IrohClientSession {
 
     const generation = this.requestGeneration;
     const stream = await this.pipe.connection.openBi();
-    let cancelled = false;
+    let cancellation: Promise<void> | null = null;
+    let cancellationReason: unknown;
     let requestBodyReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const cancel = async (reason?: unknown, code = IROH_CANCEL_CODE): Promise<void> => {
-      if (cancelled) return;
-      cancelled = true;
+    const cancel = (reason?: unknown, code = IROH_CANCEL_CODE): Promise<void> => {
+      if (cancellation) return cancellation;
+      cancellationReason = reason;
       signal?.removeEventListener("abort", onAbort);
-      this.outboundRequests.delete(request.requestId);
-      this.pipe.diagnosticsChanged();
-      if (requestBodyReader) void requestBodyReader.cancel(reason).catch(() => undefined);
-      else if (body) void body.cancel(reason).catch(() => undefined);
-      await Promise.all([
-        stream.send.reset(code).catch(() => undefined),
-        stream.recv.stop(code).catch(() => undefined),
-      ]);
+      cancellation = Promise.resolve()
+        .then(async () => {
+          await Promise.all([
+            (requestBodyReader ? requestBodyReader.cancel(reason) : body?.cancel(reason))?.catch(
+              () => undefined
+            ),
+            stream.send.reset(code).catch(() => undefined),
+            stream.recv.stop(code).catch(() => undefined),
+          ]);
+        })
+        .finally(() => {
+          this.outboundRequests.delete(request.requestId);
+          this.pipe.diagnosticsChanged();
+        });
+      return cancellation;
     };
     const onAbort = (): void => {
       void cancel((signal as (AbortSignal & { reason?: unknown }) | null | undefined)?.reason);
@@ -508,7 +516,7 @@ class ClientSession implements IrohClientSession {
       // predates the listener, so check again before sending the request.
       if (signal?.aborted) {
         onAbort();
-        throw new Error("Streaming RPC aborted by caller");
+        throw signal.reason ?? new Error("Streaming RPC aborted by caller");
       }
       await writeIrohStreamPreamble(stream.send, {
         body: body != null,
@@ -525,8 +533,8 @@ class ClientSession implements IrohClientSession {
       requestBodyReader = body?.getReader();
     } catch (error) {
       signal?.removeEventListener("abort", onAbort);
-      cancel(error);
-      throw error;
+      await cancel(error);
+      throw cancellationReason ?? error;
     }
 
     let uploadSettled = false;
@@ -539,31 +547,43 @@ class ClientSession implements IrohClientSession {
       this.outboundRequests.delete(request.requestId);
       this.pipe.diagnosticsChanged();
     };
-    void this.pumpRequestBody(stream, requestBodyReader, cancel).then(() => {
+    const uploadCompletion = this.pumpRequestBody(stream, requestBodyReader, cancel).then(() => {
       uploadSettled = true;
       settle();
     }, cancel);
+    const headRead = readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES).then(
+      decodeIrohStreamResponseHead
+    );
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const head = await Promise.race([
-      readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES).then(decodeIrohStreamResponseHead),
-      new Promise<never>((_, reject) => {
-        if (!Number.isFinite(headTimeoutMs) || headTimeoutMs <= 0) return;
-        timeout = setTimeout(
-          () => reject(new IrohResponseHeadTimeoutError(headTimeoutMs)),
-          headTimeoutMs
-        );
-        (timeout as unknown as { unref?: () => void }).unref?.();
-      }),
-    ])
-      .catch((error: unknown) => {
-        cancel(error);
-        throw error;
+    // Only an explicit caller deadline may bound admission. Cold service work
+    // otherwise remains owned until a response, cancellation, or disconnect.
+    const pendingHead =
+      headTimeoutMs !== undefined && Number.isFinite(headTimeoutMs) && headTimeoutMs > 0
+        ? Promise.race([
+            headRead,
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(
+                () => reject(new IrohResponseHeadTimeoutError(headTimeoutMs)),
+                headTimeoutMs
+              );
+              (timeout as unknown as { unref?: () => void }).unref?.();
+            }),
+          ])
+        : headRead;
+    const head = await pendingHead
+      .catch(async (error: unknown) => {
+        await cancel(error);
+        // The deadline cancels AND joins its owned receive and upload. Do not
+        // abandon native reads or caller cancellation hooks behind a race.
+        await Promise.allSettled([headRead, uploadCompletion]);
+        throw cancellationReason ?? error;
       })
       .finally(() => {
         if (timeout) clearTimeout(timeout);
       });
     if (head.error) {
-      cancel(head.error.message);
+      await cancel(head.error.message);
+      await uploadCompletion;
       throw new RemoteRpcError(
         head.error.message,
         head.error.errorKind,
@@ -571,9 +591,16 @@ class ClientSession implements IrohClientSession {
         head.error.errorData
       );
     }
-    const responseBody = irohReceiveStreamBody(stream.recv, cancel, () => {
-      responseSettled = true;
-      settle();
+    const responseBody = irohReceiveStreamBody(stream.recv, {
+      cancel: async (reason) => {
+        await cancel(reason);
+        await uploadCompletion;
+      },
+      failure: () => cancellationReason,
+      settled: () => {
+        responseSettled = true;
+        settle();
+      },
     });
     return {
       status: head.status,
@@ -947,14 +974,21 @@ export function createIrohClientPipe(
 
 export function irohReceiveStreamBody(
   recv: IrohPhysicalReceiveStream,
-  onCancel?: (reason?: unknown) => void,
-  onSettled?: () => void
+  owner: {
+    cancel(reason?: unknown): Promise<void>;
+    failure(): unknown;
+    settled(): void;
+  } = {
+    cancel: () => recv.stop(IROH_CANCEL_CODE).catch(() => undefined),
+    failure: () => undefined,
+    settled: () => {},
+  }
 ): ReadableStream<Uint8Array> {
   let settled = false;
   const settle = (): void => {
     if (settled) return;
     settled = true;
-    onSettled?.();
+    owner.settled();
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -965,14 +999,13 @@ export function irohReceiveStreamBody(
           controller.close();
         } else controller.enqueue(chunk);
       } catch (error) {
-        onCancel?.(error);
+        await owner.cancel(error);
         settle();
-        controller.error(error);
+        controller.error(owner.failure() ?? error);
       }
     },
     async cancel(reason) {
-      onCancel?.(reason);
-      await recv.stop(IROH_CANCEL_CODE).catch(() => undefined);
+      await owner.cancel(reason);
       settle();
     },
   });

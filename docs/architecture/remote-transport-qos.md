@@ -18,6 +18,13 @@ a bounded metadata head and raw body bytes; uploads apply bounded chunk reads
 and propagate cancellation with QUIC reset/stop. A method may own a semantic
 limit for its resource, but the transport does not invent one.
 
+Streaming response admission has no implicit elapsed-time deadline. A caller
+may supply an explicit response-head deadline; expiry cancels and joins the
+upload, its cancellation hook, and the native receive before rejecting. The
+first upload or cancellation failure reaches the response caller, including
+failures after response headers have arrived. Request ownership remains visible
+until cancellation cleanup completes.
+
 ## Panel artifact delivery
 
 Immutable panel artifacts retain their content-addressed disk cache. A cold
