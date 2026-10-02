@@ -346,7 +346,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     await pipe.close();
   });
 
-  it("owns slow streaming heads until completion and honors explicit caller deadlines", async () => {
+  async function verifyStreamingOwnership(closeOwner: "session" | "pipe") {
     const serverEndpoint = await bind();
     const clientEndpoint = await bind();
     const incomingPromise = serverEndpoint.acceptNext();
@@ -518,7 +518,11 @@ describe("Iroh RPC client over real local QUIC", () => {
         );
         if (finishResponse) await duplex.send.finish();
         else await duplex.send.writeAll(new Uint8Array([1]));
-        expect(await duplex.recv.receivedReset()).toBe(cancellationCode);
+        if (closeOwner === "pipe" && cancellationCode === 0x201) {
+          // Physical retirement owns the whole connection, so its terminal
+          // event is the authoritative peer receipt rather than a stream code.
+          await server.closed();
+        } else expect(await duplex.recv.receivedReset()).toBe(cancellationCode);
       }
     })();
 
@@ -655,21 +659,43 @@ describe("Iroh RPC client over real local QUIC", () => {
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
       expect(session.isClosed()).toBe(false);
 
-      const sessionCancelUpload = vi.fn();
+      let finishSessionCancellation!: () => void;
+      let sessionCancellationStarted!: () => void;
+      const sessionCancellationReady = new Promise<void>((resolve) => {
+        sessionCancellationStarted = resolve;
+      });
+      const sessionCancellation = new Promise<void>((resolve) => {
+        finishSessionCancellation = resolve;
+      });
+      const sessionCancelUpload = vi.fn(() => {
+        sessionCancellationStarted();
+        return sessionCancellation;
+      });
       const sessionUpload = new ReadableStream<Uint8Array>({ cancel: sessionCancelUpload });
       await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      let sessionCloseSettled = false;
       vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
         const opened = await openBi();
-        await session.close();
+        await (closeOwner === "session" ? session.close() : pipe.close());
+        sessionCloseSettled = true;
         return opened;
       });
       const openingCancelUpload = vi.fn();
-      await expect(
+      const openingRejected = expect(
         rpc.stream("main", "closed-during-open", [], {
           body: new ReadableStream<Uint8Array>({ cancel: openingCancelUpload }),
         })
       ).rejects.toThrow("closed while opening request");
+      try {
+        await sessionCancellationReady;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(sessionCloseSettled).toBe(false);
+        expect(pipe.diagnostics()?.activeRequests).toBe(1);
+      } finally {
+        finishSessionCancellation();
+        await openingRejected;
+      }
       await expect.poll(() => sessionCancelUpload.mock.calls.length).toBe(1);
       await expect.poll(() => sessionUpload.locked).toBe(false);
       expect(openingCancelUpload).toHaveBeenCalledOnce();
@@ -681,5 +707,10 @@ describe("Iroh RPC client over real local QUIC", () => {
       await pipe.close();
       await Promise.allSettled([serverTask, clientTask]);
     }
-  });
+  }
+
+  it.each(["session", "pipe"] as const)(
+    "owns slow streaming heads and explicit caller deadlines through %s close",
+    verifyStreamingOwnership
+  );
 });

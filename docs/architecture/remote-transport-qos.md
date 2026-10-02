@@ -23,7 +23,10 @@ may supply an explicit response-head deadline; expiry cancels and joins the
 upload, its cancellation hook, and the native receive before rejecting. The
 first upload or cancellation failure reaches the response caller, including
 failures after response headers have arrived. Request ownership remains visible
-until cancellation cleanup completes.
+until cancellation cleanup completes. Logical-session and physical-pipe close
+join those same owners. A failed session-close control write still retires its
+requests; physical close releases native I/O before joining caller upload hooks.
+Nonterminal logical-session recovery waits for the retired generation to settle.
 
 ## Panel artifact delivery
 

@@ -65,11 +65,15 @@ is otherwise validated.
     Iroh response admission likewise has no implicit head deadline. Explicit
     caller deadlines cancel and join upload hooks and native reads, retaining
     original upload failures before and after response headers. The current
-    146 integration, 12 end-to-end, and 26 operational tests and host typecheck
-    pass. The host-only production-build fixture now projects installed
+    147 integration, 12 end-to-end, and 26 operational tests and host typecheck
+    pass. Session and physical-pipe close join the same request cleanup; real
+    QUIC regressions hold an upload cancellation receipt and prove close remains
+    pending and request ownership visible until that receipt arrives. The host-only production-build fixture now projects installed
     package-local dependencies rather than substituting root versions; its
     build, typecheck, and 52 isolation tests pass. Native client acceptance
-    after this last transport change remains pending.
+    passed on Linux desktop and Android after removing the implicit head
+    deadline, including onboarding and server restart. Acceptance after the
+    shutdown follow-up remains pending.
   - **Unresolved observation:** One Android run restored the durable onboarding
     event but missed its inline UI after server restart; a subsequent full run
     passed. Long native RPC and inline-module compilation latency still need
@@ -94,6 +98,9 @@ is otherwise validated.
     in the endpoint-generation owner. The Apple artifact now retains the matching
     generated Swift source and its receipt hash alongside the XCFramework.
     Relevant main-branch pushes now run the native repair build matrix too.
+    All seven targets passed: five desktop bindings, Android AAR, and the iOS
+    XCFramework with its generated Swift wrapper. Android shell builds and the
+    iOS shell simulator tests also passed in CI.
     Production dependency pins are unchanged.
   - **Remaining design work:** An interrupted mutation with no acceptance
     receipt still has an unknown outcome. Recovering it requires a stable
