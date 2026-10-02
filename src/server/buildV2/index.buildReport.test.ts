@@ -111,6 +111,7 @@ async function loadWithMocks(
     blockingAuthorityConsumer?: boolean;
     isolatedExports?: unknown;
     invalidPanelManifest?: boolean;
+    resolvedBuildKey?: string;
   } = {}
 ): Promise<{
   buildSystem: BuildSystemV2;
@@ -187,6 +188,7 @@ async function loadWithMocks(
     },
   }));
 
+  const resolvedBuildKey = options.resolvedBuildKey;
   vi.doMock("./builder.js", async () => {
     const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
     const buildStore = await vi.importActual<typeof import("./buildStore.js")>("./buildStore.js");
@@ -201,7 +203,9 @@ async function loadWithMocks(
           stateRef: string,
           options?: { priority?: "interactive" | "background" | "speculative" }
         ) => {
-          const key = actual.computeBuildUnitKey(node as never, ev, options as never);
+          const key =
+            (node.name === "@workspace-panels/app" ? resolvedBuildKey : undefined) ??
+            actual.computeBuildUnitKey(node as never, ev, options as never);
           // Cache hit → reuse (exactly like the real builder + coalescing).
           const cached = buildStore.get(key);
           if (cached) return cached;
@@ -317,6 +321,24 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(buildCalls.length).toBe(buildsAfterFirst);
     expect(typecheckCalls).toBe(typechecksAfterFirst);
   }, 15_000);
+
+  it("reports the artifact key resolved by the build backend", async () => {
+    const resolvedBuildKey = "c".repeat(64);
+    env = await loadWithMocks({ resolvedBuildKey });
+    const report = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(report.status).toBe("ok");
+    expect(report.builds).toEqual([
+      { target: "runtime", buildKey: resolvedBuildKey, diagnosticIndexes: [] },
+    ]);
+    expect(env.buildSystem.getBuildByKey(report.builds[0]!.buildKey!)).toMatchObject({
+      buildKey: resolvedBuildKey,
+      artifacts: [expect.objectContaining({ path: "bundle.js" })],
+    });
+    expect(await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW)).toEqual(
+      report
+    );
+  });
 
   it("exposes only completed cached reports to runtime recovery surfaces", async () => {
     env = await loadWithMocks();

@@ -2274,6 +2274,7 @@ async function runSmoke(options, ownerSignal, createOwnedProcessLifetime) {
     const appRestartWorkspaceCount = logcat.phaseCount("workspace-connected");
     const appRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
     const appRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
+    logcat.releaseAppProcess();
     await adb(options.device, "shell", "am", "force-stop", options.packageName);
     // Snapshot asset activity only after the old app is gone. This excludes a
     // late write from the initial materialization from the warm-relaunch window.

@@ -832,13 +832,12 @@ async function collectShellSnapshots(app, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_
       for (const contents of webContents.getAllWebContents()) {
         if (contents.isDestroyed()) continue;
         const url = contents.getURL();
-        if (!url) {
+        if (!url || contents.isLoadingMainFrame()) {
           snapshots.push({ id: contents.id, url, pendingNavigation: true });
           continue;
         }
         try {
-          const dom = await Promise.race([
-            contents.executeJavaScript(
+          const dom = await contents.executeJavaScript(
               `(() => {
             const text = document.body?.innerText ?? "";
             const buttons = Array.from(document.querySelectorAll("button"))
@@ -862,11 +861,7 @@ async function collectShellSnapshots(app, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_
             };
           })()`,
               true
-            ),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("webContents DOM probe timed out")), 2_000)
-            ),
-          ]);
+            );
           snapshots.push({
             id: contents.id,
             url,
@@ -896,7 +891,8 @@ async function clickDesktopButton(app, label) {
           // Prepared panel views have no document until their launch is approved.
           // executeJavaScript on such a view waits for its first navigation,
           // which would strand the click that must approve that very launch.
-          if (contents.isDestroyed() || !contents.getURL()) continue;
+          if (contents.isDestroyed() || !contents.getURL() || contents.isLoadingMainFrame())
+            continue;
           try {
             const priority = await contents.executeJavaScript(
               `(() => {
@@ -1313,8 +1309,17 @@ async function captureDesktopFailureDiagnostics(app, failure) {
               (contents) => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl
             );
         if (!contents) return { available: false };
+        if (contents.isLoadingMainFrame()) return { available: true, pendingNavigation: true };
         return contents.executeJavaScript(`(() => ({
         available: true,
+        text: document.body?.innerText?.slice(0, 3000) ?? "",
+        dialogs: [...document.querySelectorAll('[role="dialog"]')].slice(0, 10)
+          .map(element => ({ text: element.textContent?.slice(0, 2000),
+            visible: element.getClientRects().length > 0 })),
+        buttons: [...document.querySelectorAll('button')].filter(element =>
+          element.getClientRects().length > 0 && !element.closest('[hidden]')).slice(0, 50)
+          .map(element => ({ label: element.getAttribute('aria-label') || element.textContent?.trim(),
+            disabled: element.disabled })),
         rootChildren: document.getElementById('root')?.childElementCount ?? null,
         workspaceIds: [...document.querySelectorAll('[data-workspace-id]')]
           .slice(0, 50).map(element => element.dataset.workspaceId),
@@ -1351,7 +1356,7 @@ async function captureDesktopFailureDiagnostics(app, failure) {
   await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
   const artifact = path.join(directory, `desktop-diagnostics-${Date.now()}-${randomUUID()}.json`);
   await fsp.writeFile(artifact, `${JSON.stringify(packet, null, 2)}\n`, { mode: 0o600 });
-  console.error(`[desktop-smoke] Desktop failure diagnostics: ${JSON.stringify(packet)}`);
+  console.error(`[desktop-smoke] Desktop failure diagnostics retained at ${artifact}`);
 }
 
 async function readInitialPanelHistory(app, webContentsId, workspaceId) {

@@ -10,13 +10,27 @@ export function observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packa
   let stderr = "";
   let appCrashed = false;
   let readerError = null;
+  let appProcessId = null;
+  let appProcessFailure = null;
 
   const recordLine = (line) => {
     if (!line) return;
     if (line.includes("AndroidRuntime") && line.includes(`Process: ${packageName}, PID:`)) {
       appCrashed = true;
     }
+    const killed = line.includes("ActivityManager")
+      ? line.match(/\bKilling (\d+):([^/\s]+)\/[^:]+:\s*(.*)/)
+      : null;
+    if (killed && killed[1] === appProcessId && killed[2] === packageName) {
+      appProcessFailure ??= `Android destroyed the active app process: ${killed[3]}`;
+      recentLines.push(line);
+      if (recentLines.length > 200) recentLines.shift();
+    }
     if (line.includes(smokePrefix) || line.includes("VibestudioMobileSmokeProbe")) {
+      if (line.includes(smokePrefix)) {
+        const process = line.match(/ReactNativeJS\(\s*(\d+)\)/);
+        if (process) appProcessId = process[1];
+      }
       console.log(`[smoke-log] ${line}`);
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
@@ -64,12 +78,12 @@ export function observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packa
         `adb logcat exited (${child.signalCode ?? child.exitCode})\n${stderr}`.trim()
       );
     }
-    if (!appCrashed && !phases.has("embedded-pairing-failed")) return;
+    if (!appCrashed && !appProcessFailure && !phases.has("embedded-pairing-failed")) return;
     const recent = recentLines.length
       ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
       : "";
     throw new Error(
-      `${appCrashed ? "The Android app crashed" : "The mobile app reported a terminal pairing failure"}${recent}`
+      `${appProcessFailure ?? (appCrashed ? "The Android app crashed" : "The mobile app reported a terminal pairing failure")}${recent}`
     );
   };
 
@@ -121,5 +135,19 @@ export function observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packa
     throw new Error(`Timed out waiting for any of: ${candidates.join(", ")}${recent}`);
   };
 
-  return { child, waitForPhase, waitForPhaseAfter, waitForAnyPhase, hasPhase, phaseCount };
+  // Relinquish the old process before the runner explicitly stops it. The next
+  // app phase binds observation to the newly launched process.
+  const releaseAppProcess = () => {
+    throwIfTerminalFailure();
+    appProcessId = null;
+  };
+  return {
+    child,
+    waitForPhase,
+    waitForPhaseAfter,
+    waitForAnyPhase,
+    hasPhase,
+    phaseCount,
+    releaseAppProcess,
+  };
 }

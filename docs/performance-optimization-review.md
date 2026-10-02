@@ -189,18 +189,19 @@ is otherwise validated.
     streams or the connection. A fresh installed Linux x64 root/platform package
     passed all 22 native tests, including four stream-opening ownership cases,
     CommonJS/ESM export checks, and strict declaration typechecking. UniFFI also
-    checks successfully. The regenerated cross-platform artifacts still need
-    matrix acceptance and publication before application adoption.
+    checks successfully. All seven native binding targets and the Node
+    coherence gate also pass at commit `1d4c0a4c`. Publication remains required
+    before application adoption.
   - **Remaining release work:** Publish regenerated Node/Kotlin/Swift dial and
     stream-opening
     bindings and matching native artifacts, then adopt request-owned cancellation
     in the endpoint-generation owner. The Apple artifact now retains the matching
     generated Swift source and its receipt hash alongside the XCFramework.
     Relevant main-branch pushes now run the native repair build matrix too.
-    All seven targets passed again with regenerated dial bindings: five desktop
+    All seven targets passed again with regenerated dial and opening bindings: five desktop
     Node packages, Android AAR, and the iOS XCFramework with its generated Swift
     wrapper. Each desktop target installed its actual matching root/platform
-    tarballs and passed all 18 native endpoint, stream, and dial regressions.
+    tarballs and passed all 22 native endpoint, stream, dial, and opening regressions.
     The cross-platform gate confirmed identical generated JavaScript and
     declarations, exact platform versions, and matching source receipts. Android shell builds and the
     iOS shell simulator tests also passed in CI.
@@ -212,7 +213,32 @@ is otherwise validated.
     deterministic boundary regression fails before the fix. All 148 Iroh
     integration tests, 12 native end-to-end tests, and 26 remote operation tests
     pass afterward; the two slow-head ownership cases also pass in five isolated
-    repetitions. CI acceptance remains required for its original timeout case.
+    repetitions. CI Quality Checks at `ae019a66` also passes the original
+    timeout case, production Linux desktop pairing, and the complete host suite.
+    Both macOS desktop pairing jobs and all three installed-app jobs pass.
+    Windows desktop pairing still fails before Personal mounts a native panel;
+    the captured shell overlay is active, with no reported asset or renderer
+    errors. Worker builds complete after a slow dependency install. Further
+    evidence now retains visible shell dialogs, button readiness, and screenshots.
+    DOM probes avoid queuing execution behind a pending initial navigation.
+  - **Native mobile retirement cause:** React Native's actual AbortController
+    implementation has neither `AbortSignal.reason` nor an abort reason argument.
+    Mobile materialization now owns its first retirement cause directly, checks
+    it after awaited work, and joins the task before retirement completes. All
+    465 mobile tests and System composition types pass; native source validation
+    also passes without diagnostics. The Android rerun was interrupted when
+    Google Play updated WebView and Android killed the active app process.
+    Its exact lifecycle evidence is retained and all owned resources are retired.
+    The harness now propagates active app destruction with Android's original
+    reason, while relinquishing the old process for its explicit cold restart;
+    seven lifecycle tests pass.
+  - **Provider artifact reporting:** Native profiling exposed a report key
+    computed before provider identity resolution. React Native's completed
+    artifact uses a key containing the provider implementation. Build reports
+    now record the completed artifact's key. A held backend-key regression fails
+    before this repair; all 39 build-report and build-service tests pass afterward.
+    The earlier empty-target profile establishes source validation only, not
+    payload size or verified artifact reuse. Fresh native profiling remains needed.
   - **Latest Android acceptance:** Pairing, app cold restart, and server restart
     pass with zero recovery panel-asset pipe misses. Initial embedded-host
     compilation includes a 97-second dependency install. During its initial

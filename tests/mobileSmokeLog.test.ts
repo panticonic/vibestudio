@@ -22,6 +22,33 @@ function setup() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("mobile smoke log lifecycle", () => {
+  it("reports destruction of the active app process with Android's original cause", async () => {
+    const { child, log } = setup();
+    child.stdout.write("I/ReactNativeJS( 4457): [VibestudioMobileSmoke] phase=ready\n");
+    child.stdout.write(
+      "I/ActivityManager( 688): Killing 4457:app.vibestudio.mobile.internal/u0a216 " +
+        "(adj 0): stop com.google.android.webview due to installPackageLI\n"
+    );
+    await expect(log.waitForPhase("ready")).rejects.toThrow(
+      "stop com.google.android.webview due to installPackageLI"
+    );
+  });
+
+  it("releases the stopped process for a runner-owned cold restart", async () => {
+    const { child, log } = setup();
+    child.stdout.write("I/ReactNativeJS( 42): [VibestudioMobileSmoke] phase=ready\n");
+    log.releaseAppProcess();
+    child.stdout.write(
+      "I/ActivityManager( 688): Killing 42:app.vibestudio.mobile.internal/u0a216 (adj 0): stop\n"
+    );
+    child.stdout.write("I/ReactNativeJS( 43): [VibestudioMobileSmoke] phase=ready\n");
+    await expect(log.waitForPhaseAfter("ready", 1, 1000)).resolves.toBeUndefined();
+    child.stdout.write(
+      "I/ActivityManager( 688): Killing 43:app.vibestudio.mobile.internal/u0a216 (adj 0): provider removed\n"
+    );
+    await expect(log.waitForPhase("ready")).rejects.toThrow("provider removed");
+  });
+
   it("reassembles chunked phases and counts new occurrences", async () => {
     const { child, log } = setup();
     child.stdout.write("[VibestudioMobileSmoke] pha");

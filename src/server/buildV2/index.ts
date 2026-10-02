@@ -1686,7 +1686,9 @@ export async function initBuildSystemV2(
         ...(spec.target !== "runtime"
           ? { exportPath: (spec as { exportPath: string }).exportPath }
           : {}),
-        buildKey,
+        // Providers resolve their immutable identity using their implementation.
+        // Report the artifact that actually completed.
+        buildKey: built?.buildKey ?? buildKey,
         diagnostics,
       },
       reusable,
