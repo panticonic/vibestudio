@@ -190,6 +190,7 @@ export const SlotHistoryRowSchema = z.object({
 
 export const EntityRecordSchema = z.object({
   id: z.string(),
+  authoritySessionId: z.string().min(1),
   kind: z.enum(["panel", "app", "worker", "do", "session", "shell", "server"]),
   source: z.object({ repoPath: z.string(), effectiveVersion: z.string() }),
   activeBuildKey: z.string().optional(),
@@ -387,7 +388,11 @@ export const PanelTreePlacementSchema = z
 
 export const workspaceStateMethods = defineServiceMethods({
   "panelTree.rootGroups": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -407,7 +412,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreeRootGroupsSchema,
   },
   "panelTree.rootsForCaller": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -427,7 +436,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreePageSchema,
   },
   "panelTree.page": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -447,7 +460,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreePageSchema,
   },
   "panelTree.path": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -466,7 +483,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreePathSchema.nullable(),
   },
   "panelTree.detail": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -485,7 +506,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelDetailSchema.nullable(),
   },
   "panelTree.search": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -503,7 +528,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreeSearchPageSchema,
   },
   "slot.get": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -522,7 +551,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotRowSchema.nullable(),
   },
   "slot.historyRelative": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -541,7 +574,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotHistoryRowSchema.nullable(),
   },
   "slot.historyEntry": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -560,7 +597,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotHistoryRowSchema.nullable(),
   },
   "entity.resolveActive": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -579,7 +620,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "entity.resolve": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -598,7 +643,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "slot.resolveByEntity": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -619,7 +668,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "slot.create": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -646,7 +699,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.commitPreparedNavigation": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -683,7 +740,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotCommitPreparedNavigationResultSchema,
   },
   "slot.updateCurrentStateArgs": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -709,7 +770,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.move": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -735,7 +800,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.close": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -764,7 +833,11 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeCleanupPage": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -796,7 +869,11 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeOwnedRoots": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -820,7 +897,11 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeCleanupAck": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -838,7 +919,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "panel.search": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -856,7 +941,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.array(PanelSearchResultSchema),
   },
   "panel.sourceUsage": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
@@ -875,7 +964,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.array(PanelSourceUsageSchema),
   },
   "panel.index": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -903,7 +996,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "panel.updateTitle": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -932,7 +1029,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "panel.incrementAccess": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -950,7 +1051,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "panel.rebuildIndex": {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -968,7 +1073,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseUpsert: {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -987,7 +1096,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseClear: {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -1005,8 +1118,64 @@ export const workspaceStateMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },
+  alarmSourceRegister: {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
+    args: z.tuple([LifecycleKeySchema]),
+    description: "Register a durable wake source before admitting execution work.",
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    access: { sensitivity: "write" },
+    returns: z.string().min(1),
+  },
+  alarmSourcePublish: {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
+    args: z.tuple([
+      LifecycleKeySchema.extend({
+        incarnation: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        wakeAt: z.number().int().nonnegative().nullable(),
+      }),
+    ]),
+    description: "Publish one exact source revision, retaining cleared scheduling identity.",
+    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
+    access: { sensitivity: "write" },
+    returns: z.enum(["accepted", "duplicate", "stale"]),
+  },
   alarmSet: {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
@@ -1025,7 +1194,11 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   alarmClear: {
-    website: {"kind":"closed","reason":"The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,

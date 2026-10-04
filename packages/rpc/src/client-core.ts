@@ -957,13 +957,12 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   function invocationOptions<T extends { signal?: AbortSignal }>(options?: T): T | undefined {
     const signal = config.invocationSignal?.();
     if (!signal) return options;
-    return {
-      ...options,
+    return mergeRpcOptions(options, {
       signal:
         options?.signal && options.signal !== signal
           ? AbortSignal.any([signal, options.signal])
           : signal,
-    } as T;
+    }) as T;
   }
 
   function callOnceWithProvenance<T = unknown>(
@@ -1066,15 +1065,17 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         // lifecycle control through its AbortSignal; an explicit timeout on
         // the protected operation starts anew only when that operation is
         // retried after approval.
+        // Waiting belongs to the same admitted caller and causal invocation.
+        // Its control request must not reuse the protected effect's key.
+        const waitOptions = mergeRpcOptions(options, {});
+        delete waitOptions.timeoutMs;
+        delete waitOptions.idempotencyKey;
         const outcome = await callOnceWithProvenance<{ state: "decided" | "closed" }>(
           provenance,
           "main",
           "authority.awaitDecision",
           [{ acquisitionId }],
-          {
-            ...(options?.signal ? { signal: options.signal } : {}),
-            ...(options?.destination ? { destination: options.destination } : {}),
-          }
+          waitOptions
         );
         if (outcome.state !== "decided") throw error;
       }
@@ -1583,18 +1584,22 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
 /** One client view path: peers must retain the same options as direct effects. */
 function withCallOptions(
   base: RpcClient,
-  map: (options?: RpcCallOptions | RpcStreamOptions) => RpcCallOptions & RpcStreamOptions
+  map: (options?: RpcCallOptions | RpcStreamOptions) => RpcCallOptions & RpcStreamOptions,
+  enter: <T>(operation: () => T) => T = (operation) => operation()
 ): RpcClient {
   const view: RpcClient = {
     selfId: base.selfId,
     expose: base.expose.bind(base),
     exposeAll: base.exposeAll.bind(base),
     exposeStreaming: base.exposeStreaming.bind(base),
-    call: (target, method, args, options) => base.call(target, method, args, map(options)),
-    stream: (target, method, args, options) => base.stream(target, method, args, map(options)),
+    call: (target, method, args, options) =>
+      enter(() => base.call(target, method, args, map(options))),
+    stream: (target, method, args, options) =>
+      enter(() => base.stream(target, method, args, map(options))),
     streamReadable: (target, method, args, options) =>
-      base.streamReadable(target, method, args, map(options)),
-    emit: (target, event, payload, options) => base.emit(target, event, payload, map(options)),
+      enter(() => base.streamReadable(target, method, args, map(options))),
+    emit: (target, event, payload, options) =>
+      enter(() => base.emit(target, event, payload, map(options))),
     on: base.on.bind(base),
     peer: (target, options) => createPeer(view, target, options),
     status: base.status.bind(base),
@@ -1604,9 +1609,27 @@ function withCallOptions(
   return Object.freeze(view);
 }
 
+/** Enter the owning async context for every outbound effect, including peer calls.
+ * Options retain separately admitted execution, provenance and cancellation. */
+export function withRpcContext(base: RpcClient, enter: <T>(operation: () => T) => T): RpcClient {
+  return withCallOptions(base, (options) => options ?? {}, enter);
+}
+
 /** Bind exact upstream provenance while retaining any evaluated execution admission. */
 export function withCausalParent(base: RpcClient, causalParent: RpcCausalParent): RpcClient {
   return withCallOptions(base, (options) => mergeRpcOptions(options, { causalParent }));
+}
+
+/** Bind every call and stream to its owning operation without replacing local cancellation. */
+export function withRpcAbortSignal(base: RpcClient, signal: AbortSignal): RpcClient {
+  return withCallOptions(base, (options) =>
+    mergeRpcOptions(options, {
+      signal:
+        options?.signal && options.signal !== signal
+          ? AbortSignal.any([signal, options.signal])
+          : signal,
+    })
+  );
 }
 
 /** Runtime-only client view that binds every outbound effect to one host admission. */

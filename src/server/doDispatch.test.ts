@@ -302,7 +302,7 @@ describe("DODispatch", () => {
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-        dispatcher: getWorkerdConnectionDispatcher(),
+        dispatcher: getWorkerdConnectionDispatcher("http://127.0.0.1:10001"),
       });
     });
 

@@ -31,8 +31,8 @@ function createHarness() {
   const credentialGrants: Array<CredentialUseGrant & { credentialId: string }> = [];
   const interruptAgent = vi.fn(async () => undefined);
   const interruptAllAgents = vi.fn(async () => undefined);
-  const closeAgentAcquisitions = vi.fn(() => 1);
-  const closeAllAcquisitions = vi.fn(() => 2);
+  const closeAgentAcquisitions = vi.fn(async () => 1);
+  const closeAllAcquisitions = vi.fn(async () => 2);
   const definition = createPermissionsService({
     capabilityGrants,
     credentialUseGrants: {
@@ -104,6 +104,41 @@ function createHarness() {
 }
 
 describe("permissions service", () => {
+  it.each(["pause-agent", "revoke-all-agent", "workspace-lock"] as const)(
+    "%s awaits terminal presentation ownership and propagates its original failure",
+    async (action) => {
+      const h = createHarness();
+      const original = new Error("Owned presentation teardown failed");
+      let rejectClosure!: (error: Error) => void;
+      const closure = new Promise<number>((_resolve, reject) => {
+        rejectClosure = reject;
+      });
+      const close = action === "workspace-lock" ? h.closeAllAcquisitions : h.closeAgentAcquisitions;
+      close.mockReturnValueOnce(closure);
+      const request =
+        action === "workspace-lock"
+          ? h.definition.handler(context(), "setWorkspaceAuthorityLock", [{ locked: true }])
+          : h.definition.handler(context(), "updateAgentProfile", [
+              { action, bindingId: "binding:one" },
+            ]);
+      const rejected = expect(request).rejects.toBe(original);
+      try {
+        await Promise.resolve();
+        expect(close).toHaveBeenCalledOnce();
+        expect(h.interruptAgent).not.toHaveBeenCalled();
+        expect(h.interruptAllAgents).not.toHaveBeenCalled();
+        rejectClosure(original);
+        await rejected;
+        expect(h.interruptAgent).not.toHaveBeenCalled();
+        expect(h.interruptAllAgents).not.toHaveBeenCalled();
+      } finally {
+        rejectClosure(original);
+        await request.catch(() => undefined);
+        h.capabilityGrants.close();
+      }
+    }
+  );
+
   it("names mutable subjects from host records and distinguishes page from continuing consent", async () => {
     const h = createHarness();
     try {

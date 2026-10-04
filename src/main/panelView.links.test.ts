@@ -311,6 +311,47 @@ describe("PanelView plain panel links", () => {
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
   });
 
+  it("joins repeated link clicks until navigation settles, then permits another navigation", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator, sendPanelEvent } = createHarness();
+    let finish!: (result: { id: string; title: string }) => void;
+    vi.mocked(panelOrchestrator.navigatePanel).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+    const url = "vibestudio://panel?v=1&source=panels%2Fchat";
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+    await vi.waitFor(() => expect(panelOrchestrator.navigatePanel).toHaveBeenCalledOnce());
+    finish({ id: panelId, title: "Chat" });
+    await vi.waitFor(() =>
+      expect(sendPanelEvent).toHaveBeenCalledWith(panelId, "runtime:managed-navigation", {
+        panelId,
+        url,
+      })
+    );
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+    await vi.waitFor(() => expect(panelOrchestrator.navigatePanel).toHaveBeenCalledTimes(2));
+  });
+
+  it("allows another link attempt after a navigation fails", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator, sendPanelEvent } = createHarness();
+    vi.mocked(panelOrchestrator.navigatePanel).mockRejectedValueOnce(new Error("build failed"));
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+    const url = "vibestudio://panel?v=1&source=panels%2Fchat";
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+    await vi.waitFor(() =>
+      expect(sendPanelEvent).toHaveBeenCalledWith(panelId, "runtime:child-creation-error", {
+        url,
+        error: "build failed",
+      })
+    );
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+    await vi.waitFor(() => expect(panelOrchestrator.navigatePanel).toHaveBeenCalledTimes(2));
+  });
+
   it("reports an in-place navigation transaction failure back to the launcher", async () => {
     const { panelId, panelView, webContents, panelOrchestrator, sendPanelEvent } = createHarness();
     vi.mocked(panelOrchestrator.navigatePanel).mockRejectedValueOnce(

@@ -23,7 +23,8 @@ import {
   captureOwnedProcessIdentity,
   type OwnedProcessIdentity,
 } from "../../scripts/owned-process-identity.mjs";
-import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
+import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
+import { closeOwnedDesktop } from "../../scripts/lib/owned-desktop-close.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
@@ -417,7 +418,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   app.once("close", () => closedElectronApplications.add(app));
   const output: string[] = [];
   const child = app.process();
-  const mainIdentity = captureTestProcessIdentity(child.pid);
+  const mainOwner = OwnedProcessGroup.create(child);
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
   child.stderr?.on("data", (chunk) => output.push(String(chunk)));
 
@@ -483,66 +484,51 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         }
       }
 
-      const mainPid = child.pid;
       const workspaceServerPid = readReadyFilePid(
         path.join(workspacePath, "state", "server-ready.json")
       );
       const centralDataDir = getCentralDataDirFromEnv(workspaceInfo.env);
       const hubReady = readHubReadyFile(path.join(centralDataDir, "server-auth", "hub-ready.json"));
-      const hubPid = hubReady?.pid;
-      const processReceipts = [
-        { pid: mainPid, identity: mainIdentity },
-        { pid: workspaceServerPid, identity: captureTestProcessIdentity(workspaceServerPid) },
-        { pid: hubPid, identity: captureTestProcessIdentity(hubPid) },
-      ];
-      const closeWithTimeout = async (timeoutMs: number): Promise<void> =>
-        Promise.race([
-          app.close(),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("App close timed out")), timeoutMs)
-          ),
-        ]);
-
+      const orphanOwners = [workspaceServerPid, hubReady?.pid].flatMap((pid) => {
+        const identity = captureTestProcessIdentity(pid);
+        return identity ? [OwnedProcessGroup.adopt(identity)] : [];
+      });
+      const cleanupErrors: unknown[] = ledgerFailure ? [ledgerFailure] : [];
       try {
-        // HubProcessManager allows up to 12 seconds for the detached hub's
-        // ordered shutdown. Cutting Electron off earlier strands its 30-second
-        // machine-control lease and makes an immediate restart fail.
-        await closeWithTimeout(20_000);
+        await closeOwnedDesktop(app, mainOwner);
       } catch (error) {
-        console.warn("[TestSetup] Graceful close failed, force killing:", error);
+        cleanupErrors.push(error);
       }
-
-      for (const receipt of processReceipts) {
-        if (!receipt.pid || (process.platform !== "win32" && !receipt.identity)) continue;
-        const result = await terminateOwnedProcessTree(receipt.pid, { identity: receipt.identity });
-        if (!result.gone) throw new Error(`Test process tree ${receipt.pid} did not retire`);
+      // Only actual Electron exit makes these original detached children
+      // orphaned. Retain physical proof independently of logical close errors.
+      try {
+        await mainOwner.join();
+      } catch (error) {
+        throw new AggregateError([...cleanupErrors, error], "Electron owner did not exit");
       }
-
-      // A forced hub stop cannot execute its final lease release. Once the
-      // exact ready-file PID is confirmed dead, release only that boot's lease
-      // so an immediate restart does not wait for the 30-second fencing TTL.
-      if (hubReady && !isProcessAlive(hubReady.pid)) {
-        const centralData = new CentralDataManager({
-          databasePath: path.join(centralDataDir, "server-auth", "identity.db"),
-        });
-        try {
-          centralData.releaseHubProcessLease(hubReady.serverBootId);
-        } finally {
-          centralData.close();
-        }
+      const physical = await Promise.allSettled(
+        orphanOwners.map((owner) => owner.retire("SIGKILL"))
+      );
+      const physicalFailures = physical.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      cleanupErrors.push(...physicalFailures);
+      if (physicalFailures.length) {
+        throw new AggregateError(cleanupErrors, "Electron resources did not retire");
       }
 
       if (ownsWorkspace) {
         try {
           await removeManagedTestWorkspaceWithRetry(workspacePath);
         } catch (error) {
-          console.warn("[TestSetup] Error removing workspace:", error);
+          cleanupErrors.push(error);
         }
       } else {
         releaseRunCleanupPath(workspaceInfo.testRoot);
       }
 
-      if (ledgerFailure) throw ledgerFailure;
+      if (cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Electron cleanup failed");
     })();
     return cleanupPromise;
   };
@@ -577,12 +563,21 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     const hubDetails = readLogTail(
       path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log")
     );
-    await cleanup();
-    throw new Error(
+    const launchFailure = new Error(
       `${error instanceof Error ? error.message : String(error)}${
         electronDetails ? `\n\nElectron output before readiness:\n${electronDetails}` : ""
       }${hubDetails ? `\n\nLocal hub log before readiness:\n${hubDetails}` : ""}`
     );
+    try {
+      await cleanup();
+    } catch (cleanupFailure) {
+      throw new AggregateError(
+        [launchFailure, cleanupFailure],
+        "Electron launch failed and its owned resources could not be retired",
+        { cause: launchFailure }
+      );
+    }
+    throw launchFailure;
   }
 
   // Optionally open DevTools

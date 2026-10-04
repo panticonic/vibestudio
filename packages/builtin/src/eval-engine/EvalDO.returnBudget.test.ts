@@ -23,9 +23,17 @@ const reach = (instance: EvalDO): Reach => instance as unknown as Reach;
 const imageOwner = (runId: string, data: string): string =>
   `eval-result:${runId}:${createHash("sha256").update(data, "base64").digest("hex")}`;
 
+async function artifactFixture() {
+  const fixture = await createTestDO(EvalDO);
+  Object.defineProperty(fixture.instance, "rpc", {
+    value: { call: vi.fn(async () => undefined) },
+  });
+  return fixture;
+}
+
 describe("eval return budget", () => {
   it("keeps operation evidence when independently compacting large guest output", async () => {
-    const { instance } = await createTestDO(EvalDO);
+    const { instance } = await artifactFixture();
     const operationJournal = {
       protocol: "workspace-operations.v1" as const,
       entries: [
@@ -46,13 +54,13 @@ describe("eval return budget", () => {
     expect(result.operationJournal).toEqual(operationJournal);
   });
   it("returns a small value untouched", async () => {
-    const { instance } = await createTestDO(EvalDO);
+    const { instance } = await artifactFixture();
     const value = { ok: true };
     expect(reach(instance).compactReturnValue(value, "$lastLargeReturn")).toBe(value);
   });
 
   it("reports the budget alongside the overage so a retry can be sized", async () => {
-    const { instance } = await createTestDO(EvalDO);
+    const { instance } = await artifactFixture();
     // A projected page of records, the shape that overflows in practice.
     const wide = Array.from({ length: 400 }, (_, seq) => ({
       seq,
@@ -79,7 +87,7 @@ describe("eval return budget", () => {
     expect(typeof envelope["preview"]).toBe("string");
   });
   it("stores large image bytes as an owned artifact before applying the JSON budget", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await artifactFixture();
     sql.exec(
       "INSERT INTO runs(run_id, args, status, started_at) VALUES ('image', '{}', 'running', 0)"
     );
@@ -108,13 +116,20 @@ describe("eval return budget", () => {
     });
     expect(JSON.stringify(compact).length).toBeLessThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
     expect(putRetained).toHaveBeenCalledWith({ base64: data, owner: imageOwner("image", data) });
-    await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("image", data) });
-    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(releaseRetention).not.toHaveBeenCalled();
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: imageOwner("image", data) },
+    ]);
   });
 
   it("materializes nested images without truncating sibling verification evidence", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await artifactFixture();
     sql.exec(
       "INSERT INTO runs(run_id, args, status, started_at) VALUES ('nested', '{}', 'running', 0)"
     );
@@ -141,12 +156,20 @@ describe("eval return budget", () => {
     expect(JSON.stringify(compact)).not.toContain(image.data);
     expect(putRetained).toHaveBeenCalledTimes(1);
     expect(input.screenshots[0]).toBe(image);
-    await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("nested", image.data) });
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(releaseRetention).not.toHaveBeenCalled();
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: imageOwner("nested", image.data) },
+    ]);
   });
 
-  it("joins a pending artifact write before releasing its ownership during disposal", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+  it("joins a pending artifact write before reporting terminal lifecycle readiness", async () => {
+    const { instance, sql } = await artifactFixture();
     sql.exec(
       "INSERT INTO runs(run_id, args, status, started_at) VALUES ('pending-image', '{}', 'running', 0)"
     );
@@ -167,9 +190,11 @@ describe("eval return budget", () => {
       },
     });
     let disposed = false;
-    const disposal = instance.dispose().then(() => {
-      disposed = true;
-    });
+    const disposal = instance
+      .releaseForLifecycle({ epoch: "retire:test", mode: "retire", reason: "test", deadlineMs: 0 })
+      .then(() => {
+        disposed = true;
+      });
     await vi.waitFor(() =>
       expect(sql.exec("SELECT status FROM runs").toArray()[0]?.["status"]).toBe("cancelled")
     );
@@ -178,11 +203,14 @@ describe("eval return budget", () => {
     finish({ digest: "b".repeat(64), size: 1 });
     await image;
     await disposal;
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("pending-image", "eA==") });
+    expect(releaseRetention).not.toHaveBeenCalled();
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: imageOwner("pending-image", "eA==") },
+    ]);
   });
 
-  it("retains ownership of a failed nested upload until disposal", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+  it("retains failed upload ownership for canonical host retirement", async () => {
+    const { instance, sql } = await artifactFixture();
     sql.exec(
       "INSERT INTO runs(run_id, args, status, started_at) VALUES ('failed-image', '{}', 'running', 0)"
     );
@@ -205,12 +233,20 @@ describe("eval return budget", () => {
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
       { owner: imageOwner("failed-image", "eA==") },
     ]);
-    await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("failed-image", "eA==") });
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(releaseRetention).not.toHaveBeenCalled();
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: imageOwner("failed-image", "eA==") },
+    ]);
   });
 
   it("retains multiple distinct images in one result under the blobstore's one-content-per-owner contract", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await artifactFixture();
     sql.exec("INSERT INTO runs(run_id,args,status,started_at) VALUES ('multi','{}','running',0)");
     const owners = new Map<string, string>();
     const putRetained = vi.fn(async ({ base64, owner }: { base64: string; owner: string }) => {
@@ -242,13 +278,18 @@ describe("eval return budget", () => {
     });
     expect(owners.size).toBe(2);
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
-    await instance.dispose();
-    expect(owners.size).toBe(0);
-    expect(releaseRetention).toHaveBeenCalledTimes(2);
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(owners.size).toBe(2);
+    expect(releaseRetention).not.toHaveBeenCalled();
   });
 
   it("keeps every retention intent for cleanup when a later image upload fails", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await artifactFixture();
     sql.exec("INSERT INTO runs(run_id,args,status,started_at) VALUES ('partial','{}','running',0)");
     const releaseRetention = vi.fn(async () => {});
     const putRetained = vi
@@ -269,14 +310,18 @@ describe("eval return budget", () => {
       })
     ).rejects.toThrow("second upload interrupted");
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
-    await instance.dispose();
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("partial", "eA==") });
-    expect(releaseRetention).toHaveBeenCalledWith({ owner: imageOwner("partial", "eQ==") });
-    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([]);
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(releaseRetention).not.toHaveBeenCalled();
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
   });
 
   it("does not allocate an artifact after its run was cancelled", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await artifactFixture();
     sql.exec(
       "INSERT INTO runs(run_id, args, status, started_at) VALUES ('cancelled-image', '{}', 'cancelled', 0)"
     );

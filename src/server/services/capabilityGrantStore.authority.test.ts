@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -60,49 +60,49 @@ describe("CapabilityGrantStore agent authority", () => {
     grants.close();
   });
 
-  it("rejects an old schema version instead of migrating authority state", () => {
-    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-no-compat-"));
-    const current = new CapabilityGrantStore({ statePath });
-    const databasePath = current.databasePath;
-    current.close();
-    const old = new DatabaseSync(databasePath);
-    old.exec("PRAGMA user_version = 6");
-    old.close();
-
-    expect(() => new CapabilityGrantStore({ statePath })).toThrow(
-      /cannot be loaded without risking data loss.*schema version is 6, expected 11/iu
-    );
-  });
-
-  it("migrates version-7 consent without extending it to foreign workspaces", () => {
-    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-reopen-v7-"));
-    const first = new CapabilityGrantStore({ statePath });
-    const issued = first.issue({
-      effect: "allow",
-      capability: "workspace.gateway.access",
-      resource: { kind: "origin", origin: "https://example.com" },
-      subject: "user:alice",
-      issuedBy: "user:alice",
-      provenance: "acquisition",
-      constraints: { sessionId: "session-legacy" },
-    });
-    first.close();
-    const legacy = new DatabaseSync(first.databasePath);
-    legacy.exec("DROP TABLE authority_subjects");
-    legacy.exec("ALTER TABLE authority_grants DROP COLUMN task_authority");
-    legacy.exec("ALTER TABLE authority_grants DROP COLUMN requesting_code_principal");
-    legacy.exec("ALTER TABLE authority_grants DROP COLUMN document_id");
-    legacy.exec("ALTER TABLE authority_grants DROP COLUMN subject_generation");
-    legacy.exec("ALTER TABLE authority_grants DROP COLUMN source_workspace_id");
-    legacy.exec("PRAGMA user_version = 7");
-    legacy.close();
-
-    const reopened = new CapabilityGrantStore({ statePath });
-    expect(reopened.grantsForSubjects(["user:alice"], issued.capability)).toEqual([
-      expect.objectContaining({ id: issued.id, constraints: { sessionId: "session-legacy" } }),
-    ]);
-    reopened.close();
-  });
+  it.each([6, 7, 8, 9, 10, 11, 12, 13, 14])(
+    "rejects schema version %i unchanged at the final pre-release cut",
+    (version) => {
+      const statePath = mkdtempSync(join(tmpdir(), "authority-grants-cut-"));
+      const first = new CapabilityGrantStore({ statePath });
+      first.issue({
+        effect: "allow",
+        subject: "session:session-one",
+        capability: "model.use",
+        resource: { kind: "exact", key: "credential-one" },
+        issuedBy: "user:alice",
+        provenance: "acquisition",
+      });
+      first.acquisitions.admit({
+        requestKey: "retained-request",
+        ownerRuntimeId: "do:owner",
+        sessionId: "session-one",
+        facts: { value: "original" },
+      });
+      const databasePath = first.databasePath;
+      first.close();
+      const db = new DatabaseSync(databasePath);
+      try {
+        db.exec(`PRAGMA user_version = ${version}`);
+        const snapshot = () => ({
+          version: db.prepare("PRAGMA user_version").get(),
+          schema: db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY name").all(),
+          grants: db.prepare("SELECT * FROM authority_grants ORDER BY id").all(),
+          acquisitions: db
+            .prepare("SELECT * FROM authority_acquisitions ORDER BY acquisition_id")
+            .all(),
+        });
+        const before = snapshot();
+        expect(() => new CapabilityGrantStore({ statePath })).toThrow(
+          new RegExp(`schema version is ${version}, expected 15`, "iu")
+        );
+        expect(snapshot()).toEqual(before);
+      } finally {
+        db.close();
+        rmSync(statePath, { recursive: true, force: true });
+      }
+    }
+  );
 
   it("round-trips the exact task constraint used by authorization", () => {
     const grants = store("task-scope");

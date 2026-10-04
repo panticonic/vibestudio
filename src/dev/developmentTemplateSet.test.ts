@@ -19,7 +19,7 @@ function git(directory: string, ...args: string[]): void {
     },
   });
 }
-function fixture(epoch: number) {
+function fixture(epoch: number, consumers = ["personal", "system", "examples"]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-set-"));
   roots.push(root);
   const templates = path.join(root, "templates");
@@ -42,7 +42,7 @@ function fixture(epoch: number) {
           name: "System testing",
           description: "Acceptance harness",
           url: "git+https://example.test/system-testing.git",
-          consumers: ["personal", "system"],
+          consumers,
         },
         {
           id: "examples",
@@ -64,7 +64,11 @@ function fixture(epoch: number) {
     );
     fs.writeFileSync(
       path.join(checkout, "meta", "vibestudio.yml"),
-      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/${name}]\n`
+      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/${name}]\n${
+        name === "examples" || name === "system-testing"
+          ? "  dependencies:\n    - url: git+https://example.test/base.git\n"
+          : ""
+      }`
     );
     git(checkout, "init", "-b", "main");
     git(checkout, "add", ".");
@@ -94,6 +98,14 @@ describe("resolveDevelopmentTemplateSet", () => {
 
   it("snapshots the complete official template universe without projecting a source superset", async () => {
     const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
+    const examples = path.join(templates, "examples");
+    const examplesManifestPath = path.join(examples, "meta", "vibestudio.yml");
+    const originalManifest = fs.readFileSync(examplesManifestPath, "utf8");
+    const originalHead = execFileSync("git", ["-C", examples, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    });
+    const authoredFile = path.join(examples, "packages", "examples", "authored.txt");
+    fs.writeFileSync(authoredFile, "current dirty authored source\n");
     await expect(
       resolveDevelopmentTemplateSet({
         repoRoot: host,
@@ -138,6 +150,47 @@ describe("resolveDevelopmentTemplateSet", () => {
       "utf8"
     );
     expect(personalManifest).toContain("git+https://example.test/system-testing.git");
+    const examplesManifest = fs.readFileSync(
+      path.join(checkpoint, "4", "meta", "vibestudio.yml"),
+      "utf8"
+    );
+    expect(examplesManifest).toContain("git+https://example.test/system-testing.git");
+    expect(examplesManifest).toContain("git+https://example.test/base.git");
+    expect(
+      fs.readFileSync(path.join(checkpoint, "4", "packages", "examples", "authored.txt"), "utf8")
+    ).toBe("current dirty authored source\n");
+    expect(fs.readFileSync(examplesManifestPath, "utf8")).toBe(originalManifest);
+    expect(execFileSync("git", ["-C", examples, "rev-parse", "HEAD"], { encoding: "utf8" })).toBe(
+      originalHead
+    );
+    expect(fs.readFileSync(authoredFile, "utf8")).toBe("current dirty authored source\n");
+  });
+
+  it("does not inject the development harness into undeclared catalog consumers", async () => {
+    const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH, ["personal", "system"]);
+    const selection = await resolveDevelopmentTemplateSet({
+      repoRoot: host,
+      checkpointRoot: checkpoint,
+      explicitRoot: templates,
+    });
+    expect(selection).not.toBeNull();
+    const examples = selection?.checkouts["examples"];
+    if (!examples) throw new Error("Expected an inspected Examples checkout");
+    expect(fs.readFileSync(path.join(examples, "meta", "vibestudio.yml"), "utf8")).toBe(
+      fs.readFileSync(path.join(templates, "examples", "meta", "vibestudio.yml"), "utf8")
+    );
+  });
+
+  it("does not inspect or inject development dependencies in a production launch", async () => {
+    const { host, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
+    expect(
+      await resolveDevelopmentTemplateSet({
+        repoRoot: host,
+        checkpointRoot: checkpoint,
+        productionTemplates: true,
+      })
+    ).toBeNull();
+    expect(fs.existsSync(checkpoint)).toBe(false);
   });
 
   it("rejects an incompatible template before startup", async () => {

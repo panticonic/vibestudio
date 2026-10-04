@@ -38,6 +38,9 @@ export interface WorkspaceCapabilityCatalogEntry {
   methods?: readonly {
     name: string;
     signature: string;
+    argsSchema?: Record<string, unknown>;
+    returnsSchema?: Record<string, unknown>;
+    argumentNames?: string[];
     website: MethodSchema["website"];
     description?: string;
     access?: Record<string, unknown>;
@@ -84,7 +87,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       const ser = serializeMethod(method);
       const principals = authorityPrincipals(method, def);
       const access = {
-        ...(method.access ?? {}),
+        ...(ser.access ?? {}),
         authority: method.authority ?? def.authority,
         website: method.website,
         principals,
@@ -249,6 +252,9 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         title: `${declared.name}.${method.name}`,
         ...(method.description ? { description: method.description } : {}),
         signature: method.signature,
+        ...(method.argsSchema ? { argsSchema: method.argsSchema } : {}),
+        ...(method.returnsSchema ? { returnsSchema: method.returnsSchema } : {}),
+        ...(method.argumentNames ? { argumentNames: method.argumentNames } : {}),
         access: {
           ...bindingAccess,
           website: method.website,
@@ -280,7 +286,7 @@ function runtimeMethodAccess(
   const qualifiedMethod = `${definition.name}.${methodName}`;
   const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, method.tier, null);
   return {
-    ...(method.access ?? {}),
+    ...(serializeMethod(method).access ?? {}),
     authority: method.authority ?? definition.authority,
     website: method.website,
     principals: authorityPrincipals(method, definition),

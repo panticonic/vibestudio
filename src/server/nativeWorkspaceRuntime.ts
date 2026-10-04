@@ -1,7 +1,13 @@
 import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
-import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
+import { ImmutableTreeWorkerClient } from "./buildV2/immutableTreeWorkerClient.js";
+import {
+  waitForNativeJob,
+  type NativeWorkspaceJob,
+  type NativeDependencyAdmission,
+  type NativeDependencyResources,
+} from "./nativeWorkspaceJob.js";
 import { mkdir, realpath, copyFile, lstat, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -12,7 +18,11 @@ import {
   type ProcessAdapterOptions,
 } from "@vibestudio/process-adapter";
 import { createFsDiskPort } from "./services/fsDiskPort.js";
-import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import {
+  resolveNativeTypeScriptServerPath,
+  resolveRequiredHostArtifactRoot,
+  TYPESCRIPT_SERVER_PATH_ENV,
+} from "./appRoot.js";
 import { stateLayout } from "./stateLayout.js";
 
 /** Installed owner of a workspace's single native domain. The containing state
@@ -79,6 +89,13 @@ export async function startNativeWorkspaceRuntime(input: {
   const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
   const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
   await copyFile(rgPath, ripgrep);
+  // The installed compiler is an executable plus adjacent standard libraries.
+  // Admit that complete immutable resource into the workspace's native domain;
+  // bundled API clients cannot resolve it relative to their generated bundle.
+  const installedCompiler = await realpath(resolveNativeTypeScriptServerPath(input.appRoot));
+  const compilerRoot = path.join(runtimeRoot, "typescript");
+  await materializeImmutableTree(path.dirname(installedCompiler), compilerRoot);
+  const compiler = path.join(compilerRoot, path.basename(installedCompiler));
   const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
   const { executable } = runtime;
   const identity = createHash("sha256");
@@ -87,6 +104,7 @@ export async function startNativeWorkspaceRuntime(input: {
     path.join(runtimeRoot, "control.js"),
     workerEntry,
     extensionEntry,
+    compiler,
   ])
     identity.update(await readFile(resource));
   const sandbox = await WorkspaceRuntime.start(
@@ -114,6 +132,7 @@ export async function startNativeWorkspaceRuntime(input: {
         ].join(path.delimiter),
         LANG: "C.UTF-8",
         ...runtime.environment,
+        [TYPESCRIPT_SERVER_PATH_ENV]: compiler,
       },
       read: [...runtime.readPaths, sourceRoot, buildsRoot, providerInputsRoot],
       // These are owner-selected anchors, never the destinations of guest links.
@@ -126,11 +145,30 @@ export async function startNativeWorkspaceRuntime(input: {
       workspaceEntry,
     }
   );
+  const dependencyRoot = path.join(runtimeRoot, "dependencies");
+  const dependencyWorker = new ImmutableTreeWorkerClient(input.appRoot);
+  const dependencyAdmissions = new Map<string, Promise<NativeDependencyResources>>();
+  let retiring = false;
+  let dependencyRetirement: Promise<void> | undefined;
+  const retireDependencies = (): Promise<void> => {
+    retiring = true;
+    return (dependencyRetirement ??= (async () => {
+      await Promise.allSettled(dependencyAdmissions.values());
+      await dependencyWorker.close();
+      await rm(dependencyRoot, { recursive: true, force: true });
+      dependencyAdmissions.clear();
+    })());
+  };
   let disk: ReturnType<typeof createFsDiskPort> | undefined;
   try {
     const diskProcess = sandbox.fork(workerEntry, { VIBESTUDIO_RIPGREP_PATH: ripgrep });
     disk = createFsDiskPort(diskProcess);
-    void sandbox.retired.then(() => disk?.retire());
+    void sandbox.retired
+      .then(async () => {
+        disk?.retire();
+        await retireDependencies();
+      })
+      .catch((error) => console.error("Native dependency retirement failed:", error));
     await disk.call(
       { root: home, panelId: "installed:filesystem", exposeHostPaths: false },
       "mkdir",
@@ -140,6 +178,51 @@ export async function startNativeWorkspaceRuntime(input: {
     return {
       disk,
       extensionEntry,
+      admitDependencies(input: NativeDependencyAdmission): Promise<NativeDependencyResources> {
+        const { key, nodeModulesDir, workspacePackages } = input;
+        if (retiring) return Promise.reject(new Error("Native workspace is retiring"));
+        if (!/^[a-z0-9-]+$/u.test(key))
+          return Promise.reject(new Error("Invalid acquired dependency identity"));
+        const existing = dependencyAdmissions.get(key);
+        if (existing) return existing;
+        const destination = path.join(dependencyRoot, key);
+        const admission = (async () => {
+          try {
+            const nodeModulesPaths: string[] = [];
+            if (nodeModulesDir) {
+              const modules = path.join(destination, "node_modules");
+              await dependencyWorker.materialize(nodeModulesDir, modules);
+              nodeModulesPaths.push(modules);
+            }
+            const packages: Record<string, string> = {};
+            for (const [name, source] of Object.entries(workspacePackages)) {
+              const target = path.join(
+                destination,
+                "workspace-modules",
+                Buffer.from(name).toString("base64url")
+              );
+              await dependencyWorker.materializePackage(source, target);
+              packages[name] = target;
+            }
+            if (retiring) throw new Error("Native workspace retired during dependency admission");
+            return { nodeModulesPaths, workspacePackages: packages };
+          } catch (error) {
+            try {
+              await rm(destination, { recursive: true, force: true });
+            } catch (cleanupError) {
+              throw new AggregateError(
+                [error, cleanupError],
+                "Native dependency admission and cleanup failed",
+                { cause: error }
+              );
+            }
+            throw error;
+          }
+        })();
+        dependencyAdmissions.set(key, admission);
+        void admission.catch(() => dependencyAdmissions.delete(key));
+        return admission;
+      },
       fork: (
         entry: string,
         environment: Record<string, string | undefined>,
@@ -167,17 +250,22 @@ export async function startNativeWorkspaceRuntime(input: {
         }
       },
       async stop() {
+        retiring = true;
         disk?.retire();
-        return sandbox.stop();
+        const stopped = await sandbox.stop();
+        if (stopped.launcherExited) await retireDependencies();
+        return stopped;
       },
       async retireStorage() {
         const stopped = await sandbox.stop();
         if (!stopped.launcherExited) throw new Error("Native workspace still owns its storage");
+        await retireDependencies();
       },
     };
   } catch (error) {
     disk?.retire();
     await sandbox.stop();
+    await retireDependencies();
     throw error;
   }
 }

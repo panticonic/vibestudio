@@ -353,6 +353,19 @@ export const RuntimeSupervisionHealthSchema = z
   .strict();
 export type RuntimeSupervisionHealth = z.infer<typeof RuntimeSupervisionHealthSchema>;
 
+/** Native evidence of an exact bounded health read; excludes diagnostic prose. */
+export const NativeRuntimeHealthObservationSchema = z.object({
+  protocol: z.literal("runtime-health-observation.v1"),
+  identity: RuntimeSupervisionEntityKeySchema,
+  source: z.string(),
+  logCount: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  errorLimit: z.number().int().positive(),
+  dropped: z.object({ entries: z.number(), errors: z.number() }).strict(),
+  capacity: z.object({ entries: z.number(), errors: z.number() }).strict(),
+}).strict();
+
 const RuntimeSupervisionLogOptionsSchema = z
   .object({
     since: z.number().optional(),
@@ -472,92 +485,100 @@ const PanelReservationSpecSchema = PanelEntityCreateSpecSchema.extend({
 
 export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   PanelEntityCreateSpecSchema,
-  z.object({
-    kind: z.literal("app"),
-    execution: CodeExecutionSchema,
-    contextId: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(
-        "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
-      ),
-    key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
-    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
-    stateArgs: z.unknown().optional().describe("Opaque initial state passed to the app runtime."),
-  }),
-  z.object({
-    kind: z.literal("worker"),
-    execution: CodeExecutionSchema,
-    contextId: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(
-        "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
-      ),
-    key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
-    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
-    stateArgs: z
-      .unknown()
-      .optional()
-      .describe("Opaque initial state passed to the worker runtime."),
-    env: z.record(z.string()).optional().describe("Extra environment variables for the worker."),
-    agentBinding: RuntimeAgentBindingSchema.optional(),
-    agentChannelId: z
-      .string()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe(
-        "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
-      ),
-  }),
-  z.object({
-    kind: z.literal("do"),
-    execution: CodeExecutionSchema,
-    className: z.string().describe("Durable Object class name exported by the source."),
-    key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
-    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
-    contextId: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(
-        "Target context; omit/null to inherit the verified caller's context, or derive it from agentBinding. Root callers mint a fresh context."
-      ),
-    stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
-    agentBinding: RuntimeAgentBindingSchema.optional(),
-    agentChannelId: z
-      .string()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe(
-        "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
-      ),
-  }),
-  z.object({
-    kind: z.literal("session"),
-    execution: InertExecutionSchema,
-    source: z.string().describe("Logical session source label (e.g. an agent CLI name)."),
-    contextId: z
-      .string()
-      .nullable()
-      .optional()
-      .describe("Target context; omit/null to mint a fresh one (reused on key re-attach)."),
-    key: z.string().optional().describe("Stable session key; omit to mint a random UUID."),
-    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
-    title: z.string().optional().describe("Display title surfaced by approval UIs."),
-    agentChannelId: z
-      .string()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe(
-        "Channel served by this external-agent session. The host records the derived self entity/context/channel binding on the session."
-      ),
-  }),
+  z
+    .object({
+      kind: z.literal("app"),
+      execution: CodeExecutionSchema,
+      contextId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
+        ),
+      key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+      resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
+      stateArgs: z.unknown().optional().describe("Opaque initial state passed to the app runtime."),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("worker"),
+      execution: CodeExecutionSchema,
+      contextId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
+        ),
+      key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+      resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
+      stateArgs: z
+        .unknown()
+        .optional()
+        .describe("Opaque initial state passed to the worker runtime."),
+      env: z.record(z.string()).optional().describe("Extra environment variables for the worker."),
+      agentBinding: RuntimeAgentBindingSchema.optional(),
+      agentChannelId: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("do"),
+      execution: CodeExecutionSchema,
+      className: z.string().describe("Durable Object class name exported by the source."),
+      key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+      resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
+      contextId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "Target context; omit/null to inherit the verified caller's context, or derive it from agentBinding. Root callers mint a fresh context."
+        ),
+      stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
+      agentBinding: RuntimeAgentBindingSchema.optional(),
+      agentChannelId: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("session"),
+      execution: InertExecutionSchema,
+      source: z.string().describe("Logical session source label (e.g. an agent CLI name)."),
+      contextId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("Target context; omit/null to mint a fresh one (reused on key re-attach)."),
+      key: z.string().optional().describe("Stable session key; omit to mint a random UUID."),
+      resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
+      title: z.string().optional().describe("Display title surfaced by approval UIs."),
+      agentChannelId: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Channel served by this external-agent session. The host records the derived self entity/context/channel binding on the session."
+        ),
+    })
+    .strict(),
 ]);
 
 const CodeEntityReservationSpecSchema = z.union([
@@ -1467,7 +1488,7 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.supervision",
       rationale: "Bounded health and diagnostic read from one exact executable-unit driver.",
     },
-    description: "Read bounded health, failures, logs, and build events for one supervised entity.",
+    description: "Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here.",
     args: z.tuple([
       RuntimeSupervisionEntityKeySchema,
       RuntimeSupervisionLogOptionsSchema.optional(),
@@ -1489,7 +1510,7 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.supervision-observability",
       rationale: "Bounded retained-log read from one exact executable-unit driver.",
     },
-    description: "Read retained logs for one exact supervised entity.",
+    description: "Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those.",
     args: z.tuple([
       RuntimeSupervisionEntityKeySchema,
       RuntimeSupervisionLogOptionsSchema.optional(),

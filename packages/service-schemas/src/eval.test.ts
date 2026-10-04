@@ -55,6 +55,15 @@ describe("eval lifecycle contract", () => {
 
   it("uses request presence as the exact-allowlist boundary and rejects combinations that could prompt unexpectedly", () => {
     expect(evalAuthorityInputSchema.parse({})).toEqual({});
+    const preauthorize = [{ service: "permissions", method: "list", args: [] }];
+    expect(evalAuthorityInputSchema.parse({ preauthorize })).toEqual({ preauthorize });
+    expect(
+      evalStartInputSchema.parse({
+        runId: "run:default-prompt",
+        source: { kind: "inline", code: "return 1" },
+        authority: { preauthorize },
+      }).authority
+    ).toEqual({ preauthorize });
     expect(evalAuthorityInputSchema.parse({ effects: "read-write" })).toEqual({
       effects: "read-write",
     });
@@ -135,6 +144,21 @@ describe("eval lifecycle contract", () => {
       "eval.get",
     ]);
     expect(call.mock.calls[1]?.[1]).toEqual([{ runId: "run:1" }]);
+  });
+
+  it("preserves a pre-start abort without manufacturing an external run or cancellation", async () => {
+    const abort = new AbortController();
+    const reason = new Error("stop before admission");
+    abort.abort(reason);
+    const call = vi.fn();
+    const execute = createEvalExecutor(call, { signal: abort.signal });
+    await expect(
+      execute({
+        runId: "run:unstarted",
+        source: { kind: "inline", code: "return 42" },
+      })
+    ).rejects.toBe(reason);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("cancels the same caller-owned run when aborted", async () => {

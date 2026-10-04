@@ -393,9 +393,10 @@ describe("AgentExecutionSessionRegistry admission", () => {
 
   it.each(["agent-turn", "method"] as const)(
     "admits and terminally closes a generic %s executor",
-    (kind) => {
+    async (kind) => {
       const registry = new AgentExecutionSessionRegistry();
       const runtimeId = `do:workers/automation:${kind}:one`;
+      const closeSession = vi.fn(async () => {});
       const fact = registry.admitExecution({
         controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
         admissionKey: `mission:one:${kind}`,
@@ -454,9 +455,10 @@ describe("AgentExecutionSessionRegistry admission", () => {
       expect(
         registry.resolveDispatch(fact.controllerRuntimeId, runtimeId, "unrelated", fact.nonce)
       ).toBeNull();
-      expect(() =>
-        registry.finishExecution(fact.authoritySessionId, "do:unrelated:Worker:one")
-      ).toThrow(/admission controller/);
+      await expect(
+        registry.finishExecution(fact.authoritySessionId, "do:unrelated:Worker:one", closeSession)
+      ).rejects.toThrow(/admission controller/);
+      expect(closeSession).not.toHaveBeenCalled();
       expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
       expect(
         registry.admitExecution({
@@ -477,13 +479,36 @@ describe("AgentExecutionSessionRegistry admission", () => {
           causalParent: fact.causalParent,
         })
       ).toBe(fact);
-      expect(registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId)).toBe(
-        true
+      const closureFailure = new Error("Canonical session closure failed");
+      closeSession.mockImplementationOnce(() => {
+        throw closureFailure;
+      });
+      await expect(
+        registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId, closeSession)
+      ).rejects.toBe(closureFailure);
+      expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
+      let joinPresentation!: () => void;
+      closeSession.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            joinPresentation = resolve;
+          })
       );
+      const closing = registry.finishExecution(
+        fact.authoritySessionId,
+        fact.controllerRuntimeId,
+        closeSession
+      );
+      await Promise.resolve();
+      expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
+      joinPresentation();
+      await expect(closing).resolves.toBe(true);
       expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBeNull();
-      expect(registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId)).toBe(
-        false
-      );
+      await expect(
+        registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId, closeSession)
+      ).resolves.toBe(false);
+      expect(closeSession).toHaveBeenCalledTimes(2);
+      expect(closeSession).toHaveBeenLastCalledWith(fact.authoritySessionId);
     }
   );
 });

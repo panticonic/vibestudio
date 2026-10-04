@@ -84,6 +84,7 @@ function makeBuildSystem(): BuildSystemV2 {
     })),
     getEffectiveVersion: vi.fn(),
     getExternalDeps: vi.fn(),
+    prepareTypecheck: vi.fn(),
     listRecentBuildEvents: vi.fn(() => []),
     recompute: vi.fn(),
     gc: vi.fn(),
@@ -146,6 +147,40 @@ function makeBuildSystem(): BuildSystemV2 {
 }
 
 describe("build service extension diagnostics", () => {
+  it("preserves the exact semantic ref and native dependency resources", async () => {
+    const buildSystem = makeBuildSystem();
+    const environment = {
+      stateHash: "state:context",
+      dependencyKey: "immutable-dependencies",
+      nodeModulesPaths: ["/native-owner/resources/node_modules"],
+      workspacePackages: { "@vibestudio/sdk": "/native-owner/resources/sdk" },
+      moduleConditions: ["worker", "workerd", "import", "default"],
+    };
+    vi.mocked(buildSystem.prepareTypecheck).mockResolvedValue(environment);
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => "agent-context",
+    });
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "prepareTypecheck", [
+        "packages/example",
+        "ctx:agent-context",
+      ])
+    ).resolves.toEqual(environment);
+    expect(buildSystem.prepareTypecheck).toHaveBeenCalledWith(
+      "packages/example",
+      "ctx:agent-context"
+    );
+    const failure = new Error("Dependency acquisition failed");
+    vi.mocked(buildSystem.prepareTypecheck).mockRejectedValue(failure);
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "prepareTypecheck", [
+        "packages/example",
+        "ctx:agent-context",
+      ])
+    ).rejects.toBe(failure);
+  });
   it("builds websites only from exact refs and returns a content-free immutable handle", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({

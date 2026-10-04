@@ -3,7 +3,12 @@ import { conditionsForLibraryTarget, conditionsForRuntimeUnit } from "./moduleCo
 import { serviceAuthorityDigest } from "../services/unitAdmissionStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
+import type {
+  RunNativeWorkspaceJob,
+  NativeDependencyAdmission,
+  NativeDependencyResources,
+} from "../nativeWorkspaceJob.js";
+import { typecheckDependencyGraph } from "./typecheckDependencyGraph.js";
 /**
  * Build System V2 — Public API + RPC service registration.
  *
@@ -33,6 +38,7 @@ import {
   diffEvMaps,
   computeBuildKey,
   setBuildRootConfig,
+  getRootDependencyFingerprintInfo,
   type ContentHashMap,
   type ChangeSet,
   type EffectiveVersionMap,
@@ -117,6 +123,8 @@ import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPubl
 import {
   collectExternalDependencyClosure,
   prepareExternalDependencyEnvironment,
+  resolveExternalDependencyRequirements,
+  acquireExternalDeps,
 } from "./externalDeps.js";
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
@@ -243,6 +251,10 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 
 export interface BuildSystemRootOptions {
   runNativeJob: RunNativeWorkspaceJob;
+  /** Admit an acquired, immutable dependency tree to the native workspace owner. */
+  admitNativeDependencies?: (
+    input: NativeDependencyAdmission
+  ) => Promise<NativeDependencyResources>;
   /** Demand the admitted native build provider before a target build starts. */
   ensureBuildProvider?: (target: "react-native") => Promise<void>;
   /** Whether this workspace identity survives a process restart. Diagnostics only. */
@@ -456,6 +468,18 @@ export interface BuildSystemV2 {
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
+
+  /** Resolve exact declared dependencies and return their native read-only locations. */
+  prepareTypecheck(
+    unit: string,
+    ref?: string
+  ): Promise<{
+    stateHash: string;
+    dependencyKey: string | null;
+    nodeModulesPaths: string[];
+    workspacePackages: Record<string, string>;
+    moduleConditions: string[];
+  }>;
 
   /** Get the active provider identity that affects builds for a pluggable target. */
   getBuildProviderDetails(target: "react-native"): {
@@ -1732,7 +1756,6 @@ export async function initBuildSystemV2(
       const dependencyEnvironment = await prepareExternalDependencyEnvironment(
         node,
         graphAtView,
-        workspaceRoot,
         sourceRoot,
         rootOptions.appRoot,
         appNodeModuleRoots
@@ -2397,12 +2420,101 @@ export async function initBuildSystemV2(
     };
   };
 
+  const dependencyPreparations = new Set<
+    Promise<Awaited<ReturnType<BuildSystemV2["prepareTypecheck"]>>>
+  >();
+  let retiringDependencies = false;
+
   const buildSystem: BuildSystemV2 = {
     getBuild,
     getTestArtifact,
     resolveTestSuite,
     getUnitIcon,
     bindRuntimeImage,
+
+    async prepareTypecheck(unitPath, requestedRef) {
+      if (retiringDependencies) throw new Error("Build system is retiring");
+      const admitDependencies = rootOptions.admitNativeDependencies;
+      if (!admitDependencies)
+        throw new Error("Native dependency admission is unavailable for this build system");
+      const preparation = (async () => {
+        const ref = validateBuildRef(requestedRef);
+        const exactRef = !ref || ref === MAIN_HEAD ? (await source.ensureFresh()).stateHash : ref;
+        const resolution = await buildSystem.resolveBuildUnit(unitPath, exactRef);
+        if (!resolution)
+          throw new BuildRequestError("package_not_found", `Unknown dependency unit: ${unitPath}`, {
+            specifier: unitPath,
+          });
+        const { graph } = await viewAt(resolution.stateHash);
+        const node = graph.get(resolution.unitName);
+        const compiler = typecheckDependencyGraph(
+          node,
+          graph,
+          rootOptions.appRoot,
+          appNodeModuleRoots
+        );
+        const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+          compiler.graph.allNodes().filter((candidate) => graph.has(candidate.name)),
+          resolution.stateHash,
+          workspaceRoot
+        );
+        for (const candidate of compiler.graph.allNodes()) {
+          if (!graph.has(candidate.name))
+            candidate.relativePath = path
+              .relative(sourceRoot, candidate.path)
+              .split(path.sep)
+              .join("/");
+        }
+        const { closure, dependencyOverrides, dependencyPatches } =
+          await resolveExternalDependencyRequirements(
+            compiler.graph.get(node.name),
+            compiler.graph,
+            sourceRoot,
+            appNodeModuleRoots
+          );
+        // Host package roots participate in declaration resolution, but never
+        // become grants to native workspace code. Acquire the closed installation
+        // with lifecycle scripts disabled before admitting it to the native owner.
+        const environment = await acquireExternalDeps(closure.installSet, dependencyOverrides, {
+          appRoot: rootOptions.appRoot,
+          patches: dependencyPatches,
+        });
+        try {
+          const packages = Object.keys(compiler.workspacePackages).sort();
+          const dependencyKey =
+            environment.key || packages.length
+              ? sha256Canonical({
+                  recipe: "native-typecheck-resources.v1",
+                  external: environment.key,
+                  sdk: getRootDependencyFingerprintInfo().value,
+                  packages,
+                })
+              : null;
+          const resources = dependencyKey
+            ? await admitDependencies({
+                key: dependencyKey,
+                nodeModulesDir: environment.nodeModulesDir,
+                workspacePackages: compiler.workspacePackages,
+              })
+            : { nodeModulesPaths: [], workspacePackages: {} };
+          return {
+            stateHash: resolution.stateHash,
+            dependencyKey,
+            ...resources,
+            moduleConditions:
+              node.kind === "package" ? ["import", "default"] : [...conditionsForRuntimeUnit(node)],
+          };
+        } finally {
+          environment.release();
+        }
+      })();
+      dependencyPreparations.add(preparation);
+      try {
+        return await preparation;
+      } finally {
+        dependencyPreparations.delete(preparation);
+      }
+    },
 
     async resolveBuildUnit(
       unitPath: string,
@@ -3350,7 +3462,9 @@ export async function initBuildSystemV2(
     },
 
     async shutdown(): Promise<void> {
+      retiringDependencies = true;
       trigger.stop();
+      await Promise.allSettled(dependencyPreparations);
       await Promise.all([authorityAnalysisWorker.close(), typecheckWorker.close(), closeBuilder()]);
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);

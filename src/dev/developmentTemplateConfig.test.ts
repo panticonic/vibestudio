@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearDevelopmentTemplateRoot,
   configuredDevelopmentTemplateRoot,
+  readOfficialTemplateCatalog,
   selectDevelopmentTemplateCheckouts,
   setDevelopmentTemplateRoot,
 } from "./developmentTemplateConfig.js";
@@ -43,7 +44,7 @@ function collection(): { host: string; root: string } {
           name: "System testing",
           description: "Acceptance harness",
           url: "git+https://example.test/system-testing.git",
-          consumers: ["personal", "system"],
+          consumers: ["personal", "system", "examples"],
         },
         {
           id: "examples",
@@ -80,7 +81,7 @@ describe("development template configuration", () => {
           id: "system-testing",
           role: "development",
           url: "git+https://example.test/system-testing.git",
-          consumers: ["personal", "system"],
+          consumers: ["personal", "system", "examples"],
         }),
         expect.objectContaining({ id: "examples", role: "catalog" }),
       ],
@@ -94,6 +95,19 @@ describe("development template configuration", () => {
     const { host, root } = collection();
     git(path.join(root, "base"), "remote", "set-url", "origin", "https://example.test/base");
     expect(setDevelopmentTemplateRoot(host, root).checkouts.base).toBe(path.join(root, "base"));
+  });
+
+  it.each([
+    ["missing", /unknown consumer missing/u],
+    ["system-testing", /consumer system-testing is not installable/u],
+  ])("rejects an invalid development consumer %s", (consumer, error) => {
+    const { host } = collection();
+    const registry = path.join(host, "templates", "registry.json");
+    const document = JSON.parse(fs.readFileSync(registry, "utf8"));
+    document.templates.find((source: { id: string }) => source.id === "system-testing").consumers =
+      [consumer];
+    fs.writeFileSync(registry, JSON.stringify(document));
+    expect(() => readOfficialTemplateCatalog(registry)).toThrow(error);
   });
 
   it("supports one explicit collection override", () => {

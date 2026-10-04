@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CHANNEL_TRAJECTORY_LOG_PREFIX,
-  channelIdFromTrajectoryLog,
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
   headForChannel,
@@ -12,24 +10,29 @@ describe("channel trajectory identity", () => {
   it("derives one canonical, walkable log/head coordinate pair", () => {
     expect(channelTrajectoryFor("channel:alpha")).toEqual({
       channelId: "channel:alpha",
-      logId: `${CHANNEL_TRAJECTORY_LOG_PREFIX}channel:alpha`,
-      head: `${CHANNEL_TRAJECTORY_LOG_PREFIX}channel:alpha`,
+      logId: "channel:alpha",
+      head: "main",
     });
-    expect(headForChannel("channel:alpha")).toBe(logIdForChannel("channel:alpha"));
-    expect(channelIdFromTrajectoryLog(logIdForChannel("channel:alpha"))).toBe("channel:alpha");
+    expect(logIdForChannel("channel:alpha")).toBe("channel:alpha");
+    expect(headForChannel("channel:alpha")).toBe("main");
+    expect(channelTrajectoryFor("channel:beta")).toEqual({
+      channelId: "channel:beta",
+      logId: "channel:beta",
+      head: "main",
+    });
   });
 
   it("rejects an absent channel identity instead of minting a shared trajectory", () => {
     expect(() => channelTrajectoryFor("")).toThrow(/non-empty channelId/);
-    expect(channelIdFromTrajectoryLog("branch:other:channel:alpha")).toBeNull();
-    expect(channelIdFromTrajectoryLog(CHANNEL_TRAJECTORY_LOG_PREFIX)).toBeNull();
+    expect(() => logIdForChannel("")).toThrow(/non-empty channelId/);
+    expect(() => headForChannel("")).toThrow(/non-empty channelId/);
   });
 });
 
 describe("trajectory invocation command identity", () => {
   const coordinates = {
-    logId: "branch:channel:channel:alpha",
-    head: "branch:channel:channel:alpha",
+    logId: "channel:alpha",
+    head: "main",
     invocationId: "invocation:7",
   };
 
@@ -37,7 +40,7 @@ describe("trajectory invocation command identity", () => {
     const first = commandIdForTrajectoryInvocation(coordinates);
     expect(commandIdForTrajectoryInvocation({ ...coordinates })).toBe(first);
     expect(first).toBe(
-      "command:trajectory-invocation:1fab89634d5430dbaadd2a83838ee7302a06e7fce9d70b3a7a350b267481084e"
+      "command:trajectory-invocation:ef0c7e69d5dfa110a95b1b2c1159996a869620644b4ef981bef782bc0ab66fc6"
     );
   });
 

@@ -190,7 +190,7 @@ export const docsMethods = defineServiceMethods({
         "P-discovery: capability discovery and introspection; §2 default {code, session} family",
     },
     description:
-      "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...).",
+      "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method with rpc.call(\"main\", \"<service>.<method>\", args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client.",
     args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(serializedServiceSchema),
     access: READONLY_ACCESS,

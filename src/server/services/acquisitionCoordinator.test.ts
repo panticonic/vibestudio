@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -11,7 +11,8 @@ import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { TargetAuthorityRequestStore } from "./targetAuthorityRequestStore.js";
+import { createAuthorityService } from "./authorityService.js";
+import { authorityAcquisitionReceiptSchema } from "@vibestudio/service-schemas/authority";
 
 function snapshot() {
   return createInvocationSnapshot({
@@ -61,6 +62,100 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it("withdraws only one native invocation while its sibling approval stays actionable", async () => {
+    const path = mkdtempSync(join(tmpdir(), "native-acquisition-ownership-"));
+    const grantStore = new CapabilityGrantStore({ statePath: path });
+    const reviews: Array<{ signal: AbortSignal; resolve: (decision: "version" | "deny") => void }> =
+      [];
+    const request = vi.fn(
+      (input: { signal?: AbortSignal }) =>
+        new Promise<"version" | "deny">((resolve) => {
+          if (!input.signal) throw new Error("Approval requires its owned lifetime");
+          reviews.push({ signal: input.signal, resolve });
+          input.signal.addEventListener("abort", () => resolve("deny"), { once: true });
+        })
+    );
+    const coordinator = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request } as never,
+    });
+    try {
+      const runtimeId = "do:workers/example:Example:native";
+      const code = {
+        callerId: runtimeId,
+        callerKind: "do" as const,
+        repoPath: "workers/example",
+        effectiveVersion: "ev-test",
+        executionDigest: "c".repeat(64),
+        requested: [],
+      };
+      const caller = createVerifiedCaller(runtimeId, "do", code);
+      const owned = (invocationId: string) => {
+        const causalParent = {
+          kind: "trajectory-invocation" as const,
+          logId: "trajectory:channel:one",
+          head: "main",
+          invocationId,
+        };
+        const snap = {
+          ...snapshot(),
+          callerPrincipal: `code:workers/example@${"c".repeat(64)}` as const,
+          causalParent,
+        };
+        return coordinator.request({
+          snapshot: snap,
+          snapshotDigest: invocationSnapshotDigest(snap),
+          tier: "gated",
+          caller: { ...caller, causalParent },
+          renderedAction: "use the local service",
+          resource: { kind: "exact", key: snap.resourceKey },
+          presentation: { ...reviewedPresentation(), allowedDecisions: ["version", "deny"] },
+        });
+      };
+      const first = owned("native:first");
+      const second = owned("native:second");
+      expect(first.acquisitionId).not.toBe(second.acquisitionId);
+      expect(reviews).toHaveLength(2);
+      const owner = { ownerRuntimeId: runtimeId, sessionId: "chat-1" };
+      const service = createAuthorityService({
+        dispatcher: {} as never,
+        acquisitions: coordinator,
+        grants: grantStore,
+      });
+      const context = { caller, authorization: { session: { id: owner.sessionId } } as never };
+      const receipt = async (acquisitionId: string) =>
+        authorityAcquisitionReceiptSchema.parse(
+          await service.handler(context, "acquisitionReceipt", [{ acquisitionId }])
+        );
+      const before = await receipt(first.acquisitionId);
+      await service.handler(context, "withdrawAcquisition", [
+        { acquisitionId: first.acquisitionId, bindingDigest: before.bindingDigest },
+      ]);
+      expect(reviews[0]!.signal.aborted).toBe(true);
+      expect(reviews[1]!.signal.aborted).toBe(false);
+      expect(await receipt(first.acquisitionId)).toMatchObject({
+        state: "closed",
+        invocations: [{ causalParent: { invocationId: "native:first" } }],
+      });
+      expect(await receipt(second.acquisitionId)).toMatchObject({
+        state: "pending",
+        invocations: [{ causalParent: { invocationId: "native:second" } }],
+      });
+      reviews[1]!.resolve("version");
+      await expect(
+        coordinator.awaitDecision({ ...owner, acquisitionId: second.acquisitionId })
+      ).resolves.toMatchObject({ state: "decided", decision: "version" });
+      expect(await receipt(second.acquisitionId)).toMatchObject({
+        state: "decided",
+        invocations: [{ causalParent: { invocationId: "native:second" } }],
+      });
+      expect((await receipt(first.acquisitionId)).state).toBe("closed");
+    } finally {
+      await coordinator.closeAll();
+      grantStore.close();
+      rmSync(path, { recursive: true });
+    }
+  });
   it.each([true, false])(
     "binds approval retirement to the actual subject, not website attribution (website caller: %s)",
     async (websiteCaller) => {
@@ -304,6 +399,7 @@ describe("AcquisitionCoordinator", () => {
         await vi.waitFor(() => expect(failPresentation).toBeDefined());
         const wait = () =>
           coordinator.awaitDecision({
+            sessionId: "chat-1",
             acquisitionId: info.acquisitionId,
             ownerRuntimeId: "agent:1",
             ...(mode === "waiting-abortable" ? { signal: new AbortController().signal } : {}),
@@ -313,12 +409,23 @@ describe("AcquisitionCoordinator", () => {
         failPresentation(failure);
         if (late) {
           await vi.waitFor(() => expect(coordinator.pendingViews()).toHaveLength(0));
-          await expect(wait()).rejects.toBe(failure);
+          // Late reads cross the canonical storage boundary; preserve the
+          // structured failure rather than requiring a live Error reference.
+          await expect(wait()).rejects.toMatchObject({
+            message: failure.message,
+            code: failure.code,
+          });
         } else await assertion;
-        if (late) expect(notifyOwner).toHaveBeenCalledWith("agent:1", info.acquisitionId);
+        if (late)
+          expect(notifyOwner).toHaveBeenCalledWith(
+            "agent:1",
+            info.acquisitionId,
+            expect.any(AbortSignal)
+          );
         else expect(notifyOwner).not.toHaveBeenCalled();
         await expect(
           coordinator.awaitDecision({
+            sessionId: "chat-1",
             acquisitionId: info.acquisitionId,
             ownerRuntimeId: "another-owner",
           })
@@ -333,7 +440,6 @@ describe("AcquisitionCoordinator", () => {
   it("presents planned task rules once and persists only selected rows", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-task-rules-"));
     const grantStore = new CapabilityGrantStore({ statePath });
-    const targetRequests = new TargetAuthorityRequestStore({ statePath });
     const requestWithHandle = vi.fn((request) => ({
       approvalId: "approval:rules",
       decision: Promise.resolve("task" as const),
@@ -346,7 +452,6 @@ describe("AcquisitionCoordinator", () => {
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { requestWithHandle } as never,
       grantStore,
-      targetRequests,
       resolveTaskTitle: async () => "Trello-style task board",
     });
     const targetSubject = `task:${"a".repeat(64)}` as const;
@@ -404,14 +509,12 @@ describe("AcquisitionCoordinator", () => {
       expect.objectContaining({ cardType: "task.rules", authorityFacets: expect.any(Array) })
     );
     expect(grantStore.grantsForSubjects([targetSubject], "panel.inspect")).toEqual([]);
-    targetRequests.close();
     grantStore.close();
   });
 
   it("settles a durable task-target request as a reusable task grant", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-"));
     const grantStore = new CapabilityGrantStore({ statePath });
-    const targetRequests = new TargetAuthorityRequestStore({ statePath });
     const requestWithHandle = vi.fn((input) => ({
       approvalId: "approval:task",
       decision: Promise.resolve("task" as const),
@@ -427,7 +530,6 @@ describe("AcquisitionCoordinator", () => {
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { requestWithHandle } as never,
       grantStore,
-      targetRequests,
     });
     const targetSubject = `task:${"e".repeat(64)}` as const;
     const authorityPlanDigest = "f".repeat(64);
@@ -468,18 +570,15 @@ describe("AcquisitionCoordinator", () => {
         issuedBy: "user:bob",
       }),
     ]);
-    targetRequests.close();
     grantStore.close();
   });
 
   it("persists a durable target denial on the target task rather than the presentation session", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-deny-"));
     const grantStore = new CapabilityGrantStore({ statePath });
-    const targetRequests = new TargetAuthorityRequestStore({ statePath });
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request: vi.fn(async () => "deny" as const) } as never,
       grantStore,
-      targetRequests,
     });
     const targetSubject = `task:${"a".repeat(64)}` as const;
     const authorityPlanDigest = "b".repeat(64);
@@ -514,14 +613,12 @@ describe("AcquisitionCoordinator", () => {
         scope: "task",
       }),
     ]);
-    targetRequests.close();
     grantStore.close();
   });
 
   it("joins a matching runtime invocation to the durable subject request", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-target-join-"));
     const grantStore = new CapabilityGrantStore({ statePath });
-    const targetRequests = new TargetAuthorityRequestStore({ statePath });
     let decide!: (decision: "task") => void;
     const request = vi.fn(
       () =>
@@ -532,7 +629,6 @@ describe("AcquisitionCoordinator", () => {
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request } as never,
       grantStore,
-      targetRequests,
     });
     const targetSubject = `task:${"e".repeat(64)}` as const;
     const authorityPlanDigest = "f".repeat(64);
@@ -580,14 +676,13 @@ describe("AcquisitionCoordinator", () => {
       info: { pending: false },
     });
     expect(grantStore.grantsForSubjects([targetSubject], snap.capability)).toHaveLength(1);
-    targetRequests.close();
     grantStore.close();
   });
 
   it("cannot mint a late grant after the target subject is retired", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-retired-target-"));
     const grantStore = new CapabilityGrantStore({ statePath });
-    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    const targetRequests = grantStore.targetRequests;
     let decide!: (decision: "mission") => void;
     const cancelForCaller = vi.fn();
     const coordinator = new AcquisitionCoordinator({
@@ -601,7 +696,6 @@ describe("AcquisitionCoordinator", () => {
         cancelForCaller,
       } as never,
       grantStore,
-      targetRequests,
     });
     const targetSubject = `mission:nightly@${"a".repeat(64)}` as const;
     const authorityPlanDigest = "b".repeat(64);
@@ -640,7 +734,6 @@ describe("AcquisitionCoordinator", () => {
     });
     expect(cancelForCaller).toHaveBeenCalledTimes(1);
     expect(grantStore.grantsForSubjects([targetSubject], "notification.show")).toEqual([]);
-    targetRequests.close();
     grantStore.close();
   });
 
@@ -904,6 +997,7 @@ describe("AcquisitionCoordinator", () => {
     resolve("version");
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: first.acquisitionId,
         ownerRuntimeId: caller.runtime.id,
       })
@@ -986,12 +1080,14 @@ describe("AcquisitionCoordinator", () => {
     decisions[0]!("version");
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: first.acquisitionId,
         ownerRuntimeId: caller.runtime.id,
       })
     ).resolves.toMatchObject({ state: "decided", decision: "version" });
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: second.acquisitionId,
         ownerRuntimeId: caller.runtime.id,
       })
@@ -1003,6 +1099,7 @@ describe("AcquisitionCoordinator", () => {
     decisions[2]!("deny");
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: unrelated.acquisitionId,
         ownerRuntimeId: caller.runtime.id,
       })
@@ -1154,11 +1251,13 @@ describe("AcquisitionCoordinator", () => {
     );
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: first.acquisitionId,
         ownerRuntimeId: "agent:someone-else",
       })
     ).rejects.toMatchObject({ code: "EACCES" });
     const waiting = coordinator.awaitDecision({
+      sessionId: "chat-1",
       acquisitionId: first.acquisitionId,
       ownerRuntimeId: input.caller.runtime.id,
     });
@@ -1255,6 +1354,7 @@ describe("AcquisitionCoordinator", () => {
     expect(info.pending).toBe(false);
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: info.acquisitionId,
         ownerRuntimeId: input.caller.runtime.id,
       })
@@ -1474,7 +1574,7 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
-  it("releases terminal rendezvous state while retaining a bounded awaitDecision race result", async () => {
+  it("releases terminal rendezvous state while retaining the canonical awaitDecision result", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-terminal-")),
     });
@@ -1502,6 +1602,7 @@ describe("AcquisitionCoordinator", () => {
     await vi.waitFor(() => expect(coordinator.pending()).toEqual([]));
     await expect(
       coordinator.awaitDecision({
+        sessionId: "chat-1",
         acquisitionId: info.acquisitionId,
         ownerRuntimeId: input.caller.runtime.id,
       })
@@ -1510,15 +1611,19 @@ describe("AcquisitionCoordinator", () => {
     const internals = coordinator as unknown as {
       byRequestKey: Map<unknown, unknown>;
       byId: Map<unknown, unknown>;
-      completedById: Map<unknown, unknown>;
     };
     expect(internals.byRequestKey.size).toBe(0);
     expect(internals.byId.size).toBe(0);
-    expect(internals.completedById.size).toBe(1);
+    expect(
+      grantStore.acquisitions.get(info.acquisitionId, {
+        ownerRuntimeId: input.caller.runtime.id,
+        sessionId: input.snapshot.sessionId,
+      })?.state
+    ).toBe("decided");
     grantStore.close();
   });
 
-  it("bounds terminal acquisition observations for unique requests", async () => {
+  it("retains terminal acquisition identities beyond the former race-cache limit without retaining live rendezvous state", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-bounded-")),
     });
@@ -1533,10 +1638,11 @@ describe("AcquisitionCoordinator", () => {
       channelId: "chat-1",
     });
 
+    let firstAcquisitionId = "";
     for (let index = 0; index < 520; index += 1) {
       const resourceKey = `https://example.com/${index}`;
       const snap = { ...snapshot(), resourceKey, args: [resourceKey] };
-      await coordinator.requestAndWait({
+      const result = await coordinator.requestAndWait({
         snapshot: snap,
         snapshotDigest: invocationSnapshotDigest(snap),
         tier: "critical",
@@ -1545,16 +1651,28 @@ describe("AcquisitionCoordinator", () => {
         resource: { kind: "origin", origin: "https://example.com" },
         presentation: reviewedPresentation(),
       });
+      if (index === 0) firstAcquisitionId = result.info!.acquisitionId;
     }
 
     const internals = coordinator as unknown as {
       byRequestKey: Map<unknown, unknown>;
       byId: Map<unknown, unknown>;
-      completedById: Map<unknown, unknown>;
     };
     expect(internals.byRequestKey.size).toBe(0);
     expect(internals.byId.size).toBe(0);
-    expect(internals.completedById.size).toBe(512);
+    expect(
+      grantStore.acquisitions.outstanding({
+        ownerRuntimeId: caller.runtime.id,
+        sessionId: "chat-1",
+      })
+    ).toHaveLength(64);
+    await expect(
+      coordinator.awaitDecision({
+        sessionId: "chat-1",
+        acquisitionId: firstAcquisitionId,
+        ownerRuntimeId: caller.runtime.id,
+      })
+    ).resolves.toEqual({ state: "decided", decision: "deny" });
     grantStore.close();
   });
 
@@ -1595,8 +1713,11 @@ describe("AcquisitionCoordinator", () => {
     );
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     controller.abort();
+    expect(request.mock.calls[0]![0].signal?.aborted).toBe(true);
 
     await expect(waiting).rejects.toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
     await vi.waitFor(() => expect(coordinator.pending()).toEqual([]));
@@ -1651,7 +1772,7 @@ describe("AcquisitionCoordinator", () => {
         resource: { type: "context", label: "Workspace branch", value: "two" },
         operation: expect.objectContaining({ kind: "runtime", verb: "Open panel" }),
         details: [{ label: "Source", value: "panels/chat" }],
-        signal,
+        signal: expect.any(AbortSignal),
       })
     );
     grantStore.close();
@@ -1951,8 +2072,12 @@ describe("AcquisitionCoordinator", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(notifyOwner).toHaveBeenCalledOnce();
-    expect(notifyOwner).toHaveBeenCalledWith(caller.runtime.id, expect.stringMatching(/^acq:/));
+    await vi.waitFor(() => expect(notifyOwner).toHaveBeenCalledOnce());
+    expect(notifyOwner).toHaveBeenCalledWith(
+      caller.runtime.id,
+      expect.stringMatching(/^acq:/),
+      expect.any(AbortSignal)
+    );
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(caller.runtime.id),
@@ -2017,6 +2142,7 @@ describe("AcquisitionCoordinator", () => {
     });
 
     const waited = coordinator.awaitDecision({
+      sessionId: "chat-1",
       acquisitionId: info.acquisitionId,
       ownerRuntimeId: caller.runtime.id,
     });

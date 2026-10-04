@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { compileSvelteTypeSource, projectSvelteDeclarations, svelteTypeEnvironmentFiles } from "@vibestudio/svelte-type-source";
+import { compileSvelteTypeSource, projectSvelteDeclarations, svelteTypeEnvironment } from "@vibestudio/svelte-type-source";
 import { TraceMap, AnyMap, originalPositionFor } from "@jridgewell/trace-mapping";
 import {
   API,
@@ -251,7 +251,9 @@ export class TypeCheckService {
     this.updateFile(entry, `export { default } from ${JSON.stringify(importPath)};\nexport * from ${JSON.stringify(importPath)};\n`);
     if (!this.svelteEnvironmentLoaded) {
       this.svelteEnvironmentLoaded = true;
-      for (const file of svelteTypeEnvironmentFiles) this.updateFile(file, fs.readFileSync(file, "utf8"));
+      for (const [filename, definitions] of Object.entries(svelteTypeEnvironment)) {
+        this.updateFile(path.join(this.panelPath, ".vibestudio-svelte-types", filename), definitions);
+      }
     }
   }
 

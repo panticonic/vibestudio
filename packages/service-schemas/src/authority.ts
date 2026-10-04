@@ -1,4 +1,8 @@
+import { AUTHORITY_FAILURE_REASON_CODES, AUTHORITY_REMEDIATION_KINDS } from "@vibestudio/rpc";
 import { z } from "zod";
+import { rpcCausalParentSchema } from "./rpcCausality.js";
+import { nativeInvocationIdentitySchema } from "./nativeInvocation.js";
+import { JsonValueSchema } from "@vibestudio/shared/wireValues";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
@@ -61,6 +65,75 @@ export const authorityRowSchema = z
   })
   .strict() satisfies z.ZodType<AuthorityRow>;
 
+const acquisitionIdentity = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes("\0"));
+const acquisitionDigest = z.string().regex(/^[a-f0-9]{64}$/);
+/** Original protected invocation, projected by the host from sealed admission data.
+ * A receipt read authenticates this identity; delivery hints do not supply it. */
+export const authorityAcquisitionInvocationSchema = z
+  .object({
+    nativeInvocation: nativeInvocationIdentitySchema.nullable(),
+    ownerRuntimeId: acquisitionIdentity,
+    sessionId: acquisitionIdentity,
+    causalParent: rpcCausalParentSchema.nullable(),
+    code: z
+      .object({
+        repoPath: acquisitionIdentity,
+        effectiveVersion: acquisitionIdentity,
+        executionDigest: acquisitionDigest.nullable(),
+      })
+      .strict()
+      .nullable(),
+    service: acquisitionIdentity,
+    method: acquisitionIdentity,
+    argsDigest: acquisitionDigest,
+    preparedStateDigest: acquisitionIdentity,
+    snapshotDigest: acquisitionDigest,
+    capability: acquisitionIdentity,
+    resourceKey: z.string(),
+  })
+  .strict();
+export type AuthorityAcquisitionInvocation = z.infer<typeof authorityAcquisitionInvocationSchema>;
+
+const acquisitionPosition = z
+  .object({
+    createdAt: z.number().int().nonnegative().safe(),
+    acquisitionId: acquisitionIdentity,
+  })
+  .strict();
+const acquisitionReceiptFields = {
+  acquisitionId: acquisitionIdentity,
+  bindingDigest: acquisitionDigest,
+  invocations: z.array(authorityAcquisitionInvocationSchema).nonempty(),
+  admission: z
+    .object({
+      requestKey: acquisitionIdentity,
+      ownerRuntimeId: acquisitionIdentity,
+      sessionId: acquisitionIdentity,
+      facts: JsonValueSchema,
+    })
+    .strict(),
+  createdAt: z.number().int().nonnegative().safe(),
+};
+
+/** Canonical host admission/outcome. Live transports and human cards are not receipts. */
+export const authorityAcquisitionReceiptSchema = z.discriminatedUnion("state", [
+  z.object({ ...acquisitionReceiptFields, state: z.literal("pending") }).strict(),
+  z
+    .object({
+      ...acquisitionReceiptFields,
+      state: z.enum(["decided", "closed", "failed"]),
+      resolution: JsonValueSchema,
+      resolutionDigest: acquisitionDigest,
+      settledAt: z.number().int().nonnegative().safe(),
+      acknowledgedAt: z.number().int().nonnegative().safe().optional(),
+    })
+    .strict(),
+]);
+export type AuthorityAcquisitionReceipt = z.infer<typeof authorityAcquisitionReceiptSchema>;
+
 const EVERY_ORIGIN: ServiceAuthorityPolicy = {
   principals: ["host", "user", "code", "session", "mission"],
 };
@@ -73,37 +146,15 @@ const leafSchema = z
     tier: z.enum(["open", "gated", "critical"]),
     failure: z
       .object({
-        reasonCode: z.enum([
-          "approval-required",
-          "user-denied",
-          "receiver-rejected",
-          "fixed-code-not-requested",
-          "invalid-session",
-          "connection-required",
-          "invalid-attestation",
-          "receiver-undeclared",
-          "attestation-required",
-          "attestation-invalid",
-          "eval-read-only",
-        ]),
+        reasonCode: z.enum(AUTHORITY_FAILURE_REASON_CODES),
         reason: z.string(),
         capability: z.string().optional(),
         resourceKey: z.string().optional(),
         remediation: z
           .object({
-            kind: z.enum([
-              "request-user-approval",
-              "update-installed-code-manifest",
-              "declare-rpc-receiver",
-              "use-admitted-principal",
-              "satisfy-relationship",
-              "refresh-session",
-              "connect-workspace",
-              "respect-denial",
-              "use-writable-session",
-              "retry-through-host",
-            ]),
+            kind: z.enum(AUTHORITY_REMEDIATION_KINDS),
             message: z.string(),
+            review: z.object({ approvalId: z.string(), title: z.string() }).strict().optional(),
             request: z
               .object({
                 capability: z.string(),
@@ -122,7 +173,11 @@ const leafSchema = z
 
 export const authorityMethods = defineServiceMethods({
   listTaskRules: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -150,7 +205,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   resetTaskRules: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -167,7 +226,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   awaitDecision: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -187,8 +250,103 @@ export const authorityMethods = defineServiceMethods({
     authority: EVERY_ORIGIN,
     access: { sensitivity: "read" },
   },
+  acquisitionReceipt: {
+    website: {
+      kind: "closed",
+      reason: "Approval receipts belong to their authenticated execution owner.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Reads only a retained acquisition owned by the authenticated runtime and session; grants no authority.",
+    },
+    description:
+      "Read canonical admission and outcome for an acquisition in the authenticated session.",
+    args: z.tuple([z.object({ acquisitionId: acquisitionIdentity }).strict()]),
+    returns: authorityAcquisitionReceiptSchema.nullable(),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "read" },
+  },
+  outstandingAcquisitions: {
+    website: {
+      kind: "closed",
+      reason: "Approval recovery belongs to its authenticated execution owner.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Traverses only unacknowledged acquisitions in the authenticated runtime/session; does not settle or execute them.",
+    },
+    description:
+      "Read one bounded page of acquisitions awaiting acknowledgement in the authenticated session.",
+    args: z.tuple([z.object({ after: acquisitionPosition.optional() }).strict()]),
+    returns: z
+      .object({
+        receipts: z.array(authorityAcquisitionReceiptSchema).max(64),
+        next: acquisitionPosition.nullable(),
+      })
+      .strict(),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "read" },
+  },
+  withdrawAcquisition: {
+    website: {
+      kind: "closed",
+      reason: "Approval withdrawal belongs to its authenticated execution owner.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Closes only an exact pending acquisition owned by the authenticated runtime/session; grants no authority and leaves other work active.",
+    },
+    description:
+      "Withdraw an exact acquisition after its owning operation ends; retain any outcome already committed.",
+    args: z.tuple([
+      z.object({ acquisitionId: acquisitionIdentity, bindingDigest: acquisitionDigest }).strict(),
+    ]),
+    returns: authorityAcquisitionReceiptSchema,
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "write" },
+  },
+  acknowledgeAcquisition: {
+    website: {
+      kind: "closed",
+      reason: "Approval acknowledgement belongs to its authenticated execution owner.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Acknowledges only an exact canonical terminal digest owned by the authenticated runtime/session; grants no authority.",
+    },
+    description:
+      "Acknowledge an exact acquisition outcome after the owning agent commits its consumption.",
+    args: z.tuple([
+      z
+        .object({ acquisitionId: acquisitionIdentity, resolutionDigest: acquisitionDigest })
+        .strict(),
+    ]),
+    returns: z.object({ acknowledged: z.literal(true) }).strict(),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "write" },
+  },
   preflight: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -226,7 +384,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   compileAuthorityPlan: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -268,7 +430,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   acquireForTarget: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -298,7 +464,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   acquireForCurrentTask: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -327,7 +497,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   admitExecution: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -388,7 +562,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   finishExecution: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -403,7 +581,11 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retireTarget: {
-    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "Authority administration belongs to trusted callers; websites acquire through ordinary RPC.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",

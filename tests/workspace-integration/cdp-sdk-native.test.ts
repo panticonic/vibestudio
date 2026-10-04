@@ -97,6 +97,7 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
       let native: CdpConnection | undefined;
       let sdk: Awaited<ReturnType<typeof BrowserImpl.connect>> | undefined;
       let downloads: HeadlessBrowserDownloads | undefined;
+      let originalFailure: unknown;
       try {
         browser = await launchChromium({
           executablePath: process.env["VIBESTUDIO_CDP_CHROMIUM"] ?? "/usr/bin/google-chrome",
@@ -221,6 +222,9 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
         const popup = page.waitForPopup();
         await page.getByRole("button", { name: "Popup" }).click();
         expect((await popup).panelId).toBe("panel-popup");
+      } catch (error) {
+        originalFailure = error;
+        throw error;
       } finally {
         const failures: unknown[] = [];
         const release = async (cleanup: () => unknown) => {
@@ -234,15 +238,30 @@ describe.runIf(process.env["VIBESTUDIO_RUN_CDP_SDK_NATIVE"] === "1")(
         await release(() => downloads?.stop());
         await release(() => pages?.unloadPanel("panel-popup"));
         await release(() => pages?.unloadPanel("panel-main"));
-        native?.close();
+        await release(() => native?.close());
         await release(() => browser?.stop());
-        for (const peer of peers) peer.close();
-        await new Promise<void>((resolve) => sockets.close(() => resolve()));
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve()))
+        await release(async () => {
+          const closed = new Promise<void>((resolve, reject) =>
+            sockets.close((error) => (error ? reject(error) : resolve()))
+          );
+          for (const peer of peers) peer.close();
+          await closed;
+        });
+        await release(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+              server.closeAllConnections();
+            })
         );
-        await rm(root, { recursive: true, force: true });
-        if (failures.length) throw new AggregateError(failures, "Native SDK test cleanup failed");
+        // Failed retirement retains diagnostic files rather than claiming cleanup.
+        if (!failures.length) await release(() => rm(root, { recursive: true, force: true }));
+        if (failures.length)
+          throw new AggregateError(
+            [...(originalFailure === undefined ? [] : [originalFailure]), ...failures],
+            "Native SDK test cleanup failed",
+            { cause: originalFailure ?? failures[0] }
+          );
       }
     }, 60000); // Investigation containment only; finally owns browser/socket/file cleanup.
   }

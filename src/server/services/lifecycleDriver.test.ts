@@ -4,12 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 import type { DODispatch } from "../doDispatch.js";
-import type { DORef } from "@vibestudio/shared/doDispatcher";
+import type {
+  DORef,
+  LifecyclePrepareInput,
+  LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
 
 function makeHarness(
   opts: {
-    hangPrepare?: boolean;
-    hangRecordOp?: boolean;
+    prepare?: (ref: DORef, input: LifecyclePrepareInput) => Promise<LifecyclePrepareResult>;
+    workspace?: (method: string, args: unknown[]) => Promise<void>;
     leases?: Array<{ source: string; className: string; objectKey: string }>;
     concurrency?: number;
   } = {}
@@ -46,9 +50,7 @@ function makeHarness(
   const doDispatch = {
     dispatch: async (_ref: DORef, method: string, ...args: unknown[]) => {
       calls.push({ kind: "workspace", method, arg: args[0] });
-      if (opts.hangRecordOp && method === "lifecycleRecordOp") {
-        await new Promise(() => undefined);
-      }
+      await opts.workspace?.(method, args);
       if (method === "lifecycleOpenEpoch") {
         epoch = "epoch-1";
         return epoch;
@@ -67,9 +69,8 @@ function makeHarness(
     },
     dispatchLifecycle: async (ref: DORef, method: "prepare" | "resume", arg: unknown) => {
       calls.push({ kind: "lifecycle", method, ref, arg });
-      if (opts.hangPrepare && method === "prepare") {
-        await new Promise(() => undefined);
-      }
+      if (opts.prepare && method === "prepare")
+        return opts.prepare(ref, arg as LifecyclePrepareInput);
       return method === "prepare" ? { status: "ready" } : undefined;
     },
   } as Pick<DODispatch, "dispatch" | "dispatchLifecycle">;
@@ -78,12 +79,12 @@ function makeHarness(
     workerdManager: workerdManager as WorkerdManager,
     doDispatch: doDispatch as DODispatch,
     workspaceId: "workspace-main",
-    prepareDeadlineMs: 50,
     concurrency: opts.concurrency ?? 2,
   });
   driver.start();
   return {
     calls,
+    driver,
     fireBegin: (event: RestartBeginEvent) => beginHook?.(event),
     fireReady: (event: RestartReadyEvent) => readyHook?.(event),
   };
@@ -149,74 +150,156 @@ describe("LifecycleDriver", () => {
     ).toBe(false);
   });
 
-  it("records timed_out when a DO does not complete prepare before the deadline", async () => {
-    const harness = makeHarness({ hangPrepare: true });
-    await expect(
-      harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" })
-    ).rejects.toThrow(/Lifecycle release failed/u);
-
-    expect(harness.calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "workspace",
-          method: "lifecycleRecordOp",
-          arg: expect.objectContaining({
-            opKind: "prepare",
-            status: "timed_out",
-          }),
-        }),
-      ])
+  it("keeps a slow valid release owned beyond the former shutdown deadline", async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const release = deferred<LifecyclePrepareResult>();
+    const harness = makeHarness({
+      prepare: async () => {
+        entered.resolve(undefined);
+        return release.promise;
+      },
+    });
+    let settled = false;
+    const preparation = harness.driver.prepareForShutdown();
+    const observed = preparation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
     );
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settled).toBe(false);
+      expect(harness.calls.find((call) => call.kind === "lifecycle")?.arg).toMatchObject({
+        mode: "suspend",
+        deadlineMs: 0,
+        reason: "server_shutdown",
+      });
+      expect(harness.calls.some((call) => call.method === "lifecycleRecordOp")).toBe(false);
+      release.resolve({ status: "ready" });
+      await preparation;
+      expect(harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg).toMatchObject({
+        status: "ready",
+      });
+    } finally {
+      release.resolve({ status: "ready" });
+      await observed;
+      vi.useRealTimers();
+    }
   });
 
-  it("uses one batch deadline instead of timing out each hung prepare serially", async () => {
+  it("joins the actual journal acknowledgement after release without timing it out", async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const journal = deferred<void>();
     const harness = makeHarness({
-      hangPrepare: true,
+      workspace: async (method) => {
+        if (method === "lifecycleRecordOp") {
+          entered.resolve(undefined);
+          await journal.promise;
+        }
+      },
+    });
+    let settled = false;
+    const preparation = harness.fireBegin({
+      correlationId: "r-journal",
+      generation: 8,
+      reason: "planned",
+    });
+    const observed = Promise.resolve(preparation).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settled).toBe(false);
+      journal.resolve(undefined);
+      await preparation;
+      expect(settled).toBe(true);
+    } finally {
+      journal.resolve(undefined);
+      await observed;
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the original release failure while attempting independent targets", async () => {
+    const original = new Error("native connection cleanup refused", {
+      cause: new Error("socket cause"),
+    });
+    const harness = makeHarness({
       concurrency: 1,
       leases: [
         { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" },
         { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-2" },
       ],
+      prepare: async (ref) => {
+        if (ref.objectKey === "ch-1") throw original;
+        return { status: "ready" };
+      },
     });
-
-    const startedAt = Date.now();
-    await expect(
-      harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" })
-    ).rejects.toThrow(/Lifecycle release failed/u);
-    const elapsedMs = Date.now() - startedAt;
-
-    const prepareCalls = harness.calls.filter(
-      (call) => call.kind === "lifecycle" && call.method === "prepare"
-    );
-    const timedOutOps = harness.calls.filter(
-      (call) =>
-        call.kind === "workspace" &&
-        call.method === "lifecycleRecordOp" &&
-        (call.arg as { status?: string }).status === "timed_out"
-    );
-    expect(prepareCalls).toHaveLength(1);
-    expect(elapsedMs).toBeLessThan(90);
-    expect(timedOutOps).toHaveLength(2);
+    const failure = await harness.driver.prepareForShutdown().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(1);
+    expect((failure as AggregateError).errors[0]).toBe(original);
+    expect((failure as AggregateError).cause).toBe(original);
+    expect(harness.calls.filter((call) => call.kind === "lifecycle")).toHaveLength(2);
+    expect(
+      harness.calls
+        .filter((call) => call.method === "lifecycleRecordOp")
+        .map((call) => (call.arg as { status: string }).status)
+    ).toEqual(["failed", "ready"]);
   });
 
-  it("does not let bookkeeping against a wedged WorkspaceDO hold restart preparation", async () => {
-    const harness = makeHarness({ hangPrepare: true, hangRecordOp: true });
-    const startedAt = Date.now();
-
-    await expect(
-      harness.fireBegin({ correlationId: "r-bookkeeping", generation: 8, reason: "planned" })
-    ).rejects.toThrow(/Lifecycle release failed/u);
-
-    expect(Date.now() - startedAt).toBeLessThan(140);
-    expect(harness.calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: "workspace", method: "lifecycleRecordOp" }),
-      ])
-    );
+  it("propagates original journal failure without a second bookkeeping attempt", async () => {
+    const original = new Error("lifecycle journal rejected");
+    const harness = makeHarness({
+      workspace: async (method) => {
+        if (method === "lifecycleRecordOp") throw original;
+      },
+    });
+    const failure = await harness.driver.prepareForShutdown().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(1);
+    expect((failure as AggregateError).errors[0]).toBe(original);
+    expect(harness.calls.filter((call) => call.method === "lifecycleRecordOp")).toHaveLength(1);
   });
 
-  it("aborts prepare and its bookkeeping immediately when crash recovery preempts it", async () => {
-    const harness = makeHarness({ hangPrepare: true, hangRecordOp: true });
+  it("does not acknowledge an invalid prepare result as released ownership", async () => {
+    const harness = makeHarness({
+      prepare: async () => undefined as unknown as LifecyclePrepareResult,
+    });
+    await expect(harness.driver.prepareForShutdown()).rejects.toThrow(/Lifecycle release failed/u);
+    expect(harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg).toMatchObject({
+      status: "failed",
+      detail: { error: "Lifecycle prepare returned no valid release receipt" },
+    });
+  });
+
+  it("joins a crash-preempted dispatch until actual old-target destruction and admits no further work", async () => {
+    const entered = deferred<void>();
+    const destroyed = deferred<LifecyclePrepareResult>();
+    const original = new Error("old workerd process connection destroyed");
+    const harness = makeHarness({
+      concurrency: 1,
+      leases: [
+        { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" },
+        { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-2" },
+      ],
+      prepare: async () => {
+        entered.resolve(undefined);
+        return destroyed.promise;
+      },
+    });
     const controller = new AbortController();
     const preparation = harness.fireBegin({
       correlationId: "r-preempt",
@@ -224,13 +307,41 @@ describe("LifecycleDriver", () => {
       reason: "planned",
       signal: controller.signal,
     });
-
-    await vi.waitFor(() =>
-      expect(
-        harness.calls.some((call) => call.kind === "lifecycle" && call.method === "prepare")
-      ).toBe(true)
+    let settled = false;
+    const observed = Promise.resolve(preparation).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
     );
-    controller.abort();
-    await expect(preparation).rejects.toThrow(/Lifecycle release failed/u);
+    try {
+      await entered.promise;
+      controller.abort(new Error("authoritative crash replacement"));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(harness.calls.some((call) => call.method === "lifecycleRecordOp")).toBe(false);
+      destroyed.reject(original);
+      const failure = await Promise.resolve(preparation).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(1);
+      expect((failure as AggregateError).errors[0]).toBe(original);
+      expect(harness.calls.filter((call) => call.kind === "lifecycle")).toHaveLength(1);
+      expect(harness.calls.some((call) => call.method === "lifecycleRecordOp")).toBe(false);
+    } finally {
+      destroyed.reject(original);
+      await observed;
+    }
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}

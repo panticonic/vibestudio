@@ -125,6 +125,7 @@ export interface WorkspaceStateClient {
  * (and any other code that creates panels/workers/DOs) to mint entities.
  */
 export interface RuntimeClient {
+  createContext(input: { contextId: string }): Promise<{ contextId: string }>;
   createEntity(spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   reserveEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
@@ -182,6 +183,7 @@ export function createRuntimeClient(callService: ShellServiceCall): RuntimeClien
     callService("runtime", method, args) as Promise<T>;
   return {
     createEntity: (spec) => call("createEntity", [spec]),
+    createContext: (input) => call("createContext", [input]),
     reserveEntity: (spec) => call("reserveEntity", [spec]),
     activateReservedEntity: (spec) => call("activateReservedEntity", [spec]),
     retireEntity: (id) => call("retireEntity", [{ id }]),

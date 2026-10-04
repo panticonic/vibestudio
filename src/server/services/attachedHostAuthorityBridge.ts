@@ -173,7 +173,7 @@ export interface OrdinaryAuthorityAcquirer {
     capability: string;
     resource: ResourceScope;
   }): number;
-  invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+  invalidate(inputs: readonly AttachedHostAcquisitionInput[]): void;
 }
 
 /** One dispatcher adapter: local calls retain the normal coordinator while
@@ -226,8 +226,7 @@ export function attachedHostAwareAuthorityAcquirer(
           }) => ordinary.priorInteractiveApprovalCount!(input),
         }
       : {}),
-    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-      ordinary.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+    invalidate: (inputs) => ordinary.invalidate(inputs),
   };
 }
 

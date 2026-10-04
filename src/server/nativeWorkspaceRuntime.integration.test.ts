@@ -1,9 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, readFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { waitForNativeJob } from "./nativeWorkspaceJob.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
+import { build } from "esbuild";
 
 it("runs the production disk receiver under its platform execution contract", async () => {
   // An Electron-hosted invocation still launches the installed standalone Node
@@ -94,6 +95,125 @@ it("runs the production disk receiver under its platform execution contract", as
     vi.unstubAllEnvs();
     const stopped = await runtime?.stop();
     if (stopped) expect(stopped.launcherExited).toBe(true);
+    await runtime?.retireStorage();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("runs bundled typechecking with its admitted native compiler and standard libraries", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "native-workspace-typecheck-"));
+  const statePath = path.join(root, "state");
+  const sourceRoot = path.join(statePath, "source");
+  await mkdir(sourceRoot, { recursive: true });
+  const source =
+    'import { answer } from "@vibestudio/fixture-sdk"; const result: number = answer;\n';
+  await writeFile(path.join(sourceRoot, "index.ts"), source);
+  const dependencies = path.join(root, "acquired-dependencies");
+  const dependency = path.join(dependencies, "typed-dependency");
+  await mkdir(dependency, { recursive: true });
+  await writeFile(
+    path.join(dependency, "package.json"),
+    JSON.stringify({
+      name: "typed-dependency",
+      version: "1.0.0",
+      types: "index.d.ts",
+    })
+  );
+  await writeFile(path.join(dependency, "index.d.ts"), "export declare const answer: string;\n");
+  const sdk = path.join(root, "installed-sdk");
+  await mkdir(path.join(sdk, "types"), { recursive: true });
+  await writeFile(
+    path.join(sdk, "package.json"),
+    JSON.stringify({
+      name: "@vibestudio/fixture-sdk",
+      exports: { ".": { types: "./types/index.d.ts" } },
+    })
+  );
+  await writeFile(
+    path.join(sdk, "types", "index.d.ts"),
+    'export { answer } from "typed-dependency";\n'
+  );
+  await writeFile(path.join(sdk, ".npmrc"), "host-only package-manager input");
+  let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
+  let admitted: string | undefined;
+  try {
+    const bundled = await build({
+      stdin: {
+        contents: 'export { TypeCheckService } from "@vibestudio/typecheck";',
+        resolveDir: process.cwd(),
+        sourcefile: "typecheck-job.ts",
+      },
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      write: false,
+      banner: {
+        js: 'import { createRequire as __vibestudioCreateRequire } from "node:module"; import { fileURLToPath as __vibestudioFileURLToPath } from "node:url"; import { dirname as __vibestudioDirname } from "node:path"; const require = __vibestudioCreateRequire(import.meta.url); const __filename = __vibestudioFileURLToPath(import.meta.url); const __dirname = __vibestudioDirname(__filename);',
+      },
+    });
+    runtime = await startNativeWorkspaceRuntime({
+      workspaceId: "typecheck-fixture",
+      statePath,
+      sourceRoot,
+      scratchRoot: path.join(statePath, "scratch", "contexts"),
+      buildsRoot: path.join(statePath, "builds"),
+      appRoot: process.cwd(),
+    });
+    const concurrentAdmissions = await Promise.all([
+      runtime.admitDependencies({
+        key: "fixture-dependencies",
+        nodeModulesDir: dependencies,
+        workspacePackages: { "@vibestudio/fixture-sdk": sdk },
+      }),
+      runtime.admitDependencies({
+        key: "fixture-dependencies",
+        nodeModulesDir: dependencies,
+        workspacePackages: { "@vibestudio/fixture-sdk": sdk },
+      }),
+    ]);
+    expect(concurrentAdmissions[0]).toBe(concurrentAdmissions[1]);
+    const resources = concurrentAdmissions[0]!;
+    admitted = resources.nodeModulesPaths[0]!;
+    const sdkResource = resources.workspacePackages["@vibestudio/fixture-sdk"]!;
+    await expect(access(path.join(sdkResource, ".npmrc"))).rejects.toThrow();
+    await writeFile(
+      path.join(sdk, "types", "index.d.ts"),
+      "export declare const answer: number;\n"
+    );
+    expect(await readFile(path.join(sdkResource, "types", "index.d.ts"), "utf8")).toBe(
+      'export { answer } from "typed-dependency";\n'
+    );
+    await runtime.runJob({
+      dependencies: "",
+      bundle: bundled.outputFiles[0]!.text,
+      script: `
+        import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        import { TypeCheckService } from './bundle.js';
+        assert.equal(process.env.VIBESTUDIO_APP_ROOT, undefined);
+        if (process.platform !== 'win32') {
+          assert.throws(() => fs.readFileSync(${JSON.stringify(path.join(dependency, "index.d.ts"))}));
+          assert.throws(() => fs.writeFileSync(${JSON.stringify(path.join(admitted, "typed-dependency", "index.d.ts"))}, 'mutated'));
+        }
+        const service = new TypeCheckService({panelPath: ${JSON.stringify(sourceRoot)}, nodeModulesPaths: [${JSON.stringify(admitted)}], workspaceContext: {
+          monorepoRoot: ${JSON.stringify(sourceRoot)}, packages: new Map([["@vibestudio/fixture-sdk", {
+            name: "@vibestudio/fixture-sdk", dir: ${JSON.stringify(sdkResource)},
+            packageJson: JSON.parse(fs.readFileSync(${JSON.stringify(path.join(sdkResource, "package.json"))}, 'utf8')),
+          }]])
+        }, disableTsconfigDiscovery: true});
+        try {
+          service.updateFile('index.ts', ${JSON.stringify(source)});
+          const result = service.check();
+          assert(result.diagnostics.some(diagnostic => diagnostic.code === 2322));
+          assert(!result.diagnostics.some(diagnostic => diagnostic.code === 2307));
+          assert(!result.diagnostics.some(diagnostic => diagnostic.message.includes('global type')));
+        } finally { service.dispose(); }
+      `,
+    });
+  } finally {
+    const stopped = await runtime?.stop();
+    if (stopped) expect(stopped.launcherExited).toBe(true);
+    if (admitted) await expect(access(admitted)).rejects.toThrow();
     await runtime?.retireStorage();
     await rm(root, { recursive: true, force: true });
   }

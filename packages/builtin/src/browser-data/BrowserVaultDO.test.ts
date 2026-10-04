@@ -17,18 +17,18 @@ describe("BrowserVaultDO schema", () => {
     }
   });
 
-  it("has one typed declaration for every exposed data method", () => {
+  it("has one typed declaration for every exposed data method", async () => {
     const db = new DatabaseSync(":memory:");
-    const instance = createBrowserVaultDO(db);
+    const instance = await createBrowserVaultDO(db);
     const productMethods = [...rpcExposedMethodNames(instance)].filter(
       (method) => !DURABLE_OBJECT_FRAMEWORK_RPC_METHODS.has(method)
     );
     expect(productMethods.sort()).toEqual(Object.keys(browserVaultMethods).sort());
   });
 
-  it("creates the one canonical pre-release schema directly", () => {
+  it("creates the one canonical pre-release schema directly", async () => {
     const db = new DatabaseSync(":memory:");
-    createBrowserVaultDO(db);
+    await createBrowserVaultDO(db);
 
     expect(db.prepare(`SELECT singleton, version FROM _vibestudio_schema`).get()).toEqual({
       singleton: 1,
@@ -47,9 +47,9 @@ describe("BrowserVaultDO schema", () => {
     db.close();
   });
 
-  it("enforces tier, sensitivity, and principals from the typed method table", () => {
+  it("enforces tier, sensitivity, and principals from the typed method table", async () => {
     const db = new DatabaseSync(":memory:");
-    const instance = createBrowserVaultDO(db);
+    const instance = await createBrowserVaultDO(db);
     const resolve = (
       method: keyof typeof browserVaultMethods
     ): import("@vibestudio/rpc").ResolvedRpcAuthority | null =>
@@ -85,7 +85,7 @@ describe("BrowserVaultDO schema", () => {
 describe("BrowserVaultDO form-fill field identity", () => {
   it("rejects credentials and transient secrets from reusable form history", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = createBrowserVaultDO(db);
+    const store = await createBrowserVaultDO(db);
 
     for (const type of ["current-password", "new-password", "one-time-code", "cc-csc"] as const) {
       await expect(
@@ -100,7 +100,7 @@ describe("BrowserVaultDO form-fill field identity", () => {
 
   it("stores and retrieves arbitrary browser-native field names", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = createBrowserVaultDO(db);
+    const store = await createBrowserVaultDO(db);
 
     await store.addFormFillValue({
       fieldName: "favorite_pizza_topping",
@@ -123,7 +123,7 @@ describe("BrowserVaultDO form-fill field identity", () => {
 
   it("deduplicates semantic equivalents while retaining their native aliases", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = createBrowserVaultDO(db);
+    const store = await createBrowserVaultDO(db);
 
     const firstId = await store.addFormFillValue({
       fieldName: "email_address",
@@ -154,7 +154,7 @@ describe("BrowserVaultDO form-fill field identity", () => {
 describe("BrowserVaultDO partitioned cookies", () => {
   it("stores identical cookie triples independently by structured partition key", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = createBrowserVaultDO(db);
+    const store = await createBrowserVaultDO(db);
     const base = {
       name: "sid",
       value: "one",
@@ -214,9 +214,15 @@ describe("BrowserVaultDO partitioned cookies", () => {
   });
 });
 
-function createBrowserVaultDO(db: DatabaseSync, env: Record<string, unknown> = {}): BrowserVaultDO {
-  const instance = new BrowserVaultDO(sqliteContext(db), env);
-  (instance as unknown as { ensureReady(): void }).ensureReady();
+async function createBrowserVaultDO(
+  db: DatabaseSync,
+  env: Record<string, unknown> = {}
+): Promise<BrowserVaultDO> {
+  const instance = new BrowserVaultDO(sqliteContext(db), {
+    WORKER_CLASS_NAME: "BrowserVaultDO",
+    ...env,
+  });
+  await (instance as unknown as { initializeSchema(): Promise<void> }).initializeSchema();
   return instance;
 }
 
@@ -246,6 +252,17 @@ function sqliteContext(db: DatabaseSync): DurableObjectContext {
         return null;
       },
       deleteAlarm() {},
+      async transaction<T>(callback: () => Promise<T>): Promise<T> {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const result = await callback();
+          db.exec("COMMIT");
+          return result;
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+      },
       transactionSync<T>(callback: () => T): T {
         db.exec("BEGIN IMMEDIATE");
         try {

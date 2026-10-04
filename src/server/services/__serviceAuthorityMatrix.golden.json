@@ -441,6 +441,29 @@
       ]
     },
     "methods": {
+      "acknowledgeAcquisition": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "Acknowledges only an exact canonical terminal digest owned by the authenticated runtime/session; grants no authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "acquireForCurrentTask": {
         "authority": {
           "principals": [
@@ -475,6 +498,29 @@
           "residency": "grant-authority",
           "family": "authority.acquire",
           "rationale": "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "acquisitionReceipt": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "Reads only a retained acquisition owned by the authenticated runtime and session; grants no authority."
         },
         "capability": null,
         "presentation": null
@@ -582,6 +628,29 @@
         "capability": null,
         "presentation": null
       },
+      "outstandingAcquisitions": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "Traverses only unacknowledged acquisitions in the authenticated runtime/session; does not settle or execute them."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "preflight": {
         "authority": {
           "principals": [
@@ -643,6 +712,29 @@
           "residency": "grant-authority",
           "family": "authority.execution",
           "rationale": "Installed workflow code retires an owner-attributed target only after its admitted executions have closed."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "withdrawAcquisition": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "Closes only an exact pending acquisition owned by the authenticated runtime/session; grants no authority and leaves other work active."
         },
         "capability": null,
         "presentation": null
@@ -2189,6 +2281,23 @@
           "residency": "untrusted-execution",
           "family": "build.read",
           "rationale": "Read-only projection of declared workspace sources, immutable build identity, and reviewed authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "prepareTypecheck": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "build.native-resources",
+          "rationale": "Resolves an exact compiler program's declared runtime/development dependencies and installed SDK declarations, then admits those resources read-only to its native workspace with installer scripts disabled."
         },
         "capability": null,
         "presentation": null
@@ -4398,6 +4507,23 @@
       ]
     },
     "methods": {
+      "acknowledge": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "eval.control",
+          "rationale": "Owner-scoped acknowledgement neither executes code nor deletes retained data."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "cancel": {
         "authority": {
           "inherits": true
@@ -4496,6 +4622,23 @@
           "residency": "untrusted-execution",
           "family": "eval.read",
           "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "receipt": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "eval.read",
+          "rationale": "Owner-scoped read of an immutable result; no new execution or authority."
         },
         "capability": null,
         "presentation": null
@@ -18184,6 +18327,64 @@
         }
       },
       "alarmSet": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "workspace-state.supervision",
+          "rationale": "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "alarmSourcePublish": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "workspace-state.supervision",
+          "rationale": "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "alarmSourceRegister": {
         "authority": {
           "principals": [
             "host",

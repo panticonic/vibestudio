@@ -1,11 +1,19 @@
 import { expect, test } from "@playwright/test";
 import * as fsSync from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import YAML from "yaml";
+import { inspectNativeApprovalInvocation } from "../../fixtures/nativeApprovalEvidence.js";
 import type { PanelReadinessSnapshot } from "../../../src/main/panelReadiness.js";
 
-import { CredentialStore } from "@vibestudio/credential-client/store";
+import {
+  NATIVE_APPROVAL_MODEL,
+  NATIVE_APPROVAL_REPLY,
+  writeNativeApprovalModelProvider,
+  writeNativeApprovalReviewExtension,
+} from "../../fixtures/nativeApprovalModelProvider";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
+import { RuntimeSupervisionDescriptionSchema } from "@vibestudio/service-schemas/runtime";
 import {
   createManagedTestWorkspace,
   callTestApi,
@@ -22,7 +30,7 @@ import {
   executePanelScript,
   type TestApp,
 } from "../../setup/electronSetup";
-import { findWorkspaceShellPage } from "../support/workspaceCreation";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -38,134 +46,12 @@ type PendingApproval = {
   parts?: Array<{ kind: string; name: string; target?: string | null }>;
 };
 
-const OPENAI_CODEX_CREDENTIAL_ID = "e2e-openai-codex";
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-
-function centralDataDirForWorkspace(workspaceDir: string): string {
-  return path.dirname(path.dirname(workspaceDir));
-}
-
-function envForCentralDataDir(centralDataDir: string): Partial<NodeJS.ProcessEnv> {
-  switch (process.platform) {
-    case "win32":
-      return { APPDATA: path.dirname(centralDataDir) };
-    case "darwin":
-      return {
-        HOME: path.dirname(path.dirname(path.dirname(centralDataDir))),
-      };
-    default:
-      return {
-        XDG_CONFIG_HOME: path.dirname(centralDataDir),
-        HOME: path.join(path.dirname(path.dirname(centralDataDir)), "home"),
-      };
-  }
-}
-
-async function withCredentialStoreEnv<T>(workspaceDir: string, fn: () => Promise<T>): Promise<T> {
-  const overrides = envForCentralDataDir(centralDataDirForWorkspace(workspaceDir));
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(overrides)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
-async function seedOpenAiCodexCredential(workspaceDir: string): Promise<void> {
-  await withCredentialStoreEnv(workspaceDir, async () => {
-    const store = new CredentialStore({
-      basePath: path.join(centralDataDirForWorkspace(workspaceDir), "credentials"),
-    });
-    await store.saveUrlBound({
-      id: OPENAI_CODEX_CREDENTIAL_ID,
-      label: "ChatGPT Codex model credential",
-      providerId: "url-bound",
-      connectionId: OPENAI_CODEX_CREDENTIAL_ID,
-      connectionLabel: "ChatGPT Codex model credential",
-      accountIdentity: {
-        providerUserId: "e2e-openai-account",
-        email: "e2e@example.invalid",
-      },
-      accessToken: "e2e-openai-token",
-      scopes: ["openid", "profile", "email", "offline_access"],
-      bindings: [
-        {
-          id: "fetch",
-          use: "fetch",
-          audience: [{ url: OPENAI_CODEX_BASE_URL, match: "path-prefix" }],
-          injection: {
-            type: "header",
-            name: "Authorization",
-            valueTemplate: "Bearer {token}",
-            stripIncoming: ["authorization"],
-          },
-        },
-      ],
-      metadata: {
-        modelProviderId: "openai-codex",
-        materialType: "bearer-token",
-      },
-    });
-  });
-}
-
 function configureWorkspaceSourceForApproval(
   sourceRoot: string,
   initialPromptOverride?: string
 ): string {
-  const extensionDir = path.join(sourceRoot, "extensions", "e2e-approval");
-  fsSync.mkdirSync(extensionDir, { recursive: true });
-  fsSync.writeFileSync(
-    path.join(extensionDir, "package.json"),
-    JSON.stringify(
-      {
-        name: "@workspace-extensions/e2e-approval",
-        version: "0.1.0",
-        private: true,
-        type: "module",
-        vibestudio: {
-          displayName: "E2E Approval Extension",
-          entry: "index.ts",
-          extension: {
-            activationEvents: ["*"],
-            methodAuthority: {
-              ping: { effect: { kind: "open" } },
-            },
-          },
-          authority: { requests: [], provides: [] },
-        },
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
-  fsSync.writeFileSync(
-    path.join(extensionDir, "index.ts"),
-    [
-      "export async function activate() {",
-      "  return {",
-      "    ping() { return 'pong'; },",
-      "  };",
-      "}",
-      "",
-    ].join("\n"),
-    "utf8"
-  );
+  const providerRepo = writeNativeApprovalModelProvider(sourceRoot);
+  writeNativeApprovalReviewExtension(sourceRoot);
   const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
     template?: { repositories?: string[] };
@@ -180,13 +66,15 @@ function configureWorkspaceSourceForApproval(
   if (!repositories.includes("extensions/e2e-approval")) {
     repositories.push("extensions/e2e-approval");
   }
+  if (!repositories.includes(providerRepo)) repositories.push(providerRepo);
   config.defaultAgentConfig = {
     ...config.defaultAgentConfig,
-    model: "openai-codex:gpt-5.4-mini",
+    model: NATIVE_APPROVAL_MODEL,
   };
   config.extensions = [
     ...(Array.isArray(config.extensions) ? config.extensions : []),
     { source: "extensions/e2e-approval" },
+    { source: providerRepo },
   ];
   // Exercise the shipped onboarding contract itself. This test must not inject
   // a substitute prompt: doing so would hide a template regression where the
@@ -280,35 +168,6 @@ async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
       }
     }
     return hasLaunchGateApproval || (hasHostedShellChrome && hasApprovalSurface);
-  });
-}
-
-async function credentialApprovalActionStyles(
-  testApp: TestApp
-): Promise<{ trustVersion: string; useOnce: string } | null> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const styles = await contents.executeJavaScript(
-          `(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const trust = buttons.find((button) => button.innerText.trim() === 'Trust version');
-            const once = buttons.find((button) => button.innerText.trim() === 'Use once');
-            if (!(trust instanceof HTMLElement) || !(once instanceof HTMLElement)) return null;
-            return {
-              trustVersion: trust.getAttribute('data-accent-color') ?? '',
-              useOnce: once.getAttribute('data-accent-color') ?? '',
-            };
-          })()`,
-          true
-        );
-        if (styles) return styles;
-      } catch {
-        // Ignore non-DOM and transiently navigating webContents.
-      }
-    }
-    return null;
   });
 }
 
@@ -510,17 +369,6 @@ async function clickShellButton(
   );
 }
 
-async function clickShellButtonByPreference(
-  testApp: TestApp,
-  labels: RegExp[],
-  approvalId?: string
-): Promise<boolean> {
-  for (const label of labels) {
-    if (await clickShellButton(testApp, label, approvalId)) return true;
-  }
-  return false;
-}
-
 async function listShellDomSnapshots(testApp: TestApp): Promise<
   Array<{
     id: number;
@@ -604,6 +452,36 @@ async function listShellDomSnapshots(testApp: TestApp): Promise<
 }
 
 async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
+  const extensionOwners = await Promise.all(
+    [...new Set([testApp.workspaceId, testApp.systemWorkspaceId])].map(async (workspaceId) => {
+      const config = await rpcCall(testApp, "workspace", "getConfig", [], workspaceId)
+        .then((value) => {
+          if (!value || typeof value !== "object" || Array.isArray(value))
+            throw new Error("The owning workspace did not return its effective configuration");
+          const config = value as Record<string, unknown>;
+          return {
+            extensions: config["extensions"],
+            hostTargets: config["hostTargets"],
+            defaultAgentConfig: config["defaultAgentConfig"],
+          };
+        })
+        .catch((error: unknown) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      const extensions = await rpcCall(
+        testApp,
+        "runtime",
+        "supervision.list",
+        [{ kind: "extension" }],
+        workspaceId
+      )
+        .then((value) => RuntimeSupervisionDescriptionSchema.array().parse(value))
+        .catch((error: unknown) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return { workspaceId, config, extensions };
+    })
+  );
   const pending = await listPendingApprovals(testApp).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
@@ -756,7 +634,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
                 payloadKind: event.payload?.kind,
                 agenticKind: event.payload?.payload?.kind,
                 role: event.payload?.payload?.message?.role ?? event.payload?.message?.role,
-                content: String(event.payload?.payload?.message?.content ?? event.payload?.message?.content ?? event.payload?.content ?? "").slice(0, 300),
+                content: String(event.payload?.payload?.blocks?.filter((block) => block.type === "text").map((block) => block.content).join("\n") ?? "").slice(0, 300),
               })),
             })))()`
           ).catch((error: unknown) => ({
@@ -793,6 +671,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     error: error instanceof Error ? error.message : String(error),
   }));
   const diagnostics = {
+    extensionOwners,
     pending,
     launchResult,
     hostView,
@@ -817,7 +696,9 @@ type StartupAgentCompletionState = {
     initialPromptDelivered: boolean;
     onboardingSkillReadCompleted: boolean;
     assistantCompleted: boolean;
-    turnClosed: boolean;
+    nativeSettled: boolean;
+    networkInvocationIds: string[];
+    completedNetworkInvocationIds: string[];
     pendingWork: string[];
     failures: string[];
     invocations: Array<Record<string, unknown>>;
@@ -842,7 +723,7 @@ function summarizeInvocationEvent(event: Record<string, unknown>): Record<string
       kind: event["kind"],
       invocationId: event["invocationId"],
       name: event["name"],
-      request: boundedEventValue(event["request"]),
+      nativeSource: boundedEventValue(event["nativeSource"]),
       terminalOutcome: event["terminalOutcome"],
       outcome: event["outcome"],
       reason: event["reason"],
@@ -870,20 +751,6 @@ async function collectStartupAgentCompletion(
   if (!firstPanelId) {
     return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
   }
-  const panelSurfaceText = await getPanelText(testApp, firstPanelId).catch(() => "");
-  const surfaceAgentHandle = panelSurfaceText.match(/@ai-chat-[a-z0-9-]+/i)?.[0] ?? null;
-  // A completed first turn can be fully rendered in the panel after the agent
-  // has retired its live subscription. Keep the user-visible contract as a
-  // bounded fallback for that lifecycle state; durable channel/trajectory
-  // events remain authoritative whenever they are available.
-  const surfaceInitialPromptDelivered = panelSurfaceText.includes(expectedInitialPrompt.trim());
-  const surfaceOnboardingSkillReadCompleted = /\bRead\s+path:\s+SKILL\.md\b/i.test(
-    panelSurfaceText
-  );
-  const surfaceAssistantCompleted = panelSurfaceText.includes(
-    "E2E model response: initial agent turn completed."
-  );
-
   const channels: StartupAgentCompletionState["channels"] = [];
   const errors: string[] = [];
   for (const channelName of channelNames) {
@@ -914,7 +781,9 @@ async function collectStartupAgentCompletion(
         initialPromptDelivered: false,
         onboardingSkillReadCompleted: false,
         assistantCompleted: false,
-        turnClosed: false,
+        nativeSettled: false,
+        networkInvocationIds: [],
+        completedNetworkInvocationIds: [],
         pendingWork: [],
         failures: ["Channel service target was not resolved"],
         invocations: [],
@@ -943,15 +812,12 @@ async function collectStartupAgentCompletion(
           return value.encoding === "json" ? JSON.parse(text) : text;
         };
         const normalize = async (event) => {
-          const outer = event?.payload;
-          const agentic = outer?.kind === "agentic.event" ? outer.payload : (outer?.payload?.kind ? outer.payload : outer);
-          const body = agentic?.payload ?? agentic?.message ?? agentic ?? {};
-          const message = body?.message ?? {};
-          const rawBlocks = Array.isArray(body?.blocks)
-            ? body.blocks
-            : Array.isArray(message?.blocks)
-              ? message.blocks
-              : [];
+          const agentic = event?.payload;
+          if (!agentic || !["message.completed", "invocation.started", "invocation.completed", "invocation.failed"].includes(agentic.kind)) return null;
+          if (!agentic.actor || !agentic.payload)
+            throw new Error("Canonical agentic record has no actor or payload");
+          const body = agentic.payload;
+          const rawBlocks = Array.isArray(body.blocks) ? body.blocks : [];
           const blocks = Array.isArray(agentic?.payload?.blocks)
             ? agentic.payload.blocks.map((block) => ({
                 type: block?.type,
@@ -969,49 +835,29 @@ async function collectStartupAgentCompletion(
             actorId: agentic?.actor?.id,
             actorKind: agentic?.actor?.kind,
             invocationId: agentic?.causality?.invocationId,
-            role: body?.role ?? message?.role,
+            role: body.role,
             name: body?.name,
-            request: await hydrateStoredValue(body?.request),
+            nativeSource: body.nativeSource,
+            transport: body.transport,
             result: await hydrateStoredValue(body?.result),
             terminalOutcome: body?.terminalOutcome,
-            content: typeof body?.content === "string"
-              ? body.content
-              : typeof message?.content === "string"
-                ? message.content
-                : "",
-            outcome: body?.outcome ?? message?.outcome,
+            content: typeof body.content === "string" ? body.content : "",
+            outcome: body.outcome,
+            failure: body.failure,
+            metadata: body.metadata,
             reason: body?.reason,
             error: body?.error,
             recoverable: body?.recoverable,
             blocks,
           };
         };
-        const [participants, replay, trajectoryEvents] = await Promise.all([
+        const [participants, replay] = await Promise.all([
           rpc.call(${JSON.stringify(targetId)}, "getParticipants", []),
           rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]),
-          // The agent may gracefully leave the live channel after completing
-          // the turn. The channel roster/tail is then intentionally empty, but
-          // the GAD trajectory remains the durable source of truth for the
-          // completed turn and its tool invocations.
-          rpc
-            .call("do:workers/workspace-source:GadWorkspaceDO:workspace", "listTrajectoryEvents", [
-              {
-                trajectoryId: "branch:channel:" + ${JSON.stringify(channelName)},
-                branchId: "branch:channel:" + ${JSON.stringify(channelName)},
-                cursor: 0,
-                limit: 500,
-              },
-            ])
-            .catch(() => []),
         ]);
         return {
           participants,
-          events: await Promise.all((replay?.logEvents ?? []).map(normalize)),
-          trajectoryEvents: await Promise.all(
-            (Array.isArray(trajectoryEvents) ? trajectoryEvents : []).map((event) =>
-              normalize({ payload: event?.payload, senderId: event?.actor?.id }).catch(() => null)
-            )
-          ).then((events) => events.filter((event) => event !== null)),
+          events: (await Promise.all((replay?.logEvents ?? []).map(normalize))).filter((event) => event !== null),
         };
       })()`
     ).catch((error: unknown) => {
@@ -1039,12 +885,7 @@ async function collectStartupAgentCompletion(
     const channelEvents = Array.isArray((snapshot as { events?: unknown } | null)?.events)
       ? (snapshot as { events: Array<Record<string, unknown>> }).events
       : [];
-    const trajectoryEvents = Array.isArray(
-      (snapshot as { trajectoryEvents?: unknown } | null)?.trajectoryEvents
-    )
-      ? (snapshot as { trajectoryEvents: Array<Record<string, unknown>> }).trajectoryEvents
-      : [];
-    const events = [...channelEvents, ...trajectoryEvents];
+    const events = channelEvents;
     // A completed worker may leave the channel before this diagnostic poll
     // runs. Preserve its identity from the durable event stream so completion
     // validation still recognizes the turn instead of treating a valid replay
@@ -1057,9 +898,6 @@ async function collectStartupAgentCompletion(
           observedAgentIds.add(id);
         }
       }
-    }
-    if (observedAgentIds.size === 0 && surfaceAgentHandle) {
-      observedAgentIds.add(`surface:${surfaceAgentHandle}`);
     }
     const isAgentEvent = (event: Record<string, unknown>) =>
       Array.from(observedAgentIds).some(
@@ -1082,19 +920,42 @@ async function collectStartupAgentCompletion(
       const content = typeof event["content"] === "string" ? event["content"].trim() : "";
       return blockText === expectedInitialPrompt.trim() || content === expectedInitialPrompt.trim();
     });
+    const nativeInvocations = events
+      .filter((event) => event["kind"] === "invocation.started" && isAgentEvent(event))
+      .flatMap((event) => {
+        const inspected = inspectNativeApprovalInvocation(event, channelName);
+        return inspected ? [{ event, ...inspected }] : [];
+      });
+    const originalReadDigest = createHash("sha256")
+      .update(JSON.stringify({ path: "skills/onboarding/SKILL.md" }))
+      .digest("hex");
     const onboardingReadInvocationIds = new Set(
-      events
-        .filter((event) => {
-          if (event["kind"] !== "invocation.started" || event["name"] !== "read") return false;
-          if (!isAgentEvent(event)) return false;
-          const request = event["request"];
-          if (!request || typeof request !== "object") return false;
-          const path = (request as Record<string, unknown>)["path"];
-          const target = (request as Record<string, unknown>)["target"];
-          return path === "skills/onboarding/SKILL.md" || target === "skills/onboarding/SKILL.md";
-        })
-        .map((event) => event["invocationId"])
-        .filter((invocationId): invocationId is string => typeof invocationId === "string")
+      nativeInvocations
+        .filter(
+          ({ source }) =>
+            source.operation.kind === "tool" &&
+            source.operation.name === "read" &&
+            source.operation.argumentsDigest === originalReadDigest
+        )
+        .map(({ invocationId }) => invocationId)
+    );
+    const networkInvocationIds = [
+      ...new Set(
+        nativeInvocations
+          .filter(
+            ({ source }) => source.operation.kind === "tool" && source.operation.name === "eval"
+          )
+          .map(({ invocationId }) => invocationId)
+      ),
+    ];
+    const completedNetworkInvocationIds = networkInvocationIds.filter((invocationId) =>
+      events.some(
+        (event) =>
+          event["kind"] === "invocation.completed" &&
+          event["terminalOutcome"] === "success" &&
+          event["invocationId"] === invocationId &&
+          isAgentEvent(event)
+      )
     );
     const onboardingSkillReadCompleted = events.some((event) => {
       if (event["kind"] !== "invocation.completed") return false;
@@ -1120,25 +981,27 @@ async function collectStartupAgentCompletion(
           typeof block === "object" &&
           (block as { type?: unknown }).type === "text" &&
           typeof (block as { content?: unknown }).content === "string" &&
-          (block as { content: string }).content.trim().length > 0
+          (block as { content: string }).content === NATIVE_APPROVAL_REPLY
       );
     });
-    const turnClosed = events.some(
-      (event) => event["kind"] === "turn.closed" && isAgentEvent(event)
-    );
     const failures = events
       .filter((event) => {
         if (!isAgentEvent(event)) return false;
-        if (event["kind"] === "message.failed" || event["kind"] === "invocation.failed") {
+        if (event["kind"] === "invocation.failed") {
           return true;
         }
-        return event["kind"] === "message.completed" && event["outcome"] === "empty";
+        return (
+          event["kind"] === "message.completed" &&
+          (event["failure"] !== undefined ||
+            event["outcome"] === "empty" ||
+            event["outcome"] === "interrupted")
+        );
       })
       .map(
         (event) =>
           `${String(event["kind"])}:${String(event["outcome"] ?? "")}:` +
           `${String(event["reason"] ?? "")}:` +
-          `${JSON.stringify(event["error"] ?? event["result"] ?? null)}`
+          `${JSON.stringify(event["failure"] ?? event["error"] ?? event["result"] ?? null)}`
       );
     for (const event of events) {
       if (event["kind"] !== "message.completed" || !isAgentEvent(event)) continue;
@@ -1155,35 +1018,61 @@ async function collectStartupAgentCompletion(
       }
     }
     const pendingWork: string[] = [];
+    let nativeSettled = observedAgentIds.size > 0;
     for (const agentId of observedAgentIds) {
       const debugState = await executePanelScript(
         testApp,
         firstPanelId,
         `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
-      ).catch(() => null);
+      );
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
-      const loop =
-        state && typeof state === "object" && (state as { loops?: Record<string, unknown> }).loops
-          ? (state as { loops: Record<string, unknown> }).loops[channelName]
-          : null;
-      if (loop && typeof loop === "object") {
-        for (const key of ["pendingInvocations", "pendingApprovals", "pendingCredentialWaits"]) {
-          const values = (loop as Record<string, unknown>)[key];
-          if (Array.isArray(values) && values.length > 0) {
-            pendingWork.push(`${agentId}:${key}:${values.join(",")}`);
-          }
-        }
+      const inspection =
+        state && typeof state === "object"
+          ? (
+              state as {
+                conversations?: Record<
+                  string,
+                  {
+                    loaded?: boolean;
+                    conversationId?: unknown;
+                    live?: { run?: unknown };
+                    tasks?: unknown[];
+                    submissions?: unknown[];
+                    observation?: unknown;
+                  }
+                >;
+              }
+            ).conversations?.[channelName]
+          : undefined;
+      if (
+        !inspection ||
+        inspection.loaded !== true ||
+        typeof inspection.conversationId !== "number" ||
+        !inspection.live ||
+        !Array.isArray(inspection.tasks) ||
+        !Array.isArray(inspection.submissions)
+      ) {
+        nativeSettled = false;
+        pendingWork.push(
+          `${agentId}:native-inspection:${String(inspection?.observation ?? "missing")}`
+        );
+        continue;
+      }
+      if (inspection.live.run || inspection.tasks.length || inspection.submissions.length) {
+        nativeSettled = false;
+        pendingWork.push(`${agentId}:native-owned-work:${JSON.stringify(inspection)}`);
       }
     }
 
     channels.push({
       channelName,
       agentIds: Array.from(observedAgentIds),
-      initialPromptDelivered: initialPromptDelivered || surfaceInitialPromptDelivered,
-      onboardingSkillReadCompleted:
-        onboardingSkillReadCompleted || surfaceOnboardingSkillReadCompleted,
-      assistantCompleted: assistantCompleted || surfaceAssistantCompleted,
-      turnClosed: turnClosed || surfaceAssistantCompleted,
+      initialPromptDelivered,
+      onboardingSkillReadCompleted,
+      assistantCompleted,
+      nativeSettled,
+      networkInvocationIds,
+      completedNetworkInvocationIds,
       pendingWork,
       failures,
       invocations: events
@@ -1203,7 +1092,7 @@ async function collectStartupAgentCompletion(
         channel.initialPromptDelivered &&
         channel.onboardingSkillReadCompleted &&
         channel.assistantCompleted &&
-        channel.turnClosed &&
+        channel.nativeSettled &&
         channel.pendingWork.length === 0 &&
         channel.failures.length === 0
     ) &&
@@ -1251,12 +1140,6 @@ function describeApproval(approval: PendingApproval): string {
           .join(",")
       : "";
   return `${approval.kind}:${approval.title ?? ""}:${parts}`;
-}
-
-function isOpenAiCredentialApproval(approval: PendingApproval): boolean {
-  return (
-    approval.kind === "credential" && approval.credentialLabel === "ChatGPT Codex model credential"
-  );
 }
 
 async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<string[]> {
@@ -1337,17 +1220,8 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
       observedInstallReviews.add(describeApproval(approval));
     }
     const pendingUnitBatchCount = pendingInstallReviews.length;
-    const pendingCredentialCount = pending.filter(isOpenAiCredentialApproval).length;
-    const pendingTargetCount = pendingUnitBatchCount + pendingCredentialCount;
+    const pendingTargetCount = pendingUnitBatchCount;
     if (pendingTargetCount === 0) break;
-    if (pendingCredentialCount > 0) {
-      await expect
-        .poll(() => credentialApprovalActionStyles(testApp), {
-          timeout: 45_000,
-          intervals: [250, 500, 1_000, 2_000],
-        })
-        .toEqual({ trustVersion: "sky", useOnce: "" });
-    }
     if (pendingUnitBatchCount > 0) {
       // The install review's real click path is covered by the desktop pairing
       // smoke. This launch-gate spec is about the subsequent agent lifecycle;
@@ -1365,38 +1239,11 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
         );
       }
     }
-    if (pendingCredentialCount > 0) {
-      try {
-        await expect
-          .poll(
-            () =>
-              clickShellButtonByPreference(testApp, [
-                /^Trust(?: this)? version$/,
-                /^Use this session$/,
-                /^Approve all$/,
-                /^Dev session$/,
-                /^Approve and start$/,
-                /^Approve$/,
-                /^Install and run$/,
-                /^Run once$/,
-                /^Allow for session$/,
-                /^Use once$/,
-              ]),
-            { timeout: 45_000, intervals: [500, 1000, 2000, 5000] }
-          )
-          .toBe(true);
-      } catch (error) {
-        await attachStartupDiagnostics(testApp);
-        throw error;
-      }
-    }
     await expect
       .poll(
         async () => {
           const next = await listPendingApprovals(testApp);
-          return (
-            next.filter(isUnitBatchApproval).length + next.filter(isOpenAiCredentialApproval).length
-          );
+          return next.filter(isUnitBatchApproval).length;
         },
         { timeout: 10_000, intervals: [500, 1000, 2000] }
       )
@@ -1409,12 +1256,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
       intervals: [500, 1000, 2000],
     })
     .toBe(0);
-  await expect
-    .poll(
-      async () => (await listPendingApprovals(testApp)).filter(isOpenAiCredentialApproval).length,
-      { timeout: 30_000, intervals: [500, 1000, 2000] }
-    )
-    .toBe(0);
+  await declineFirstRunReporting(testApp);
   return [...observedInstallReviews];
 }
 
@@ -1461,7 +1303,6 @@ test.describe("Desktop Startup Approvals", () => {
         configuredInitialPrompt = configureWorkspaceSourceForApproval(sourceRoot);
       },
     });
-    await seedOpenAiCodexCredential(workspaceDir);
 
     testApp = await launchTestApp({
       workspace: workspaceDir,
@@ -1486,7 +1327,7 @@ test.describe("Desktop Startup Approvals", () => {
             const closedWithoutOnboarding = state.channels.find(
               (channel) =>
                 channel.assistantCompleted &&
-                channel.turnClosed &&
+                channel.nativeSettled &&
                 channel.pendingWork.length === 0 &&
                 !channel.onboardingSkillReadCompleted
             );
@@ -1525,8 +1366,8 @@ test.describe("Desktop Startup Approvals", () => {
               testApp!,
               onboardingPanel.id,
               `(() => {
-                const overview = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
-                  (frame) => frame.textContent?.includes('onboarding-setup-overview')
+                const overview = document.querySelector(
+                  '[data-inline-ui-id="onboarding-setup-overview"]'
                 );
                 if (!(overview instanceof HTMLElement)) return false;
                 overview.scrollIntoView({ block: "start" });
@@ -1539,14 +1380,13 @@ test.describe("Desktop Startup Approvals", () => {
           { timeout: 30_000, intervals: [250, 500, 1000] }
         )
         .toBe(true);
-      const shellPage = await findWorkspaceShellPage(testApp);
       expect(
         await executePanelScript<boolean>(
           testApp,
           onboardingPanel.id,
           `(() => {
             const link = Array.from(document.querySelectorAll('a')).find(
-              (candidate) => candidate.textContent?.trim() === 'Open workspace chooser'
+              (candidate) => candidate.textContent?.trim() === 'Add workspace'
             );
             if (!(link instanceof HTMLAnchorElement)) return false;
             link.click();
@@ -1554,10 +1394,28 @@ test.describe("Desktop Startup Approvals", () => {
           })()`
         )
       ).toBe(true);
-      await expect(
-        shellPage.getByRole("button", { name: "New workspace", exact: true })
-      ).toBeVisible({ timeout: 30_000 });
-      await shellPage.keyboard.press("Escape");
+      let chooserPage: import("@playwright/test").Page | undefined;
+      await expect
+        .poll(
+          async () => {
+            for (const page of testApp!.app.context().pages()) {
+              if (
+                await page
+                  .getByRole("dialog", { name: "Create a workspace", exact: true })
+                  .isVisible()
+              ) {
+                chooserPage = page;
+                return true;
+              }
+            }
+            return false;
+          },
+          { timeout: 30_000 }
+        )
+        .toBe(true);
+      await chooserPage!
+        .getByRole("button", { name: "Close workspace setup", exact: true })
+        .click();
       const readiness = await callTestApi<PanelReadinessSnapshot>(testApp, "getPanelReadiness", [
         onboardingPanel.id,
       ]);
@@ -1610,7 +1468,6 @@ test.describe("Desktop Startup Approvals", () => {
         configureWorkspaceSourceForApproval(sourceRoot, prompt);
       },
     });
-    await seedOpenAiCodexCredential(workspaceDir);
 
     testApp = await launchTestApp({
       workspace: workspaceDir,
@@ -1654,6 +1511,13 @@ test.describe("Desktop Startup Approvals", () => {
     }
 
     if (!networkApproval) throw new Error("Expected the pending network approval");
+    const paused = await collectStartupAgentCompletion(testApp, prompt);
+    const originalNetworkInvocations = paused.channels.flatMap(
+      (channel) => channel.networkInvocationIds
+    );
+    expect(originalNetworkInvocations).toHaveLength(1);
+    expect(paused.complete).toBe(false);
+    expect(paused.channels.flatMap((channel) => channel.completedNetworkInvocationIds)).toEqual([]);
     expect(networkApproval).toMatchObject({
       kind: "capability",
       capability: "network.response.read",
@@ -1663,7 +1527,7 @@ test.describe("Desktop Startup Approvals", () => {
         label: "Website",
         value: "https://example.com",
       },
-      allowedDecisions: ["once", "session", "task", "deny"],
+      allowedDecisions: ["once", "task", "deny"],
     });
 
     const rendered: { current: Awaited<ReturnType<typeof capabilityApprovalUiSnapshot>> } = {
@@ -1682,13 +1546,9 @@ test.describe("Desktop Startup Approvals", () => {
       )
       .toContain("Connect to example.com");
     expect(rendered.current?.buttons).toEqual(
-      expect.arrayContaining([
-        "Connect once",
-        "Allow this site",
-        "Allow for this task",
-        "Don't allow",
-      ])
+      expect.arrayContaining(["Connect once", "Allow for this task", "Don't allow"])
     );
+    expect(rendered.current?.buttons).not.toContain("Allow this site");
     expect(rendered.current?.buttons).not.toContain("Always for AI Chat");
     expect(rendered.current?.buttons).not.toContain("Don't allow and stop asking");
     expect(rendered.current?.buttons).not.toContain("Remember for this version");
@@ -1720,6 +1580,14 @@ test.describe("Desktop Startup Approvals", () => {
             const failures = state.channels.flatMap((channel) => channel.failures);
             if (failures.length > 0) {
               throw new Error(`Authority-resumed chat turn failed: ${failures.join("; ")}`);
+            }
+            if (state.complete) {
+              expect(state.channels.flatMap((channel) => channel.networkInvocationIds)).toEqual(
+                originalNetworkInvocations
+              );
+              expect(
+                state.channels.flatMap((channel) => channel.completedNetworkInvocationIds)
+              ).toEqual(originalNetworkInvocations);
             }
             return state.complete;
           },

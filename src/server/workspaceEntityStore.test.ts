@@ -39,6 +39,14 @@ function makeStore(
 }
 
 describe("WorkspaceEntityStore", () => {
+  it("commits cleanup against the exact captured retired authority lifetime", async () => {
+    const { store, calls } = makeStore({ entityCleanupComplete: () => undefined });
+    await store.cleanupComplete(RECORD.id, "retired-lifetime");
+    expect(calls).toEqual([
+      { method: "entityCleanupComplete", args: [RECORD.id, "retired-lifetime"] },
+    ]);
+  });
+
   it("does not dispatch an executable entity write when exact reservation fails", async () => {
     const dispatch = async () => {
       throw new Error("owner write must not run");

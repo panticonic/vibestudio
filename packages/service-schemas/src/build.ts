@@ -827,7 +827,7 @@ export const buildMethods = defineServiceMethods({
         "Read-only projection of declared workspace sources, immutable build identity, and reviewed authority",
     },
     description:
-      "List declared executable source units and their build readiness. This is not a process list: use runtime.supervision.list for exact live entities.",
+      "List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list.",
     args: z.tuple([]),
     returns: z.array(buildUnitCatalogEntrySchema),
     access: READ_ACCESS,
@@ -1050,6 +1050,41 @@ export const buildMethods = defineServiceMethods({
     ]),
     returns: buildBundleResultSchema,
     access: EXTERNAL_ACQUISITION_ACCESS,
+  },
+  prepareTypecheck: {
+    website: {
+      kind: "closed",
+      reason:
+        "Returns resources admitted to the native workspace; websites use compiled artifacts.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "build.native-resources",
+      rationale:
+        "Resolves an exact compiler program's declared runtime/development dependencies and installed SDK declarations, then admits those resources read-only to its native workspace with installer scripts disabled.",
+    },
+    description:
+      "Prepare an exact workspace unit for native source analysis, including declared development dependencies, selected installed SDK exports, and the unit's module conditions. Returned paths are read-only native resources valid for the runtime lifetime. This does not compile or execute the unit, publish source, or expose host package-manager workspaces.",
+    args: z.tuple([
+      z.string().describe("Canonical unit name or workspace-relative path."),
+      z
+        .string()
+        .optional()
+        .describe("Workspace state: omitted = current main, ctx:<contextId>, or state:… hash."),
+    ]),
+    argumentNames: ["unit", "ref"],
+    returns: z
+      .object({
+        stateHash: z.string(),
+        dependencyKey: z.string().nullable(),
+        nodeModulesPaths: z.array(z.string()),
+        workspacePackages: z.record(z.string()),
+        moduleConditions: z.array(z.string()),
+      })
+      .strict(),
+    access: READ_ACCESS,
   },
   getBuildMetadata: {
     website: {

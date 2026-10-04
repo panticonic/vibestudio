@@ -61,8 +61,8 @@ export function createPermissionsService(deps: {
   interruptAgent?: (bindingId: string, reason: string) => Promise<void>;
   resumeAgent?: (bindingId: string) => Promise<void>;
   interruptAllAgents?: (reason: string) => Promise<void>;
-  closeAgentAcquisitions?: (bindingId: string) => number;
-  closeAllAcquisitions?: () => number;
+  closeAgentAcquisitions?: (bindingId: string) => Promise<number>;
+  closeAllAcquisitions?: () => Promise<number>;
 }): ServiceDefinition {
   const safetyStatus = (reviewingUserId?: string) => {
     // The lock is stored as an ordinary workspace-level lock record, so who
@@ -228,7 +228,7 @@ export function createPermissionsService(deps: {
           changed = deps.capabilityGrants.revokeLock(request.id);
         } else if (request.action === "pause-agent") {
           deps.capabilityGrants.setAgentPaused(request.bindingId, true, decidedBy);
-          deps.closeAgentAcquisitions?.(request.bindingId);
+          await deps.closeAgentAcquisitions?.(request.bindingId);
           await deps.interruptAgent?.(request.bindingId, "The user paused this agent.");
           changed = true;
         } else if (request.action === "resume-agent") {
@@ -240,7 +240,7 @@ export function createPermissionsService(deps: {
             keepLocks: true,
           });
           await deps.credentialUseGrants.revokeForAgent(request.bindingId);
-          deps.closeAgentAcquisitions?.(request.bindingId);
+          await deps.closeAgentAcquisitions?.(request.bindingId);
           await deps.interruptAgent?.(
             request.bindingId,
             "The user revoked all authority for this agent."
@@ -260,7 +260,7 @@ export function createPermissionsService(deps: {
         const decidedBy = decidedByAccount(ctx);
         deps.capabilityGrants.setWorkspaceAuthorityLocked(locked, decidedBy);
         if (locked) {
-          deps.closeAllAcquisitions?.();
+          await deps.closeAllAcquisitions?.();
           await deps.interruptAllAgents?.(
             "The user engaged the emergency workspace authority lock."
           );

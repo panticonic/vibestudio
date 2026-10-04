@@ -1448,6 +1448,76 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "alarmSourceRegister": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host",
+          "code"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "alarmSourcePublish": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host",
+          "code"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "alarmSet": {
         "website": {
           "kind": "closed",
@@ -2094,6 +2164,125 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "alarmSourceRegister": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "alarmSourcePublish": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host",
+          "code"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "alarmSourceRequest": {
+        "website": {
+          "kind": "closed",
+          "reason": "Only the host requests receipt/readiness reconciliation."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Only the host requests receipt/readiness reconciliation."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "alarmSourceList": {
+        "website": {
+          "kind": "closed",
+          "reason": "Durable scheduling metadata belongs to the authenticated execution owner and host lifecycle."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Durable scheduling metadata belongs to the authenticated execution owner and host lifecycle."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "alarmSet": {
         "website": {
           "kind": "closed",
@@ -2137,6 +2326,31 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "website": {
             "kind": "closed",
             "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "alarmComplete": {
+        "website": {
+          "kind": "closed",
+          "reason": "Only the host alarm driver acknowledges successful owner passes."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Only the host alarm driver acknowledges successful owner passes."
           },
           "capability": "workspace.runtime-state.manage",
           "resource": {
@@ -4470,6 +4684,56 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "getRunReceipt": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
+        "capability": "runtime.code-execution.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
+          "capability": "runtime.code-execution.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "acknowledgeRunResult": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
+        "capability": "runtime.code-execution.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
+          "capability": "runtime.code-execution.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "getRunEvents": {
         "website": {
           "kind": "closed",
@@ -4596,31 +4860,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "reset": {
-        "website": {
-          "kind": "closed",
-          "reason": "Execution engine control is internal to reviewed execution receivers."
-        },
-        "capability": "runtime.code-execution.manage",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "website": {
-            "kind": "closed",
-            "reason": "Execution engine control is internal to reviewed execution receivers."
-          },
-          "capability": "runtime.code-execution.manage",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "dispose": {
         "website": {
           "kind": "closed",
           "reason": "Execution engine control is internal to reviewed execution receivers."

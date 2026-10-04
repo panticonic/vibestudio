@@ -301,6 +301,9 @@ interface NotificationServiceLike {
 }
 
 export interface ExtensionHostDeps {
+  /** Startup owner classification completion, registered before Extensions RPC is exposed.
+   * Does not include activation, builds, or a human review decision. */
+  initialDeclarationsStaged?: Promise<void>;
   statePath: string;
   workspacePath: string;
   workspaceId: string;
@@ -382,6 +385,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
   private activationTails = new Map<string, Promise<void>>();
   private lastDeclared: UnitDeclaration[] = [];
+  private readonly shutdownSignal = new AbortController();
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
@@ -506,13 +510,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
       removeUndeclared: async (entry) => {
+        await this.processes.stop(entry.name);
         this.deferredBuildIdentityKeys.delete(entry.name);
         this.unregisterBuildProvidersFor(entry.name);
-        try {
-          await this.processes.stop(entry.name);
-        } catch {
-          // best-effort
-        }
       },
       emitRemoved: (entry) => {
         this.deps.eventService.emit("extensions:status", {
@@ -533,7 +533,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       onApprovalCandidateError: (node, _decl, message) => {
         this.deps.eventService.emit("extensions:status", {
           name: node.name,
-          status: "error",
+          status: this.registry.get(node.name)!.status,
           error: message,
         });
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
@@ -652,8 +652,38 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   /** Declared extensions are classified (entries + staged approvals); builds may still run. */
-  async whenDeclarationsStaged(): Promise<void> {
-    await this.unitHost.whenDeclarationsStaged();
+  async whenDeclarationsStaged(signal?: AbortSignal, target?: string): Promise<void> {
+    const ownedSignal = signal
+      ? AbortSignal.any([signal, this.shutdownSignal.signal])
+      : this.shutdownSignal.signal;
+    ownedSignal.throwIfAborted();
+    // An existing approved target remains callable while unrelated startup
+    // planning stages its review. Every target still observes the currently
+    // admitted reconciliation's classification before its registry is read.
+    const alreadyActive = target !== undefined && this.lookupForInvoke(target) !== null;
+    const wait = (staged: Promise<void>) =>
+      new Promise<void>((resolve, reject) => {
+        const finish = (error?: unknown) => {
+          ownedSignal.removeEventListener("abort", onAbort);
+          if (error !== undefined) reject(error);
+          else resolve();
+        };
+        const onAbort = () => finish(ownedSignal.reason);
+        ownedSignal.addEventListener("abort", onAbort, { once: true });
+        void staged.then(
+          () => finish(),
+          (error: unknown) => {
+            ownedSignal.removeEventListener("abort", onAbort);
+            reject(error);
+          }
+        );
+      });
+    if (!alreadyActive && this.deps.initialDeclarationsStaged) {
+      await wait(this.deps.initialDeclarationsStaged);
+      ownedSignal.throwIfAborted();
+    }
+    await wait(this.unitHost.whenDeclarationsStaged());
+    ownedSignal.throwIfAborted();
   }
 
   /** Build/start a single declared extension. */
@@ -751,6 +781,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async shutdown(): Promise<void> {
+    this.shutdownSignal.abort(new Error("Extension host shut down before declaration readiness"));
     await this.processes.shutdown();
   }
 
@@ -1532,7 +1563,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: "invoke" | "invokeProvider" | "invokeStream",
     signal?: AbortSignal
   ): Promise<RegistryEntry & { activeBundleKey: string }> {
-    await this.whenDeclarationsStaged();
+    await this.whenDeclarationsStaged(signal, name);
     // Declaration application can finish by deferring an onInvoke build. Wait
     // for that target transition before deciding whether first use must build.
     await this.waitForTargetActivation(name, signal);
@@ -1683,6 +1714,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private extensionUnavailableError(name: string, operation: string): ServiceError {
     const entry = this.resolveInvocationEntry(name);
     if (entry && !entry.activeBundleKey) {
+      if (entry.status === "error") {
+        return new ServiceError(
+          "extensions",
+          operation,
+          entry.lastError ?? `Extension ${entry.name} failed declaration readiness`,
+          "ENOTREADY"
+        );
+      }
       const effectiveVersion = this.deps.buildSystem.getEffectiveVersion(entry.name);
       const review = effectiveVersion
         ? this.deps.openUnitReviewFor({ repoPath: entry.source.repo, effectiveVersion })

@@ -16,6 +16,9 @@ import { RouteRegistry } from "./routeRegistry.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { stateLayout } from "./stateLayout.js";
+import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
@@ -166,6 +169,7 @@ class WorkerdManager extends ProductWorkerdManager {
 
 function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDeps {
   const build = mockWorkerBuild();
+  const boundBuilds = new Map<string, BuildResult>();
   const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
   testStatePaths.add(statePath);
   return {
@@ -177,16 +181,21 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       closeHandlesForCaller: vi.fn(),
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => "http://127.0.0.1:9999",
-    bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => ({
-      source: unitPath,
-      unitName: unitPath,
-      artifact: runtimeArtifact(unitPath, ref ?? "main"),
-      authority: { provides: [], requests: [], serviceRequests: [] },
-    })),
+    bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => {
+      const artifact = runtimeArtifact(unitPath, ref ?? "main");
+      boundBuilds.set(artifact.buildKey, mockWorkerBuildFor(unitPath, artifact));
+      return {
+        source: unitPath,
+        unitName: unitPath,
+        artifact,
+        authority: { provides: [], requests: [], serviceRequests: [] },
+      };
+    }),
     getBuildByKey: vi.fn(() => build),
-    getBuildByExecution: vi.fn((_key, executionDigest) =>
-      build.metadata.execution?.executionDigest === executionDigest ? build : null
-    ),
+    getBuildByExecution: vi.fn((key, executionDigest) => {
+      const candidate = boundBuilds.get(key) ?? build;
+      return candidate.metadata.execution?.executionDigest === executionDigest ? candidate : null;
+    }),
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
@@ -247,7 +256,21 @@ function statusOf(mgr: WorkerdManager, name: string) {
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(null, { status: 204 }))
+    vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      );
+      if (url.pathname.endsWith("/__vibestudio_schema_descriptor")) {
+        const packedKey = decodeURIComponent(url.pathname.split("/")[2]!);
+        const className = decodeURIComponent(packedKey.split("|")[1]!);
+        return Response.json({
+          className,
+          version: 1,
+          freshSchemaFingerprint: `fixture:${className}`,
+        });
+      }
+      return new Response(null, { status: 204 });
+    })
   );
 });
 
@@ -289,6 +312,253 @@ describe("WorkerdManager", () => {
       freshSchemaFingerprint: fingerprint,
     });
 
+    it("rebuilds obsolete probe evidence and retains exact evidence across reopen", async () => {
+      const deps = createMockDeps();
+      const layout = stateLayout(deps.statePath).databases;
+      fs.mkdirSync(layout.root, { recursive: true });
+      const old = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
+      old.exec(`
+        CREATE TABLE do_schema_descriptors (
+          source TEXT NOT NULL, effective_version TEXT NOT NULL,
+          class_name TEXT NOT NULL, descriptor_json TEXT NOT NULL,
+          PRIMARY KEY (source, effective_version, class_name)
+        );
+        INSERT INTO do_schema_descriptors VALUES ('workers/board','old','BoardDO','{}');
+      `);
+      old.close();
+      const manager = new WorkerdManager(deps);
+      const probe = vi
+        .spyOn(manager, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "fresh-shape"));
+      await manager.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "first",
+        contextId: "fresh",
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+      await manager.shutdown();
+      const reopened = new WorkerdManager(deps);
+      const secondProbe = vi.spyOn(reopened, "probeDurableObjectSchema");
+      await reopened.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "second",
+        contextId: "fresh",
+      });
+      expect(secondProbe).not.toHaveBeenCalled();
+      const code = await reopened.getDoCode("workers/board", "BoardDO");
+      expect(code?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "fresh-shape"));
+      await reopened.shutdown();
+    });
+
+    it("admits internal executables before static registration and binds their exact descriptor", async () => {
+      const manager = new WorkerdManager(
+        createMockDeps({
+          internalDOBundle: {
+            bundle: "export class EvalDO {}",
+            buildKey: sha256("export class EvalDO {}"),
+          },
+        })
+      );
+      await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
+      const config = await (
+        manager as unknown as {
+          generateConfig(): Promise<{
+            services: Array<{ worker?: { bindings?: Array<{ name: string; json?: string }> } }>;
+          }>;
+        }
+      ).generateConfig();
+      const descriptors = config.services
+        .flatMap((service) => service.worker?.bindings ?? [])
+        .filter((binding) => binding.name === "VIBESTUDIO_SCHEMA_DESCRIPTOR");
+      expect(descriptors.map((binding) => JSON.parse(binding.json!))).toEqual([
+        { className: "EvalDO", version: 1, freshSchemaFingerprint: "fixture:EvalDO" },
+      ]);
+      expect(
+        (manager as unknown as { schemaProbeBuilds: Map<string, unknown> }).schemaProbeBuilds.size
+      ).toBe(0);
+      await manager.shutdown();
+    });
+
+    it("shares exact schema admission and retains its evidence without a publication", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const probe = vi.spyOn(mgr, "probeDurableObjectSchema").mockImplementation(async () => {
+        entered();
+        await released;
+        return descriptor(1, "fresh-shape");
+      });
+      const prepare = (key: string) =>
+        mgr.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key,
+          contextId: "fresh",
+        });
+      const first = prepare("first");
+      await started;
+      const second = prepare("second");
+      release();
+      await Promise.all([first, second]);
+      await prepare("third");
+      expect(probe).toHaveBeenCalledTimes(1);
+      await mgr.shutdown();
+    });
+
+    it("rejects first activation with the original schema failure", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const failure = new Error("schema installation failed");
+      vi.spyOn(mgr, "probeDurableObjectSchema").mockRejectedValue(failure);
+      await expect(
+        mgr.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "fresh",
+          contextId: "fresh",
+        })
+      ).rejects.toBe(failure);
+      await mgr.shutdown();
+    });
+
+    it("preserves both probe and retirement failures and reclaims owned scratch at shutdown", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/__vibestudio_schema_descriptor"))
+          return new Response("original schema failure", { status: 500 });
+        if (url.endsWith("/__vibestudio_retire"))
+          return new Response("retirement failure", { status: 500 });
+        return ordinaryFetch(input, init);
+      });
+      let failure: unknown;
+      try {
+        await mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild());
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors[0].message).toContain("original schema failure");
+      expect(aggregate.errors[1].message).toContain("retirement failure");
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      const internals = mgr as unknown as { schemaProbeBuilds: Map<string, unknown> };
+      expect(internals.schemaProbeBuilds.size).toBe(1);
+      await mgr.shutdown();
+      expect(internals.schemaProbeBuilds.size).toBe(0);
+    });
+
+    it("binds schema evidence to the exact artifact even when source effective versions match", async () => {
+      const source = "workers/board";
+      const first = runtimeArtifact(source, "same-source");
+      const { executionDigest: _digest, ...unsigned } = first;
+      const changed = {
+        ...unsigned,
+        recipeDigest: sha256("different recipe"),
+        buildKey: sha256("different build"),
+      };
+      const second = verifyExecutionArtifactRef({
+        ...changed,
+        executionDigest: executionArtifactDigest(changed),
+      });
+      const builds = [first, second].map((artifact) => mockWorkerBuildFor(source, artifact));
+      const deps = createMockDeps({
+        bindRuntimeImage: vi.fn(async (_source, ref) => ({
+          source,
+          unitName: source,
+          artifact: ref === "ctx:b" ? second : first,
+          authority: { provides: [], requests: [], serviceRequests: [] },
+        })),
+        getBuildByExecution: vi.fn(
+          (key, digest) =>
+            builds.find(
+              (build) =>
+                build.buildKey === key && build.metadata.execution?.executionDigest === digest
+            ) ?? null
+        ),
+      });
+      const mgr = new WorkerdManager(deps);
+      const probe = vi
+        .spyOn(mgr, "probeDurableObjectSchema")
+        .mockImplementation(async (_source, _className, build) =>
+          descriptor(
+            1,
+            build.metadata.execution?.executionDigest === first.executionDigest
+              ? "first-shape"
+              : "second-shape"
+          )
+        );
+      for (const contextId of ["a", "b"]) {
+        const prepared = await mgr.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: contextId,
+          contextId,
+        });
+        await mgr.restoreDurableObjectEntity({
+          id: prepared.targetId,
+          kind: "do",
+          source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId,
+          className: "BoardDO",
+          key: contextId,
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        });
+      }
+      mgr.validateAndStageDurableObjectSchemas("same-source", [
+        {
+          source,
+          effectiveVersion: first.sourceState.effectiveVersion,
+          executionDigest: first.executionDigest,
+          descriptor: descriptor(1, "first-shape"),
+        },
+        {
+          source,
+          effectiveVersion: second.sourceState.effectiveVersion,
+          executionDigest: second.executionDigest,
+          descriptor: descriptor(1, "second-shape"),
+        },
+      ]);
+      const firstCode = await mgr.getDoCode(source, "BoardDO", "a");
+      const secondCode = await mgr.getDoCode(source, "BoardDO", "b");
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(firstCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "first-shape"));
+      expect(secondCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(
+        descriptor(1, "second-shape")
+      );
+      expect(firstCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(first.executionDigest);
+      expect(secondCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(second.executionDigest);
+      expect(firstCode?.env["WORKER_BUILD_KEY"]).toBe(first.buildKey);
+      expect(secondCode?.env["WORKER_BUILD_KEY"]).toBe(second.buildKey);
+      expect(() =>
+        mgr.validateAndStageDurableObjectSchemas("conflicting-probe", [
+          {
+            source,
+            effectiveVersion: first.sourceState.effectiveVersion,
+            executionDigest: first.executionDigest,
+            descriptor: descriptor(1, "changed-first-shape"),
+          },
+        ])
+      ).toThrow(/same immutable execution artifact/);
+      expect(
+        (await mgr.getDoCode(source, "BoardDO", "a"))?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
+      ).toEqual(descriptor(1, "first-shape"));
+    });
+
     it("stages each publication's exact current descriptor without comparing old generations", () => {
       const mgr = new WorkerdManager(createMockDeps());
       expect(
@@ -296,6 +566,7 @@ describe("WorkerdManager", () => {
           {
             source: "workers/board",
             effectiveVersion: "ev-1",
+            executionDigest: sha256("execution:ev-1"),
             descriptor: descriptor(1, "shape-v1"),
           },
         ])
@@ -307,6 +578,7 @@ describe("WorkerdManager", () => {
           {
             source: "workers/board",
             effectiveVersion: "ev-2",
+            executionDigest: sha256("execution:ev-2"),
             descriptor: descriptor(2, "shape-v2"),
           },
         ])
@@ -318,6 +590,7 @@ describe("WorkerdManager", () => {
           {
             source: "workers/board",
             effectiveVersion: "ev-3",
+            executionDigest: sha256("execution:ev-3"),
             descriptor: descriptor(1, "new-current-shape"),
           },
         ])
@@ -353,6 +626,45 @@ describe("WorkerdManager", () => {
       expect.objectContaining({ operationId }),
     ]);
     await mgr.shutdown();
+  });
+
+  it("rotates canonical storage identity atomically with journal progress and preserves it across journal recovery", async () => {
+    const deps = createMockDeps();
+    const mgr = new WorkerdManager(deps);
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "journal-identity" };
+    const before = mgr.durableObjectStorageIncarnation(ref);
+    expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
+    const internals = mgr as unknown as {
+      doMaintenanceDb: { exec(sql: string): void };
+      readOpenDurableObjectMaintenance(): Array<{ operationId: string }>;
+    };
+    internals.doMaintenanceDb
+      .exec(`CREATE TRIGGER refuse_identity_acceptance BEFORE UPDATE ON do_maintenance
+      WHEN NEW.step = 'replaced' BEGIN SELECT RAISE(ABORT, 'injected journal acceptance failure'); END`);
+    await expect(mgr.resetDOStorage(ref, "rotate identity")).rejects.toThrow(
+      "injected journal acceptance failure"
+    );
+    expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
+    const operationId = internals.readOpenDurableObjectMaintenance()[0]!.operationId;
+    internals.doMaintenanceDb.exec("DROP TRIGGER refuse_identity_acceptance");
+    await expect(mgr.resetDOStorage(ref, "resume identity rotation")).resolves.toEqual({
+      operationId,
+    });
+    const current = mgr.durableObjectStorageIncarnation(ref);
+    expect(current).toEqual({ incarnation: operationId, generation: before.generation + 1 });
+    await mgr.shutdown();
+    const reopened = new WorkerdManager(deps);
+    expect(reopened.durableObjectStorageIncarnation(ref)).toEqual(current);
+    const restored = await reopened.restoreDOStorageBackup(
+      ref,
+      operationId,
+      "restore earlier data without reviving its identity"
+    );
+    expect(reopened.durableObjectStorageIncarnation(ref)).toEqual({
+      incarnation: restored.operationId,
+      generation: current.generation + 1,
+    });
+    await reopened.shutdown();
   });
 
   it("resumes after replacement failure and retains only the five newest backups", async () => {
@@ -1612,6 +1924,50 @@ describe("WorkerdManager", () => {
 
       const nextMgr = new WorkerdManager(createMockDeps({ statePath }));
       expect(nextMgr.getBootGeneration()).toBe(2);
+    });
+
+    it("propagates original activation recovery failure after joining independent hooks without restarting the ready process", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawnCount = vi.mocked(spawn).mock.calls.length;
+      const generation = mgr.getBootGeneration();
+      const original = new Error("Original native activation recovery refused");
+      mgr.onRestartReady(() => {
+        throw original;
+      });
+      let entered!: () => void;
+      const independentEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const independentReleased = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const independent = vi.fn(async () => {
+        entered();
+        await independentReleased;
+      });
+      mgr.onRestartReady(independent);
+      let settled = false;
+      const restart = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd().then(
+        () => {
+          settled = true;
+          return null;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        }
+      );
+      await independentEntered;
+      expect(settled).toBe(false);
+      expect(mgr.getBootGeneration()).toBe(generation + 1);
+      expect(mgr.getPort()).not.toBeNull();
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount + 1);
+      release();
+      expect(await restart).toBe(original);
+      expect(independent).toHaveBeenCalledOnce();
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount + 1);
     });
 
     it("replaces an unresponsive sandbox without a graceful begin RPC and reports crash recovery", async () => {

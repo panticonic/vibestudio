@@ -109,7 +109,7 @@ export const createWebhookIngressSubscriptionSchema = z
   .object({
     label: z.string().min(1).max(256).optional().describe("Human-readable subscription label."),
     target: webhookTargetSchema.describe(
-      "Worker/DO method that receives verified deliveries. For worker/DO callers, target.source must equal the caller's own source; agent eval can obtain it from agent.describe().identity."
+      "Worker/DO method that receives verified deliveries. For worker/DO callers, target.source must equal the caller's own source; agent eval can obtain it from (await agent.describe()).identity."
     ),
     delivery: webhookDeliverySchema.describe(
       "relay uses the configured public relay; direct uses this server's co-located public gateway."
@@ -315,7 +315,7 @@ export const webhookIngressMethods = defineServiceMethods({
     returns: webhookIngressSubscriptionSummarySchema,
     agentFacing: false,
     access: { sensitivity: "write" },
-    description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (${WEBHOOK_DEFAULT_MAX_BODY_BYTES}) for relay delivery and the configured host ceiling for direct delivery (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
+    description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (${WEBHOOK_DEFAULT_MAX_BODY_BYTES}) for relay delivery and the configured host ceiling for direct delivery (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default). In agent eval, use (await agent.describe()).identity for target.source, target.className, and target.objectKey.`,
   },
   listSubscriptions: {
     website: {"kind":"closed","reason":"The webhookIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
@@ -401,3 +401,41 @@ export const webhookIngressMethods = defineServiceMethods({
       "Rotate a caller-owned subscription secret, generating a strong secret when one is omitted.",
   },
 });
+
+/** Native lifecycle metadata excludes verifier configuration, tokens and secrets. */
+export const NativeWebhookObservationSchema = z.discriminatedUnion("method", [
+  z
+    .object({
+      protocol: z.literal("webhook-observation.v1"),
+      method: z.literal("createSubscription"),
+      subscriptionId: webhookIdentifierSchema,
+      hasSecret: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("webhook-observation.v1"),
+      method: z.literal("listSubscriptions"),
+      includeRevoked: z.boolean(),
+      subscriptions: z.array(
+        z.object({ subscriptionId: webhookIdentifierSchema, revoked: z.boolean() }).strict()
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("webhook-observation.v1"),
+      method: z.literal("rotateSecret"),
+      subscriptionId: webhookIdentifierSchema,
+      secretPresent: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("webhook-observation.v1"),
+      method: z.literal("revokeSubscription"),
+      subscriptionId: webhookIdentifierSchema,
+    })
+    .strict(),
+]);
+export type NativeWebhookObservation = z.infer<typeof NativeWebhookObservationSchema>;

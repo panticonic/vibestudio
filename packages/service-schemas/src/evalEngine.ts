@@ -1,8 +1,15 @@
 import { z } from "zod";
+import { rpcCausalParentSchema } from "./rpcCausality.js";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { executionArtifactRefSchema } from "./build.js";
-import { evalEventsPageSchema, evalRunResultSchema, evalRunStatusSchema } from "./eval.js";
+import {
+  evalEventsPageSchema,
+  evalRunResultSchema,
+  evalRunStatusSchema,
+  evalResultIdentitySchema,
+  evalResultReceiptSchema,
+} from "./eval.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
 
 /**
@@ -25,15 +32,6 @@ const managed = (sensitivity: "read" | "write" | "destructive") => ({
   access: { sensitivity },
 });
 
-const causalParentSchema = z
-  .object({
-    kind: z.literal("trajectory-invocation"),
-    logId: z.string().min(1),
-    head: z.string().min(1),
-    invocationId: z.string().min(1),
-  })
-  .strict();
-
 export const evalEngineRunArgsSchema = z
   .object({
     code: z.string().optional(),
@@ -52,7 +50,7 @@ export const evalEngineRunArgsSchema = z
     gatewayToken: z.string().min(1),
     executionSessionNonce: z.string().min(1).optional(),
     eventSinkNonce: z.string().min(1).optional(),
-    causalParent: causalParentSchema.optional(),
+    causalParent: rpcCausalParentSchema.optional(),
     agentInvocationId: z.string().min(1).optional(),
     parent: z
       .object({
@@ -195,6 +193,24 @@ const rawEvalEngineMethods = defineServiceMethods({
     args: z.tuple([runIdSchema]),
     returns: evalRunStatusSchema,
   },
+  getRunReceipt: {
+    website: {
+      kind: "closed",
+      reason: "Execution engine control is internal to reviewed execution receivers.",
+    } as const,
+    ...managed("read"),
+    args: z.tuple([runIdSchema]),
+    returns: evalResultReceiptSchema.nullable(),
+  },
+  acknowledgeRunResult: {
+    website: {
+      kind: "closed",
+      reason: "Execution engine control is internal to reviewed execution receivers.",
+    } as const,
+    ...managed("write"),
+    args: z.tuple([runIdSchema, evalResultIdentitySchema]),
+    returns: z.object({ acknowledged: z.literal(true), duplicate: z.boolean() }).strict(),
+  },
   getRunEvents: {
     website: {
       kind: "closed",
@@ -259,15 +275,6 @@ const rawEvalEngineMethods = defineServiceMethods({
     returns: z.object({ ok: z.boolean(), existed: z.boolean() }).strict(),
   },
   reset: {
-    website: {
-      kind: "closed",
-      reason: "Execution engine control is internal to reviewed execution receivers.",
-    } as const,
-    ...managed("destructive"),
-    args: z.tuple([]),
-    returns: okSchema,
-  },
-  dispose: {
     website: {
       kind: "closed",
       reason: "Execution engine control is internal to reviewed execution receivers.",

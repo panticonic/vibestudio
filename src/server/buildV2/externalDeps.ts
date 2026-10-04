@@ -1217,20 +1217,18 @@ export function resolveHostDependencyProjection(
 export async function prepareExternalDependencyEnvironment(
   unit: GraphNode,
   graph: PackageGraph,
-  workspaceRoot: string,
   sourceRoot: string,
   appRoot: string,
   appNodeModules: string[] = []
 ): Promise<ExternalDependencyEnvironment> {
-  const closure = collectExternalDependencyClosure(unit, graph, workspaceRoot, appNodeModules);
-  const externalDeps = closure.installSet;
-  const dependencyOverrides = collectTransitiveDependencyOverrides(
+  const requirements = await resolveExternalDependencyRequirements(
     unit,
     graph,
-    workspaceRoot,
+    sourceRoot,
     appNodeModules
   );
-  const dependencyPatches = await collectTransitiveDependencyPatches(unit, graph, sourceRoot);
+  const { closure, dependencyOverrides, dependencyPatches } = requirements;
+  const externalDeps = closure.installSet;
   const hostProjection = resolveHostDependencyProjection(
     externalDeps,
     dependencyOverrides,
@@ -1262,6 +1260,25 @@ export async function prepareExternalDependencyEnvironment(
     dependencyPatches,
     release: () => borrowed?.release(),
   };
+}
+
+/** Resolve one exact unit's dependency inputs independently of where its
+ * consumer runs. Native admission and bundling share these declarations. */
+export async function resolveExternalDependencyRequirements(
+  unit: GraphNode,
+  graph: PackageGraph,
+  sourceRoot: string,
+  appNodeModules: string[]
+) {
+  const closure = collectExternalDependencyClosure(unit, graph, sourceRoot, appNodeModules);
+  const dependencyOverrides = collectTransitiveDependencyOverrides(
+    unit,
+    graph,
+    sourceRoot,
+    appNodeModules
+  );
+  const dependencyPatches = await collectTransitiveDependencyPatches(unit, graph, sourceRoot);
+  return { closure, dependencyOverrides, dependencyPatches };
 }
 
 export async function ensureExtensionRuntimeDeps(

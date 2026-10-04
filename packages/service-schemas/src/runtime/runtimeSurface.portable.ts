@@ -24,9 +24,12 @@ import {
 } from "@vibestudio/shared/runtimeSurface";
 import browserDataRuntimeCatalog from "./generated/browserDataRuntimeCatalog.json";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
+import gitRuntimeCatalog from "./generated/gitRuntimeCatalog.json";
 import templatesRuntimeCatalog from "./generated/templatesRuntimeCatalog.json";
+import webhooksRuntimeCatalog from "./generated/webhooksRuntimeCatalog.json";
 import workspaceServiceResolutionSchema from "./generated/workspaceServiceResolution.json";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
+import { runtimeMethods } from "../runtime.js";
 import {
   BLOBSTORE_METHOD_NAMES,
   GIT_INTEROP_METHOD_NAMES,
@@ -704,7 +707,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   credentials: namespaceEntry(
     CREDENTIALS_MEMBERS,
-    "Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."
+    "Typed credential lifecycle and credentialed network access. Use resolveCredential({ url }) for host-owned audience matching; an unbound URL returns null without UI. Inventory summaries do not replace the resolver's binding and use policy. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."
   ),
   browserData: namespaceEntry(
     BROWSER_DATA_MEMBERS,
@@ -715,7 +718,8 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   git: namespaceEntry(
     GIT_MEMBERS,
     "Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote.",
-    "gitInterop"
+    "gitInterop",
+    gitRuntimeCatalog
   ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
   gad: namespaceEntry(
@@ -754,7 +758,8 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Each subscription has an explicit maxBodyBytes budget: relay defaults to its 1,500,000-byte transport ceiling, while direct defaults to the operator-configured host ceiling (16 MiB by default). Delivery events currently include rawBodyBase64, so the host ceiling also bounds that in-memory expansion. Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings.",
     // Internal schema source only. The catalog projects these method schemas as
     // runtime:webhooks.* entries; the raw transport remains non-agent-facing.
-    "webhookIngress"
+    "webhookIngress",
+    webhooksRuntimeCatalog
   ),
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
   templates: namespaceEntry(
@@ -769,8 +774,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The client contract is shared by panels, workers, Durable Objects, and eval; Durable Objects bind clients to their own instance RPC."
   ),
   hosts: valueEntry("Portable owner-scoped attached-host access for development sessions."),
-  runtime: valueEntry(
-    "Portable typed runtime lifecycle and supervision client for the current workspace context."
+  runtime: namespaceEntry(
+    Object.keys(runtimeMethods),
+    "Portable typed runtime lifecycle and supervision client for the current workspace context.",
+    "runtime"
   ),
 };
 

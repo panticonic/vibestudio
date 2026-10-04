@@ -117,7 +117,6 @@ function readOfficialTemplateCatalog(registryFile) {
   }
   const sources = document.templates.map((entry) => catalogEntry(entry, entry?.role));
   const foundations = sources.filter((entry) => DEFAULT_TEMPLATE_NAMES.includes(entry.role));
-  const byRole = new Map(foundations.map((entry) => [entry.role, entry]));
   for (const role of DEFAULT_TEMPLATE_NAMES) {
     if (foundations.filter((entry) => entry.role === role).length !== 1) {
       throw new Error(`Template registry must declare exactly one ${role} source`);
@@ -137,8 +136,14 @@ function readOfficialTemplateCatalog(registryFile) {
   }
   for (const source of development) {
     for (const consumer of source.consumers) {
-      if (!byRole.has(consumer)) {
+      const target = sources.find((entry) => entry.id === consumer);
+      if (!target) {
         throw new Error(`Development template ${source.id} names unknown consumer ${consumer}`);
+      }
+      if (target.role === "development") {
+        throw new Error(
+          `Development template ${source.id} consumer ${consumer} is not installable`
+        );
       }
     }
   }

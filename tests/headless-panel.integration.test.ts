@@ -28,6 +28,7 @@ import {
   resolveDevelopmentTemplateSet,
 } from "../src/dev/developmentTemplateSet.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { attemptCleanup, ownChild } from "./setup/ownedChild.js";
 
 interface ReadyPayload {
   gatewayUrl: string;
@@ -71,37 +72,42 @@ const maybeDescribe =
 
 let serverProc: ChildProcessWithoutNullStreams | null = null;
 let tempRoot: string | null = null;
+let serverOwner: ReturnType<typeof ownChild> | null = null;
 let fixtureServer: http.Server | null = null;
 let shellConnection: RpcWsConnection | null = null;
 let workerConnection: RpcWsConnection | null = null;
 let cdpClient: CdpClient | null = null;
 
 afterEach(async () => {
-  cdpClient?.close();
-  cdpClient = null;
-  await workerConnection?.close();
-  workerConnection = null;
-  await shellConnection?.close();
-  shellConnection = null;
-  if (fixtureServer) {
-    const server = fixtureServer;
-    fixtureServer = null;
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      server.closeAllConnections();
-    });
-  }
-  if (serverProc && serverProc.exitCode === null) {
-    serverProc.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, 8_000);
-      serverProc?.once("exit", () => {
-        clearTimeout(timeout);
-        resolve();
+  await attemptCleanup([
+    async () => {
+      await cdpClient?.close();
+      cdpClient = null;
+    },
+    async () => {
+      await workerConnection?.close();
+      workerConnection = null;
+    },
+    async () => {
+      await shellConnection?.close();
+      shellConnection = null;
+    },
+    async () => {
+      if (!fixtureServer) return;
+      const server = fixtureServer;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
       });
-    });
-  }
-  serverProc = null;
+      fixtureServer = null;
+    },
+    async () => {
+      await serverOwner?.retire();
+      serverOwner = null;
+      serverProc = null;
+    },
+  ]);
+  // Failed retirement preserves scratch and exact resource references.
   if (tempRoot) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     tempRoot = null;
@@ -147,6 +153,8 @@ maybeDescribe("headless browser panel integration", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
+
+    serverOwner = ownChild(serverProc);
 
     let serverOutput = "";
     const appendServerOutput = (chunk: Buffer | string): void => {
@@ -740,49 +748,76 @@ async function connectRpcWebSocket(options: {
     ready: () => Promise.resolve(),
     onStatusChange: () => () => {},
   };
+  const lifetime = new AbortController();
+  const outbound = new Set<Promise<unknown>>();
   const rpcClient = createRpcClient({
+    lifetime: lifetime.signal,
+    onOutboundOperation(operation) {
+      outbound.add(operation);
+      void operation.then(
+        () => outbound.delete(operation),
+        () => outbound.delete(operation)
+      );
+    },
     selfId: options.selfId,
     callerKind: options.callerKind,
     transport,
   });
 
-  const auth = await new Promise<RpcWsConnection["auth"]>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("RPC WebSocket auth timeout")), 10_000);
-    const fail = (error: unknown) => {
-      clearTimeout(timeout);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    ws.once("error", fail);
-    ws.once("open", () => {
-      ws.send(
-        JSON.stringify({
-          type: "ws:auth",
-          contractVersion: RPC_CONTRACT_VERSION,
-          token: admission.grant,
-          clientLabel: options.clientLabel,
-          clientPlatform: "desktop",
-        } satisfies WsClientMessage)
-      );
-    });
-    ws.on("message", function onMessage(data) {
-      const message = parseJson<WsServerMessage>(data);
-      if (!message) return;
-      if (message.type === "ws:auth-result") {
-        ws.off("message", onMessage);
-        ws.off("error", fail);
+  const retireRpc = async (): Promise<void> => {
+    lifetime.abort(new Error("Test RPC owner retired"));
+    await Promise.allSettled([...outbound]);
+  };
+
+  let auth: RpcWsConnection["auth"];
+  try {
+    auth = await new Promise<RpcWsConnection["auth"]>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("RPC WebSocket auth timeout")), 10_000);
+      const fail = (error: unknown) => {
         clearTimeout(timeout);
-        if (!message.success) {
-          reject(new Error(`RPC WebSocket auth failed: ${message.error ?? "unknown error"}`));
-          return;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      ws.once("error", fail);
+      ws.once("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "ws:auth",
+            contractVersion: RPC_CONTRACT_VERSION,
+            token: admission.grant,
+            clientLabel: options.clientLabel,
+            clientPlatform: "desktop",
+          } satisfies WsClientMessage)
+        );
+      });
+      ws.on("message", function onMessage(data) {
+        const message = parseJson<WsServerMessage>(data);
+        if (!message) return;
+        if (message.type === "ws:auth-result") {
+          ws.off("message", onMessage);
+          ws.off("error", fail);
+          clearTimeout(timeout);
+          if (!message.success) {
+            reject(new Error(`RPC WebSocket auth failed: ${message.error ?? "unknown error"}`));
+            return;
+          }
+          resolve({
+            callerId: message.callerId ?? options.selfId,
+            callerKind: message.callerKind ?? options.callerKind,
+            connectionId: message.connectionId,
+          });
         }
-        resolve({
-          callerId: message.callerId ?? options.selfId,
-          callerKind: message.callerKind ?? options.callerKind,
-          connectionId: message.connectionId,
-        });
-      }
+      });
     });
-  });
+  } catch (original) {
+    try {
+      await attemptCleanup([retireRpc, () => closeWebSocket(ws)]);
+    } catch (cleanup) {
+      throw new AggregateError([original, cleanup], "RPC authentication and cleanup failed", {
+        cause: original,
+      });
+    }
+    throw original;
+  }
 
   ws.on("message", (data) => {
     const message = parseJson<WsServerMessage>(data);
@@ -821,14 +856,7 @@ async function connectRpcWebSocket(options: {
   return {
     rpc: rpcClient,
     auth,
-    close: async () => {
-      if (ws.readyState === WebSocket.CLOSED) return;
-      await new Promise<void>((resolve) => {
-        ws.once("close", () => resolve());
-        ws.close(1000, "test cleanup");
-        setTimeout(resolve, 1_000);
-      });
-    },
+    close: async () => attemptCleanup([retireRpc, () => closeWebSocket(ws)]),
   };
 }
 
@@ -851,19 +879,30 @@ class CdpClient {
     const ws = new WebSocket(endpoint.wsEndpoint, [
       webSocketAuthProtocol("inspection", endpoint.token),
     ]);
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("CDP auth timeout")), 10_000);
-      const fail = (error: unknown) => {
-        clearTimeout(timeout);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      };
-      ws.once("error", fail);
-      ws.once("open", () => {
-        ws.off("error", fail);
-        clearTimeout(timeout);
-        resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("CDP auth timeout")), 10_000);
+        const fail = (error: unknown) => {
+          clearTimeout(timeout);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        };
+        ws.once("error", fail);
+        ws.once("open", () => {
+          ws.off("error", fail);
+          clearTimeout(timeout);
+          resolve();
+        });
       });
-    });
+    } catch (original) {
+      try {
+        await closeWebSocket(ws);
+      } catch (cleanup) {
+        throw new AggregateError([original, cleanup], "CDP authentication and cleanup failed", {
+          cause: original,
+        });
+      }
+      throw original;
+    }
     return new CdpClient(ws);
   }
 
@@ -901,11 +940,9 @@ class CdpClient {
     return result.result?.value;
   }
 
-  close(): void {
-    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-      this.ws.close(1000, "test cleanup");
-    }
+  async close(): Promise<void> {
     this.rejectPending(new Error("CDP client closed"));
+    await closeWebSocket(this.ws);
   }
 
   private handleMessage(data: WebSocket.RawData): void {
@@ -972,4 +1009,27 @@ function parseJson<T>(data: WebSocket.RawData): T | null {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function closeWebSocket(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return;
+  await new Promise<void>((resolve, reject) => {
+    const closed = () => {
+      ws.off("error", failed);
+      resolve();
+    };
+    const failed = (error: Error) => {
+      ws.off("close", closed);
+      reject(error);
+    };
+    ws.once("close", closed);
+    ws.once("error", failed);
+    try {
+      if (ws.readyState !== WebSocket.CLOSING) ws.close(1000, "test cleanup");
+    } catch (error) {
+      ws.off("close", closed);
+      ws.off("error", failed);
+      reject(error);
+    }
+  });
 }

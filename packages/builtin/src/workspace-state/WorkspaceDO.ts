@@ -1,3 +1,9 @@
+import {
+  WakePublicationStore,
+  type WakePublication,
+  type WakeRequest,
+  type StorageIncarnation,
+} from "@vibestudio/durable";
 /**
  * WorkspaceDO — durable workspace state store.
  *
@@ -6,8 +12,8 @@
  * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
  * the panel-tree position; slot_history holds the navigation history.
  *
- * This pre-release store has one exact current schema. Prior workspace
- * databases are intentionally unsupported and must be recreated.
+ * This owner currently declares no supported schema upgrades. Older shapes
+ * refuse unchanged; supported user-data upgrades require an explicit path.
  */
 
 import { DurableObjectBase, schemaRpc, type DurableObjectContext } from "@vibestudio/durable";
@@ -70,6 +76,7 @@ interface DbEntityRow {
   agent_channel_id: string | null;
   parent_id: string | null;
   owner_user_id: string | null;
+  authority_session_id: string;
   created_at: number;
   status: "preparing" | "active" | "retired";
   retired_at: number | null;
@@ -263,6 +270,7 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "agent_channel_id",
   "parent_id",
   "owner_user_id",
+  "authority_session_id",
   "created_at",
   "status",
   "retired_at",
@@ -314,7 +322,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 36;
+  static override schemaVersion = 37;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -347,6 +355,7 @@ export class WorkspaceDO extends DurableObjectBase {
         agent_channel_id TEXT,
         parent_id TEXT,
         owner_user_id TEXT,
+        authority_session_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -592,7 +601,7 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override validateSchema(): void {
     super.validateSchema();
-    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v29`);
+    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v37`);
     assertWorkspaceEntityStatuses(
       this.sql,
       ["preparing", "active", "retired"],
@@ -638,6 +647,9 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
+        if (existing.status === "retired" && existing.cleanup_complete !== 1) {
+          throw new Error(`Cannot reactivate entity ${id} before retirement cleanup completes`);
+        }
         if (existing.active_build_key && existing.active_build_key !== nextBuildKey) {
           throw new IdentityCollisionError(id, {
             field: "activeBuildKey",
@@ -700,15 +712,20 @@ export class WorkspaceDO extends DurableObjectBase {
         if (existing.status === "active") {
           return this.rowToEntity(existing);
         }
-        // Reactivate
+        // Preparing -> active preserves its reserved lifetime; completed
+        // retirement -> active creates a new authority owner over retained data.
+        const authoritySessionId =
+          existing.status === "retired" ? crypto.randomUUID() : existing.authority_session_id;
         this.sql.exec(
-          `UPDATE entities SET status = 'active', retired_at = NULL, cleanup_complete = 1, error = NULL WHERE id = ?`,
+          `UPDATE entities SET status = 'active', retired_at = NULL, cleanup_complete = 1, error = NULL, authority_session_id = ? WHERE id = ?`,
+          authoritySessionId,
           id
         );
         return this.rowToEntity({
           ...existing,
           agent_entity_id: existing.agent_entity_id,
           agent_channel_id: existing.agent_channel_id,
+          authority_session_id: authoritySessionId,
           status: "active",
           retired_at: null,
           cleanup_complete: 1,
@@ -723,9 +740,9 @@ export class WorkspaceDO extends DurableObjectBase {
           active_execution_digest,
           active_authority, execution_authority,
           context_id, class_name, key, state_args, agent_entity_id, agent_channel_id,
-          parent_id, owner_user_id, created_at,
+          parent_id, owner_user_id, authority_session_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -744,6 +761,7 @@ export class WorkspaceDO extends DurableObjectBase {
         input.agentBinding?.channelId ?? null,
         input.parentId ?? null,
         input.ownerUserId ?? null,
+        crypto.randomUUID(),
         now
       );
       const row = this.readEntityRow(id);
@@ -793,9 +811,9 @@ export class WorkspaceDO extends DurableObjectBase {
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version, active_build_key,
           active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
-          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id,
+          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id, authority_session_id,
           created_at, status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -810,6 +828,7 @@ export class WorkspaceDO extends DurableObjectBase {
         input.agentBinding?.channelId ?? null,
         input.parentId ?? null,
         input.ownerUserId ?? null,
+        crypto.randomUUID(),
         now
       );
       if (input.lifecycleOwner) {
@@ -1051,10 +1070,17 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  /** Mark cleanup_complete=1 after server-side hooks succeed. */
+  /** Complete only the retired lifetime whose owned cleanup has joined. */
   @schemaRpc()
-  entityCleanupComplete(id: string): void {
-    this.sql.exec(`UPDATE entities SET cleanup_complete = 1 WHERE id = ?`, id);
+  entityCleanupComplete(id: string, authoritySessionId: string): void {
+    if (!authoritySessionId)
+      throw new Error("Entity cleanup requires its exact authority lifetime");
+    this.sql.exec(
+      `UPDATE entities SET cleanup_complete = 1
+        WHERE id = ? AND status = 'retired' AND authority_session_id = ?`,
+      id,
+      authoritySessionId
+    );
   }
 
   /** Find rows whose cleanup hooks need retrying. */
@@ -1248,6 +1274,55 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
+  private wakePublications(): WakePublicationStore {
+    return new WakePublicationStore(this.ctx.storage, (key) => {
+      this.assertLifecycleKey(key);
+      const entity = this.readEntityRow(
+        canonicalEntityId({
+          kind: "do",
+          source: key.source,
+          className: key.className,
+          key: key.objectKey,
+        })
+      );
+      if (!entity || entity.status !== "active")
+        throw new Error("Wake source is not an active Durable Object");
+    });
+  }
+
+  @schemaRpc()
+  alarmSourceRegister(key: LifecycleKey & StorageIncarnation): string {
+    return this.wakePublications().register(key, key);
+  }
+
+  @schemaRpc()
+  alarmSourcePublish(input: LifecycleKey & WakePublication): "accepted" | "duplicate" | "stale" {
+    return this.wakePublications().publish(input, input);
+  }
+
+  /** Host-owned receipt/readiness hints cannot overwrite a source schedule revision. */
+  @schemaRpc()
+  alarmSourceRequest(input: LifecycleKey & { incarnation: string }): "accepted" | "stale" {
+    return this.wakePublications().request(input, input.incarnation);
+  }
+
+  @schemaRpc()
+  alarmSourceList(): LifecycleKey[] {
+    return this.wakePublications()
+      .owners()
+      .filter(
+        (key) =>
+          this.readEntityRow(
+            canonicalEntityId({
+              kind: "do",
+              source: key.source,
+              className: key.className,
+              key: key.objectKey,
+            })
+          )?.status === "active"
+      );
+  }
+
   /** Register/replace a DO's wake time (absolute epoch ms).
    *
    * Calls without a dispatch claim are fresh scheduling decisions. They fence
@@ -1320,6 +1395,7 @@ export class WorkspaceDO extends DurableObjectBase {
           input.objectKey,
           Math.round(input.wakeAt)
         );
+        this.wakePublications().ensureRequestedAlarm(input);
       }
       if (input.testPolicy) {
         this.sql.exec(
@@ -1379,6 +1455,16 @@ export class WorkspaceDO extends DurableObjectBase {
           input.objectKey
         );
       }
+      const entity = this.readEntityRow(
+        canonicalEntityId({
+          kind: "do",
+          source: input.source,
+          className: input.className,
+          key: input.objectKey,
+        })
+      );
+      if (entity?.status === "active") this.wakePublications().ensureRequestedAlarm(input);
+      else this.wakePublications().forgetRequest(input);
       this.sql.exec(
         `DELETE FROM do_alarm_test_policies
           WHERE source = ? AND class_name = ? AND object_key = ?`,
@@ -1387,6 +1473,55 @@ export class WorkspaceDO extends DurableObjectBase {
         input.objectKey
       );
       return "accepted";
+    });
+  }
+
+  /** A successful pass consumes only its captured events; failures use alarmSet to retain debt. */
+  @schemaRpc()
+  alarmComplete(
+    input: LifecycleKey & {
+      dispatchOwner: string;
+      dispatchGeneration: number;
+      wakeRequest?: WakeRequest;
+      nextAlarm: { wakeAt: number; testPolicy?: AgentExecutionTestPolicy } | null;
+    }
+  ): { status: "accepted"; wakeAt: number | null } | { status: "stale" } {
+    return this.ctx.storage.transactionSync(() => {
+      if (
+        !input.dispatchOwner?.trim() ||
+        !Number.isSafeInteger(input.dispatchGeneration) ||
+        input.dispatchGeneration < 1
+      )
+        throw new Error("alarmComplete: invalid dispatch claim");
+      const claim = this.sql
+        .exec(
+          "SELECT 1 AS owned FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ? AND dispatch_owner = ? AND dispatch_generation = ?",
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        )
+        .toArray()[0];
+      if (!claim) return { status: "stale" };
+      if (input.wakeRequest)
+        this.wakePublications().acknowledgeRequest(
+          input,
+          input.wakeRequest,
+          input.dispatchGeneration
+        );
+      const result = input.nextAlarm
+        ? this.alarmSet({ ...input, ...input.nextAlarm })
+        : this.alarmClear(input);
+      if (result === "stale")
+        throw new Error("Alarm claim changed inside its completion transaction");
+      this.wakePublications().ensureRequestedAlarm(input);
+      return {
+        status: "accepted",
+        wakeAt: this.wakePublications().hasPendingRequest(input)
+          ? 0
+          : (input.nextAlarm?.wakeAt ?? null),
+      };
     });
   }
 
@@ -1440,6 +1575,20 @@ export class WorkspaceDO extends DurableObjectBase {
           WHERE dispatch_owner IS NOT NULL`
       );
       this.setStateValue("alarm-active-worker", workerId);
+      // Registration precedes source admission. A generation recovery pass
+      // must include sources whose first/newest publication never arrived.
+      // This is one recovery opportunity, not a source scheduling decision:
+      // the pass republishes its canonical projection and parks if ineligible.
+      for (const key of this.alarmSourceList()) {
+        this.sql.exec(
+          `INSERT INTO do_alarms (source, class_name, object_key, wake_at, dispatch_generation, dispatch_owner)
+           VALUES (?, ?, ?, 0, 0, NULL)
+           ON CONFLICT(source, class_name, object_key) DO UPDATE SET wake_at = 0`,
+          key.source,
+          key.className,
+          key.objectKey
+        );
+      }
       return { previousWorkerId };
     });
   }
@@ -1475,6 +1624,7 @@ export class WorkspaceDO extends DurableObjectBase {
     LifecycleKey & {
       wakeAt: number;
       dispatchGeneration: number;
+      wakeRequest?: WakeRequest;
       testPolicy?: AgentExecutionTestPolicy;
     }
   > {
@@ -1521,13 +1671,19 @@ export class WorkspaceDO extends DurableObjectBase {
         )
         .slice(0, input.limit);
       return selected.map((row) => {
+        const nextGeneration = this.wakePublications().nextClaimGeneration({
+          source: row.source,
+          className: row.class_name,
+          objectKey: row.object_key,
+        });
         this.sql.exec(
           `UPDATE do_alarms
               SET dispatch_owner = ?,
-                  dispatch_generation = dispatch_generation + 1
+                  dispatch_generation = ?
             WHERE source = ? AND class_name = ? AND object_key = ?
               AND dispatch_owner IS NULL`,
           input.workerId,
+          nextGeneration,
           row.source,
           row.class_name,
           row.object_key
@@ -1542,12 +1698,17 @@ export class WorkspaceDO extends DurableObjectBase {
             row.object_key
           )
           .one()["generation"];
+        const wakeRequest = this.wakePublications().claimRequest(
+          { source: row.source, className: row.class_name, objectKey: row.object_key },
+          Number(generation)
+        );
         return {
           source: row.source,
           className: row.class_name,
           objectKey: row.object_key,
           wakeAt: row.wake_at,
           dispatchGeneration: Number(generation),
+          ...(wakeRequest ? { wakeRequest } : {}),
           ...(row.test_policy_json
             ? { testPolicy: JSON.parse(row.test_policy_json) as AgentExecutionTestPolicy }
             : {}),
@@ -3138,6 +3299,7 @@ export class WorkspaceDO extends DurableObjectBase {
         : {}),
       contextId: row.context_id,
       key: row.key,
+      authoritySessionId: row.authority_session_id,
       createdAt: row.created_at,
       status: row.status,
       cleanupComplete: row.cleanup_complete === 1,

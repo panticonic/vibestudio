@@ -314,3 +314,69 @@ describe("shellApproval service contract", () => {
     });
   });
 });
+
+describe("native approval attribution", () => {
+  const nativeInvocation = {
+    owner: { runtimeId: "agent", authoritySessionId: "authority" },
+    task: { conversationId: 1, taskId: 2 },
+    operation: { kind: "tool" as const, assistantEntryId: 3, callId: "network-fetch" },
+  };
+  const causalParent = {
+    kind: "trajectory-invocation" as const,
+    logId: "log:chat",
+    head: "head:exact",
+    invocationId: "invocation:original",
+  };
+  const snapshot = createInvocationSnapshot({
+    nativeInvocation,
+    causalParent,
+    service: "credentials",
+    method: "proxyFetch",
+    capability: "network.response.read",
+    capabilityDefinitionDigest: "-",
+    resourceType: "url-origin",
+    provider: "-",
+    providerExecutionDigest: "-",
+    resourceKey: "https://example.com",
+    args: [],
+    preparedStateDigest: "-",
+    callerPrincipal: "code:workers/agent",
+    sessionId: "authority",
+    missionSubject: "-",
+    snippetDigest: "-",
+    codeLineage: { class: "internal", chain: [] },
+    initiatorChain: [],
+    at: 1,
+  });
+  const approval = {
+    approvalId: "native-network",
+    callerId: "agent",
+    callerKind: "do" as const,
+    repoPath: "workers/agent",
+    effectiveVersion: "version",
+    requestedAt: 1,
+    kind: "capability" as const,
+    capability: "network.response.read",
+    title: "Connect",
+    allowedDecisions: ["once", "session", "task", "deny"],
+    snapshot,
+  };
+  it("preserves the exact native task and causal parent through pending approval delivery", () => {
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+  });
+  it("rejects malformed original coordinates and unrecognized snapshot fields", () => {
+    for (const replacement of [
+      {
+        ...snapshot,
+        nativeInvocation: { ...nativeInvocation, task: { conversationId: 1, taskId: 0 } },
+      },
+      { ...snapshot, causalParent: { ...causalParent, head: "" } },
+      { ...snapshot, causalParent: { ...causalParent, invocationId: "bad\0coordinate" } },
+      { ...snapshot, extraAuthority: "unrecognized" },
+    ])
+      expect(
+        shellApprovalMethods.listPending.returns.safeParse([{ ...approval, snapshot: replacement }])
+          .success
+      ).toBe(false);
+  });
+});

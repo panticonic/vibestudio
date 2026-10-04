@@ -637,11 +637,16 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     });
     d.markInitialized();
 
-    await expect(d.dispatch(ctx("worker"), "acquisition", "act", [])).rejects.toMatchObject({
+    const nativeCtx = ctx("worker");
+    const source = { kind: "trajectory-invocation" as const, logId: "trajectory:channel:one", head: "main", invocationId: "native:actual" };
+    nativeCtx.caller.causalParent = source;
+    nativeCtx.causalParent = { ...source, invocationId: "raw:metadata" };
+    await expect(d.dispatch(nativeCtx, "acquisition", "act", [])).rejects.toMatchObject({
       code: "EACQUIRE",
       errorData: { acquisition: { pending: true } },
     });
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ snapshot: expect.objectContaining({ causalParent: source }) }));
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(acquire).not.toHaveBeenCalled();
 

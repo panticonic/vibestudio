@@ -15,7 +15,9 @@ import { capabilityDomain } from "@vibestudio/shared/authority/authorityDomains"
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
 import { isCodePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { stateLayout } from "../stateLayout.js";
-import { AUTHORITY_GRANTS_SCHEMA, AUTHORITY_GRANTS_MIGRATIONS } from "./authorityGrantSchema.js";
+import { AUTHORITY_GRANTS_SCHEMA } from "./authorityGrantSchema.js";
+import { AuthorityAcquisitionStore } from "./authorityAcquisitionStore.js";
+import { TargetAuthorityRequestStore } from "./targetAuthorityRequestStore.js";
 
 export interface IssueAuthorityGrantInput {
   id?: string;
@@ -46,6 +48,8 @@ export interface StoredAuthoritySubject<S extends AuthorityGrantSubject = Author
 
 export class CapabilityGrantStore {
   private readonly db: DatabaseSync;
+  readonly acquisitions: AuthorityAcquisitionStore;
+  readonly targetRequests: TargetAuthorityRequestStore;
   private readonly executions = new Map<
     string,
     import("@vibestudio/rpc").AuthoritySubjectBinding & {
@@ -57,6 +61,8 @@ export class CapabilityGrantStore {
   private readonly grantWithdrawalListeners = new Set<
     (grant: AuthorityGrant, at: number) => void
   >();
+  private transactionEffects: (() => void)[] | undefined;
+  private transactionDepth = 0;
   readonly databasePath: string;
 
   constructor(opts: { statePath: string }) {
@@ -69,9 +75,39 @@ export class CapabilityGrantStore {
     try {
       openCanonicalSqliteDatabase(this.db, AUTHORITY_GRANTS_SCHEMA, {
         description: `authority grant store in ${this.databasePath}`,
-        migrations: AUTHORITY_GRANTS_MIGRATIONS,
       });
       this.db.exec("PRAGMA journal_mode = WAL");
+      this.acquisitions = new AuthorityAcquisitionStore(this.db, (work) => this.transaction(work));
+      this.targetRequests = new TargetAuthorityRequestStore(
+        this.db,
+        (work) => this.transaction(work),
+        (request) => {
+          const value =
+            request.state === "cancelled"
+              ? { state: "closed" as const }
+              : {
+                  state: "decided" as const,
+                  decision:
+                    request.state === "denied"
+                      ? "deny"
+                      : request.targetSubject.startsWith("mission:")
+                        ? "mission"
+                        : "task",
+                  ...(request.grantId ? { grantId: request.grantId } : {}),
+                };
+          this.acquisitions.resolveTarget(
+            request.requestId,
+            {
+              kind: "target-settled",
+              requestId: request.requestId,
+              state: request.state,
+              grantId: request.grantId ?? null,
+            },
+            { state: value.state, value },
+            request.settledAt
+          );
+        }
+      );
     } catch (error) {
       this.db.close();
       throw new Error(
@@ -281,12 +317,10 @@ export class CapabilityGrantStore {
 
   /** Keep identity for audit/deduplication while atomically withdrawing all consent. */
   invalidateAuthoritySubject(subject: AuthorityGrantSubject, now = Date.now()): boolean {
-    const grants = this.listAuthorityGrants().filter(
-      (grant) => grant.subject === subject && grant.revokedAt === undefined
-    );
-    let changed: boolean;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.transaction(() => {
+      const grants = this.listAuthorityGrants().filter(
+        (grant) => grant.subject === subject && grant.revokedAt === undefined
+      );
       const result = this.db
         .prepare("UPDATE authority_subjects SET generation = generation + 1 WHERE subject = ?")
         .run(subject);
@@ -295,17 +329,11 @@ export class CapabilityGrantStore {
           "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
         )
         .run(now, subject);
-      this.db.exec("COMMIT");
-      changed = Number(result.changes) === 1;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-    // Live effects observe only a committed invalidation, including listeners that read the store.
-    for (const execution of this.executions.values())
-      if (execution.subject === subject) execution.lifetime.abort();
-    for (const grant of grants) this.emitGrantWithdrawal(grant, now);
-    return changed;
+      for (const execution of this.executions.values())
+        if (execution.subject === subject) this.afterCommit(() => execution.lifetime.abort());
+      for (const grant of grants) this.emitGrantWithdrawal(grant, now);
+      return Number(result.changes) === 1;
+    });
   }
 
   issue(input: IssueAuthorityGrantInput): AuthorityGrant {
@@ -338,8 +366,8 @@ export class CapabilityGrantStore {
           session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
-          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal, task_authority
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal, task_authority, lineage_at_consent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -368,7 +396,10 @@ export class CapabilityGrantStore {
         constraints.subjectGeneration ?? null,
         constraints.documentId ?? null,
         constraints.requestingCodePrincipal ?? null,
-        constraints.taskAuthority ?? null
+        constraints.taskAuthority ?? null,
+        constraints.lineageAtConsent === undefined
+          ? null
+          : JSON.stringify(constraints.lineageAtConsent)
       );
     return {
       id,
@@ -438,28 +469,32 @@ export class CapabilityGrantStore {
   }
 
   revoke(grantId: string, now = Date.now()): boolean {
-    const grant = this.listAuthorityGrants().find((candidate) => candidate.id === grantId);
-    const result = this.db
-      .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-      .run(now, grantId);
-    const changed = Number(result.changes) === 1;
-    if (changed && grant) this.emitGrantWithdrawal(grant, now);
-    return changed;
+    return this.transaction(() => {
+      const grant = this.listAuthorityGrants().find((candidate) => candidate.id === grantId);
+      const result = this.db
+        .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        .run(now, grantId);
+      const changed = Number(result.changes) === 1;
+      if (changed && grant) this.emitGrantWithdrawal(grant, now);
+      return changed;
+    });
   }
 
   revokeSubject(subject: AuthorityGrantSubject, now = Date.now()): number {
-    const grants = this.listAuthorityGrants().filter(
-      (grant) => grant.subject === subject && grant.revokedAt === undefined
-    );
-    const count = Number(
-      this.db
-        .prepare(
-          "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
-        )
-        .run(now, subject).changes
-    );
-    for (const grant of grants) this.emitGrantWithdrawal(grant, now);
-    return count;
+    return this.transaction(() => {
+      const grants = this.listAuthorityGrants().filter(
+        (grant) => grant.subject === subject && grant.revokedAt === undefined
+      );
+      const count = Number(
+        this.db
+          .prepare(
+            "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
+          )
+          .run(now, subject).changes
+      );
+      for (const grant of grants) this.emitGrantWithdrawal(grant, now);
+      return count;
+    });
   }
 
   touch(grantId: string, now = Date.now()): boolean {
@@ -475,29 +510,31 @@ export class CapabilityGrantStore {
   }
 
   suspendIdleAgentGrants(now = Date.now(), idleMs = 90 * 24 * 60 * 60 * 1_000): number {
-    const cutoff = now - idleMs;
-    const candidates = (
-      this.db
-        .prepare(
-          `SELECT * FROM authority_grants
-           WHERE scope = 'agent' AND revoked_at IS NULL AND consumed_at IS NULL
-             AND suspended_at IS NULL
-             AND COALESCE(last_used_at, created_at) <= ?
-           ORDER BY created_at DESC, id DESC`
-        )
-        .all(cutoff) as GrantRow[]
-    ).map(rowToGrant);
-    const changed = Number(
-      this.db
-        .prepare(
-          `UPDATE authority_grants SET suspended_at = ?
-           WHERE scope = 'agent' AND revoked_at IS NULL AND suspended_at IS NULL
-             AND COALESCE(last_used_at, created_at) <= ?`
-        )
-        .run(now, cutoff).changes
-    );
-    for (const grant of candidates) this.emitGrantWithdrawal(grant, now);
-    return changed;
+    return this.transaction(() => {
+      const cutoff = now - idleMs;
+      const candidates = (
+        this.db
+          .prepare(
+            `SELECT * FROM authority_grants
+             WHERE scope = 'agent' AND revoked_at IS NULL AND consumed_at IS NULL
+               AND suspended_at IS NULL
+               AND COALESCE(last_used_at, created_at) <= ?
+             ORDER BY created_at DESC, id DESC`
+          )
+          .all(cutoff) as GrantRow[]
+      ).map(rowToGrant);
+      const changed = Number(
+        this.db
+          .prepare(
+            `UPDATE authority_grants SET suspended_at = ?
+             WHERE scope = 'agent' AND revoked_at IS NULL AND consumed_at IS NULL AND suspended_at IS NULL
+               AND COALESCE(last_used_at, created_at) <= ?`
+          )
+          .run(now, cutoff).changes
+      );
+      for (const grant of candidates) this.emitGrantWithdrawal(grant, now);
+      return changed;
+    });
   }
 
   restore(grantId: string): boolean {
@@ -785,9 +822,7 @@ export class CapabilityGrantStore {
     const now = input.now ?? Date.now();
     this.transaction(() => {
       for (const grantId of input.issuedGrantIds) {
-        this.db
-          .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-          .run(now, grantId);
+        this.revoke(grantId, now);
       }
       for (const grantId of input.restoreRevokedGrantIds) {
         this.db
@@ -854,25 +889,74 @@ export class CapabilityGrantStore {
             .run(now, agentBindingId).changes
         );
       }
+      for (const grant of withdrawn) this.emitGrantWithdrawal(grant, now);
     });
-    for (const grant of withdrawn) this.emitGrantWithdrawal(grant, now);
     return { grants, locks };
   }
 
   private emitGrantWithdrawal(grant: AuthorityGrant, at: number): void {
-    for (const listener of this.grantWithdrawalListeners) listener(grant, at);
+    this.afterCommit(() =>
+      this.runCommittedEffects(
+        [...this.grantWithdrawalListeners].map((listener) => () => listener(grant, at))
+      )
+    );
   }
 
-  transaction<T>(work: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
+  private afterCommit(effect: () => void): void {
+    if (!this.transactionEffects) throw new Error("Authority live effects require a transaction");
+    this.transactionEffects.push(effect);
+  }
+
+  private runCommittedEffects(effects: readonly (() => void)[]): void {
+    const failures: unknown[] = [];
+    for (const effect of effects) {
+      try {
+        effect();
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    if (failures.length > 0)
+      throw new AggregateError(failures, "Authority changes committed, but live effects failed", {
+        cause: failures[0],
+      });
+  }
+
+  /** Nested work uses a savepoint; live effects belong to the outermost commit. */
+  transaction<T>(work: () => T): T {
+    const parentEffects = this.transactionEffects;
+    const effects: (() => void)[] = [];
+    const savepoint = `authority_${this.transactionDepth}`;
+    this.db.exec(parentEffects ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
+    this.transactionDepth++;
+    this.transactionEffects = effects;
+    let result: T;
+    try {
+      result = work();
+      if (result && typeof (result as { then?: unknown }).then === "function")
+        throw new TypeError("Authority transactions require synchronous work");
+      this.db.exec(parentEffects ? `RELEASE SAVEPOINT ${savepoint}` : "COMMIT");
+    } catch (error) {
+      try {
+        if (parentEffects) {
+          this.db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        } else this.db.exec("ROLLBACK");
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Authority transaction and rollback failed",
+          { cause: error }
+        );
+      }
+      throw error;
+    } finally {
+      this.transactionDepth--;
+      this.transactionEffects = parentEffects;
+    }
+    if (parentEffects) parentEffects.push(...effects);
+    else this.runCommittedEffects(effects);
+    return result;
   }
 }
 
@@ -903,6 +987,9 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
   if (!/^(host|user|code|session|mission|agent|task|website|installation):/.test(subject))
     throw new Error(`Invalid grant subject ${subject}`);
   const constraints = {
+    ...(row["lineage_at_consent"] === null
+      ? {}
+      : { lineageAtConsent: readGrantLineage(String(row["lineage_at_consent"])) }),
     ...(row["requesting_code_principal"] === null
       ? {}
       : { requestingCodePrincipal: String(row["requesting_code_principal"]) as `code:${string}` }),
@@ -986,6 +1073,11 @@ function rowToLock(row: GrantRow): AuthorityLock {
 }
 
 function validateGrantInput(input: IssueAuthorityGrantInput): void {
+  if (input.constraints?.lineageAtConsent !== undefined) {
+    const lineage = input.constraints.lineageAtConsent;
+    if (!Array.isArray(lineage) || lineage.some((value) => typeof value !== "string"))
+      throw new Error("Consent lineage requires an array of source identities");
+  }
   if (
     input.constraints?.requestingCodePrincipal !== undefined &&
     (!isCodePrincipal(input.constraints.requestingCodePrincipal) ||
@@ -1024,6 +1116,13 @@ function validateGrantInput(input: IssueAuthorityGrantInput): void {
       );
     }
   }
+}
+
+function readGrantLineage(value: string): string[] {
+  const lineage: unknown = JSON.parse(value);
+  if (!Array.isArray(lineage) || lineage.some((entry) => typeof entry !== "string"))
+    throw new Error("Stored consent lineage is invalid");
+  return lineage;
 }
 
 function inferGrantScope(input: IssueAuthorityGrantInput): NonNullable<AuthorityGrant["scope"]> {

@@ -23,6 +23,7 @@ import {
   writeClipboardInCommandOverlay,
 } from "../support/commandOverlay";
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -59,6 +60,7 @@ test.describe("command overlay", () => {
     testApp = await launchTestApp({ launchTimeout: 300_000 });
     await approvePendingWorkspaceCreationReview(testApp);
     await waitHostedShellReady(testApp);
+    await declineFirstRunReporting(testApp);
     const panel = await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
     expect(panel.presentation.state, JSON.stringify(panel)).toBe("ready");
     await testApp.app.evaluate(
@@ -244,8 +246,12 @@ test.describe("command overlay", () => {
     expect(snapshot?.conversation).toBe(true);
     // Clearing and promoting are the two ways a conversation ends; an
     // unlabelled glyph made the second invisible, so both are asserted by name.
-    expect(snapshot?.text).toMatch(/Clear/);
-    expect(snapshot?.text).toMatch(/Move to chat panel/);
+    expect(snapshot?.buttons).toEqual(
+      expect.arrayContaining([
+        "Clear this conversation and return to commands",
+        "Move this conversation into a chat panel, keeping its history",
+      ])
+    );
   });
 
   test("resumes into the existing conversation on the next chord", async () => {
@@ -284,12 +290,24 @@ test.describe("command overlay", () => {
 
   test("promotes the same conversation into a ready chat panel", async () => {
     await expect
-      .poll(() => isCommandOverlayButtonEnabled(testApp, "Move to chat panel"), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
+      .poll(
+        () =>
+          isCommandOverlayButtonEnabled(
+            testApp,
+            "Move this conversation into a chat panel, keeping its history"
+          ),
+        {
+          timeout: 30_000,
+          intervals: [250, 500, 1000],
+        }
+      )
       .toBe(true);
-    expect(await clickInCommandOverlay(testApp, "Move to chat panel")).toBe(true);
+    expect(
+      await clickInCommandOverlay(
+        testApp,
+        "Move this conversation into a chat panel, keeping its history"
+      )
+    ).toBe(true);
 
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {

@@ -26,7 +26,11 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 export type WorkspaceRpcSchemaMetadata = Pick<
   ServiceMethodSchemas[string],
   "website" | "authority" | "tier" | "access" | "directEffect" | "execution" | "crossWorkspace"
->;
+> & {
+  argsSchema: Record<string, unknown>;
+  returnsSchema?: Record<string, unknown>;
+  description?: string;
+};
 
 function authorityPrincipals(
   authority: NonNullable<ServiceMethodSchemas[string]["authority"]>
@@ -50,6 +54,9 @@ export interface WorkspaceRpcMethodDoc {
   className: string;
   name: string;
   signature: string;
+  argsSchema?: Record<string, unknown>;
+  returnsSchema?: Record<string, unknown>;
+  argumentNames?: string[];
   description?: string;
   effect:
     | { kind: "open" }
@@ -383,6 +390,7 @@ export function collectWorkspaceRpcCatalog(
             let effect: WorkspaceRpcMethodDoc["effect"];
             let execution: WorkspaceRpcMethodDoc["execution"];
             let handleProduction: { capability: string } | undefined;
+            let schemaContract: WorkspaceRpcSchemaMetadata | undefined;
             const collectDeclaration = <T>(
               read: () => T,
               suggestion?: string
@@ -412,6 +420,7 @@ export function collectWorkspaceRpcCatalog(
                     `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
                   );
                 }
+                schemaContract = schema;
                 const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
                 if (
                   principals.length === 0 ||
@@ -461,10 +470,28 @@ export function collectWorkspaceRpcCatalog(
                 signature: signatureOf(member, source),
                 inputContractDigest: sha256Canonical({
                   signature: signatureOf(member, source),
+                  ...(schemaContract ? { argsSchema: schemaContract.argsSchema } : {}),
                 }),
+                ...(schemaContract
+                  ? {
+                      argsSchema: schemaContract.argsSchema,
+                      ...(schemaContract.returnsSchema
+                        ? { returnsSchema: schemaContract.returnsSchema }
+                        : {}),
+                      ...(member.parameters.every((parameter) => ts.isIdentifier(parameter.name))
+                        ? {
+                            argumentNames: member.parameters.map((parameter) =>
+                              parameter.name.getText(source)
+                            ),
+                          }
+                        : {}),
+                    }
+                  : {}),
                 effect,
                 ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
-                ...(description ? { description } : {}),
+                ...((schemaContract?.description ?? description)
+                  ? { description: schemaContract?.description ?? description }
+                  : {}),
                 ...(access ? { access } : {}),
                 ...(execution ? { execution } : {}),
               });

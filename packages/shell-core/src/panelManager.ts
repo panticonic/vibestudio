@@ -583,7 +583,9 @@ export class PanelManager {
         `Panel id already in use: ${slotId}. A slug must be unique among its parent's children.`
       );
     }
-    const contextId = opts?.contextId?.trim() || generateContextId(slotId);
+    const requestedContextId = opts?.contextId?.trim();
+    const contextId = requestedContextId || generateContextId(slotId);
+    if (!requestedContextId) await runtime.createContext({ contextId });
     const historyEntryKey = mintHistoryEntryKey();
     const browserSource = `browser:${url}`;
 

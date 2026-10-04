@@ -3189,7 +3189,11 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    expect(host.registry.get("@workspace-apps/shell")).toBeNull();
+    expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
+      status: "error",
+      activeBundleKey: null,
+      lastError: expect.stringContaining("pure-thin"),
+    });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:status",
       expect.objectContaining({

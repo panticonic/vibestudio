@@ -1,12 +1,49 @@
-import fs from "node:fs";
-import path from "node:path";
 import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { AuthorityGrantSubject, ResourceScope, TargetAuthorityRequest } from "@vibestudio/rpc";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { stateLayout } from "../stateLayout.js";
-import { TARGET_AUTHORITY_REQUEST_SCHEMA } from "./targetAuthorityRequestSchema.js";
+import { z } from "zod";
+import { AuthorityResourceScopeSchema } from "@vibestudio/service-schemas/authority";
+
+const identity = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes("\0"));
+const targetIdentity = identity.refine((value) => /^(task|mission):.+$/.test(value));
+const targetFacts = z.object({
+  targetSubject: targetIdentity,
+  authorityPlanDigest: identity,
+  operationKey: identity,
+  capability: identity,
+  capabilityDefinitionDigest: identity,
+  resource: AuthorityResourceScopeSchema,
+  tier: z.enum(["gated", "critical"]),
+  sourceUser: identity.refine((value) => /^user:.+$/.test(value)),
+  review: z
+    .object({
+      action: z.string(),
+      domain: z.enum([
+        "files",
+        "sharing",
+        "accounts",
+        "web",
+        "automation",
+        "people",
+        "computer",
+        "safety",
+      ]),
+      verb: z.enum(["see", "act", "manage"]),
+      declaredBy: identity,
+    })
+    .strict(),
+});
+
+function targetRequestId(targetSubject: string, operationKey: string): string {
+  return createHash("sha256")
+    .update("target-authority-request-v2\0")
+    .update(canonicalJson({ targetSubject, operationKey }))
+    .digest("hex");
+}
 
 export interface DurableTargetAuthorityRequest extends TargetAuthorityRequest {
   capabilityDefinitionDigest: string;
@@ -14,72 +51,61 @@ export interface DurableTargetAuthorityRequest extends TargetAuthorityRequest {
 }
 
 export class TargetAuthorityRequestStore {
-  private readonly db: DatabaseSync;
-  readonly databasePath: string;
-
-  constructor(opts: { statePath: string }) {
-    this.databasePath = stateLayout(opts.statePath).authority.targetRequestsDb;
-    fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(this.databasePath);
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    openCanonicalSqliteDatabase(this.db, TARGET_AUTHORITY_REQUEST_SCHEMA, {
-      description: `target authority request store in ${this.databasePath}`,
-    });
-    this.db.exec("PRAGMA journal_mode = WAL");
-  }
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly transaction: <T>(work: () => T) => T,
+    private readonly settled: (request: DurableTargetAuthorityRequest) => void
+  ) {}
 
   ensure(
     input: Omit<DurableTargetAuthorityRequest, "v" | "requestId" | "state" | "createdAt">,
     now = Date.now()
   ): DurableTargetAuthorityRequest {
-    const requestId = createHash("sha256")
-      .update("target-authority-request-v2\0")
-      .update(
-        canonicalJson({
-          targetSubject: input.targetSubject,
-          operationKey: input.operationKey,
-        })
-      )
-      .digest("hex");
-    this.db
-      .prepare(
-        `INSERT INTO target_authority_requests
+    return this.transaction(() => {
+      targetFacts.parse(input);
+      if (this.subject(input.targetSubject)?.state === "retired")
+        throw new Error(`Authority subject ${input.targetSubject} is retired`);
+      const requestId = targetRequestId(input.targetSubject, input.operationKey);
+      this.db
+        .prepare(
+          `INSERT INTO target_authority_requests
       (request_id,target_subject,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,review_json,created_at)
       VALUES (?,?,?,?,?,?,'pending',?,?,?,?) ON CONFLICT(target_subject,operation_key) DO NOTHING`
-      )
-      .run(
-        requestId,
-        input.targetSubject,
-        input.operationKey,
-        input.capability,
-        canonicalJson(input.resource),
-        input.tier,
-        input.sourceUser,
-        input.capabilityDefinitionDigest,
-        canonicalJson(input.review),
-        now
-      );
-    this.db
-      .prepare(
-        `INSERT INTO target_authority_request_plans
+        )
+        .run(
+          requestId,
+          input.targetSubject,
+          input.operationKey,
+          input.capability,
+          canonicalJson(input.resource),
+          input.tier,
+          input.sourceUser,
+          input.capabilityDefinitionDigest,
+          canonicalJson(input.review),
+          now
+        );
+      this.db
+        .prepare(
+          `INSERT INTO target_authority_request_plans
          (request_id,authority_plan_digest,created_at) VALUES (?,?,?)
          ON CONFLICT(request_id,authority_plan_digest) DO NOTHING`
-      )
-      .run(requestId, input.authorityPlanDigest, now);
-    const request = this.require(requestId);
-    if (
-      request.targetSubject !== input.targetSubject ||
-      request.operationKey !== input.operationKey ||
-      request.capability !== input.capability ||
-      request.capabilityDefinitionDigest !== input.capabilityDefinitionDigest ||
-      canonicalJson(request.resource) !== canonicalJson(input.resource) ||
-      request.tier !== input.tier ||
-      request.sourceUser !== input.sourceUser ||
-      canonicalJson(request.review) !== canonicalJson(input.review)
-    ) {
-      throw new Error(`Target authority request ${requestId} was replayed with different facts`);
-    }
-    return request;
+        )
+        .run(requestId, input.authorityPlanDigest, now);
+      const request = this.require(requestId);
+      if (
+        request.targetSubject !== input.targetSubject ||
+        request.operationKey !== input.operationKey ||
+        request.capability !== input.capability ||
+        request.capabilityDefinitionDigest !== input.capabilityDefinitionDigest ||
+        canonicalJson(request.resource) !== canonicalJson(input.resource) ||
+        request.tier !== input.tier ||
+        request.sourceUser !== input.sourceUser ||
+        canonicalJson(request.review) !== canonicalJson(input.review)
+      ) {
+        throw new Error(`Target authority request ${requestId} was replayed with different facts`);
+      }
+      return request;
+    });
   }
 
   registerSubject(
@@ -89,26 +115,32 @@ export class TargetAuthorityRequestStore {
     controllerRuntimeId: string,
     now = Date.now()
   ): void {
-    this.db
-      .prepare(
-        `INSERT INTO authority_subjects
+    this.transaction(() => {
+      targetIdentity.parse(subject);
+      identity.parse(authorityPlanDigest);
+      identity.refine((value) => /^user:.+$/.test(value)).parse(ownerUser);
+      identity.parse(controllerRuntimeId);
+      this.db
+        .prepare(
+          `INSERT INTO target_authority_subjects
       (target_subject,authority_plan_digest,owner_user,controller_runtime_id,state,created_at)
       VALUES (?,?,?,?,'active',?)
       ON CONFLICT(target_subject) DO NOTHING`
-      )
-      .run(subject, authorityPlanDigest, ownerUser, controllerRuntimeId, now);
-    const registered = this.subject(subject);
-    if (
-      !registered ||
-      registered.authorityPlanDigest !== authorityPlanDigest ||
-      registered.ownerUser !== ownerUser ||
-      registered.controllerRuntimeId !== controllerRuntimeId ||
-      registered.state !== "active"
-    ) {
-      throw new Error(
-        `Authority subject ${subject} was replayed with different ownership, controller, or policy`
-      );
-    }
+        )
+        .run(subject, authorityPlanDigest, ownerUser, controllerRuntimeId, now);
+      const registered = this.subject(subject);
+      if (
+        !registered ||
+        registered.authorityPlanDigest !== authorityPlanDigest ||
+        registered.ownerUser !== ownerUser ||
+        registered.controllerRuntimeId !== controllerRuntimeId ||
+        registered.state !== "active"
+      ) {
+        throw new Error(
+          `Authority subject ${subject} was replayed with different ownership, controller, or policy`
+        );
+      }
+    });
   }
 
   subject(subject: AuthorityGrantSubject): {
@@ -119,25 +151,28 @@ export class TargetAuthorityRequestStore {
   } | null {
     const row = this.db
       .prepare(
-        "SELECT authority_plan_digest,owner_user,controller_runtime_id,state FROM authority_subjects WHERE target_subject=?"
+        "SELECT authority_plan_digest,owner_user,controller_runtime_id,state FROM target_authority_subjects WHERE target_subject=?"
       )
       .get(subject) as Record<string, unknown> | undefined;
-    return row
-      ? {
-          authorityPlanDigest: String(row["authority_plan_digest"]),
-          ownerUser: String(row["owner_user"]) as `user:${string}`,
-          controllerRuntimeId: String(row["controller_runtime_id"]),
-          state: String(row["state"]) as "active" | "retired",
-        }
-      : null;
+    if (!row) return null;
+    targetIdentity.parse(subject);
+    identity.parse(row["authority_plan_digest"]);
+    identity.refine((value) => /^user:.+$/.test(value)).parse(row["owner_user"]);
+    identity.parse(row["controller_runtime_id"]);
+    z.enum(["active", "retired"]).parse(row["state"]);
+    return {
+      authorityPlanDigest: String(row["authority_plan_digest"]),
+      ownerUser: String(row["owner_user"]) as `user:${string}`,
+      controllerRuntimeId: String(row["controller_runtime_id"]),
+      state: String(row["state"]) as "active" | "retired",
+    };
   }
 
   retireSubject(subject: AuthorityGrantSubject, now = Date.now()): { cancelledRequests: number } {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.transaction(() => {
       const changed = this.db
         .prepare(
-          "UPDATE authority_subjects SET state='retired',retired_at=? WHERE target_subject=? AND state='active'"
+          "UPDATE target_authority_subjects SET state='retired',retired_at=? WHERE target_subject=? AND state='active'"
         )
         .run(now, subject);
       if (Number(changed.changes) === 0) {
@@ -146,30 +181,47 @@ export class TargetAuthorityRequestStore {
         if (existing.state !== "retired")
           throw new Error(`Authority subject ${subject} could not be retired`);
       }
-      const cancelled = this.db
+      const pending = this.db
         .prepare(
-          "UPDATE target_authority_requests SET state='cancelled',settled_at=? WHERE target_subject=? AND state='pending'"
+          "SELECT request_id FROM target_authority_requests WHERE target_subject=? AND state='pending'"
         )
-        .run(now, subject);
-      this.db.exec("COMMIT");
-      return { cancelledRequests: Number(cancelled.changes) };
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+        .all(subject);
+      for (const row of pending) {
+        const id = String(row["request_id"]);
+        this.db
+          .prepare(
+            "UPDATE target_authority_requests SET state='cancelled',settled_at=? WHERE request_id=?"
+          )
+          .run(now, id);
+        this.settled(this.require(id));
+      }
+      return { cancelledRequests: pending.length };
+    });
   }
 
   settle(
     requestId: string,
     state: "granted" | "denied" | "cancelled",
-    grantId?: string,
+    writeGrant?: () => string | undefined,
     now = Date.now()
-  ): void {
-    this.db
-      .prepare(
-        "UPDATE target_authority_requests SET state=?, settled_at=?, grant_id=? WHERE request_id=? AND state='pending'"
-      )
-      .run(state, now, grantId ?? null, requestId);
+  ): DurableTargetAuthorityRequest {
+    return this.transaction(() => {
+      const retained = this.require(requestId);
+      if (retained.state !== "pending") return retained;
+      if (this.subject(retained.targetSubject)?.state === "retired")
+        throw new Error(`Authority subject ${retained.targetSubject} is retired`);
+      const grantId = writeGrant?.();
+      if (state === "granted" && !grantId)
+        throw new Error("A granted target approval requires its committed grant");
+      this.db
+        .prepare(
+          "UPDATE target_authority_requests SET state=?, settled_at=?, grant_id=? WHERE request_id=? AND state='pending'"
+        )
+        .run(state, now, grantId ?? null, requestId);
+      const committed = this.require(requestId);
+      this.settled(committed);
+      return committed;
+    });
   }
 
   pending(): DurableTargetAuthorityRequest[] {
@@ -185,6 +237,15 @@ export class TargetAuthorityRequestStore {
         )
         .all() as Record<string, unknown>[]
     ).map(row);
+  }
+
+  /** Attach a late durable observer to retained truth without issuing consent again. */
+  reconcile(requestId: string): DurableTargetAuthorityRequest {
+    return this.transaction(() => {
+      const request = this.require(requestId);
+      if (request.state !== "pending") this.settled(request);
+      return request;
+    });
   }
 
   forPlan(
@@ -248,13 +309,10 @@ export class TargetAuthorityRequestStore {
     if (!value) throw new Error(`Target authority request ${requestId} was not persisted`);
     return value;
   }
-  close(): void {
-    this.db.close();
-  }
 }
 
 function row(value: Record<string, unknown>): DurableTargetAuthorityRequest {
-  return {
+  const request: DurableTargetAuthorityRequest = {
     v: 1,
     requestId: String(value["request_id"]),
     targetSubject: String(value["target_subject"]) as AuthorityGrantSubject,
@@ -271,4 +329,20 @@ function row(value: Record<string, unknown>): DurableTargetAuthorityRequest {
     ...(value["settled_at"] == null ? {} : { settledAt: Number(value["settled_at"]) }),
     ...(value["grant_id"] == null ? {} : { grantId: String(value["grant_id"]) }),
   };
+  targetFacts.parse({
+    targetSubject: request.targetSubject,
+    authorityPlanDigest: request.authorityPlanDigest,
+    operationKey: request.operationKey,
+    capability: request.capability,
+    capabilityDefinitionDigest: request.capabilityDefinitionDigest,
+    resource: request.resource,
+    tier: request.tier,
+    sourceUser: request.sourceUser,
+    review: request.review,
+  });
+  if (request.requestId !== targetRequestId(request.targetSubject, request.operationKey))
+    throw new Error("Target authority request identity does not match its binding");
+  if (request.state === "granted" && !request.grantId)
+    throw new Error("Target authority request has no committed grant identity");
+  return request;
 }

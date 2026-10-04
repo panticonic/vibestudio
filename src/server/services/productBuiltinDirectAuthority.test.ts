@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { productBuiltinDirectAuthority } from "./productBuiltinDirectAuthority.js";
 
 describe("product builtin direct authority", () => {
+  it.each(["alarmSourceRequest", "alarmComplete"])(
+    "keeps %s behind host-only authority",
+    (method) => {
+      expect(
+        productBuiltinDirectAuthority({
+          source: "vibestudio/internal",
+          className: "WorkspaceDO",
+          method,
+        })
+      ).toMatchObject({
+        principals: ["host"],
+        methodWebsite: { kind: "closed" },
+        methodCapability: "workspace.runtime-state.manage",
+      });
+    }
+  );
   it("projects WorkspaceDO methods even when no workspace config service exists", () => {
     expect(
       productBuiltinDirectAuthority({

@@ -162,6 +162,10 @@ export class EntityCache {
     const entry: EntityRecord = {
       ...record,
       kind: "do",
+      // This admission owns the transitional bootstrap principal. The durable
+      // WorkspaceDO row replaces it when initialization commits; a new host
+      // process cannot recover authority granted to this temporary owner.
+      authoritySessionId: crypto.randomUUID(),
       createdAt: Date.now(),
       status: "active",
       cleanupComplete: true,

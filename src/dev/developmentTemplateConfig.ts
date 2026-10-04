@@ -16,7 +16,8 @@ export interface DevelopmentTemplateSource {
   url: string;
   tags?: string[];
   recommended?: boolean;
-  consumers?: Array<keyof DefaultWorkspaceTemplates>;
+  /** Registered installable template IDs receiving this development dependency. */
+  consumers?: string[];
 }
 
 const config = createRequire(import.meta.url)("./developmentTemplateConfig.cjs") as {

@@ -10,29 +10,14 @@ export interface LifecycleDriverDeps {
   workerdManager: WorkerdManager;
   doDispatch: LifecycleDoDispatcher;
   workspaceId: string;
-  prepareDeadlineMs?: number;
   concurrency?: number;
 }
 
 export class LifecycleDriver {
   private readonly deps: LifecycleDriverDeps;
   private readonly workspaceRef: DORef;
-  private readonly prepareDeadlineMs: number;
   private readonly concurrency: number;
   private readonly restartEpochs = new Map<string, string>();
-  /**
-   * Ops that could not be durably recorded because the workspace DO was
-   * wedged or mid-transition. Flushed (bounded) once the next generation is
-   * ready; capped so a permanently broken store cannot grow without bound.
-   */
-  private readonly pendingOps: Array<{
-    epochId: string;
-    key: LifecycleKey;
-    opKind: "prepare" | "resume";
-    status: "ready" | "timed_out" | "failed" | "resumed";
-    detail: unknown;
-  }> = [];
-  private static readonly MAX_PENDING_OPS = 1000;
   private unsubscribeBegin: (() => void) | null = null;
   private unsubscribeReady: (() => void) | null = null;
 
@@ -43,7 +28,6 @@ export class LifecycleDriver {
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };
-    this.prepareDeadlineMs = deps.prepareDeadlineMs ?? 5_000;
     this.concurrency = deps.concurrency ?? 8;
   }
 
@@ -79,48 +63,33 @@ export class LifecycleDriver {
     await this.dispatchWorkspace("lifecycleCompleteEpoch", epoch);
   }
 
-  async prepareForShutdown(deadlineMs = 2_000): Promise<void> {
-    const epoch = await this.withTimeout(
-      this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
-        kind: "planned",
-        reason: "server_shutdown",
-        generation: this.deps.workerdManager.getBootGeneration(),
-      }),
-      deadlineMs
-    );
-    const targets = await this.withTimeout(
-      this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases"),
-      deadlineMs
-    );
-    await this.prepareTargets(epoch, targets, deadlineMs, "server_shutdown");
+  async prepareForShutdown(): Promise<void> {
+    const epoch = await this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
+      kind: "planned",
+      reason: "server_shutdown",
+      generation: this.deps.workerdManager.getBootGeneration(),
+    });
+    const targets = await this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases");
+    await this.prepareTargets(epoch, targets, "server_shutdown");
   }
 
   private async handleRestartBegin(event: RestartBeginEvent): Promise<void> {
-    // A restart that failed between begin and ready leaves its epoch behind;
-    // abandon such strays before opening a new one so WorkspaceDO lifecycle
-    // epochs cannot leak across failed transitions.
+    event.signal?.throwIfAborted();
     await this.expireStaleEpochs();
-    // This is the one irreducible process-boundary deadline: graceful
-    // preparation must never prevent a crash recovery from reaching the
-    // process boundary when the current workerd is alive but cannot dispatch.
-    // Every dispatch on this path is deadline-bounded (and abort-aware: crash
-    // preemption cancels the remaining graceful work immediately).
-    const epoch = await this.withTimeout(
-      this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
-        kind: "planned",
-        reason: event.reason,
-        generation: event.generation,
-      }),
-      this.prepareDeadlineMs,
-      event.signal
-    );
+    event.signal?.throwIfAborted();
+    const epoch = await this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
+      kind: "planned",
+      reason: event.reason,
+      generation: event.generation,
+    });
     this.restartEpochs.set(event.correlationId, epoch);
-    const targets = await this.withTimeout(
-      this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases"),
-      this.prepareDeadlineMs,
-      event.signal
-    );
-    await this.prepareTargets(epoch, targets, this.prepareDeadlineMs, event.reason, event.signal);
+    event.signal?.throwIfAborted();
+    const targets = await this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases");
+    event.signal?.throwIfAborted();
+    // Planned replacement joins genuine release. Only the manager's actual
+    // crash preemption may stop admission into this generation; its process
+    // destruction settles any dispatch already owned by this hook.
+    await this.prepareTargets(epoch, targets, event.reason, event.signal);
   }
 
   private async handleRestartReady(event: RestartReadyEvent): Promise<void> {
@@ -128,9 +97,6 @@ export class LifecycleDriver {
     this.restartEpochs.delete(event.correlationId);
     // Everything still mapped belongs to transitions that never became ready.
     await this.expireStaleEpochs();
-    // The new generation is up: durably record any ops that could not be
-    // written while the previous generation was wedged.
-    await this.flushPendingOps();
     if (!epoch || event.reason === "crash") {
       // Crash-style ready: the old generation could not (or only partially)
       // participate in graceful prepare — either no epoch was opened, or the
@@ -161,84 +127,63 @@ export class LifecycleDriver {
   private async prepareTargets(
     epoch: string,
     targets: LifecycleKey[],
-    deadlineMs: number,
     reason: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const deadlineAt = Date.now() + deadlineMs;
-    let deadlineExhausted = false;
-    const failures: string[] = [];
-    await this.runPool(targets, async (target) => {
-      const label = `${target.source}:${target.className}/${target.objectKey}`;
+    const failures: unknown[] = [];
+    await this.runPool(this.dedupe(targets), async (target) => {
+      if (signal?.aborted) return;
+      let result: unknown;
+      let releaseFailed = false;
       try {
-        if (signal?.aborted) deadlineExhausted = true;
-        if (deadlineExhausted) {
-          await this.recordOp(
-            epoch,
-            target,
-            "prepare",
-            "timed_out",
-            { error: "lifecycle timeout" },
-            signal
-          );
-          failures.push(`${label}: lifecycle timeout`);
-          return;
-        }
-        const remainingMs = Math.max(0, deadlineAt - Date.now());
-        if (remainingMs <= 0) {
-          deadlineExhausted = true;
-          await this.recordOp(
-            epoch,
-            target,
-            "prepare",
-            "timed_out",
-            { error: "lifecycle timeout" },
-            signal
-          );
-          failures.push(`${label}: lifecycle timeout`);
-          return;
-        }
-        const result = await this.withTimeout(
-          this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
-            epoch,
-            mode: "suspend",
-            reason,
-            deadlineMs: remainingMs,
-          }),
-          remainingMs,
-          signal
-        );
-        const status =
-          result &&
-          typeof result === "object" &&
-          (result as { status?: unknown }).status === "failed"
-            ? "failed"
-            : "ready";
-        await this.recordOp(epoch, target, "prepare", status, result, signal);
-        if (status === "failed") failures.push(`${label}: release refused`);
-      } catch (err) {
-        const timedOut =
-          err instanceof Error &&
-          (err.message === "lifecycle timeout" || err.message === "lifecycle aborted");
-        if (timedOut) deadlineExhausted = true;
-        const message = err instanceof Error ? err.message : String(err);
-        await this.recordOp(
+        result = await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
           epoch,
-          target,
-          "prepare",
-          timedOut ? "timed_out" : "failed",
-          { error: message },
-          signal
-        );
-        failures.push(`${label}: ${message}`);
+          mode: "suspend",
+          reason,
+          deadlineMs: 0,
+        });
+        if (
+          !result ||
+          typeof result !== "object" ||
+          ((result as { status?: unknown }).status !== "ready" &&
+            (result as { status?: unknown }).status !== "failed")
+        ) {
+          throw new Error("Lifecycle prepare returned no valid release receipt", { cause: result });
+        }
+        if ((result as { status: string }).status === "failed") {
+          releaseFailed = true;
+          failures.push(
+            new Error(
+              `Lifecycle release refused for ${target.source}:${target.className}/${target.objectKey}`,
+              { cause: result }
+            )
+          );
+        }
+      } catch (original) {
+        releaseFailed = true;
+        failures.push(original);
+        result = { error: original instanceof Error ? original.message : String(original) };
+      }
+      // Crash preemption does not prove release. Keep the original dispatch
+      // joined above, then let the new generation reconstruct durable leases;
+      // never dispatch bookkeeping into the destroyed generation.
+      if (signal?.aborted) return;
+      try {
+        await this.recordOp(epoch, target, "prepare", releaseFailed ? "failed" : "ready", result);
+      } catch (original) {
+        failures.push(original);
       }
     });
     if (failures.length > 0) {
       throw new AggregateError(
-        failures.map((failure) => new Error(failure)),
-        `Lifecycle release failed for ${failures.length} target(s)`
+        failures,
+        `Lifecycle release failed for ${failures.length} operation(s)`,
+        {
+          cause: failures[0],
+        }
       );
     }
+    signal?.throwIfAborted();
   }
 
   private async resumeTargets(
@@ -250,88 +195,58 @@ export class LifecycleDriver {
       reason: "planned" | "crash" | "server_restart";
     }
   ): Promise<void> {
-    const failures: Array<{ target: string; error: string }> = [];
+    const failures: unknown[] = [];
     await this.runPool(this.dedupe(targets), async (target) => {
+      let originalFailure: unknown;
+      let failed = false;
       try {
         await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "resume", {
           epoch,
           ...input,
         });
-        await this.recordOp(epoch, target, "resume", "resumed", null);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        await this.recordOp(epoch, target, "resume", "failed", {
-          error: message,
-        });
-        failures.push({
-          target: `${target.source}:${target.className}/${target.objectKey}`,
-          error: message,
-        });
+      } catch (original) {
+        failed = true;
+        originalFailure = original;
+        failures.push(original);
+      }
+      try {
+        await this.recordOp(
+          epoch,
+          target,
+          "resume",
+          failed ? "failed" : "resumed",
+          failed
+            ? {
+                error:
+                  originalFailure instanceof Error
+                    ? originalFailure.message
+                    : String(originalFailure),
+              }
+            : null
+        );
+      } catch (original) {
+        failures.push(original);
       }
     });
     if (failures.length > 0) {
-      log.warn(
-        `lifecycle resume failed for ${failures.length}/${targets.length} target(s); sample=${JSON.stringify(failures.slice(0, 5))}`
+      throw new AggregateError(
+        failures,
+        `Lifecycle resume failed for ${failures.length} operation(s)`,
+        {
+          cause: failures[0],
+        }
       );
     }
   }
 
-  /**
-   * Best-effort, deadline-bounded op bookkeeping. On the path where a prepare
-   * just timed out against a wedged workerd, this dispatch would hang against
-   * the same wedged DO and hold the restart owner forever — so it is bounded,
-   * and a failed write is buffered locally and flushed after the next
-   * generation is ready. It never throws.
-   */
   private async recordOp(
     epochId: string,
     key: LifecycleKey,
     opKind: "prepare" | "resume",
-    status: "ready" | "timed_out" | "failed" | "resumed",
-    detail: unknown,
-    signal?: AbortSignal
+    status: "ready" | "failed" | "resumed",
+    detail: unknown
   ): Promise<void> {
-    const op = { epochId, key, opKind, status, detail };
-    try {
-      await this.withTimeout(
-        this.dispatchWorkspace("lifecycleRecordOp", op),
-        this.prepareDeadlineMs,
-        signal
-      );
-    } catch (err) {
-      this.bufferPendingOp(op);
-      log.warn(
-        `lifecycleRecordOp deferred (${key.source}:${key.className}/${key.objectKey} ${opKind}=${status}): ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-    }
-  }
-
-  private bufferPendingOp(op: LifecycleDriver["pendingOps"][number]): void {
-    if (this.pendingOps.length >= LifecycleDriver.MAX_PENDING_OPS) this.pendingOps.shift();
-    this.pendingOps.push(op);
-  }
-
-  /** Bounded, swallowed flush of locally buffered ops (new generation ready). */
-  private async flushPendingOps(): Promise<void> {
-    const ops = this.pendingOps.splice(0, this.pendingOps.length);
-    for (const op of ops) {
-      try {
-        await this.withTimeout(
-          this.dispatchWorkspace("lifecycleRecordOp", op),
-          this.prepareDeadlineMs
-        );
-      } catch (err) {
-        this.bufferPendingOp(op);
-        log.warn(
-          `lifecycle op flush failed; will retry on next restart-ready: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-        return;
-      }
-    }
+    await this.dispatchWorkspace("lifecycleRecordOp", { epochId, key, opKind, status, detail });
   }
 
   /** Abandon epochs left behind by restarts that failed between begin/ready. */
@@ -345,10 +260,7 @@ export class LifecycleDriver {
 
   private async completeEpochBestEffort(epoch: string): Promise<void> {
     try {
-      await this.withTimeout(
-        this.dispatchWorkspace("lifecycleCompleteEpoch", epoch),
-        this.prepareDeadlineMs
-      );
+      await this.dispatchWorkspace("lifecycleCompleteEpoch", epoch);
     } catch (err) {
       log.warn(
         `failed to complete lifecycle epoch ${epoch}: ${
@@ -389,35 +301,5 @@ export class LifecycleDriver {
       }
     });
     await Promise.all(workers);
-  }
-
-  private async withTimeout<T>(
-    promise: Promise<T>,
-    timeoutMs: number,
-    signal?: AbortSignal
-  ): Promise<T> {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    let onAbort: (() => void) | null = null;
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error("lifecycle timeout")), timeoutMs);
-          if (signal) {
-            if (signal.aborted) reject(new Error("lifecycle aborted"));
-            else {
-              onAbort = () => reject(new Error("lifecycle aborted"));
-              signal.addEventListener("abort", onAbort, { once: true });
-            }
-          }
-        }),
-      ]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
-      // The losing promise may still reject after the race is decided; that
-      // late rejection must never surface as an unhandled rejection.
-      promise.catch(() => {});
-    }
   }
 }

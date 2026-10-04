@@ -979,6 +979,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       rpcServer: {} as never,
       grantStore: { close: vi.fn() } as never,
       eventService: { emitProjected: vi.fn() } as never,
+      quiesceAuthority: vi.fn(async () => undefined),
       inviteExpiryTimers: new Map(),
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };

@@ -3,15 +3,21 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 
 export interface TaskTitleDispatch {
-  dispatch(ref: DORef, method: string, ...args: unknown[]): Promise<unknown>;
+  dispatchHeldWithSignal(
+    ref: DORef,
+    signal: AbortSignal,
+    method: string,
+    ...args: unknown[]
+  ): Promise<unknown>;
 }
 
 /** Resolve a task's durable channel title from its authenticated binding. */
 export function createTaskTitleResolver(deps: {
   taskAuthorities: TaskAuthorityRegistry;
   getDispatch: () => TaskTitleDispatch | null;
-}): (taskSubject: string) => Promise<string | null> {
-  return async (taskSubject) => {
+}): (taskSubject: string, signal: AbortSignal) => Promise<string | null> {
+  return async (taskSubject, signal) => {
+    signal.throwIfAborted();
     if (!taskSubject.startsWith("task:")) return null;
     const binding = deps.taskAuthorities.bindingFor(taskSubject as TaskGrantPrincipal);
     const dispatch = deps.getDispatch();
@@ -21,10 +27,29 @@ export function createTaskTitleResolver(deps: {
       className: "PubSubChannel",
       objectKey: binding.channelId,
     };
-    const [contextId, config] = await Promise.all([
-      dispatch.dispatch(channel, "getContextId"),
-      dispatch.dispatch(channel, "getConfig"),
-    ]);
+    const reads = new AbortController();
+    const readSignal = AbortSignal.any([signal, reads.signal]);
+    let failed = false;
+    let originalFailure: unknown;
+    const read = (method: string) =>
+      Promise.resolve()
+        .then(() => dispatch.dispatchHeldWithSignal(channel, readSignal, method))
+        .catch((error: unknown) => {
+          if (!failed) {
+            failed = true;
+            originalFailure = error;
+            reads.abort(error);
+          }
+          throw error;
+        });
+    const results = await Promise.allSettled([read("getContextId"), read("getConfig")]);
+    signal.throwIfAborted();
+    if (failed) throw originalFailure;
+    const values = results.map((result) => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
+    const [contextId, config] = values;
     if (contextId !== binding.contextId) {
       throw new Error(`Channel ${binding.channelId} does not belong to the bound task context`);
     }

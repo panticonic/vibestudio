@@ -33,7 +33,34 @@ import {
 } from "./wireEnvelopes.js";
 import { replaceExtensionStorageFile } from "./atomicStorage.js";
 
-type ChildMessage = { type: "shutdown" };
+import { ExtensionRuntimeLifecycle } from "./runtimeLifecycle.js";
+import {
+  shutdownError,
+  type ExtensionShutdownRequest,
+  type ExtensionShutdownResult,
+} from "./shutdownProtocol.js";
+
+const lifecycle = new ExtensionRuntimeLifecycle();
+const pendingShutdowns: ExtensionShutdownRequest[] = [];
+let shutdownHandler: ((message: ExtensionShutdownRequest) => Promise<void>) | undefined;
+let lifetimeCleanup: () => Promise<void> = () => Promise.resolve();
+process.on("message", (message: unknown) => {
+  if (
+    message &&
+    typeof message === "object" &&
+    "type" in message &&
+    message.type === "shutdown" &&
+    "requestId" in message &&
+    typeof message.requestId === "string"
+  ) {
+    const request: ExtensionShutdownRequest = { type: "shutdown", requestId: message.requestId };
+    if (shutdownHandler)
+      void shutdownHandler(request).catch((error) =>
+        console.error("[ExtensionRuntime] Shutdown control delivery failed:", error)
+      );
+    else pendingShutdowns.push(request);
+  }
+});
 
 interface HealthDetail {
   summary: string;
@@ -457,7 +484,7 @@ function createContext() {
       current: () => invocationStore.getStore()?.invocation ?? null,
       signal: () => invocationStore.getStore()?.signal ?? null,
     },
-    subscriptions: [] as Array<{ dispose(): void }>,
+    subscriptions: [] as Array<{ dispose(): void | Promise<void> }>,
     log: {
       debug: (message: string, fields?: Record<string, unknown>) => {
         void writeExtensionLog("debug", message, fields).catch((err) => {
@@ -640,7 +667,11 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
     connected = false;
     process.off("message", receive);
     rejectAuth(new Error("Extension process RPC disconnected"));
-    process.exit(1);
+    void lifetimeCleanup().then(
+      () => process.exit(1),
+      (error) =>
+        console.error("[ExtensionRuntime] Disconnected cleanup retains owned resources:", error)
+    );
   });
   try {
     await send({
@@ -720,8 +751,6 @@ async function closeResponseBodyStream(id: string): Promise<void> {
   fetchResponseBodies.delete(id);
   try {
     await stream.reader.cancel();
-  } catch {
-    // The stream may already be closed; cleanup should stay best-effort.
   } finally {
     stream.reader.releaseLock();
   }
@@ -742,10 +771,13 @@ async function streamResponse(
   let bytesIn = 0;
   if (response.body) {
     const reader = response.body.getReader();
+    let cancellation: Promise<void> | undefined;
     const cancel = () => {
-      void reader.cancel().catch(() => {});
+      cancellation ??= reader.cancel();
+      void cancellation.catch(() => {});
     };
     abortSignal.addEventListener("abort", cancel, { once: true });
+    let original: unknown;
     try {
       while (!abortSignal.aborted) {
         const next = await reader.read();
@@ -753,9 +785,24 @@ async function streamResponse(
         bytesIn += next.value.byteLength;
         await sink({ kind: "chunk", bytes: next.value });
       }
+    } catch (error) {
+      original = error;
+      throw error;
     } finally {
       abortSignal.removeEventListener("abort", cancel);
-      reader.releaseLock();
+      try {
+        await cancellation;
+      } catch (cleanup) {
+        if (original !== undefined)
+          throw new AggregateError(
+            [original, cleanup],
+            "Extension stream and cancellation failed",
+            { cause: original }
+          );
+        throw cleanup;
+      } finally {
+        reader.releaseLock();
+      }
     }
   }
   await sink({ kind: "end", bytesIn });
@@ -763,13 +810,15 @@ async function streamResponse(
 
 function settleWaitUntil(waitUntil: Promise<unknown>[]): void {
   if (waitUntil.length === 0) return;
-  void Promise.allSettled(waitUntil).then((results) => {
-    for (const result of results) {
-      if (result.status === "rejected") {
-        console.error("[ExtensionRuntime] fetch waitUntil rejected:", result.reason);
+  void lifecycle.retain(
+    Promise.allSettled(waitUntil).then((results) => {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error("[ExtensionRuntime] fetch waitUntil rejected:", result.reason);
+        }
       }
-    }
-  });
+    })
+  );
 }
 
 function assertHostControlCaller(
@@ -796,9 +845,35 @@ async function main(): Promise<void> {
     throw extensionRuntimeError("runtime-import", err, { extension: extensionName, bundlePath });
   }
   const ctx = createContext();
+  const activation = Promise.resolve().then(() =>
+    typeof mod["activate"] === "function" ? mod["activate"](ctx) : undefined
+  );
+  lifetimeCleanup = async () => {
+    await activation.catch(() => {});
+    const deactivate = mod["deactivate"];
+    await lifecycle.shutdown(
+      ctx.subscriptions,
+      typeof deactivate === "function" ? () => deactivate() : undefined
+    );
+  };
+  ctx.subscriptions.push({
+    dispose: async () => {
+      const results = await Promise.allSettled(
+        [...fetchResponseBodies.keys()].map(closeResponseBodyStream)
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Extension response body cleanup failed", {
+          cause: failures[0],
+        });
+    },
+  });
   let api: unknown;
   try {
-    api = typeof mod["activate"] === "function" ? await mod["activate"](ctx) : undefined;
+    api = await activation;
   } catch (err) {
     throw extensionRuntimeError("activate", err, { extension: extensionName, bundlePath });
   }
@@ -833,25 +908,27 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.invoke");
       const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-      return invocationStore.run({ invocation, signal: req.signal }, async () => {
-        const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
-          ? apiObject[method]
-          : undefined;
-        if (typeof fn !== "function") {
-          const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
-          err.code = "ENOMETHOD";
-          throw err;
-        }
-        try {
-          return await fn(...args);
-        } catch (err) {
-          throw extensionRuntimeError("invoke", err, {
-            extension: extensionName,
-            method,
-            caller: invocation.caller.callerId,
-          });
-        }
-      });
+      return lifecycle.run(req.signal, (signal) =>
+        invocationStore.run({ invocation, signal }, async () => {
+          const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
+            ? apiObject[method]
+            : undefined;
+          if (typeof fn !== "function") {
+            const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
+            err.code = "ENOMETHOD";
+            throw err;
+          }
+          try {
+            return await fn(...args);
+          } catch (err) {
+            throw extensionRuntimeError("invoke", err, {
+              extension: extensionName,
+              method,
+              caller: invocation.caller.callerId,
+            });
+          }
+        })
+      );
     },
     {
       kind: "closed",
@@ -869,31 +946,33 @@ async function main(): Promise<void> {
         unknown[],
         ExtensionInvocation,
       ];
-      return invocationStore.run({ invocation, signal: req.signal }, async () => {
-        const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
-          ? providerApis[provider]
-          : undefined;
-        const fn =
-          providerApi && typeof providerApi === "object"
-            ? (providerApi as Record<string, unknown>)[method]
+      return lifecycle.run(req.signal, (signal) =>
+        invocationStore.run({ invocation, signal }, async () => {
+          const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
+            ? providerApis[provider]
             : undefined;
-        if (typeof fn !== "function") {
-          const err = new Error(
-            `Extension provider method not found: providers.${provider}.${method}`
-          ) as NodeJS.ErrnoException;
-          err.code = "ENOMETHOD";
-          throw err;
-        }
-        try {
-          return await fn(...args);
-        } catch (err) {
-          throw extensionRuntimeError("invoke", err, {
-            extension: extensionName,
-            method: `providers.${provider}.${method}`,
-            caller: invocation.caller.callerId,
-          });
-        }
-      });
+          const fn =
+            providerApi && typeof providerApi === "object"
+              ? (providerApi as Record<string, unknown>)[method]
+              : undefined;
+          if (typeof fn !== "function") {
+            const err = new Error(
+              `Extension provider method not found: providers.${provider}.${method}`
+            ) as NodeJS.ErrnoException;
+            err.code = "ENOMETHOD";
+            throw err;
+          }
+          try {
+            return await fn(...args);
+          } catch (err) {
+            throw extensionRuntimeError("invoke", err, {
+              extension: extensionName,
+              method: `providers.${provider}.${method}`,
+              caller: invocation.caller.callerId,
+            });
+          }
+        })
+      );
     },
     {
       kind: "closed",
@@ -906,26 +985,28 @@ async function main(): Promise<void> {
     async (req, sink) => {
       assertHostControlCaller(req, "extension.invokeStream");
       const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-      await invocationStore.run({ invocation, signal: req.signal }, async () => {
-        const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
-          ? apiObject[method]
-          : undefined;
-        if (typeof fn !== "function") {
-          const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
-          err.code = "ENOMETHOD";
-          throw err;
-        }
-        const result = await fn(...methodArgs);
-        if (result instanceof Response) {
-          await streamResponse(result, sink, req.signal);
-          return;
-        }
-        if (result instanceof ReadableStream) {
-          await streamResponse(new Response(result), sink, req.signal);
-          return;
-        }
-        throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
-      });
+      await lifecycle.run(req.signal, (signal) =>
+        invocationStore.run({ invocation, signal }, async () => {
+          const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
+            ? apiObject[method]
+            : undefined;
+          if (typeof fn !== "function") {
+            const err = new Error(`Extension method not found: ${method}`) as NodeJS.ErrnoException;
+            err.code = "ENOMETHOD";
+            throw err;
+          }
+          const result = await fn(...methodArgs);
+          if (result instanceof Response) {
+            await streamResponse(result, sink, signal);
+            return;
+          }
+          if (result instanceof ReadableStream) {
+            await streamResponse(new Response(result), sink, signal);
+            return;
+          }
+          throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
+        })
+      );
     },
     {
       kind: "closed",
@@ -938,7 +1019,7 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
       const [streamId] = req.args as [string];
-      return readNextResponseBodyChunk(streamId);
+      return lifecycle.run(req.signal, () => readNextResponseBodyChunk(streamId));
     },
     {
       kind: "closed",
@@ -951,8 +1032,10 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.fetchResponseBodyClose");
       const [streamId] = req.args as [string];
-      await closeResponseBodyStream(streamId);
-      return null;
+      return lifecycle.run(req.signal, async () => {
+        await closeResponseBodyStream(streamId);
+        return null;
+      });
     },
     {
       kind: "closed",
@@ -975,40 +1058,43 @@ async function main(): Promise<void> {
         err.code = "ENOFETCH";
         throw err;
       }
-      return invocationStore.run({ invocation, signal: req.signal }, async () => {
-        const body = await requestBodyFromEnvelope(requestEnvelope.body);
-        const request = new Request(requestEnvelope.url, {
-          method: requestEnvelope.method,
-          headers: requestEnvelope.headers,
-          ...(body ? { body, duplex: "half" } : {}),
-        } as RequestInit & { duplex?: "half" });
-        const waitUntil: Promise<unknown>[] = [];
-        const fetchCtx = {
-          ...ctx,
-          waitUntil(promise: Promise<unknown>) {
-            waitUntil.push(promise);
-          },
-        };
-        try {
-          let response: Response;
-          try {
-            response = await fetchHandler(request, fetchCtx);
-          } catch (err) {
-            throw extensionRuntimeError("fetch", err, {
-              extension: extensionName,
-              method: requestEnvelope.method,
-              url: requestEnvelope.url,
-            });
-          }
-          return {
-            status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            body: responseBodyToEnvelope(response),
+      return lifecycle.run(req.signal, (signal) =>
+        invocationStore.run({ invocation, signal }, async () => {
+          const body = await requestBodyFromEnvelope(requestEnvelope.body);
+          const request = new Request(requestEnvelope.url, {
+            method: requestEnvelope.method,
+            headers: requestEnvelope.headers,
+            signal,
+            ...(body ? { body, duplex: "half" } : {}),
+          } as RequestInit & { duplex?: "half" });
+          const waitUntil: Promise<unknown>[] = [];
+          const fetchCtx = {
+            ...ctx,
+            waitUntil(promise: Promise<unknown>) {
+              waitUntil.push(promise);
+            },
           };
-        } finally {
-          settleWaitUntil(waitUntil);
-        }
-      });
+          try {
+            let response: Response;
+            try {
+              response = await fetchHandler(request, fetchCtx);
+            } catch (err) {
+              throw extensionRuntimeError("fetch", err, {
+                extension: extensionName,
+                method: requestEnvelope.method,
+                url: requestEnvelope.url,
+              });
+            }
+            return {
+              status: response.status,
+              headers: Object.fromEntries(response.headers.entries()),
+              body: responseBodyToEnvelope(response),
+            };
+          } finally {
+            settleWaitUntil(waitUntil);
+          }
+        })
+      );
     },
     {
       kind: "closed",
@@ -1016,29 +1102,35 @@ async function main(): Promise<void> {
     }
   );
 
-  const disposeSubscriptions = () => {
-    while (ctx.subscriptions.length) {
-      const subscription = ctx.subscriptions.pop();
-      if (!subscription) continue;
-      try {
-        subscription.dispose();
-      } catch (err) {
-        console.error("[ExtensionRuntime] Subscription dispose failed:", err);
+  const shutdown = async (message: ExtensionShutdownRequest): Promise<void> => {
+    let result: ExtensionShutdownResult;
+    try {
+      await lifetimeCleanup();
+      result = { type: "shutdown-result", requestId: message.requestId, ok: true };
+    } catch (error) {
+      result = {
+        type: "shutdown-result",
+        requestId: message.requestId,
+        ok: false,
+        error: shutdownError(error),
+      };
+    }
+    await new Promise<void>((resolve, reject) => {
+      if (!process.send || !process.connected) {
+        reject(new Error("Extension shutdown control disconnected"));
+        return;
       }
-    }
+      process.send(result, (error) => (error ? reject(error) : resolve()));
+    });
+    // A failed release may still own a live child or lease. Keep this activation
+    // sealed, retain the failed disposer, and allow an explicit shutdown retry.
+    if (result.ok) process.exit(0);
   };
-
-  process.on("message", (message: ChildMessage) => {
-    if (message.type === "shutdown") {
-      const deactivate = mod["deactivate"];
-      void Promise.resolve(typeof deactivate === "function" ? deactivate() : undefined)
-        .catch((err) => console.error("[ExtensionRuntime] deactivate threw:", err))
-        .finally(() => {
-          disposeSubscriptions();
-          process.exit(0);
-        });
-    }
-  });
+  shutdownHandler = shutdown;
+  if (pendingShutdowns.length > 0) {
+    await Promise.all(pendingShutdowns.splice(0).map(shutdown));
+    return;
+  }
 
   await rpcCall("runtime.supervision.reportHealth", [
     { state: "healthy", detail: { summary: "Activated" } },
@@ -1065,7 +1157,16 @@ function installCommonJsGlobals(bundlePath: string): void {
   globals.__dirname = path.dirname(bundlePath);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+main().catch(async (original) => {
+  console.error(original);
+  try {
+    await lifetimeCleanup();
+    process.exit(1);
+  } catch (cleanup) {
+    console.error(
+      new AggregateError([original, cleanup], "Extension initialization and cleanup failed", {
+        cause: original,
+      })
+    );
+  }
 });

@@ -162,7 +162,15 @@ export interface MissionRunFailure {
  * may have recovered and produced a final response, while the ledger still
  * records that one of its requested effects did not succeed. */
 export interface MissionRunEffectFailure {
-  invocationId: string;
+  source:
+    | { kind: "native-tool"; invocationId: string; nativeTaskId: number; nativeEntryId: number }
+    | {
+        kind: "provider-call";
+        nativeTaskId: number;
+        nativeEntryId: number;
+        assistantEntryId: number;
+        callId: string;
+      };
   name: string;
   outcome: "tool_error" | "infrastructure_error" | "cancelled" | "stale_dispatch" | "abandoned";
   code: string;
@@ -200,13 +208,13 @@ export type AutomationExecutorRunStatus =
   | {
       state: "running";
       channelId: string;
-      turnId: string;
+      nativeTaskId: number;
       waiting: boolean;
     }
   | {
       state: "terminal";
       channelId: string;
-      turnId: string;
+      nativeTaskId: number;
       outcome: Exclude<MissionRunOutcome, "skipped">;
       finalMessage?: string;
       completionResponse?: string;

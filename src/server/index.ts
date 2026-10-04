@@ -921,8 +921,6 @@ async function main() {
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
   const { AuthorityPlanStore } = await import("./services/authorityPlanStore.js");
   const authorityPlanStore = new AuthorityPlanStore({ statePath });
-  const { TargetAuthorityRequestStore } = await import("./services/targetAuthorityRequestStore.js");
-  const targetAuthorityRequests = new TargetAuthorityRequestStore({ statePath });
   const { UserlandResourceHandleStore } = await import("./services/userlandResourceHandleStore.js");
   const userlandResourceHandles = new UserlandResourceHandleStore({ statePath });
   const { AgentExecutionSessionRegistry } =
@@ -939,13 +937,14 @@ async function main() {
   // started to run tests, and nowhere else.
   const systemTestInstance = readSystemTestInstanceMode();
   const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
+  const { authoritySessionIdForCaller } = await import("./services/callerAuthoritySession.js");
   // Exact root bootstrap may run while services are starting, before the
   // dispatcher can be marked fully initialized. Install the one compositional
   // resolver as soon as all of its
   // durable policy inputs exist; ordinary RPC dispatch remains fenced by
   // markInitialized() after every service has registered.
   dispatcher.setAuthorityResolver(({ ctx, caller, service, capability, resourceKey, tier }) => {
-    const sessionId = caller.executionSession?.authoritySessionId ?? caller.runtime.id;
+    const sessionId = authoritySessionIdForCaller(caller, entityCache);
     return {
       ...authorizeVerifiedCaller(caller, {
         initiatingWebsite: verifiedInitiator(ctx).website,
@@ -1024,19 +1023,35 @@ async function main() {
       unitOriginResolver?.originallyInstalledFrom(repoPath) ?? null,
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
+  const { createAcquisitionOwnerNotifier } = await import("./services/acquisitionOwnerDelivery.js");
+  const authorityWakeWorkspaceRef: import("@vibestudio/shared/doDispatcher").DORef = {
+    source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
+    className: "WorkspaceDO",
+    objectKey: workspaceId,
+  };
   const acquisitionCoordinator = new AcquisitionCoordinator({
     approvalQueue,
     grantStore: capabilityGrantStore,
-    targetRequests: targetAuthorityRequests,
     resolveTaskTitle,
-    notifyOwner: async (ownerRuntimeId, acquisitionId) => {
-      const ref = parseDoTargetId(ownerRuntimeId);
+    notifyOwner: createAcquisitionOwnerNotifier(() => {
       const doDispatch = resolvedDoDispatchForTitles;
-      if (!ref || !doDispatch) return;
-      await doDispatch.dispatch(ref, "onAuthorityChanged", acquisitionId);
-    },
+      const manager = workerdManagerForGateway;
+      if (!doDispatch || !manager) return null;
+      return {
+        storageIncarnation: (ref) => manager.durableObjectStorageIncarnation(ref).incarnation,
+        requestWake: async (ref, incarnation, signal) =>
+          (await doDispatch.dispatchHeldWithSignal(
+            authorityWakeWorkspaceRef,
+            signal,
+            "alarmSourceRequest",
+            { ...ref, incarnation }
+          )) as "accepted" | "stale",
+        dispatchHint: (ref, acquisitionId, signal) =>
+          doDispatch.dispatchHeldWithSignal(ref, signal, "onAuthorityChanged", acquisitionId),
+        notifyAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
+      };
+    }),
   });
-  acquisitionCoordinator.resumeTargetRequests();
   const { UnitAdmissionStore } = await import("./services/unitAdmissionStore.js");
   // Where each unit's bytes came from. Constructed further down, once the
   // workspace VCS can be read; the admission store asks through this holder so
@@ -1336,14 +1351,28 @@ async function main() {
   let panelRuntimeCoordinatorForCleanup:
     | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
     | null = null;
-  const cleanupRuntimeEntityRecord = async (
+  const { createEntityRetirementCleanup } = await import("./services/entityRetirementCleanup.js");
+  const entityRetirementCleanup = createEntityRetirementCleanup({
+    resolveRecord: (id) => getEntityStore().resolveRecord(id),
+    complete: (id, lifetime) => getEntityStore().cleanupComplete(id, lifetime),
+    cleanup: async (record) => {
+      await releaseRuntimeEntityResources(record);
+      await workspaceChildHub.revokeAgentCredentialsForEntity(record.id);
+      tokenManager.revokeToken(`agent:${record.id}`);
+    },
+  });
+  const cleanupRuntimeEntityRecord = entityRetirementCleanup.retire;
+  const releaseRuntimeEntityResources = async (
     record: import("@vibestudio/shared/runtime/entitySpec").EntityRecord
   ) => {
-    durableObjectExecutionReadiness.forget(record.id);
     const { revokeRuntimeResourceBindings } = await import("./services/runtimeResourceBindings.js");
-    revokeRuntimeResourceBindings(capabilityGrantStore, record.id);
     const { cleanupRuntimeEntity } = await import("./runtimeEntityCleanup.js");
     await cleanupRuntimeEntity(record, {
+      retireAuthorityOwner: async (owner) => {
+        await acquisitionCoordinator.closeOwner(owner);
+        durableObjectExecutionReadiness.forget(record.id);
+        revokeRuntimeResourceBindings(capabilityGrantStore, record.id);
+      },
       panelRuntimeCoordinator: panelRuntimeCoordinatorForCleanup,
       egressProxy,
       approvalQueue,
@@ -1416,6 +1445,18 @@ async function main() {
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
+  // Extensions RPC can be reached before startup planning is scheduled. Its
+  // initial classification is owned here from registration onward, rather
+  // than treating a not-yet-started reconcile as an empty installed registry.
+  let resolveInitialExtensionDeclarations!: () => void;
+  let rejectInitialExtensionDeclarations!: (error: unknown) => void;
+  const initialExtensionDeclarations = new Promise<void>((resolve, reject) => {
+    resolveInitialExtensionDeclarations = resolve;
+    rejectInitialExtensionDeclarations = reject;
+  });
+  // Startup may fail before a caller arrives. Keep the original promise's
+  // rejection available to every waiter without an unhandled rejection.
+  void initialExtensionDeclarations.catch(() => {});
   // Protected repository content pointers: the single host publication store.
   // Constructed BEFORE WorkspaceVcs (which routes every protected read/advance
   // through it); the approval gate is late-bound below once the main-advance
@@ -1895,14 +1936,16 @@ async function main() {
               .then(() => {
                 const backgroundStartedAt = Date.now();
                 return reconcileAll().then(() => {
+                  resolveInitialExtensionDeclarations();
                   console.info(
                     `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
                   );
                 });
               })
-              .catch((err: unknown) =>
-                console.warn("[Extensions] Failed to reconcile background workspace units:", err)
-              );
+              .catch((err: unknown) => {
+                rejectInitialExtensionDeclarations(err);
+                console.warn("[Extensions] Failed to reconcile background workspace units:", err);
+              });
           } else {
             tasks.push(
               reconcileAll().catch((err: unknown) =>
@@ -2232,8 +2275,7 @@ async function main() {
       touch: (grantId) => acquisitionCoordinator.touch(grantId),
       priorInteractiveApprovalCount: (input) =>
         capabilityGrantStore.priorInteractiveApprovalCount(input),
-      invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-        acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+      invalidate: (inputs) => acquisitionCoordinator.invalidate(inputs),
     };
   dispatcher.setAuthorityAcquirer(
     attachedHostChildEndpoint && attachedHostDecisionConsumer && attachedHostApprovalClient
@@ -2288,6 +2330,25 @@ async function main() {
   });
   dispatcher.setOpenReviewLookup(unitReviewLookup.forRunningCode);
   const container = new ServiceContainer(dispatcher);
+  container.registerManaged({
+    name: "entityRetirementCleanup",
+    dependencies: ["doDispatch", "workerdManager", "authorityAcquisitionLifecycle", "panelRuntime"],
+    async start() {
+      return entityRetirementCleanup;
+    },
+    async stop() {
+      await entityRetirementCleanup.quiesce();
+    },
+  });
+  container.registerManaged({
+    name: "authorityAcquisitionLifecycle",
+    dependencies: ["doDispatch"],
+    start: async () => acquisitionCoordinator,
+    stop: async (coordinator: typeof acquisitionCoordinator) => {
+      await coordinator.quiesceOwnerDelivery();
+      await coordinator.quiescePresentations();
+    },
+  });
   const { createWorkspaceCreationService } = await import("./services/workspaceCreationService.js");
   container.registerRpc(
     createWorkspaceCreationService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
@@ -2406,6 +2467,7 @@ async function main() {
         {
           appRoot,
           runNativeJob: (input) => nativeWorkspace.runJob(input),
+          admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
         }
       );
@@ -2435,6 +2497,7 @@ async function main() {
         {
           appRoot,
           runNativeJob: (input) => nativeWorkspace.runJob(input),
+          admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
           workspaceAuthorityEnvironmentAt: async (stateHash) => {
             const { exactWorkspaceServiceBindings } =
@@ -3007,6 +3070,7 @@ async function main() {
                         candidate: {
                           source: report.repoPath,
                           effectiveVersion: build.metadata.ev,
+                          executionDigest: assertPresent(build.metadata.execution).executionDigest,
                           descriptor: await manager.probeDurableObjectSchema(
                             report.repoPath,
                             className,
@@ -3825,7 +3889,7 @@ async function main() {
 
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   let closeEvalKernelLeases: (() => Promise<void>) | null = null;
-  let closeActiveEvalRuns: ((deadlineMs?: number) => Promise<void>) | null = null;
+  let closeActiveEvalRuns: (() => Promise<void>) | null = null;
   let closeEvalAuthorityEvents: (() => Promise<void>) | null = null;
   {
     const { createEvalService } = await import("./services/evalService.js");
@@ -4196,6 +4260,7 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
+          storageIncarnation: (key) => workerdManager.durableObjectStorageIncarnation(key),
           presentationDispatch: dispatchPresentation,
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
@@ -4234,6 +4299,7 @@ async function main() {
     container.registerManaged({
       name: "runtime",
       dependencies: [
+        "entityRetirementCleanup",
         "workerdWorkspace",
         "doDispatch",
         "workerdManager",
@@ -4682,13 +4748,6 @@ async function main() {
               },
             });
           },
-          // Agent credentials follow the entity (§3.2): on retire, revoke all
-          // outstanding agent credentials and the live `agent:<entityId>` token.
-          revokeAgentCredentials: async (entityId) => {
-            await workspaceChildHub.revokeAgentCredentialsForEntity(entityId);
-            // Matches auth/model.ts agentCallerId(entityId).
-            tokenManager.revokeToken(`agent:${entityId}`);
-          },
           faultAbortAgentVessel: async (_caller, record) => {
             if (!systemTestInstance) {
               throw new Error(
@@ -5035,8 +5094,7 @@ async function main() {
           acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
           consume: (grantId) => acquisitionCoordinator.consume(grantId),
           touch: (grantId) => acquisitionCoordinator.touch(grantId),
-          invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-            acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+          invalidate: (inputs) => acquisitionCoordinator.invalidate(inputs),
         },
         eventService,
         egressProxy,
@@ -5388,7 +5446,21 @@ async function main() {
               className: semanticWorkspaceService.className,
               objectKey: semanticWorkspaceService.objectKey,
             }),
-            parent
+            parent,
+            {
+              binding,
+              entities: entityCache,
+              inspect: (source, invocationId) =>
+                doDispatch.dispatch(
+                  {
+                    source: source.owner.source,
+                    className: source.owner.className,
+                    objectKey: source.owner.objectKey,
+                  },
+                  "inspectNativeInvocationSource",
+                  { taskId: source.task.taskId, invocationId }
+                ),
+            }
           );
           if (!fact) return null;
           const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;
@@ -5403,8 +5475,15 @@ async function main() {
             origin?.kind === "website"
               ? userStore.getUser(origin.website.userId.slice("user:".length))
               : null;
-          const taskUser = origin?.kind === "website" ? launchUser : user;
+          // A task closure is not proof of human authorship. Installed code
+          // may start work from a non-human input under its authenticated,
+          // host-retained launch owner without first executing an Eval cell.
+          const taskUser =
+            origin?.kind === "website"
+              ? launchUser
+              : (user ?? (fact.owningUserId ? userStore.getUser(fact.owningUserId) : null));
           return {
+            nativeInvocation: fact.nativeInvocation,
             initiatingUser:
               user && user.revokedAt === undefined
                 ? { userId: user.id, handle: user.handle }
@@ -5982,6 +6061,7 @@ async function main() {
         >("nativeWorkspace")
       );
       const host = new ExtensionHost({
+        initialDeclarationsStaged: initialExtensionDeclarations,
         launchNativeExtension: (environment) =>
           nativeWorkspace.fork(nativeWorkspace.extensionEntry, environment),
         statePath,
@@ -6051,6 +6131,9 @@ async function main() {
       return host;
     },
     async stop(instance: import("@vibestudio/extension-host").ExtensionHost) {
+      rejectInitialExtensionDeclarations(
+        new Error("Extension declaration startup owner shut down")
+      );
       await instance?.shutdown();
     },
     getServiceDefinition(instance?: import("@vibestudio/extension-host").ExtensionHost) {
@@ -7349,13 +7432,14 @@ async function main() {
     // projection pauses its reconcile loop while the runtime is offline).
     eventService.emit("server-health", { workerd: "restarting", sampledAt: Date.now() });
   });
-  workerdManager.onRestartReady(() => {
+  const stopAuthorityRecoveryOnRestart = workerdManager.onRestartReady(async () => {
     const restartedPort = workerdManager.getPort();
     if (!restartedPort) {
       throw new Error("workerd restart reported ready without a relay port");
     }
     rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${restartedPort}`);
     eventService.emit("server-health", { workerd: "running", sampledAt: Date.now() });
+    await acquisitionCoordinator.reprojectOwnerDelivery();
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
@@ -7387,6 +7471,7 @@ async function main() {
   const reconciliation = await runStartupReconciliation({
     dispatchWorkspaceDO,
     entityCache,
+    onRetire: cleanupRuntimeEntityRecord,
     restoreRuntimes: async (records) => {
       type RuntimeTarget = { source: string; className: string; objectKey: string };
       const [lifecycle, alarms, durableWorkOwners] = await Promise.all([
@@ -7426,6 +7511,11 @@ async function main() {
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
   const durableReconciliationCompletedAt = Date.now();
+  // Approval presentation and delivery begin only after routing and exact runtime
+  // incarnation restoration; neither an early no-op nor an optional hint pays receipt debt.
+  acquisitionCoordinator.resumePending();
+  acquisitionCoordinator.resumeTargetRequests();
+  await acquisitionCoordinator.reprojectOwnerDelivery();
   // Runtime creation primes restored panel entities after durable hydration.
   // Manifest-declared initial panels use the same runtime-image/serving-cache
   // path during startup preparation; neither path creates or activates a panel.
@@ -7667,6 +7757,10 @@ async function main() {
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
+    })
+    .catch((error: unknown) => {
+      rejectInitialExtensionDeclarations(error);
+      throw error;
     });
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
@@ -7802,12 +7896,6 @@ async function main() {
 
   let isShuttingDown = false;
 
-  // Shutdown deadlines are last-resort process containment, not operating
-  // budgets. Normal shutdown is driven by quiescence and completion signals.
-  const catastrophicShutdownTimeoutMs = 5 * 60_000;
-  const catastrophicEvalDrainTimeoutMs = 60_000;
-  const catastrophicLifecyclePrepareTimeoutMs = 60_000;
-
   async function shutdown() {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -7818,14 +7906,14 @@ async function main() {
       container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
     const alarmDriver =
       container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver");
-    const shutdownStartedAt = Date.now();
     const shutdownErrors: unknown[] = [];
-    const forceExit = setTimeout(() => {
-      console.warn("[Server] Shutdown timeout — forcing exit");
-      process.exit(1);
-    }, catastrophicShutdownTimeoutMs);
 
-    cleanupReaper.stop();
+    await cleanupReaper.stop().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Cleanup reaper shutdown failed:", error);
+    });
+    stopAuthorityRecoveryOnRestart();
+    await acquisitionCoordinator.quiesceOwnerDelivery();
 
     // Stop scheduling admission before asking activations to release. A
     // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel
@@ -7839,15 +7927,12 @@ async function main() {
     // transports. Every EvalDO run is a durable trust unit with its own
     // cancellation cleanup; cancelling it here lets model/tool work, child
     // runtimes, and system-test drivers unwind while the relay is still alive.
-    // This is a catastrophic guard for a broken cancellation implementation,
-    // not an ordinary cap on durable eval cleanup.
-    const evalDrainBudgetMs = Math.min(
-      catastrophicEvalDrainTimeoutMs,
-      Math.max(0, catastrophicShutdownTimeoutMs - (Date.now() - shutdownStartedAt))
-    );
-    await closeActiveEvalRuns?.(evalDrainBudgetMs).catch((err) =>
-      console.warn("[Server] active eval shutdown drain failed:", err)
-    );
+    // Cancellation owns its cleanup until the EvalDO's actual terminal. Elapsed
+    // time cannot authorize tearing down transports needed by that cleanup.
+    await closeActiveEvalRuns?.().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] active eval shutdown drain failed:", error);
+    });
 
     await closeEvalAuthorityEvents?.().catch((err) =>
       console.warn("[Server] eval authority event journal shutdown failed:", err)
@@ -7856,15 +7941,12 @@ async function main() {
     await closeEvalKernelLeases?.().catch((err) =>
       console.warn("[Server] eval kernel lease shutdown failed:", err)
     );
-    const prepareBudgetMs = Math.min(
-      catastrophicLifecyclePrepareTimeoutMs,
-      Math.max(0, catastrophicShutdownTimeoutMs - (Date.now() - shutdownStartedAt))
-    );
-    if (prepareBudgetMs > 0) {
-      await lifecycleDriver
-        .prepareForShutdown(prepareBudgetMs)
-        .catch((err) => console.warn("[Server] lifecycle shutdown prepare failed:", err));
-    }
+    // Graceful release is complete only after the activation joins its owned
+    // resources and the lifecycle journal acknowledges it.
+    await lifecycleDriver.prepareForShutdown().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] lifecycle shutdown prepare failed:", error);
+    });
 
     // Client stop receipts arrive over RPC. Release native child ownership
     // while those transports are still available; the managed service stop
@@ -7895,6 +7977,11 @@ async function main() {
     // available as an object for the ordered service stop below; it simply no
     // longer admits or retains transport-owned work.
     rpcServerForGateway?.quiesce("Server shutting down");
+    await acquisitionCoordinator.quiescePresentations();
+    await entityRetirementCleanup.quiesce().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Entity retirement cleanup shutdown failed:", error);
+    });
 
     await container
       .stopAll()
@@ -7916,7 +8003,6 @@ async function main() {
     }
     try {
       authorityPlanStore.close();
-      targetAuthorityRequests.close();
     } catch (error) {
       console.error("[Server] Authority artifact store shutdown error:", error);
     }
@@ -7925,7 +8011,6 @@ async function main() {
     } catch (error) {
       console.error("[Server] Identity DB shutdown error:", error);
     }
-    clearTimeout(forceExit);
     console.log(
       shutdownErrors.length
         ? "[Server] Shutdown completed with errors"

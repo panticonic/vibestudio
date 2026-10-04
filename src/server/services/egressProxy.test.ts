@@ -28,7 +28,8 @@ import type { AddressInfo } from "node:net";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { WebSocketServer } from "ws";
+import { once } from "node:events";
+import { WebSocket, WebSocketServer } from "ws";
 import type { Dispatcher } from "undici";
 
 import type {
@@ -312,7 +313,7 @@ function rawEgressAuthority(approvalQueue: ApprovalQueue) {
     request: (input) => acquisitions.request(input),
     acquire: (input, signal) => acquisitions.requestAndWait(input, signal),
     consume: (id) => acquisitions.consume(id),
-    invalidate: (digest, owner, principal) => acquisitions.invalidate(digest, owner, principal),
+    invalidate: (inputs) => acquisitions.invalidate(inputs),
   });
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey, tier }) =>
     authorizeVerifiedCaller(caller, {
@@ -690,6 +691,80 @@ describe("EgressProxy", () => {
       await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
     }
   });
+
+  it.each(["provider completion", "caller retirement"])(
+    "relays real post-upgrade model frames and joins both sockets after %s",
+    async (termination) => {
+      const upstreamServer = createServer();
+      const wss = new WebSocketServer({ noServer: true });
+      const upstreamPort = await new Promise<number>((resolve) => {
+        upstreamServer.listen(0, "127.0.0.1", () => {
+          resolve((upstreamServer.address() as AddressInfo).port);
+        });
+      });
+      const auditLog = new MemoryAuditLog();
+      const proxy = createProxy(
+        createLocalFetchCredential(upstreamPort),
+        auditLog,
+        authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+      );
+      proxy.setCallerResolver((id) => (id === "worker:test" ? workerCaller(id) : null));
+      let client: WebSocket | undefined;
+      const observedRequests: unknown[] = [];
+      let upstreamClose: Promise<unknown[]> | undefined;
+      upstreamServer.on("upgrade", (req, socket, head) => {
+        expect(req.headers.authorization).toBe("Bearer secret-token");
+        wss.handleUpgrade(req, socket, head, (provider) => {
+          upstreamClose = once(provider, "close");
+          provider.once("message", (data) => {
+            observedRequests.push(JSON.parse(data.toString()));
+            provider.send(JSON.stringify({ type: "response.created" }));
+          });
+        });
+      });
+      try {
+        const proxyPort = await proxy.startShared("secret");
+        client = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/socket`, {
+          headers: {
+            host: `127.0.0.1:${upstreamPort}`,
+            "X-Forwarded-Proto": "http",
+            Authorization: "Bearer sentinel",
+            "X-Vibestudio-Egress-Caller": "worker:test",
+            "X-Vibestudio-Egress-Secret": "secret",
+          },
+        });
+        const clientClose = once(client, "close");
+        await once(client, "open");
+        const firstFrame = once(client, "message");
+        client.send(JSON.stringify({ type: "response.create", model: "fixture-model" }));
+        const [frame] = await firstFrame;
+        expect(JSON.parse(frame.toString())).toEqual({ type: "response.created" });
+        expect(observedRequests).toEqual([{ type: "response.create", model: "fixture-model" }]);
+        expect(auditLog.entries.at(-1)).toMatchObject({ callerId: "worker:test", status: 101 });
+        if (termination === "provider completion") {
+          const provider = [...wss.clients][0]!;
+          const finalFrame = once(client, "message");
+          provider.send(JSON.stringify({ type: "response.completed" }));
+          provider.close(1000, "complete");
+          const [terminal] = await finalFrame;
+          expect(JSON.parse(terminal.toString())).toEqual({ type: "response.completed" });
+        } else {
+          await proxy.dropCaller("worker:test");
+        }
+        await Promise.all([clientClose, upstreamClose]);
+        expect(client.readyState).toBe(WebSocket.CLOSED);
+        expect(wss.clients.size).toBe(0);
+      } finally {
+        client?.terminate();
+        for (const provider of wss.clients) provider.terminate();
+        await proxy.stop();
+        await Promise.all([
+          new Promise<void>((resolve) => wss.close(() => resolve())),
+          new Promise<void>((resolve) => upstreamServer.close(() => resolve())),
+        ]);
+      }
+    }
+  );
 
   it("returns a terminal WebSocket 403 for a structured approval audience rejection", async () => {
     const upstreamServer = createServer();

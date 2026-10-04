@@ -4,10 +4,29 @@ import {
   unknownWorkspaceRpcSchemaError,
   unknownWorkspaceRpcSchemaMessage,
   workspaceRpcSchema,
+  workspaceRpcSchemaMetadata,
 } from "./workspaceRpcSchemas.js";
 import { BuildDiagnosticsError, diagnosticsFromError } from "./diagnostics.js";
 
 describe("workspace RPC schemas", () => {
+  it("retains native argument bounds across the executable-free worker metadata boundary", () => {
+    const schema = workspaceRpcSchema("vibestudio.missions.v1")!;
+    const metadata = JSON.parse(JSON.stringify(workspaceRpcSchemaMetadata(schema)));
+    expect(metadata.overview.argsSchema).toMatchObject({
+      type: "array",
+      items: [
+        {
+          type: "object",
+          properties: {
+            limit: { type: "integer", minimum: 1, maximum: 50 },
+          },
+        },
+      ],
+    });
+    expect(metadata.overview.returnsSchema).toBeDefined();
+    expect(metadata.overview).not.toHaveProperty("args");
+    expect(metadata.overview).not.toHaveProperty("returns");
+  });
   it("explains that application protocols do not name a host-owned rpcSchema", () => {
     expect(workspaceRpcSchema("taskflow.tasks.v1")).toBeUndefined();
     expect(

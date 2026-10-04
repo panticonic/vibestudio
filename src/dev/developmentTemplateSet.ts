@@ -14,7 +14,7 @@ export interface DevelopmentTemplateSet {
     id: string;
     role: keyof DefaultWorkspaceTemplates | "development" | "catalog";
     url: string;
-    consumers?: Array<keyof DefaultWorkspaceTemplates>;
+    consumers?: string[];
   }>;
 }
 
@@ -50,7 +50,9 @@ export async function resolveDevelopmentTemplateSet(input: {
   for (const source of selected.sources) {
     if (source.role !== "development") continue;
     for (const consumer of source.consumers ?? []) {
-      const checkout = fs.realpathSync(path.resolve(selected.checkouts[consumer]));
+      const checkout = fs.realpathSync(
+        path.resolve(requiredEntry(selected.checkouts, consumer, "checkout"))
+      );
       declareDependencies.set(checkout, [...(declareDependencies.get(checkout) ?? []), source.url]);
     }
   }

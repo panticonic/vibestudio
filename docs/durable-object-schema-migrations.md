@@ -1,83 +1,99 @@
 # Durable Object current-schema lifecycle
 
-Status: target contract for the pre-release clean cut
+Status: current implementation contract; migration policy clarified 2026-10-01
 
-Vibestudio Durable Objects support one schema: the exact schema declared by the
-current code. The neutral `@vibestudio/durable/schema` module implements the
-contract once for both host and workspace Durable Object bases.
+The neutral `@vibestudio/durable/schema` module implements one asynchronous
+schema lifecycle for both host and workspace Durable Object bases. It supports
+fresh creation, exact current validation, and explicitly declared supported
+upgrades. Classes without upgrade declarations still refuse older storage.
+Migration support does not infer a source format or weaken validation.
 
-Despite this file's historical name, the contract contains no migrations.
+## Migration policy and release transition
+
+The earlier preference for clean cuts avoided repeatedly building bespoke
+migration machinery for disposable pre-release formats. It does not prohibit
+sound migrations already supplied by a dependency, or migrations needed to
+preserve valuable data as we approach release. Do not remove a dependency's
+migration support merely to conform to that earlier preference.
+
+Use one authoritative storage owner and a documented upgrade path. Where a
+dependency owns its schema and migration runner, assess and reuse that contract;
+integrate it explicitly with DO initialization, native transactions, schema
+validation and code publication. The base now supplies the owned asynchronous
+transaction and trusted source/target validation seam; each class must declare
+and test its actual supported upgrade path.
+
+For stores we own, design necessary upgrades from the actual supported source
+and target formats. Define atomicity or recoverable progress, duplicate/restart
+behavior, failure visibility, data preservation and rollback/downgrade limits.
+Validate the resulting current schema before ordinary work is admitted. Unknown,
+corrupt or unsupported storage still fails closed; a migration is not permission
+to guess at damaged data or silently restamp it.
+
+Before the first supported release, record which durable user facts and schema
+versions are supported, and test the next upgrade against representative stored
+data. Reset remains an option only for explicitly disposable state, not the
+default release upgrade strategy. See
+[upgrade and migration policy](agentic-upgrade-migrations-plan.md).
 
 ## Contract
 
-- `static schemaVersion` names the current schema generation for the class.
-- `createTables()` creates that exact schema only for a truly empty object.
-- `validateSchema()` validates the complete current owned shape: tables,
-  columns, indexes, constraints, views, triggers, and declared virtual tables.
-- Existing storage opens only when its recorded version and complete owned
-  shape exactly match the current declaration.
-- A different version, malformed metadata, unversioned nonempty store, missing
-  object, extra owned object, or shape drift fails closed without mutation.
-- Initialization and validation run before RPC or lifecycle work is admitted.
-- Framework-owned lazy objects and SQLite virtual-table shadow objects are
-  excluded by explicit ownership rules, never by guessing from a fingerprint.
-- The engine never calls `createTables()` to repair an existing store.
+- `static schemaVersion` declares the target generation.
+- One initialization flight is awaited before fetch/RPC, alarm and lifecycle work.
+  Constructors perform pure field setup. `ensureReady()` asserts completed
+  readiness; it does not initialize synchronously.
+- `createTables()` and `validateSchema()` can be asynchronous. Fresh platform and
+  component/domain creation, supported upgrades, final validation and metadata
+  run in one native transaction. Activation hooks run after schema acceptance;
+  contained probes skip product activation.
+- `schemaUpgrades()` declares unique source versions, trusted `fromFingerprint`
+  shapes and one-version upgrade bodies. Only a contiguous path to the target
+  is supported. Declaring upgrades requires trusted final build evidence.
+- Current storage must match its recorded and trusted target shape. An older
+  supported source must match its metadata and trusted source shape before any
+  mutation. Unknown/newer versions, gaps, malformed metadata and drift refuse
+  unchanged. Failure during migration rolls back; retry starts at the source.
+- `requiredTables` checks structural requirements. `schemaTables()` selects owned
+  shape scope; component classes default to their declared objects. A complete
+  Pi composition returns undefined to attest the full application store, so an
+  unexpected application table is drift.
+- Framework nonce/metadata objects are excluded explicitly. The initializer
+  never calls fresh creation to repair existing storage or guesses damaged data.
 
-The schema metadata records only the current schema identity needed for exact
-validation. There is no installed-version history, migration ledger,
-production baseline, supported range, source-shape parser, restamping, or
-translation callback.
+EvalDO declares no previous-version upgrades for this final pre-release cut.
+Its current schema reopens normally; previous versions refuse unchanged. Future
+supported transitions can use the shared upgrade contract above without keeping
+this cut's historical schema snapshot or conversion code.
 
-## Class shape
-
-```ts
-export class ExampleDO extends DurableObjectBase {
-  static override schemaVersion = 4;
-
-  protected createTables(): void {
-    this.sql.exec(`
-      CREATE TABLE items (
-        id TEXT PRIMARY KEY,
-        created_at INTEGER NOT NULL
-      )
-    `);
-  }
-
-  protected validateSchema(): void {
-    // Validate the exact current owned objects and invariants.
-  }
-}
-```
-
-The base class has no `schemaProductionBaseline()`, `schemaMigrations()`, or
-`schemaMigrationFixtureObjectKeys()` hooks.
+The schema metadata records the accepted current identity, not a second execution
+history. Dependency migrations execute their existing transaction-scoped body
+inside this owner. Pi's standalone wrapper uses that same body; composed storage
+opening awaits the parent's initializer instead of starting another installer.
 
 ## Build and publication checks
 
-Build V2 probes `createTables()` in a contained scratch object in the same
-workerd runtime that will serve the class. It records the exact fresh current
-schema fingerprint and rejects a candidate whose declared current shape is
-internally inconsistent.
+Contained native probes create the fresh schema in the same runtime that will
+serve it and record the target fingerprint. WorkerdManager evidence is keyed by
+source, immutable execution digest and class. Effective source version alone is
+insufficient because build recipes can differ. Conflicting evidence for an
+existing immutable digest rejects without overwriting it. The obsolete derived
+probe cache is discarded/reprobed, not treated as application data migration.
 
-The probe is current-state evidence only. It does not compare against a prior
-descriptor, retain old migration source, capture deployed databases, or replay
-fixtures. Publication does not promise that the candidate can open any earlier
-store.
+Fresh target evidence does not prove any older source upgrade. Each supported
+source descriptor and upgrade fixture must be supplied and tested by its owner.
+The shipping Pi composition must require exact artifact evidence on every route,
+including context/unpublished builds; it must probe or refuse if absent. Generic
+bare-DO activation retains its existing policy until that owner declares otherwise.
 
-Required tests:
+Required tests include fresh initialization, current row preservation, source and
+target drift, malformed/unversioned/newer refusal, unsupported path refusal,
+failed-upgrade rollback and retry, complete-shape validation, structured RPC
+correlation, probe/activation separation and replacement/reopen. Native production
+Base/Pi composition tests and manager artifact-identity tests now provide this
+component evidence; all shipping product schemas still require their own checks.
 
-1. A truly empty object initializes exactly once at the current schema.
-2. A current object validates and preserves application rows.
-3. Current-version shape drift fails unchanged.
-4. Older/newer versions fail unchanged.
-5. Unversioned or malformed nonempty storage fails unchanged.
-6. Framework lazy objects and virtual-table shadow objects do not create false
-   drift failures.
-7. Both Durable Object bases return the same structured
-   `DO_SCHEMA_INCOMPATIBLE` error through RPC.
-8. Build V2's contained fresh-schema probe matches runtime validation.
-
-There is no `DO_SCHEMA_MIGRATION_FAILED` error because no migration executes.
+Schema refusals retain `DO_SCHEMA_INCOMPATIBLE`; a migration body failure is
+reported as its actual failure, not silently restamped as a new accepted version.
 
 ## Reset for disposable pre-release state
 
@@ -92,14 +108,15 @@ or become a compatibility ledger.
 
 ## Small JSON stores and host SQLite
 
-Versioned JSON and host SQLite use the same rule: initialize a genuinely empty
+Versioned JSON and host SQLite retain their current owner-specific rule: initialize a genuinely empty
 store at the current exact version; decode/validate that exact version; reject
 malformed, unversioned, or different-version files/databases unchanged. Atomic
 writes and operation recovery remain.
 
-## Generation changes
+## Generation changes and supported upgrades
 
-Before the first supported release, a schema change is a destructive cut:
+A schema change affecting explicitly disposable development state may use a
+coordinated clean cut:
 
 1. change the current schema and version;
 2. delete old parsing/translation code;
@@ -109,8 +126,10 @@ Before the first supported release, a schema change is a destructive cut:
 6. recreate fresh objects/workspaces.
 
 Valuable user-level facts may be exported and imported through current product
-APIs. Internal database files are not converted.
+APIs. This option does not require database conversion, and does not prohibit
+a tested owner-provided migration when that is the simpler sound path.
 
-After the first supported release, this destructive policy no longer grants
-authority to discard user data. A concrete future transition must be designed
-from its real source/target data and availability contract.
+Pre-release status alone does not grant authority to discard valuable state.
+For supported user data, including data accepted before launch, design the
+transition from its real source/target data and availability contract. Once a
+release is supported, its upgrade policy must preserve that promised data.

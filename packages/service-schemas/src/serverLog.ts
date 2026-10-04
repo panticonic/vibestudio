@@ -177,3 +177,61 @@ export const serverLogMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
 });
+
+/** Bounded native read facts, copied before eval code projects or mutates results. */
+export const NativeServerLogObservationSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        protocol: z.literal("server-log-observation.v1"),
+        kind: z.literal("records"),
+        method: z.enum(["tail", "query"]),
+        limit: z.number().int().min(1).max(5000),
+        minimumLevel: ServerLogLevelSchema.optional(),
+        serverBootId: z.string().min(1),
+        latestSeq: z.number().int().nonnegative(),
+        firstSeq: z.number().int().nullable(),
+        lastSeq: z.number().int().nullable(),
+        count: z.number().int().nonnegative(),
+        byLevel: z
+          .object({
+            verbose: z.number().int().nonnegative(),
+            info: z.number().int().nonnegative(),
+            warn: z.number().int().nonnegative(),
+            error: z.number().int().nonnegative(),
+          })
+          .strict(),
+        newestLevel: ServerLogLevelSchema.nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        protocol: z.literal("server-log-observation.v1"),
+        kind: z.literal("stats"),
+        latestSeq: z.number().int().nonnegative(),
+        totalCaptured: z.number().int().nonnegative(),
+        bufferSize: z.number().int().nonnegative(),
+        byLevel: z.record(ServerLogLevelSchema, z.number().int().nonnegative()),
+      })
+      .strict(),
+  ])
+  .superRefine((receipt, context) => {
+    if (receipt.kind !== "records") return;
+    const levelCount = Object.values(receipt.byLevel).reduce((sum, count) => sum + count, 0);
+    const empty = receipt.count === 0;
+    const validCoordinates = empty
+      ? receipt.firstSeq === null && receipt.lastSeq === null && receipt.newestLevel === null
+      : receipt.firstSeq !== null &&
+        receipt.lastSeq !== null &&
+        receipt.newestLevel !== null &&
+        receipt.firstSeq > 0 &&
+        receipt.firstSeq <= receipt.lastSeq &&
+        receipt.lastSeq <= receipt.latestSeq &&
+        receipt.byLevel[receipt.newestLevel] > 0;
+    if (receipt.count > receipt.limit || levelCount !== receipt.count || !validCoordinates)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Inconsistent native log observation",
+      });
+  });
+export type NativeServerLogObservation = z.infer<typeof NativeServerLogObservationSchema>;

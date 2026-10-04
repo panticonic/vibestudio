@@ -23,6 +23,50 @@ const base = () =>
   });
 
 describe("invocation snapshot", () => {
+  it("seals detached original native task coordinates into the invocation digest", () => {
+    const nativeInvocation = {
+      owner: { runtimeId: "agent:one", authoritySessionId: "lifetime:one" },
+      task: { taskId: 12, conversationId: 0 },
+      operation: { kind: "model" as const, purpose: "generation" as const, attempt: 0, cutoff: 9 },
+    };
+    const snapshot = createInvocationSnapshot({ ...base(), args: [], nativeInvocation });
+    const digest = invocationSnapshotDigest(snapshot);
+    nativeInvocation.task.taskId = 88;
+    nativeInvocation.owner.authoritySessionId = "later";
+    nativeInvocation.operation.attempt = 3;
+    expect(snapshot.nativeInvocation).toEqual({
+      owner: { runtimeId: "agent:one", authoritySessionId: "lifetime:one" },
+      task: { taskId: 12, conversationId: 0 },
+      operation: { kind: "model", purpose: "generation", attempt: 0, cutoff: 9 },
+    });
+    for (const changed of [
+      undefined,
+      nativeInvocation,
+      { ...snapshot.nativeInvocation!, task: { taskId: 12, conversationId: 1 } },
+    ]) {
+      expect(invocationSnapshotDigest({ ...snapshot, nativeInvocation: changed })).not.toBe(digest);
+    }
+  });
+  it("pins originating invocation coordinates independently of mutable caller attribution", () => {
+    const original = base();
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:channel:one",
+      head: "main",
+      invocationId: "native:one",
+    };
+    const snapshot = createInvocationSnapshot({ ...original, args: ["same"], causalParent });
+    const digest = invocationSnapshotDigest(snapshot);
+    causalParent.invocationId = "native:changed";
+    expect(snapshot.causalParent?.invocationId).toBe("native:one");
+    for (const replacement of [
+      undefined,
+      { ...snapshot.causalParent!, invocationId: "native:other" },
+      { ...snapshot.causalParent!, head: "other" },
+      { ...snapshot.causalParent!, logId: "trajectory:channel:other" },
+    ])
+      expect(invocationSnapshotDigest({ ...snapshot, causalParent: replacement })).not.toBe(digest);
+  });
   it("seals mutable subject, revocation generation, and initiating document into consent", () => {
     const binding = { subject: "website:site-1" as const, generation: 1, documentId: "doc-1" };
     const snapshot = { ...base(), subjectBinding: binding };
@@ -82,16 +126,27 @@ describe("invocation snapshot", () => {
   });
 });
 
-
 it("seals initiating website identity independently from receiver grant identity", () => {
-  const website = { subject: "website:site" as const, userId: "user:u" as const,
-    workspaceId: "ws", origin: "https://example.com", connected: true,
-    binding: { subject: "website:site" as const, generation: 0, documentId: "doc1" } };
-  const snapshot = { ...base(), callerPrincipal: "code:receiver@v1" as const, initiatingWebsite: website };
+  const website = {
+    subject: "website:site" as const,
+    userId: "user:u" as const,
+    workspaceId: "ws",
+    origin: "https://example.com",
+    connected: true,
+    binding: { subject: "website:site" as const, generation: 0, documentId: "doc1" },
+  };
+  const snapshot = {
+    ...base(),
+    callerPrincipal: "code:receiver@v1" as const,
+    initiatingWebsite: website,
+  };
   const digest = invocationSnapshotDigest(snapshot);
-  for (const change of [undefined, { ...website, origin: "https://other.test" },
+  for (const change of [
+    undefined,
+    { ...website, origin: "https://other.test" },
     { ...website, binding: { ...website.binding, documentId: "doc2" } },
-    { ...website, binding: { ...website.binding, generation: 1 } }]) {
+    { ...website, binding: { ...website.binding, generation: 1 } },
+  ]) {
     expect(invocationSnapshotDigest({ ...snapshot, initiatingWebsite: change })).not.toBe(digest);
   }
 });

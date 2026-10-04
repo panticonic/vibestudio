@@ -150,8 +150,8 @@ export class WorkspaceEntityStore {
   }
 
   /** Mark post-retire cleanup complete (durable only — no cache state changes). */
-  async cleanupComplete(id: string): Promise<void> {
-    await this.dispatch<undefined>("entityCleanupComplete", id);
+  async cleanupComplete(id: string, authoritySessionId: string): Promise<void> {
+    await this.dispatch<undefined>("entityCleanupComplete", id, authoritySessionId);
   }
 
   replaceResourceBindings(id: string, bindings: RuntimeResourceBindingInput[]): Promise<void> {

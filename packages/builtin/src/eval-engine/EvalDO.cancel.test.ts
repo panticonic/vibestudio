@@ -18,7 +18,7 @@
  * verifies cleanup failures still reach a durable terminal result.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibestudio/durable/test-utils";
+import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import type { RpcCallOptions } from "@vibestudio/rpc";
 import { executionSessionNonceFor } from "@vibestudio/rpc/internal";
 import { EVAL_ENGINE_HOST_CONTRACT_VERSION } from "@vibestudio/service-schemas/evalEngine";
@@ -677,8 +677,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(executionSessionNonceFor(deliveryCalls[0]?.[3])).toBeUndefined();
   });
 
-  it("durably retains verified workspace import executions until disposal", async () => {
+  it("retains verified workspace import provenance through terminal preparation", async () => {
     const { instance } = await createTestDO(EvalDO);
+    Object.defineProperty(instance, "rpc", { value: { call: vi.fn(async () => undefined) } });
     setPriv(instance, "runLocked", () =>
       Promise.resolve({ success: true, console: "", returnValue: 1 })
     );
@@ -709,8 +710,15 @@ describe("EvalDO cancellation + forced recovery", () => {
       },
     ]);
 
-    await instance.dispose();
-    expect(instance.listRetainedExecutionRoots()).toEqual([]);
+    await instance.releaseForLifecycle({
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(instance.listRetainedExecutionRoots()).toEqual([
+      { runId: "root-run", moduleSpecifier: "@workspace/example", artifact },
+    ]);
   });
 
   it("releases an import root when its deadline-aborted run did not retain the module", async () => {
@@ -1219,6 +1227,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   });
 
   it("serves getRun through a concurrent fetch while executeRun is held", async () => {
+    const hostFetch = vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
     const { instance, sql, call } = await createTestDO(EvalDO);
     let releaseRun!: () => void;
     let markStarted!: () => void;
@@ -1246,6 +1255,7 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     releaseRun();
     await expect(held).resolves.toMatchObject({ success: true, returnValue: "done" });
+    hostFetch.mockRestore();
   });
 
   it("executeRun persists a bounded terminal result for huge console and return payloads", async () => {
@@ -2085,7 +2095,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toMatchObject({ status: "cancelled" });
   });
 
-  it("dispose erases terminal jobs and releases every loaded kernel reference", async () => {
+  it("terminal preparation retains jobs while releasing every loaded kernel reference", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
     Object.defineProperty(instance, "rpc", {
@@ -2112,12 +2122,25 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "moduleMap", { package: { loaded: true } });
     priv<Record<string, unknown>>(instance, "isolateModuleMap")["package"] = { loaded: true };
 
-    await expect(instance.dispose()).resolves.toEqual({ ok: true });
+    await expect(
+      instance.releaseForLifecycle({
+        epoch: "retire:test",
+        mode: "retire",
+        reason: "test",
+        deadlineMs: 0,
+      })
+    ).resolves.toEqual({ status: "ready" });
     await expect(held).resolves.toEqual({ leaseId: "finite-kernel", reason: "released" });
 
-    expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 0 });
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 1 });
+    await expect(instance.startRun({ runId: "finite", code: "return 1" })).rejects.toThrow(
+      "execution namespace is retired"
+    );
+    await expect(instance.startRun({ runId: "new", code: "return 2" })).rejects.toThrow(
+      "execution namespace is retired"
+    );
     expect(sql.exec(`SELECT COUNT(*) AS count FROM run_progress`).toArray()[0]).toMatchObject({
-      count: 0,
+      count: 1,
     });
     expect(priv(instance, "engine")).toBeNull();
     expect(priv(instance, "runtimeSupport")).toBeNull();
@@ -2142,7 +2165,12 @@ describe("EvalDO cancellation + forced recovery", () => {
         calls.push({ method, options });
         return Promise.resolve("ok");
       }),
-      stream: vi.fn(),
+      stream: vi.fn(
+        (_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
+          calls.push({ method, options });
+          return Promise.resolve(new Response("service proof"));
+        }
+      ),
       streamReadable: vi.fn(),
       emit: vi.fn((_target: string, event: string, _payload: unknown, options?: RpcCallOptions) => {
         calls.push({ method: event, options });
@@ -2172,10 +2200,19 @@ describe("EvalDO cancellation + forced recovery", () => {
         createHostedRuntime: (host: Record<string, unknown>) => ({
           rpc: host["rpc"],
           fs: host["fs"],
+          gatewayFetch: host["gatewayFetch"],
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
-        createGatewayFetch: () => () => {},
+        createGatewayFetch: (config: {
+          rpc?: { stream(target: string, method: string, args: unknown[]): Promise<Response> };
+        }) => {
+          if (!config.rpc)
+            throw new Error("Sandbox gateway requires an authenticated RPC transport");
+          const rpc = config.rpc;
+          return (path: string) =>
+            rpc.stream("main", "gateway.fetch", [{ path, method: "GET", headers: {} }]);
+        },
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
         createServicesProxy: () => ({}),
@@ -2227,6 +2264,10 @@ describe("EvalDO cancellation + forced recovery", () => {
             startB();
             await bResumed;
             await rpc.peer("main").emit("run-b-after-a-finished", {});
+            const gatewayFetch = options.bindings["gatewayFetch"] as (
+              path: string
+            ) => Promise<Response>;
+            expect(await (await gatewayFetch("/service-proof")).text()).toBe("service proof");
           }
           return { success: true, consoleOutput: "", returnValue: code };
         },
@@ -2253,7 +2294,12 @@ describe("EvalDO cancellation + forced recovery", () => {
       readOnly: true,
     });
     const runA = instance.executeRun("run-a");
-    await aStarted;
+    await Promise.race([
+      aStarted,
+      runA.then((result) => {
+        throw new Error(`Run A settled before sandbox readiness: ${JSON.stringify(result)}`);
+      }),
+    ]);
 
     // A ignores its abort and remains suspended. forceReset therefore orphans
     // its chain, allowing B to begin with a different immutable context.
@@ -2267,7 +2313,12 @@ describe("EvalDO cancellation + forced recovery", () => {
       readOnly: false,
     });
     const runB = instance.executeRun("run-b");
-    await bStarted;
+    await Promise.race([
+      bStarted,
+      runB.then((result) => {
+        throw new Error(`Run B settled before sandbox readiness: ${JSON.stringify(result)}`);
+      }),
+    ]);
 
     resumeA();
     await aCalled;
@@ -2289,7 +2340,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       readOnly: true,
       signal: aSignal,
     });
-    for (const method of ["run-b-before-a-resumes", "run-b-after-a-finished"]) {
+    for (const method of ["run-b-before-a-resumes", "run-b-after-a-finished", "gateway.fetch"]) {
       const options = byMethod.get(method);
       expect(options).toMatchObject({ causalParent: causeB, signal: bSignal });
       expect(options?.readOnly).toBeUndefined();
@@ -2595,10 +2646,13 @@ describe("EvalDO cancellation + forced recovery", () => {
           }),
         };
       },
-      createHostedRuntime: (host: Record<string, unknown>) => ({
-        getPanelHandle: (id: string) =>
-          (host["panelRuntime"] as { getPanelHandle(id: string): unknown }).getPanelHandle(id),
-      }),
+      createHostedRuntime: (host: Record<string, unknown>) => {
+        expect(host["recordOperation"]).toBe(recordOperation);
+        return {
+          getPanelHandle: (id: string) =>
+            (host["panelRuntime"] as { getPanelHandle(id: string): unknown }).getPanelHandle(id),
+        };
+      },
       createRuntimeSelfHandle: () => ({}),
       createGatewayFetch: () => () => undefined,
       createRpcFs: () => ({}),
@@ -3015,7 +3069,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(userRun.result).toBeUndefined();
   });
 
-  it("retries a failed terminal push through a bounded alarm and stops after success", async () => {
+  it("retries a failed terminal hint and stops only after an exact acknowledgement", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { instance, sql } = await createTestDO(EvalDO);
     let failures = 1;
@@ -3026,7 +3080,8 @@ describe("EvalDO cancellation + forced recovery", () => {
           failures -= 1;
           return Promise.reject(new Error("receiver unavailable"));
         }
-        return Promise.resolve(undefined);
+        const receipt = instance.getRunReceipt("redeliver-run")!;
+        return instance.acknowledgeRunResult(receipt.runId, receipt);
       }
       return Promise.resolve(undefined);
     });
@@ -3058,14 +3113,16 @@ describe("EvalDO cancellation + forced recovery", () => {
       expect(redeliveryState(sql)).toEqual({ "redeliver-run": 1 });
     });
 
-    // The alarm redelivers idempotently and clears its slot on success.
+    // A due hint retries; the exact domain ack closes its delivery slot.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
     await expect(instance.alarm()).resolves.toBeNull();
     expect(call.mock.calls.filter(([, method]) => method === "onEvalComplete")).toHaveLength(2);
     expect(redeliveryState(sql)).toEqual({});
+    clock.mockRestore();
     warn.mockRestore();
   });
 
-  it("stops terminal-push redelivery after its bounded attempt budget", async () => {
+  it("retains terminal delivery indefinitely with bounded backoff until exact acknowledgement", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { instance, sql } = await createTestDO(EvalDO);
     const receiver = "do:workers/agent-worker:AiChatWorker:agent-1";
@@ -3085,15 +3142,34 @@ describe("EvalDO cancellation + forced recovery", () => {
       channelId: "channel-1",
       executionSessionNonce: "session-exhaust-123456",
     });
-    await vi.waitFor(() => expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 1 }));
+    await vi.waitFor(() => {
+      expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 1 });
+      expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(false);
+    });
 
-    // attempt 1 → 2, 2 → 3 keep an alarm scheduled; attempt 3 exhausts the budget.
-    await expect(instance.alarm()).resolves.toMatchObject({ wakeAt: expect.any(Number) });
-    expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 2 });
-    await expect(instance.alarm()).resolves.toMatchObject({ wakeAt: expect.any(Number) });
-    expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 3 });
-    await expect(instance.alarm()).resolves.toBeNull();
-    expect(redeliveryState(sql)).toEqual({});
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const due = Number(
+          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()["wake_at"]
+        );
+        clock.mockReturnValue(due);
+        await expect(instance.alarm()).resolves.toMatchObject({ wakeAt: expect.any(Number) });
+        const next = Number(
+          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()["wake_at"]
+        );
+        expect(next - due).toBeGreaterThanOrEqual(5_000);
+        expect(next - due).toBeLessThanOrEqual(300_000);
+        expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(false);
+      }
+      expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 7 });
+      const receipt = instance.getRunReceipt("redeliver-exhaust")!;
+      await instance.acknowledgeRunResult(receipt.runId, receipt);
+      await expect(instance.alarm()).resolves.toBeNull();
+      expect(redeliveryState(sql)).toEqual({});
+    } finally {
+      clock.mockRestore();
+    }
     warn.mockRestore();
   });
 
@@ -3129,31 +3205,34 @@ describe("EvalDO cancellation + forced recovery", () => {
       const runId = (args[0] as { runId: string }).runId;
       if (runId === "redeliver-in-flight") {
         firstDeliveryStarted();
-        return firstDelivery;
+        return firstDelivery.then(async () => {
+          const receipt = instance.getRunReceipt(runId)!;
+          await instance.acknowledgeRunResult(runId, receipt);
+        });
       }
       return Promise.resolve(undefined);
     });
     Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
 
-    priv<(runId: string, attempt: number) => void>(instance, "scheduleResultRedelivery").call(
+    priv<(runId: string) => void>(instance, "scheduleResultRedelivery").call(
       instance,
-      "redeliver-in-flight",
-      1
+      "redeliver-in-flight"
     );
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
     const alarm = instance.alarm();
     await firstDeliveryIsWaiting;
 
     // An external RPC await opens the DO input gate. A second run can fail its
     // terminal push and enqueue itself while this alarm is waiting.
-    priv<(runId: string, attempt: number) => void>(instance, "scheduleResultRedelivery").call(
+    priv<(runId: string) => void>(instance, "scheduleResultRedelivery").call(
       instance,
-      "redeliver-concurrent",
-      1
+      "redeliver-concurrent"
     );
     releaseFirst();
     await expect(alarm).resolves.toMatchObject({ wakeAt: expect.any(Number) });
 
     expect(redeliveryState(sql)).toEqual({ "redeliver-concurrent": 1 });
+    clock.mockRestore();
   });
 
   it("keeps a non-abort failure after a fired deadline out of the timeout classification", async () => {

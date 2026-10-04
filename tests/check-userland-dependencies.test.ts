@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  collectExactUserlandDependencyPins,
   collectHostReuseRangeFindings,
   collectStartupHostReuseFindings,
 } from "../scripts/check-userland-dependencies.mjs";
@@ -119,6 +120,54 @@ describe("collectStartupHostReuseFindings", () => {
         JSON.stringify({ dependencies: { react: "^19.0.0", zod: "^3.25.76" } })
       );
       await expect(collectStartupHostReuseFindings(host, base)).resolves.toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("governed native runtime pins", () => {
+  it("accepts a new consumer of the exact Host release and rejects a different kernel or ordinary exact pin", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-native-pin-policy-"));
+    const host = path.join(root, "host");
+    const base = path.join(root, "base");
+    try {
+      fs.mkdirSync(host, { recursive: true });
+      const consumer = path.join(base, "workers", "new-native-owner");
+      fs.mkdirSync(consumer, { recursive: true });
+      fs.writeFileSync(
+        path.join(host, "package.json"),
+        JSON.stringify({
+          dependencies: {
+            "@panticonic/pi-durable": "0.99.2-vibestudio.9",
+            "@panticonic/pi-ai": "0.99.2-vibestudio.9",
+          },
+        })
+      );
+      fs.writeFileSync(
+        path.join(consumer, "package.json"),
+        JSON.stringify({
+          dependencies: {
+            "@panticonic/pi-durable": "0.99.2-vibestudio.9",
+            "@panticonic/pi-ai": "0.99.2-vibestudio.8",
+            "ordinary-library": "1.2.3",
+          },
+        })
+      );
+      expect(collectExactUserlandDependencyPins(base, host)).toEqual([
+        {
+          relative: "workers/new-native-owner/package.json",
+          section: "dependencies",
+          name: "@panticonic/pi-ai",
+          specifier: "0.99.2-vibestudio.8",
+        },
+        {
+          relative: "workers/new-native-owner/package.json",
+          section: "dependencies",
+          name: "ordinary-library",
+          specifier: "1.2.3",
+        },
+      ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -15,15 +15,29 @@ async function mapConcurrent<T>(
   apply: (value: T) => Promise<void>
 ): Promise<void> {
   let cursor = 0;
+  const failures: unknown[] = [];
   await Promise.all(
     Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      for (;;) {
+      while (failures.length === 0) {
         const value = values[cursor++];
         if (value === undefined) return;
-        await apply(value);
+        try {
+          await apply(value);
+        } catch (error) {
+          failures.push(error);
+          return;
+        }
       }
     })
   );
+  // Error publication transfers ownership back to the caller, which may
+  // immediately delete the target or release the source installation. Join
+  // every admitted copy before that boundary, even after one copy fails.
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, "Immutable dependency projection failed", {
+      cause: failures[0],
+    });
 }
 
 /**
@@ -110,4 +124,45 @@ export async function materializePrivateTree(source: string, target: string): Pr
     } else throw new Error(`Unsupported native resource: ${input}`);
   };
   await visit(root, target, new Set());
+}
+
+/** Admit an installed SDK package's public source/declaration roots. Its
+ * dependency links and package-manager workspace are never copied. */
+export async function materializePackageResources(source: string, target: string): Promise<void> {
+  const root = await fs.promises.realpath(source);
+  const manifest = JSON.parse(
+    await fs.promises.readFile(path.join(root, "package.json"), "utf8")
+  ) as {
+    exports?: unknown;
+    types?: string;
+    main?: string;
+  };
+  const entries = new Set(["package.json"]);
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      const relative = value.replace(/^\.\//u, "");
+      if (path.isAbsolute(relative) || relative.split(/[\\/]/u).includes(".."))
+        throw new Error(`SDK export escapes its package: ${value}`);
+      const entry = relative.split(/[\\/]/u)[0];
+      if (!entry || entry.includes("*") || entry === "node_modules")
+        throw new Error(`SDK export has no owned resource root: ${value}`);
+      entries.add(entry);
+    } else if (value && typeof value === "object") {
+      for (const child of Object.values(value)) visit(child);
+    }
+  };
+  visit(manifest.exports);
+  visit(manifest.types);
+  visit(manifest.main);
+  await fs.promises.mkdir(target, { recursive: true });
+  for (const entry of [...entries].sort()) {
+    const input = path.join(root, entry);
+    const resolved = await fs.promises.realpath(input);
+    const relative = path.relative(root, resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      throw new Error(`SDK resource escapes its package: ${input}`);
+    const output = path.join(target, entry);
+    if ((await fs.promises.stat(input)).isDirectory()) await materializePrivateTree(input, output);
+    else await fs.promises.copyFile(input, output, fs.constants.COPYFILE_EXCL);
+  }
 }

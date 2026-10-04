@@ -1388,6 +1388,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:acknowledgeRunResult",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
+      "source": "vibestudio/internal",
+      "method": "acknowledgeRunResult",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "exact-owned-eval-terminal-acknowledgement",
+        "change": "Acknowledges only the exact retained run and result digests through the existing owner relationship. Commits acknowledgement before removing redelivery debt, preserves result history, and grants no execution or reset authority."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
@@ -1598,48 +1640,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:dispose",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "dispose",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:executeRun",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
@@ -1804,6 +1804,48 @@
       "r3b": {
         "review": "host-only-bounded-eval-event-page",
         "change": "Adds a host-only bounded cursor read of durable events for an exact EvalDO run. It performs no execution, mutation, or authority acquisition."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunReceipt",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
+      "source": "vibestudio/internal",
+      "method": "getRunReceipt",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "exact-owned-eval-terminal-receipt",
+        "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -2396,6 +2438,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmComplete",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "alarmComplete",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "exact-native-wake-claim-completion",
+        "change": "Settles only the authenticated claimed alarm generation and combines acknowledgement with the actual remaining wake. Stale completion cannot erase a newer durable hint."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmListScheduled",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -2518,6 +2602,175 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceList",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "alarmSourceList",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-owned-native-wake-recovery-inventory",
+        "change": "Lists retained source registrations for the existing host-owned alarm recovery path. It creates no registration, execution authority, or scheduler policy."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "alarmSourcePublish",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "exact-native-source-schedule-publication",
+        "change": "Accepts schedules only for the authenticated registered source incarnation and increasing publication generation. Null source schedules do not erase independent host wake hints."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRegister",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "alarmSourceRegister",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-bound-native-source-registration",
+        "change": "Registers the actual active entity's source identity in its existing host-owned wake record. Registration does not restore execution authority from database contents or caller-supplied identity."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "alarmSourceRequest",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-owned-native-source-checkup-hint",
+        "change": "Records an independently retained checkup hint for the exact registered source. It asks the source to inspect canonical native work; it cannot supply a task outcome or acquire authority."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -6874,6 +7127,54 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.acknowledgeAcquisition",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "acknowledgeAcquisition",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "Acknowledges only an exact canonical terminal digest owned by the authenticated runtime/session; grants no authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.acknowledgeAcquisition"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.acknowledgeAcquisition),allOf(capability(user,service:authority.acknowledgeAcquisition),workspace-member),allOf(capability(code,service:authority.acknowledgeAcquisition),workspace-member))",
+      "r3b": {
+        "review": "exact-controller-acquisition-acknowledgement",
+        "change": "Acknowledges only a terminal acquisition matching the authenticated runtime, canonical lifetime, original binding, and exact receipt. Durable local consumption precedes this call; acknowledgement grants no capability."
+      },
+      "capability": "service:authority.acknowledgeAcquisition",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.acquireForCurrentTask",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -6959,6 +7260,54 @@
         "change": "Registers one digest-bound mission revision under the authenticated requesting user and creates or joins durable ordinary acquisitions for its host-compiled mission-grantable leaves. Runtime identity never becomes the acquisition owner."
       },
       "capability": "service:authority.acquireForTarget",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.acquisitionReceipt",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "acquisitionReceipt",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "Reads only a retained acquisition owned by the authenticated runtime and session; grants no authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.acquisitionReceipt"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.acquisitionReceipt),allOf(capability(user,service:authority.acquisitionReceipt),workspace-member),allOf(capability(code,service:authority.acquisitionReceipt),workspace-member))",
+      "r3b": {
+        "review": "controller-scoped-acquisition-receipt",
+        "change": "Reads an immutable original admission and its actual outcome only for the authenticated controller runtime and canonical authority lifetime. Caller-supplied acquisition IDs cannot expose another controller's receipt."
+      },
+      "capability": "service:authority.acquisitionReceipt",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -7190,6 +7539,54 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.outstandingAcquisitions",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "outstandingAcquisitions",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "Traverses only unacknowledged acquisitions in the authenticated runtime/session; does not settle or execute them.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.outstandingAcquisitions"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.outstandingAcquisitions),allOf(capability(user,service:authority.outstandingAcquisitions),workspace-member),allOf(capability(code,service:authority.outstandingAcquisitions),workspace-member))",
+      "r3b": {
+        "review": "controller-scoped-acquisition-recovery-inventory",
+        "change": "Pages retained pending asks and unacknowledged outcomes for the exact authenticated controller lifetime. It grants no decision authority and creates no synthetic asks or alternate execution queue."
+      },
+      "capability": "service:authority.outstandingAcquisitions",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.preflight",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -7327,6 +7724,54 @@
         "change": "Requires the attributed mission owner, refuses retirement while an admitted execution remains live, then fences the target, cancels pending acquisitions, and revokes its standing grants. Pause never uses this operation."
       },
       "capability": "service:authority.retireTarget",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.withdrawAcquisition",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "withdrawAcquisition",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "Closes only an exact pending acquisition owned by the authenticated runtime/session; grants no authority and leaves other work active.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.withdrawAcquisition"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.withdrawAcquisition),allOf(capability(user,service:authority.withdrawAcquisition),workspace-member),allOf(capability(code,service:authority.withdrawAcquisition),workspace-member))",
+      "r3b": {
+        "review": "exact-controller-owned-acquisition-withdrawal",
+        "change": "Closes only the controller's pending acquisition matching its active runtime, canonical lifetime, and original binding digest. Joins that exact presentation, preserves previous decisions, and leaves sibling asks and the shared entity lifetime actionable."
+      },
+      "capability": "service:authority.withdrawAcquisition",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -12434,6 +12879,53 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.prepareTypecheck",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "prepareTypecheck",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "build.native-resources",
+      "reviewRationale": "Resolves an exact compiler program's declared runtime/development dependencies and installed SDK declarations, then admits those resources read-only to its native workspace with installer scripts disabled.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.prepareTypecheck"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.prepareTypecheck),allOf(capability(user,service:build.prepareTypecheck),workspace-member),allOf(capability(code,service:build.prepareTypecheck),workspace-member))",
+      "r3b": {
+        "review": "native-exact-compiler-resource-admission",
+        "change": "Resolves one exact semantic compiler program, including its declared runtime/development dependencies, selected installed SDK declarations and module conditions. Existing dependency installation disables lifecycle scripts. Only acquired dependencies and SDK public export roots are copied read-only to the native owner; SDK copies are independent of mutable host source. Host checkout, package-manager workspaces, credentials and environment are not granted. Website callers are closed. Acquisition leases remain held through admission, build shutdown joins preparations, and native retirement joins projection and removes its resources. Native read-only resource admission belongs to build.native-resources, separate from untrusted artifact compilation in build.read; this classification changes no capability, caller, sensitivity or admission requirement."
+      },
+      "capability": "service:build.prepareTypecheck",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.readBuildArtifact",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -15577,6 +16069,53 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:eval.acknowledge",
+      "rpcPlane": "host-service",
+      "owner": "eval",
+      "method": "acknowledge",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.control",
+      "reviewRationale": "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:eval.acknowledge"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:eval.acknowledge),allOf(capability(user,service:eval.acknowledge),workspace-member),allOf(capability(code,service:eval.acknowledge),workspace-member))",
+      "r3b": {
+        "review": "owner-authenticated-eval-acknowledgement-relay",
+        "change": "Routes exact immutable run/result digest acknowledgement to its owning EvalDO. Preserves terminal history and rejects mismatched receipt identity rather than treating it as successful cleanup."
+      },
+      "capability": "service:eval.acknowledge",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:eval.cancel",
       "rpcPlane": "host-service",
       "owner": "eval",
@@ -15856,6 +16395,53 @@
         "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
       },
       "capability": "service:eval.readScopeTextPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:eval.receipt",
+      "rpcPlane": "host-service",
+      "owner": "eval",
+      "method": "receipt",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.read",
+      "reviewRationale": "Owner-scoped read of an immutable result; no new execution or authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:eval.receipt"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:eval.receipt),allOf(capability(user,service:eval.receipt),workspace-member),allOf(capability(code,service:eval.receipt),workspace-member))",
+      "r3b": {
+        "review": "owner-authenticated-eval-receipt-relay",
+        "change": "Routes receipt inspection to the exact retained Eval run under the existing authenticated owner relationship. Receipt delivery never trusts a hint's result or imports foreign run ownership."
+      },
+      "capability": "service:eval.receipt",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -22068,7 +22654,7 @@
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelCdp.browserOperation\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelCdp.browserOperation\"}]}",
       "r3b": {
         "review": "receiver-owned-native-browser-operation",
-        "change": "The existing native browser provider lists, inspects, cancels, or reads bounded chunks from download records owned by the selected panel. The server derives the live target and prepares its context-boundary authority before dispatch; websites remain closed. Adding the missing method to the generated census preserves that requirement and introduces no generic filesystem or raw CDP access."
+        "change": "The existing native browser provider lists, inspects, cancels, or reads bounded chunks from download records owned by the selected panel. The server derives the live target and prepares its context-boundary authority before dispatch; websites remain closed. Adding the missing method to the generated census preserves that requirement and introduces no generic filesystem or raw CDP access. Chunk reads are capped at 256 KiB and disclose no host filesystem paths; the existing panel CDP capability remains required."
       },
       "capability": "service:panelCdp.browserOperation",
       "parityAssertion": "generated-census:host-authority"
@@ -22113,8 +22699,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "approved-panel-download-context-boundary",
+        "change": "Preserves the existing receiver-derived context.boundary requirement when download operations address an approved panel across the caller's context. The native-effect family does not bypass boundary admission."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -24827,7 +25413,7 @@
       "r3aRequirement": "anyOf(capability(host,service:problemReports.forConversation),allOf(capability(user,service:problemReports.forConversation),workspace-member),allOf(capability(code,service:problemReports.forConversation),workspace-member))",
       "r3b": {
         "review": "owner-scoped-report-draft-transfer",
-        "change": "The existing service reads one caller-owned workspace draft at its exact revision and prepares that draft for the reporting agent, returning only its agent-side identity and revision. It does not submit a report, change consent, or grant external reporting authority. The generated census now includes the declared operation; draft ownership and revision checks remain authoritative."
+        "change": "The existing service reads one caller-owned workspace draft at its exact revision and prepares that draft for the reporting agent, returning only its agent-side identity and revision. It does not submit a report, change consent, or grant external reporting authority. The generated census now includes the declared operation; draft ownership and revision checks remain authoritative. The draft must be explicitly selected; evidence is preserved without embedding it in the launch prompt."
       },
       "capability": "service:problemReports.forConversation",
       "parityAssertion": "generated-census:host-authority"
@@ -33781,6 +34367,96 @@
         "change": null
       },
       "capability": "service:workspace-state.alarmSet",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.alarmSourcePublish",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "alarmSourcePublish",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.supervision",
+      "reviewRationale": "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.alarmSourcePublish"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.alarmSourcePublish),allOf(capability(code,service:workspace-state.alarmSourcePublish),workspace-member))",
+      "r3b": {
+        "review": "authenticated-native-source-schedule-relay",
+        "change": "Publishes only the authenticated caller's registered native source incarnation and generation to the canonical Workspace receiver. Preserves independent host hints and refuses stale schedules."
+      },
+      "capability": "service:workspace-state.alarmSourcePublish",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.alarmSourceRegister",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "alarmSourceRegister",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.supervision",
+      "reviewRationale": "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.alarmSourceRegister"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.alarmSourceRegister),allOf(capability(code,service:workspace-state.alarmSourceRegister),workspace-member))",
+      "r3b": {
+        "review": "authenticated-active-native-source-registration",
+        "change": "Resolves the current active caller's exact entity identity before registering its native wake source. Restored storage and inbound payloads cannot manufacture a current execution owner."
+      },
+      "capability": "service:workspace-state.alarmSourceRegister",
       "parityAssertion": "generated-census:host-authority"
     },
     {

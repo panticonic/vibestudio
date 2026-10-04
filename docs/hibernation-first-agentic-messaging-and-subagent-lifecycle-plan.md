@@ -925,11 +925,13 @@ child tool event copied parent progress messages = 0
 
 ## 12. Implementation
 
-The whole plan is implemented as one semantic cutover. There is no backward
-compatibility, no migration, and no accommodation of existing state anywhere:
-every schema this plan touches is created fresh, and every existing queue row,
-subscription row, run row, projection, and relayed history may be discarded at
-the cutover. Clean abstractions and performance are the only criteria. No
+The whole plan is implemented as one semantic cutover with one execution path.
+The original pre-release plan assumed fresh schemas and disposable queue/run
+state. That is a cutover option, not a prohibition on migrations or permission
+to discard valuable history. Follow `docs/agentic-upgrade-migrations-plan.md`:
+reuse sound owner-provided migrations, preserve valuable/supported data, and
+reset only explicitly disposable state. Clean abstractions, correct product
+behavior and performance determine the design. No
 stage ships dual delivery routes, shadow consumers, or inert folds — the new
 membership fold is authoritative the moment it exists, and the old writer is
 deleted in the same change. Because closure removal and the stream cutover

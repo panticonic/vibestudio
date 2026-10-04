@@ -6,9 +6,11 @@ import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WorkerdManager } from "./workerdManager.js";
 import type { EgressProxy } from "./services/egressProxy.js";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
+import type { AcquisitionOwner } from "./services/authorityAcquisitionStore.js";
 import type { CredentialSessionGrantStore } from "./services/credentialSessionGrants.js";
 
 export interface RuntimeEntityCleanupDeps {
+  retireAuthorityOwner(owner: AcquisitionOwner): void | Promise<void>;
   panelRuntimeCoordinator?: PanelRuntimeCoordinator | null;
   egressProxy: Pick<EgressProxy, "dropCaller">;
   approvalQueue: Pick<ApprovalQueue, "cancelForCaller">;
@@ -46,6 +48,13 @@ export async function cleanupRuntimeEntity(
   record: EntityRecord,
   deps: RuntimeEntityCleanupDeps
 ): Promise<void> {
+  if (!record.authoritySessionId)
+    throw new Error(`Entity ${record.id} has no retired authority lifetime`);
+  // Commit the canonical terminal boundary before withdrawing its review surface.
+  await deps.retireAuthorityOwner({
+    ownerRuntimeId: record.id,
+    sessionId: record.authoritySessionId,
+  });
   const failures: unknown[] = [];
   const attempt = async (fn: () => unknown | Promise<unknown>): Promise<void> => {
     try {

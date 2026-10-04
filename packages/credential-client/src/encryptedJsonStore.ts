@@ -52,6 +52,12 @@ let safeStorageCache: SafeStorage | null | undefined;
 
 function tryGetSafeStorage(): SafeStorage | null {
   if (safeStorageCache !== undefined) return safeStorageCache;
+  // Plain Node's electron package resolves/installs a binary, not safeStorage.
+  // Profile encryption remains the ordinary fallback outside the native app.
+  if (!process.versions["electron"]) {
+    safeStorageCache = null;
+    return null;
+  }
   if (process.platform === "darwin" && !hasDeveloperIdSignature(process.execPath)) {
     safeStorageCache = null;
     return null;

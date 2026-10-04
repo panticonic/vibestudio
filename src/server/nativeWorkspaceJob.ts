@@ -8,6 +8,17 @@ export interface NativeWorkspaceJob {
 }
 export type RunNativeWorkspaceJob = (input: NativeWorkspaceJob) => Promise<void>;
 
+export interface NativeDependencyAdmission {
+  key: string;
+  nodeModulesDir: string;
+  workspacePackages: Record<string, string>;
+}
+
+export interface NativeDependencyResources {
+  nodeModulesPaths: string[];
+  workspacePackages: Record<string, string>;
+}
+
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_STDERR_BYTES = 16_384;
 const OUTPUT_DRAIN_TIMEOUT_MS = 1_000;

@@ -1142,7 +1142,8 @@ export class RpcServer {
 
   private authorityParentFor(
     callerRuntimeId: string,
-    authorityParentNonce: string | undefined
+    authorityParentNonce: string | undefined,
+    operation?: string
   ): {
     receiverRuntimeId: string;
     testPolicy: AgentExecutionTestPolicy | null;
@@ -1160,7 +1161,7 @@ export class RpcServer {
     const active = this.activeAuthorityParents.get(authorityParentNonce);
     if (!active) {
       throw createRelayError(
-        "Invocation authority parent is not active",
+        `Invocation authority parent is not active for ${callerRuntimeId}${operation ? ` while calling ${operation}` : ""}`,
         "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE"
       );
     }
@@ -3694,7 +3695,8 @@ export class RpcServer {
     const readOnly = envelope.delivery.readOnly === true;
     const authorityParent = this.authorityParentFor(
       callerId,
-      (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+      (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce,
+      `${targetId}.${method}`
     );
     const executionSessionNonce = (message as InternalRpcRequest | InternalRpcStreamRequest)
       .executionSessionNonce;
@@ -5025,7 +5027,7 @@ export class RpcServer {
       },
       body: JSON.stringify(envelope),
       ...(meta?.signal ? { signal: meta.signal } : {}),
-      dispatcher: getWorkerdConnectionDispatcher(),
+      dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
 
     if (!res.ok) {
@@ -5173,7 +5175,8 @@ export class RpcServer {
         message: { type: "event", fromId, event, payload },
       });
       const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
-      const res = await fetch(`${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`, {
+      const url = `${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`;
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -5182,7 +5185,7 @@ export class RpcServer {
             : {}),
         },
         body: JSON.stringify(eventEnvelope),
-        dispatcher: getWorkerdConnectionDispatcher(),
+        dispatcher: getWorkerdConnectionDispatcher(url),
       } as RequestInit);
       if (!res.ok) {
         let text: string;

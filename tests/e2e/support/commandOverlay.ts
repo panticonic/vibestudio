@@ -31,6 +31,8 @@ export interface CommandOverlaySnapshot {
   activeMode: string | null;
   /** Row titles in display order — the Enter target is the first one. */
   rows: string[];
+  /** Actual accessible names of rendered actions. */
+  buttons: string[];
   /** True when the conversation view (transcript + compose) is showing. */
   conversation: boolean;
   /**
@@ -186,12 +188,13 @@ export async function probeCommandOverlay(
       const SNAPSHOT = `(() => {
         if (!globalThis.__vibestudioContentOverlay) return null;
         const card = document.querySelector(".quickfire-card");
-        if (!card) return { open: false, activeMode: null, rows: [], conversation: false, transcript: [], error: null, text: "" };
+        if (!card) return { open: false, activeMode: null, rows: [], buttons: [], conversation: false, transcript: [], error: null, text: "" };
         const active = card.querySelector(".quickfire-mode[aria-pressed='true']");
         return {
           open: true,
           activeMode: active ? active.textContent.trim() : null,
           rows: Array.from(card.querySelectorAll("[data-row-id]")).map((row) => row.textContent.trim()),
+          buttons: Array.from(card.querySelectorAll("button")).map((button) => button.getAttribute("aria-label") ?? button.textContent.trim()),
           conversation: card.getAttribute("data-mode") === "conversation",
           transcript: Array.from(card.querySelectorAll(
             '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
@@ -311,15 +314,26 @@ export async function writeClipboardInCommandOverlay(
   testApp: TestApp,
   value: string
 ): Promise<boolean> {
-  const result = await evaluateInOverlayDocument<boolean>(
+  const result = await evaluateInOverlayDocument<{ ok: boolean; error?: string }>(
     testApp,
-    `navigator.clipboard.writeText(${JSON.stringify(value)}).then(() => true, () => false)`
+    `(async () => {
+      try { await navigator.clipboard.writeText(${JSON.stringify(value)}); return { ok: true }; }
+      catch (error) { return { ok: false, error: String(error?.stack ?? error) }; }
+    })()`
   );
-  if (result?.value !== true) return false;
-  return testApp.app.evaluate(
-    ({ clipboard }, expected) => clipboard.readText() === expected,
+  if (!result) throw new Error("Command overlay document was not found for clipboard write");
+  if (!result.value.ok)
+    throw new Error(result.value.error ?? "Command overlay clipboard write failed");
+  const observed = await testApp.app.evaluate(
+    async ({ clipboard }, expected) => ({
+      actual: await clipboard.readText(),
+      expected,
+    }),
     value
   );
+  if (observed.actual !== observed.expected)
+    throw new Error(`Native clipboard differs after browser write: ${JSON.stringify(observed)}`);
+  return true;
 }
 
 /** Type into the overlay's input and dispatch the events the surface listens for. */
@@ -371,7 +385,7 @@ export async function clickInCommandOverlay(testApp: TestApp, label: string): Pr
     testApp,
     `(() => {
       const button = Array.from(document.querySelectorAll("button"))
-        .find((candidate) => (candidate.textContent ?? "").includes(${JSON.stringify(label)}));
+        .find((candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim() ?? "") === ${JSON.stringify(label)});
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       button.click();
       return true;
@@ -389,7 +403,7 @@ export async function isCommandOverlayButtonEnabled(
     testApp,
     `(() => {
       const button = Array.from(document.querySelectorAll("button"))
-        .find((candidate) => (candidate.textContent ?? "").includes(${JSON.stringify(label)}));
+        .find((candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim() ?? "") === ${JSON.stringify(label)});
       return button instanceof HTMLButtonElement && !button.disabled;
     })()`
   );

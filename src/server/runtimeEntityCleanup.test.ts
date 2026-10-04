@@ -11,6 +11,7 @@ function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {
     key: "one",
     ...(kind === "do" ? { className: "ExampleDO" } : {}),
     createdAt: 1,
+    authoritySessionId: "lifetime-one",
     status: "retired",
     cleanupComplete: false,
   };
@@ -18,6 +19,7 @@ function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {
 
 function deps() {
   return {
+    retireAuthorityOwner: vi.fn(),
     releaseBlobRetentions: vi.fn(async () => {}),
     panelRuntimeCoordinator: {
       retireRuntimeEntity: vi.fn(),
@@ -60,6 +62,7 @@ describe("cleanupRuntimeEntity", () => {
   it("cleans all panel runtime-owned resources from one owner", async () => {
     const d = deps();
     await cleanupRuntimeEntity(record("panel", "panel:one"), {
+      retireAuthorityOwner: d.retireAuthorityOwner,
       panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
       egressProxy: d.egressProxy,
       approvalQueue: d.approvalQueue,
@@ -86,9 +89,64 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
   });
 
+  it("commits only the captured authority owner before withdrawing its prompt", async () => {
+    const d = deps();
+    const captured = { ...record("do", "do:one"), authoritySessionId: "retired-lifetime" };
+    const order: string[] = [];
+    d.retireAuthorityOwner.mockImplementation(() => {
+      order.push("authority");
+    });
+    d.approvalQueue.cancelForCaller.mockImplementation(() => {
+      order.push("prompt");
+    });
+    await cleanupRuntimeEntity(captured, {
+      retireAuthorityOwner: d.retireAuthorityOwner,
+      panelRuntimeCoordinator: null,
+      egressProxy: d.egressProxy,
+      approvalQueue: d.approvalQueue,
+      credentialSessionGrantStore: d.credentialSessionGrantStore,
+      tokenManager: d.tokenManager,
+      releaseBlobRetentions: d.releaseBlobRetentions,
+      getFsService: () => null,
+      getWebhookIngress: () => null,
+      getWorkerdManager: () => d.workerdManager as never,
+    });
+    expect(d.retireAuthorityOwner).toHaveBeenCalledExactlyOnceWith({
+      ownerRuntimeId: "do:one",
+      sessionId: "retired-lifetime",
+    });
+    expect(order).toEqual(["authority", "prompt"]);
+  });
+
+  it("preserves canonical retirement failure without withdrawing prompts or runtime resources", async () => {
+    const d = deps();
+    const failure = new Error("authority retirement SQL refused");
+    d.retireAuthorityOwner.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(
+      cleanupRuntimeEntity(record("do", "do:one"), {
+        retireAuthorityOwner: d.retireAuthorityOwner,
+        panelRuntimeCoordinator: null,
+        egressProxy: d.egressProxy,
+        approvalQueue: d.approvalQueue,
+        credentialSessionGrantStore: d.credentialSessionGrantStore,
+        tokenManager: d.tokenManager,
+        releaseBlobRetentions: d.releaseBlobRetentions,
+        getFsService: () => null,
+        getWebhookIngress: () => null,
+        getWorkerdManager: () => d.workerdManager as never,
+      })
+    ).rejects.toBe(failure);
+    expect(d.approvalQueue.cancelForCaller).not.toHaveBeenCalled();
+    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
+    expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
+  });
+
   it("also stops worker and DO runtime resources by entity kind", async () => {
     const workerDeps = deps();
     await cleanupRuntimeEntity(record("worker", "worker:one"), {
+      retireAuthorityOwner: workerDeps.retireAuthorityOwner,
       panelRuntimeCoordinator: workerDeps.panelRuntimeCoordinator as never,
       egressProxy: workerDeps.egressProxy,
       approvalQueue: workerDeps.approvalQueue,
@@ -104,6 +162,7 @@ describe("cleanupRuntimeEntity", () => {
 
     const doDeps = deps();
     await cleanupRuntimeEntity(record("do", "do:one"), {
+      retireAuthorityOwner: doDeps.retireAuthorityOwner,
       panelRuntimeCoordinator: doDeps.panelRuntimeCoordinator as never,
       egressProxy: doDeps.egressProxy,
       approvalQueue: doDeps.approvalQueue,
@@ -140,6 +199,7 @@ describe("cleanupRuntimeEntity", () => {
       () => new Promise<void>((resolve) => (release = resolve))
     );
     const cleanup = cleanupRuntimeEntity(record("panel", "panel:blocking"), {
+      retireAuthorityOwner: d.retireAuthorityOwner,
       panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
       egressProxy: d.egressProxy,
       approvalQueue: d.approvalQueue,
@@ -171,6 +231,7 @@ describe("cleanupRuntimeEntity", () => {
 
     await expect(
       cleanupRuntimeEntity(record("panel", "panel:one"), {
+        retireAuthorityOwner: d.retireAuthorityOwner,
         panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
         egressProxy: d.egressProxy,
         approvalQueue: d.approvalQueue,
@@ -202,6 +263,7 @@ describe("cleanupRuntimeEntity", () => {
 
     await expect(
       cleanupRuntimeEntity(record("do", "do:one"), {
+        retireAuthorityOwner: d.retireAuthorityOwner,
         panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
         egressProxy: d.egressProxy,
         approvalQueue: d.approvalQueue,
@@ -228,6 +290,7 @@ describe("cleanupRuntimeEntity", () => {
 
     await expect(
       cleanupRuntimeEntity(incomplete, {
+        retireAuthorityOwner: d.retireAuthorityOwner,
         panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
         egressProxy: d.egressProxy,
         approvalQueue: d.approvalQueue,

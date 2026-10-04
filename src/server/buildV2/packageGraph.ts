@@ -36,6 +36,8 @@ export interface GraphNode {
   kind: "package" | "panel" | "worker" | "extension" | "app" | "template";
   /** Dependencies this unit owns: installed into its closure and bundled into it. */
   dependencies: Record<string, string>;
+  /** Source-analysis and test requirements; excluded from runtime composition. */
+  devDependencies?: Record<string, string>;
   /**
    * Dependencies this unit expects the context that composes it to provide
    * (name → version). A peer is never bundled into this unit: a runtime root
@@ -401,7 +403,7 @@ export function packageManifestContractError(
   return null;
 }
 
-function packageNodeFromJson(
+export function packageNodeFromJson(
   workspaceRoot: string,
   relativePath: string,
   kind: GraphNode["kind"],
@@ -442,6 +444,7 @@ function packageNodeFromJson(
     ...(typeof pkg.version === "string" ? { packageVersion: pkg.version } : {}),
     kind,
     dependencies,
+    ...(pkg.devDependencies ? { devDependencies: { ...pkg.devDependencies } } : {}),
     peerDependencies,
     optionalPeerDependencies,
     dependencyOverrides: buildDependencyOverrides(pkg),

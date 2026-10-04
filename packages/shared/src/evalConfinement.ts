@@ -24,6 +24,7 @@ const SAFE_GUEST_GLOBALS = [
   "Float32Array",
   "Float64Array",
   "FormData",
+  "Function",
   "Headers",
   "Infinity",
   "Int16Array",
@@ -151,10 +152,18 @@ const CODEGEN_SAMPLE_SOURCE =
 /** Realms this module has tamed, mapped to the compile capability taken from them. */
 const TAMED_REALMS = new WeakMap<object, FunctionConstructor>();
 
-function inertConstructor(name: string, prototype: unknown): FunctionConstructor {
-  const inert = function () {
-    throw new TypeError(`${name} is disabled: this realm does not permit dynamic code generation`);
-  } as unknown as FunctionConstructor;
+function inertConstructor(
+  name: string,
+  prototype: unknown,
+  compiler: FunctionConstructor,
+): FunctionConstructor {
+  // The replacement and the errors it throws must belong to the realm being
+  // tamed. A host-realm replacement reopens codegen through its own constructor
+  // or a caught host TypeError, even after the guest prototypes were repaired.
+  const message = `${name} is disabled: this realm does not permit dynamic code generation`;
+  const inert = (new compiler(
+    `return function () { throw new TypeError(${JSON.stringify(message)}); };`,
+  ) as unknown as () => FunctionConstructor)();
   Object.defineProperty(inert, "name", { value: name, configurable: true });
   Object.defineProperty(inert, "prototype", {
     value: prototype,
@@ -247,7 +256,7 @@ export function tameRealmCodegen(
     const ctor = proto.constructor;
     if (typeof ctor !== "function") continue;
     Object.defineProperty(proto, "constructor", {
-      value: inertConstructor(ctor.name || "Function", proto),
+      value: inertConstructor(ctor.name || "Function", proto, realmFunction),
       writable: false,
       enumerable: false,
       configurable: false,
@@ -264,7 +273,7 @@ export function tameRealmCodegen(
   });
   if (typeof realm["eval"] === "function") {
     Object.defineProperty(realm, "eval", {
-      value: inertConstructor("eval", undefined),
+      value: inertConstructor("eval", undefined, realmFunction),
       writable: false,
       enumerable: false,
       configurable: false,
@@ -340,6 +349,8 @@ export function createPrivateGuestGlobal(
       const receiver = this === undefined || this === null ? guest : this;
       return Reflect.apply(intrinsic, receiver, args);
     };
+    // A cross-realm facade must not inherit the host's working Function.
+    Object.setPrototypeOf(facadeDefaulted, Object.getPrototypeOf(intrinsic));
     Object.defineProperty(facadeDefaulted, "name", { value: name, configurable: true });
     Reflect.set(target, name, facadeDefaulted);
   }

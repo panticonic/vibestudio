@@ -6,12 +6,24 @@ import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
 import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  createEntityRetirementCleanup,
+  type EntityRetirementCleanup,
+} from "./entityRetirementCleanup.js";
 import { runStartupReconciliation } from "./startupReconciliation.js";
 
 describe("runStartupReconciliation", () => {
   let workspaceDO: WorkspaceDO;
+  let cleanup: EntityRetirementCleanup;
   beforeEach(async () => {
     ({ instance: workspaceDO } = await createTestDO(WorkspaceDOTestable));
+    cleanup = createEntityRetirementCleanup({
+      resolveRecord: async (id) => workspaceDO.entityResolve(id),
+      cleanup: async () => {},
+      complete: async (id, lifetime) => {
+        workspaceDO.entityCleanupComplete(id, lifetime);
+      },
+    });
   });
 
   function dispatchWorkspaceDO<T>(method: string, ...args: unknown[]): Promise<T> {
@@ -56,7 +68,7 @@ describe("runStartupReconciliation", () => {
     });
     workspaceDO.entityRetire(recentRetired.id);
     // Mark cleanup complete so it's not picked up by step 2.
-    workspaceDO.entityCleanupComplete(recentRetired.id);
+    workspaceDO.entityCleanupComplete(recentRetired.id, recentRetired.authoritySessionId!);
 
     // Seed: a retired entity with cleanup_complete=0 (simulates crash mid-cleanup).
     const incompleteCleanup = workspaceDO.entityActivate({
@@ -73,6 +85,7 @@ describe("runStartupReconciliation", () => {
     const warnings: string[] = [];
 
     const result = await runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO,
       entityCache,
       logger: { warn: (msg) => warnings.push(msg) },
@@ -102,6 +115,44 @@ describe("runStartupReconciliation", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("retains incomplete canonical cleanup when the shared resource owner fails after restart", async () => {
+    const record = workspaceDO.entityActivate({
+      kind: "panel",
+      source: { repoPath: "panels/failed", effectiveVersion: "one" },
+      contextId: "ctx-one",
+      key: "failed",
+    });
+    workspaceDO.entityRetire(record.id);
+    const failure = new Error("approval retirement SQL refused");
+    const owner = createEntityRetirementCleanup({
+      resolveRecord: async (id) => workspaceDO.entityResolve(id),
+      cleanup: async () => {
+        throw failure;
+      },
+      complete: async (id, lifetime) => {
+        workspaceDO.entityCleanupComplete(id, lifetime);
+      },
+    });
+    const warn = vi.fn();
+    await runStartupReconciliation({
+      dispatchWorkspaceDO,
+      entityCache: new EntityCache(),
+      onRetire: owner.retire,
+      logger: { warn },
+    });
+    expect(workspaceDO.entityResolve(record.id)?.cleanupComplete).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(record.id), failure);
+    expect(() =>
+      workspaceDO.entityActivate({
+        kind: "panel",
+        source: record.source,
+        contextId: record.contextId,
+        key: record.key,
+      })
+    ).toThrow("before retirement cleanup completes");
+    await owner.quiesce();
+  });
+
   it("does not erase an activation committed while the active snapshot is in flight", async () => {
     const entityCache = new EntityCache();
     let resolveSnapshot!: (records: EntityRecord[]) => void;
@@ -114,6 +165,7 @@ describe("runStartupReconciliation", () => {
     };
 
     const reconciliation = runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO: dispatch,
       entityCache,
     });
@@ -136,6 +188,7 @@ describe("runStartupReconciliation", () => {
     const failingDispatch = (): Promise<never> => Promise.reject(new Error("boom"));
 
     const result = await runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO: failingDispatch,
       entityCache,
       logger: {
@@ -155,6 +208,7 @@ describe("runStartupReconciliation", () => {
     const recoverLifecycle = vi.fn().mockResolvedValue(undefined);
 
     const result = await runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO,
       entityCache,
       recoverLifecycle,
@@ -184,6 +238,7 @@ describe("runStartupReconciliation", () => {
     });
 
     await runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO,
       entityCache: new EntityCache(),
       restoreRuntimes,
@@ -200,6 +255,7 @@ describe("runStartupReconciliation", () => {
     const recoverLifecycle = vi.fn();
     await expect(
       runStartupReconciliation({
+        onRetire: cleanup.retire,
         dispatchWorkspaceDO,
         entityCache: new EntityCache(),
         restoreRuntimes: () => Promise.reject(new Error("sealed image unavailable")),
@@ -214,6 +270,7 @@ describe("runStartupReconciliation", () => {
     const warnings: Array<{ msg: string; args: unknown[] }> = [];
 
     const result = await runStartupReconciliation({
+      onRetire: cleanup.retire,
       dispatchWorkspaceDO,
       entityCache,
       recoverLifecycle: () => Promise.reject(new Error("recover failed")),

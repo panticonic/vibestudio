@@ -44,6 +44,7 @@ describe("createKnownPanelSlotResolver", () => {
       createWorkspaceStateService({
         doDispatch,
         workspaceId: "ws-test",
+        storageIncarnation: () => ({ incarnation: "test-incarnation", generation: 1 }),
         presentationDispatch: async () => undefined,
         panelAccess: {
           contextExists: () => false,

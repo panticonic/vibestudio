@@ -130,6 +130,96 @@ describe("BuildSystemV2 library package subpaths", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("admits dependencies from the exact context closure without exposing host roots", async () => {
+    const mainRoot = path.join(root, "main-dependency-state");
+    const contextRoot = path.join(root, "context-dependency-state");
+    const writePackage = (
+      sourceRoot: string,
+      name: string,
+      dependencies: Record<string, string>
+    ) => {
+      const dir = path.join(sourceRoot, "packages", name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: `@workspace/${name}`,
+          version: "0.1.0",
+          type: "module",
+          exports: "./index.ts",
+          dependencies,
+        })
+      );
+      fs.writeFileSync(path.join(dir, "index.ts"), "export {};\n");
+    };
+    writePackage(mainRoot, "target", {});
+    writePackage(contextRoot, "target", { "@workspace/shared": "workspace:*" });
+    writePackage(contextRoot, "shared", { zod: "3.25.76" });
+    const admitted: string[] = [];
+    const nativePath = path.join(root, "native", "node_modules");
+    let admissionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      admissionStarted = resolve;
+    });
+    let finishAdmission!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finishAdmission = resolve;
+    });
+    buildSystem = await initBuildSystemV2(
+      mainRoot,
+      fakeMultiStateWorkspaceSource(
+        { [TEST_STATE]: mainRoot, [CONTEXT_STATE]: contextRoot },
+        TEST_STATE,
+        { "ctx:dependency-agent": CONTEXT_STATE }
+      ),
+      APP_NODE_MODULES,
+      {
+        ...buildRoots(mainRoot),
+        admitNativeDependencies: async ({ nodeModulesDir: source, workspacePackages }) => {
+          expect(APP_NODE_MODULES).not.toContain(source);
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(source, "zod", "package.json"), "utf8")
+          );
+          expect(manifest.version).toBe("3.25.76");
+          expect(fs.existsSync(path.join(source, "@workspace", "shared"))).toBe(false);
+          admitted.push(source);
+          admissionStarted();
+          await completion;
+          return { nodeModulesPaths: [nativePath], workspacePackages };
+        },
+      }
+    );
+    await expect(buildSystem.prepareTypecheck("packages/target")).resolves.toEqual({
+      stateHash: TEST_STATE,
+      dependencyKey: null,
+      nodeModulesPaths: [],
+      workspacePackages: {},
+      moduleConditions: ["import", "default"],
+    });
+    const preparation = buildSystem.prepareTypecheck("packages/target", "ctx:dependency-agent");
+    await started;
+    let shutdownComplete = false;
+    const shutdown = buildSystem.shutdown().then(() => {
+      shutdownComplete = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(shutdownComplete).toBe(false);
+    finishAdmission();
+    const environment = await preparation;
+    expect(environment).toEqual({
+      stateHash: CONTEXT_STATE,
+      dependencyKey: expect.any(String),
+      nodeModulesPaths: [nativePath],
+      workspacePackages: {},
+      moduleConditions: ["import", "default"],
+    });
+    expect(admitted).toHaveLength(1);
+    await shutdown;
+    await expect(buildSystem.prepareTypecheck("packages/target")).rejects.toThrow("retiring");
+    buildSystem = null;
+  });
+
   it("builds the requested package export subpath instead of the package root", async () => {
     const pkgDir = path.join(workspaceRoot, "packages", "split-library");
     fs.mkdirSync(path.join(pkgDir, "src"), { recursive: true });
@@ -474,8 +564,11 @@ describe("BuildSystemV2 library package subpaths", () => {
       }
     );
     expect(Object.keys(module.exports)).toEqual(
-      expect.arrayContaining(["AgentWorkerBase", "ChannelClient", "AgentLoopDriver"])
+      expect.arrayContaining(["AgentWorkerBase", "AgentVesselBase", "ChannelClient"])
     );
+    const Worker = module.exports["AgentWorkerBase"] as { prototype: object };
+    const Vessel = module.exports["AgentVesselBase"] as { prototype: object };
+    expect(Object.getPrototypeOf(Worker.prototype)).toBe(Vessel.prototype);
     expect(dynamicDependencies).toEqual(
       expect.arrayContaining(["node:fs", "node:os", "node:path"])
     );

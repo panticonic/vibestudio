@@ -978,6 +978,8 @@ describe("walkable bounded reads", () => {
         logId: "trajectory:1",
         head: "main",
         invocationId: "invocation:1",
+        nativeInvocation: null,
+        originatingInput: null,
         turnId: "turn:1",
         name: "vcs.edit",
         status: "completed",

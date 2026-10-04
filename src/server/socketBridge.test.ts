@@ -23,13 +23,15 @@ describe("bridgeDuplexSockets", () => {
       });
       const source = new Duplex({
         read() {},
-        write(_chunk, _encoding, callback) { callback(); },
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
       });
       const closes: string[] = [];
       const dispose = bridgeDuplexSockets(
         sourceSide === "client" ? source : destination,
         sourceSide === "client" ? destination : source,
-        { onClose: ({ side }) => closes.push(side) },
+        { onClose: ({ side }) => closes.push(side) }
       );
       const sourceClosed = once(source, "close");
       const destinationClosed = once(destination, "close");
@@ -67,7 +69,7 @@ describe("bridgeDuplexSockets", () => {
         await Promise.allSettled([sourceClosed, destinationClosed]);
         dispose();
       }
-    },
+    }
   );
 
   it("propagates abrupt destruction after readable EOF when the source still owns an unfinished write", async () => {
@@ -83,7 +85,9 @@ describe("bridgeDuplexSockets", () => {
     });
     const client = new Duplex({
       read() {},
-      write(_chunk, _encoding, callback) { callback(); },
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
     });
     const dispose = bridgeDuplexSockets(client, upstream);
     const upstreamClosed = once(upstream, "close");

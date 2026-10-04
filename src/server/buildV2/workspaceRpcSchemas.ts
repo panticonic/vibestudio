@@ -8,6 +8,7 @@ import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/type
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { BuildDiagnosticsError } from "./diagnostics.js";
 import type { WorkspaceRpcSchemaMetadata } from "./workspaceRpcCatalog.js";
+import { serializeMethod } from "../services/catalog/serialize.js";
 
 /**
  * Host-reviewed typed receiver contracts available to workspace worker builds.
@@ -50,18 +51,24 @@ export function workspaceRpcSchemaMetadata(
   schema: ServiceMethodSchemas
 ): Record<string, WorkspaceRpcSchemaMetadata> {
   return Object.fromEntries(
-    Object.entries(schema).map(([name, method]) => [
-      name,
-      {
-        website: method.website,
-        ...(method.authority ? { authority: method.authority } : {}),
-        ...(method.tier ? { tier: method.tier } : {}),
-        ...(method.access ? { access: method.access } : {}),
-        ...(method.directEffect ? { directEffect: method.directEffect } : {}),
-        ...(method.execution ? { execution: method.execution } : {}),
-        ...(method.crossWorkspace === true ? { crossWorkspace: true } : {}),
-      },
-    ])
+    Object.entries(schema).map(([name, method]) => {
+      const serialized = serializeMethod(method);
+      return [
+        name,
+        {
+          website: method.website,
+          argsSchema: serialized.argsSchema,
+          ...(serialized.returnsSchema ? { returnsSchema: serialized.returnsSchema } : {}),
+          ...(method.description ? { description: method.description } : {}),
+          ...(method.authority ? { authority: method.authority } : {}),
+          ...(method.tier ? { tier: method.tier } : {}),
+          ...(method.access ? { access: method.access } : {}),
+          ...(method.directEffect ? { directEffect: method.directEffect } : {}),
+          ...(method.execution ? { execution: method.execution } : {}),
+          ...(method.crossWorkspace === true ? { crossWorkspace: true } : {}),
+        },
+      ];
+    })
   );
 }
 

@@ -1,9 +1,7 @@
-import { createRequire } from "node:module";
 import { svelte2tsx } from "svelte2tsx";
 import { parse } from "svelte/compiler";
 import ts from "typescript";
-
-const require = createRequire(import.meta.url);
+import typeEnvironment from "./type-environment.generated.json" with { type: "json" };
 
 /** Svelte owns its source grammar; the host's TypeScript 7 owns typechecking. */
 export function compileSvelteTypeSource(source: string, filename: string) {
@@ -15,10 +13,8 @@ export function compileSvelteTypeSource(source: string, filename: string) {
   return { ...svelte2tsx(source, { filename, mode: "ts", isTsFile: isTypeScript, emitJsDoc: !isTypeScript }), isTypeScript };
 }
 
-export const svelteTypeEnvironmentFiles = [
-  require.resolve("svelte2tsx/svelte-shims-v4.d.ts"),
-  require.resolve("svelte2tsx/svelte-jsx-v4.d.ts"),
-];
+/** Compiler-owned declarations travel with the library through both installation and bundling. */
+export const svelteTypeEnvironment = typeEnvironment.files;
 
 /** Concrete compiled components own their types; an ambient wildcard cannot prove a source exists. */
 export function projectSvelteDeclarations(source: string, filename: string): string {

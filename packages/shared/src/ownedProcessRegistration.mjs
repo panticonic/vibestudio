@@ -99,7 +99,9 @@ export function createOwnedProcessGroupReceiver(
         child.off("message", onMessage);
         await Promise.all(pending);
         const results = await Promise.allSettled(
-          [...groups.values()].map((group) => group.retire())
+          // The actual producer close is authoritative owner destruction;
+          // these retained detached groups can no longer perform valid work.
+          [...groups.values()].map((group) => group.retire("SIGKILL"))
         );
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : []

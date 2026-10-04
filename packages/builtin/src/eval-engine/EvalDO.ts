@@ -26,7 +26,7 @@ import {
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
 import { ExecutionJournal } from "./executionJournal.js";
-import type { EvalOperationJournal } from "@vibestudio/service-schemas/eval";
+import type { EvalOperationJournal, EvalResultReceipt } from "@vibestudio/service-schemas/eval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
@@ -61,13 +61,12 @@ import {
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
 import {
-  describeEvalBindingIndex,
   describeEvalBindingSurface,
-  describeEvalMethod,
+  describeEvalHelpName,
+  evalBindingMethodNames,
   EVAL_RUNTIME_METHOD_NOTES,
   evalRuntimeServiceName,
   invalidHelpArgumentResponse,
-  unknownHelpNameResponse,
 } from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
 import { freezeModuleNamespace } from "./moduleNamespace.js";
@@ -111,9 +110,17 @@ const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 const CANCELLATION_GRACE_MS = 5_000;
 const MAX_KERNEL_IDLE_LEASE_MS = 60 * 60 * 1_000;
-/** Bounded EvalDO-side terminal-push redelivery (receivers dedupe). */
-const RESULT_REDELIVERY_MAX_ATTEMPTS = 3;
+/** Delivery is a hint; only an exact durable acknowledgement closes it. */
 const RESULT_REDELIVERY_BASE_DELAY_MS = 5_000;
+const RESULT_REDELIVERY_MAX_DELAY_MS = 5 * 60_000;
+const RESULT_REDELIVERY_BATCH_SIZE = 64;
+const RESULT_REDELIVERY_TABLE = `CREATE TABLE eval_result_redeliveries (
+  run_id TEXT PRIMARY KEY,
+  attempt INTEGER NOT NULL CHECK (attempt >= 1),
+  wake_at INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+)`;
+const RESULT_REDELIVERY_INDEX = `CREATE INDEX eval_result_redeliveries_due ON eval_result_redeliveries(wake_at, run_id)`;
 
 const EVAL_SCHEMA_TABLES = [
   "runs",
@@ -368,8 +375,9 @@ interface RunArgs {
   /**
    * Owner-scoped gateway bearer minted by the eval service for THIS EvalDO's
    * concrete `do:...:EvalDO:<objectKey>` identity (NOT the shared internal-DO
-   * service bearer). Backs `gatewayConfig`/`gatewayFetch` so a leak is scoped to
-   * the owner. Server→DO arg only — never user-supplied.
+   * service bearer). Backs `gatewayConfig` for owner-scoped hosted integrations.
+   * `gatewayFetch` uses the active execution's authenticated RPC transport.
+   * Server→DO arg only — never user-supplied.
    */
   gatewayToken?: string;
   /** Host-created proof binding outbound RPC to this exact admitted run. */
@@ -483,7 +491,7 @@ interface KernelLeaseState {
 
 export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
-  static override schemaVersion = 4;
+  static override schemaVersion = 5;
 
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;
@@ -625,6 +633,11 @@ export class EvalDO extends DurableObjectBase {
     // no module heap to retain, so carrying these rows across an incarnation
     // would reject a valid rebuild after the workspace head changes.
     if (this.kernelRestarted) this.sql.exec(`DELETE FROM eval_execution_roots`);
+    // Delivery indexes are recoverable from retained domain admissions. This
+    // covers a crash after a terminal commit or a lost host alarm publication.
+    this.reconcileResultDeliveries();
+    const next = this.resultDeliverySchedule();
+    if (next) this.setAlarmAt(next.wakeAt);
   }
 
   private persistOpenPanelResources(): void {
@@ -656,8 +669,8 @@ export class EvalDO extends DurableObjectBase {
       )
     `);
     // SqlStorage executes one statement per exec() call under real workerd.
-    // Keep this separate from `runs` so existing objects and fresh objects both
-    // receive the progress table deterministically.
+    // Keep this separate from `runs` so fresh initialization executes each table
+    // declaration deterministically.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS run_progress (
         run_id TEXT PRIMARY KEY,
@@ -697,13 +710,8 @@ export class EvalDO extends DurableObjectBase {
         retained_at INTEGER NOT NULL
       )
     `);
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS eval_result_redeliveries (
-        run_id TEXT PRIMARY KEY,
-        attempt INTEGER NOT NULL CHECK (attempt >= 1),
-        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
-      )
-    `);
+    this.sql.exec(RESULT_REDELIVERY_TABLE);
+    this.sql.exec(RESULT_REDELIVERY_INDEX);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS resident_channel_memberships (
         channel_id TEXT PRIMARY KEY,
@@ -711,13 +719,6 @@ export class EvalDO extends DurableObjectBase {
         registered_at INTEGER NOT NULL
       )
     `);
-    const residentMembershipColumns = this.sql
-      .exec(`PRAGMA table_info(resident_channel_memberships)`)
-      .toArray()
-      .map((row) => String(row["name"]));
-    if (!residentMembershipColumns.includes("target_id")) {
-      this.sql.exec(`ALTER TABLE resident_channel_memberships ADD COLUMN target_id TEXT`);
-    }
   }
 
   protected override requiredTables(): readonly string[] {
@@ -808,6 +809,16 @@ export class EvalDO extends DurableObjectBase {
       }
       try {
         const result = await base.call<T>(targetId, method, args, mergeOptions(options));
+        if (targetId === "main") {
+          operationJournal.recordServerLogRead(method, args, result);
+          operationJournal.recordBlobTextOperation(method, args, result);
+          operationJournal.recordBlobTreeOperation(method, args, result);
+          operationJournal.recordWebhookOperation(method, args, result);
+          operationJournal.recordPermissionInventory(method, args, result);
+          operationJournal.recordCredentialResolution(method, args, result);
+          operationJournal.recordRuntimeHealth(method, args, result);
+          operationJournal.recordNotificationLifecycle(method, args, result);
+        }
         if (targetId === "main" && method === "build.getPerformanceProfile") {
           operationJournal.recordBuildProfile(result as BuildPerformanceProfileWire);
         }
@@ -921,7 +932,7 @@ export class EvalDO extends DurableObjectBase {
     obj: Record<string, unknown>,
     docs: DocsClient
   ): Promise<unknown | null> {
-    const liveMethods = Object.keys(obj).filter((k) => typeof obj[k] === "function");
+    const liveMethods = evalBindingMethodNames(obj);
     if (liveMethods.length === 0) return null;
     let serviceMethods: Record<string, unknown> = {};
     const serviceName = evalRuntimeServiceName(name);
@@ -981,6 +992,7 @@ export class EvalDO extends DurableObjectBase {
     expiresAt: number | null;
     holderAttached: boolean;
   } {
+    this.assertAdmissionOpen();
     if (!input || typeof input.leaseId !== "string" || input.leaseId.length === 0) {
       throw new Error("eval kernel lease requires a non-empty leaseId");
     }
@@ -1080,6 +1092,9 @@ export class EvalDO extends DurableObjectBase {
   }
 
   override async releaseForLifecycle(input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
+    // Retirement is terminal for this execution namespace. Persist the seal
+    // before yielding so a concurrent admission cannot escape the drain.
+    if (input.mode === "retire") this.setStateValue("eval_execution_closed", input.epoch);
     const failures: unknown[] = [];
     try {
       await this.cancelRunsForLifecycle();
@@ -1104,6 +1119,14 @@ export class EvalDO extends DurableObjectBase {
         .map((error) => (error instanceof Error ? error.message : String(error)))
         .join("; ");
       throw new AggregateError(failures, `eval lifecycle release failed: ${details}`);
+    }
+    if (input.mode === "retire") {
+      // These writes are infrastructure-owned and may outlive the guest's
+      // cancellation. Join them before the host excludes the producer and
+      // releases its blob namespace. Admission/receipt roots remain durable
+      // until that canonical retirement boundary reclaims the storage.
+      await Promise.allSettled([...this.inFlightResultArtifacts]);
+      this.releaseKernelReferences();
     }
     return { status: "ready" };
   }
@@ -1186,7 +1209,7 @@ export class EvalDO extends DurableObjectBase {
   async startRun(args: RunArgs & { runId: string }): Promise<{
     runId: string;
     runDigest: string;
-    scopeInputRevision: string;
+    scopeInputRevision?: string;
     status: string;
     existing: boolean;
   }> {
@@ -1199,10 +1222,80 @@ export class EvalDO extends DurableObjectBase {
   ): Promise<{
     runId: string;
     runDigest: string;
-    scopeInputRevision: string;
+    scopeInputRevision?: string;
     status: string;
     existing: boolean;
   }> {
+    this.assertAdmissionOpen();
+    const runId = args.runId;
+    const retained = this.retainedRunAdmission(args, schedule);
+    if (retained) return retained;
+    // Reset and enqueue are one DO turn and ordered before insertion. This is
+    // safe under startRun replay because an existing run returns above without
+    // resetting a second time (or cancelling its own in-flight execution).
+    if (args.reset === true) await this.forceReset();
+    // Reset may yield to lifecycle preparation. Recheck at the insertion
+    // boundary, rather than treating the pre-reset check as an admission.
+    this.assertAdmissionOpen();
+    const raced = this.retainedRunAdmission(args, schedule);
+    if (raced) return raced;
+    const predecessor = this.sql
+      .exec(
+        `SELECT run_id FROM runs WHERE status <> 'cancelled-before-admission' ORDER BY started_at DESC, run_id DESC LIMIT 1`
+      )
+      .toArray()[0];
+    const scopeInputRevision =
+      args.reset === true
+        ? `reset:${runId}`
+        : predecessor
+          ? `run:${String(predecessor["run_id"])}`
+          : "scope:initial";
+    const runDigest = createHash("sha256")
+      .update(`${args.intentDigest ?? ""}\0${scopeInputRevision}`)
+      .digest("hex");
+    args = { ...args, scopeInputRevision, runDigest };
+    const acceptedAt = Date.now();
+    const deadlineAt = args.timeoutMs ? acceptedAt + args.timeoutMs : null;
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+        runId,
+        JSON.stringify(args),
+        args.agentRef ?? null,
+        args.channelId ?? null,
+        acceptedAt,
+        deadlineAt
+      );
+      if (args.resultReceiverRef) this.retainResultDelivery(runId);
+    });
+    if (args.resultReceiverRef) this.scheduleResultRedelivery(runId);
+    this.appendRunEvent(runId, "state", { status: "accepted" });
+    this.appendRunEvent(runId, "state", { status: "queued" });
+    this.refreshKernelIdleLease();
+    if (schedule) this.scheduleRun(runId);
+    return {
+      runId,
+      runDigest,
+      scopeInputRevision,
+      status: "pending",
+      existing: false,
+    };
+  }
+
+  /** Existing domain identity wins over any late preparation or transport replay. */
+  private retainedRunAdmission(
+    args: RunArgs & { runId: string },
+    schedule: boolean
+  ):
+    | {
+        runId: string;
+        runDigest: string;
+        scopeInputRevision?: string;
+        status: string;
+        existing: boolean;
+      }
+    | undefined {
     const runId = args.runId;
     const existing = this.sql
       .exec(`SELECT status, args FROM runs WHERE run_id = ?`, runId)
@@ -1210,6 +1303,13 @@ export class EvalDO extends DurableObjectBase {
     if (existing) {
       const status = String(existing["status"]);
       const prior = JSON.parse(String(existing["args"])) as RunArgs;
+      if (status === "cancelled-before-admission") {
+        if (!prior.runDigest || prior.runId !== runId)
+          throw new Error(
+            `eval: cancelled-before-admission run ${runId} has no canonical identity`
+          );
+        return { runId, runDigest: prior.runDigest, status: "cancelled", existing: true };
+      }
       if (canonicalJson(semanticRunArgs(prior)) !== canonicalJson(semanticRunArgs(args))) {
         throw new Error(`eval: runId ${runId} was reused with different input`);
       }
@@ -1241,6 +1341,7 @@ export class EvalDO extends DurableObjectBase {
         }
         if (schedule && status === "pending") this.scheduleRun(runId);
       }
+      if (prior.resultReceiverRef) this.scheduleResultRedelivery(runId);
       return {
         runId,
         runDigest: prior.runDigest,
@@ -1249,46 +1350,7 @@ export class EvalDO extends DurableObjectBase {
         existing: true,
       };
     }
-    // Reset and enqueue are one DO turn and ordered before insertion. This is
-    // safe under startRun replay because an existing run returns above without
-    // resetting a second time (or cancelling its own in-flight execution).
-    if (args.reset === true) await this.forceReset();
-    const predecessor = this.sql
-      .exec(`SELECT run_id FROM runs ORDER BY started_at DESC, run_id DESC LIMIT 1`)
-      .toArray()[0];
-    const scopeInputRevision =
-      args.reset === true
-        ? `reset:${runId}`
-        : predecessor
-          ? `run:${String(predecessor["run_id"])}`
-          : "scope:initial";
-    const runDigest = createHash("sha256")
-      .update(`${args.intentDigest ?? ""}\0${scopeInputRevision}`)
-      .digest("hex");
-    args = { ...args, scopeInputRevision, runDigest };
-    const acceptedAt = Date.now();
-    const deadlineAt = args.timeoutMs ? acceptedAt + args.timeoutMs : null;
-    this.sql.exec(
-      `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      runId,
-      JSON.stringify(args),
-      args.agentRef ?? null,
-      args.channelId ?? null,
-      acceptedAt,
-      deadlineAt
-    );
-    this.appendRunEvent(runId, "state", { status: "accepted" });
-    this.appendRunEvent(runId, "state", { status: "queued" });
-    this.refreshKernelIdleLease();
-    if (schedule) this.scheduleRun(runId);
-    return {
-      runId,
-      runDigest,
-      scopeInputRevision,
-      status: "pending",
-      existing: false,
-    };
+    return undefined;
   }
 
   /**
@@ -1313,24 +1375,25 @@ export class EvalDO extends DurableObjectBase {
     this.ctx.waitUntil(execution);
   }
 
-  /** Execute once, persist first, then let only this agent's EvalDO settle its owning agent. */
+  /** Execute once; retain delivery until the owner acknowledges domain truth. */
   private async executeAndDeliver(runId: string): Promise<void> {
-    const row = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
-    if (!row) return;
+    await this.executeRun(runId);
+    await this.pushRetainedResult(runId);
+  }
+
+  private async pushRetainedResult(runId: string): Promise<void> {
+    const receipt = this.getRunReceipt(runId);
+    if (!receipt || receipt.acknowledged) return;
+    const row = this.sql.exec("SELECT args FROM runs WHERE run_id = ?", runId).one();
     const args = JSON.parse(String(row["args"])) as RunArgs;
-    const result = await this.executeRun(runId);
-    if (!args.resultReceiverRef || !args.channelId) return;
+    if (!args.resultReceiverRef) return;
     try {
-      await this.deliverTerminalResult(runId, args, result);
+      await this.deliverTerminalResult(runId, args, receipt.result);
     } catch (error) {
-      // The terminal row is canonical. A hibernated/restarted agent re-observes
-      // it through getRun; the vessel keeps its own durable redrive. Between
-      // those, retry the push a few bounded times from here — receivers dedupe.
       console.warn(
-        `[EvalDO] completion delivery for ${runId} failed (durable getRun recovery remains available):`,
+        `[EvalDO] completion hint for ${runId} failed; retained until exact acknowledgement:`,
         error instanceof Error ? error.message : String(error)
       );
-      this.scheduleResultRedelivery(runId, 1);
     }
   }
 
@@ -1343,104 +1406,92 @@ export class EvalDO extends DurableObjectBase {
       throw new Error(`eval: run ${runId} has no execution session for terminal delivery`);
     }
     const options: RpcCallOptions = {};
-
     await this.runDetached(() =>
       this.rpc.call(
         args.resultReceiverRef!,
         "onEvalComplete",
-        [
-          {
-            runId,
-            agentInvocationId: args.agentInvocationId,
-            result,
-            channelId: args.channelId,
-          },
-        ],
+        [{ runId, agentInvocationId: args.agentInvocationId, result, channelId: args.channelId }],
         options
       )
     );
+    // Transport success never means the receiver committed the result. Only
+    // acknowledgeRunResult may close this delivery index.
   }
 
-  private scheduleResultRedelivery(runId: string, attempt: number): void {
+  private retainResultDelivery(runId: string): void {
+    if (this.getStateValue(this.resultAcknowledgementKey(runId)) !== null) return;
     this.sql.exec(
-      `INSERT INTO eval_result_redeliveries (run_id, attempt) VALUES (?, ?)
+      `INSERT INTO eval_result_redeliveries (run_id, attempt, wake_at) VALUES (?, 1, ?)
        ON CONFLICT (run_id) DO NOTHING`,
       runId,
-      attempt
+      Date.now() + RESULT_REDELIVERY_BASE_DELAY_MS
     );
-    this.setAlarm(RESULT_REDELIVERY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  }
+
+  private scheduleResultRedelivery(runId: string): void {
+    this.retainResultDelivery(runId);
+    const next = this.resultDeliverySchedule();
+    if (next) this.setAlarmAt(next.wakeAt);
+  }
+
+  private reconcileResultDeliveries(): void {
+    // Existing deadlines are preserved. Activation cannot postpone a due hint.
+    this.sql.exec(
+      `INSERT OR IGNORE INTO eval_result_redeliveries (run_id, attempt, wake_at)
+       SELECT run_id, 1, ? FROM runs
+       WHERE json_extract(args, '$.resultReceiverRef') IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM state WHERE key = 'eval-result-ack:' || json_quote(runs.run_id)
+         )`,
+      Date.now() + RESULT_REDELIVERY_BASE_DELAY_MS
+    );
+  }
+
+  private resultDeliverySchedule(): { wakeAt: number } | null {
+    const next = this.sql
+      .exec("SELECT MIN(wake_at) AS wake_at FROM eval_result_redeliveries")
+      .one();
+    return next["wake_at"] === null ? null : { wakeAt: Number(next["wake_at"]) };
+  }
+
+  protected override nextAlarmAfterRequest(): { wakeAt: number } | null {
+    return this.resultDeliverySchedule();
   }
 
   override async alarm(): Promise<{ wakeAt: number } | null> {
     this.ensureReady();
-    return this.redeliverTerminalResults();
-  }
-
-  /**
-   * Bounded, idempotent redelivery of failed terminal pushes. The durable run
-   * row stays canonical; this only shortens the window before the receiver's
-   * own durable redrive. After the attempt budget the entry is dropped.
-   */
-  private async redeliverTerminalResults(): Promise<{ wakeAt: number } | null> {
+    const now = Date.now();
     const pending = this.sql
-      .exec(`SELECT run_id, attempt FROM eval_result_redeliveries ORDER BY run_id`)
+      .exec(
+        `SELECT run_id, attempt, wake_at FROM eval_result_redeliveries
+       WHERE wake_at <= ? ORDER BY wake_at, run_id LIMIT ?`,
+        now,
+        RESULT_REDELIVERY_BATCH_SIZE
+      )
       .toArray();
-    for (const pendingRow of pending) {
-      const runId = String(pendingRow["run_id"]);
-      const attempt = Number(pendingRow["attempt"]);
-      const row = this.sql
-        .exec(`SELECT args, status, result FROM runs WHERE run_id = ?`, runId)
-        .toArray()[0];
-      const status = row ? String(row["status"]) : null;
-      const terminal =
-        status === "done" || status === "cancelled" || status === "approval-route-lost";
-      if (!row || !terminal || row["result"] == null) {
-        this.deleteResultRedelivery(runId, attempt);
-        continue;
-      }
-      const args = JSON.parse(String(row["args"])) as RunArgs;
-      if (!args.resultReceiverRef || !args.channelId) {
-        this.deleteResultRedelivery(runId, attempt);
-        continue;
-      }
-      try {
-        await this.deliverTerminalResult(
+    for (const row of pending) {
+      const runId = String(row["run_id"]);
+      const attempt = Number(row["attempt"]);
+      const delay = Math.min(
+        RESULT_REDELIVERY_MAX_DELAY_MS,
+        RESULT_REDELIVERY_BASE_DELAY_MS * 2 ** Math.min(attempt, 6)
+      );
+      // Advance the exact due slot before yielding. A concurrent alarm cannot
+      // claim the same attempt; an ack racing the RPC cannot recreate its slot.
+      const claimed = this.sql
+        .exec(
+          `UPDATE eval_result_redeliveries SET attempt = ?, wake_at = ?
+         WHERE run_id = ? AND attempt = ? AND wake_at = ? RETURNING run_id`,
+          Math.min(attempt + 1, 7),
+          now + delay,
           runId,
-          args,
-          JSON.parse(String(row["result"])) as RunResult
-        );
-        this.deleteResultRedelivery(runId, attempt);
-      } catch (error) {
-        if (attempt >= RESULT_REDELIVERY_MAX_ATTEMPTS) {
-          console.warn(
-            `[EvalDO] completion redelivery for ${runId} exhausted after ${attempt} attempts:`,
-            error instanceof Error ? error.message : String(error)
-          );
-          this.deleteResultRedelivery(runId, attempt);
-          continue;
-        }
-        this.sql.exec(
-          `UPDATE eval_result_redeliveries SET attempt = ? WHERE run_id = ? AND attempt = ?`,
-          attempt + 1,
-          runId,
-          attempt
-        );
-      }
+          attempt,
+          row["wake_at"]
+        )
+        .toArray();
+      if (claimed.length > 0) await this.pushRetainedResult(runId);
     }
-    const next = this.sql
-      .exec(`SELECT attempt FROM eval_result_redeliveries ORDER BY attempt ASC LIMIT 1`)
-      .toArray()[0];
-    if (!next) return null;
-    const delayMs = RESULT_REDELIVERY_BASE_DELAY_MS * 2 ** (Number(next["attempt"]) - 1);
-    return { wakeAt: Date.now() + delayMs };
-  }
-
-  private deleteResultRedelivery(runId: string, attempt: number): void {
-    this.sql.exec(
-      `DELETE FROM eval_result_redeliveries WHERE run_id = ? AND attempt = ?`,
-      runId,
-      attempt
-    );
+    return this.resultDeliverySchedule();
   }
 
   /**
@@ -1494,7 +1545,9 @@ export class EvalDO extends DurableObjectBase {
         failureCode: "eval_run_missing",
       };
     }
-    const status = String(row["status"]) as EvalRunStatusValue;
+    const status = (
+      row["status"] === "cancelled-before-admission" ? "cancelled" : String(row["status"])
+    ) as EvalRunStatusValue;
     if (!claimedRow) {
       // Already terminal (idempotent re-dispatch, or cancelled before we claimed it).
       if (
@@ -1786,6 +1839,72 @@ export class EvalDO extends DurableObjectBase {
     return terminalResult;
   }
 
+  /** Domain truth, independent of the observing task or a push delivery. */
+  @schemaRpc()
+  getRunReceipt(runId: string): EvalResultReceipt | null {
+    const row = this.sql
+      .exec(`SELECT status, args, result FROM runs WHERE run_id = ?`, runId)
+      .toArray()[0];
+    if (
+      !row ||
+      !["done", "cancelled", "cancelled-before-admission", "approval-route-lost"].includes(
+        String(row["status"])
+      )
+    )
+      return null;
+    const args = JSON.parse(String(row["args"])) as RunArgs;
+    if (!args.runDigest) throw new Error(`eval: run ${runId} has no immutable admission identity`);
+    let result: RunResult;
+    if (row["result"] != null) result = JSON.parse(String(row["result"])) as RunResult;
+    else if (row["status"] === "cancelled")
+      result = {
+        success: false,
+        console: "",
+        error: "eval: run cancelled",
+        failureKind: "cancelled",
+        failureCode: evalLifecycleFailureCodes.cancelled,
+      };
+    else throw new Error(`eval: terminal run ${runId} has no result`);
+    const resultDigest = createHash("sha256").update(canonicalJson(result)).digest("hex");
+    const retained = this.getStateValue(this.resultAcknowledgementKey(runId));
+    if (retained) {
+      const identity = JSON.parse(retained) as { runDigest: string; resultDigest: string };
+      if (identity.runDigest !== args.runDigest || identity.resultDigest !== resultDigest)
+        throw new Error(`eval: acknowledged result ${runId} changed`);
+    }
+    return {
+      runId,
+      runDigest: args.runDigest,
+      resultDigest,
+      result,
+      acknowledged: retained !== null,
+    };
+  }
+
+  /** Exact acknowledgement is durable before returning and does not erase data. */
+  @schemaRpc()
+  async acknowledgeRunResult(
+    runId: string,
+    identity: { runDigest: string; resultDigest: string }
+  ): Promise<{ acknowledged: true; duplicate: boolean }> {
+    return this.ctx.storage.transaction(async () => {
+      const receipt = this.getRunReceipt(runId);
+      if (!receipt) throw new Error(`eval: run ${runId} has no terminal receipt`);
+      if (
+        receipt.runDigest !== identity.runDigest ||
+        receipt.resultDigest !== identity.resultDigest
+      )
+        throw new Error(`eval: acknowledgement for ${runId} does not match the terminal receipt`);
+      this.setStateValue(this.resultAcknowledgementKey(runId), JSON.stringify(identity));
+      this.sql.exec(`DELETE FROM eval_result_redeliveries WHERE run_id = ?`, runId);
+      return { acknowledged: true, duplicate: receipt.acknowledged };
+    });
+  }
+
+  private resultAcknowledgementKey(runId: string): string {
+    return `eval-result-ack:${JSON.stringify(runId)}`;
+  }
+
   /** Poll backstop for the durable run state. `cancelling` is deliberately
    * non-terminal: execution admission remains live until cleanup settles. */
   @schemaRpc()
@@ -1810,7 +1929,9 @@ export class EvalDO extends DurableObjectBase {
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
     if (!row) return { status: "unknown" };
-    const status = String(row["status"]) as EvalRunStatusValue;
+    const status = (
+      row["status"] === "cancelled-before-admission" ? "cancelled" : String(row["status"])
+    ) as EvalRunStatusValue;
     const progressRow = this.sql
       .exec(`SELECT progress FROM run_progress WHERE run_id = ?`, runId)
       .toArray()[0];
@@ -2296,31 +2417,13 @@ export class EvalDO extends DurableObjectBase {
     return this.forceReset();
   }
 
-  /**
-   * Destructively empty an explicitly finite kernel before its runtime entity
-   * retires. Unlike reset, disposal also releases every loaded provider/module
-   * reference and removes terminal run records so an idle cached DO instance
-   * cannot retain the former owner's execution heap.
-   */
-  @schemaRpc()
-  async dispose(): Promise<{ ok: boolean }> {
-    if (this.kernelLease) {
-      await this.clearLifecycleRelease();
-      this.settleKernelLease(this.kernelLease, "released");
-    }
-    await this.forceReset();
-    // Join only host-owned artifact writes, never a potentially wedged guest.
-    // A late upload cannot recreate a retention after disposal releases it.
-    await Promise.allSettled([...this.inFlightResultArtifacts]);
-    for (const row of this.sql.exec(`SELECT owner FROM run_result_artifacts`).toArray()) {
-      await this.infrastructureExecution().blobstore.releaseRetention({
-        owner: String(row["owner"]),
-      });
-    }
-    this.sql.exec(`DELETE FROM run_result_artifacts`);
-    this.sql.exec(`DELETE FROM run_progress`);
-    this.sql.exec(`DELETE FROM eval_execution_roots`);
-    this.sql.exec(`DELETE FROM runs`);
+  private assertAdmissionOpen(): void {
+    if (this.getStateValue("eval_execution_closed") !== null)
+      throw new Error("eval: execution namespace is retired; use a new scope for new work");
+  }
+
+  /** Heap release never erases the canonical admission or retained content. */
+  private releaseKernelReferences(): void {
     this.engine = null;
     this.scopeManager = null;
     this.runtimeSupport = null;
@@ -2335,7 +2438,6 @@ export class EvalDO extends DurableObjectBase {
     this.runCleanupPhases.clear();
     this.runCancelHandlers.clear();
     this.runCancelExecutions.clear();
-    return { ok: true };
   }
 
   /**
@@ -2468,6 +2570,45 @@ export class EvalDO extends DurableObjectBase {
   }
 
   private async cancelRun(runId: string): Promise<EvalCancelResult> {
+    if (!runId.trim()) throw new Error("eval: cancellation requires a run identity");
+    // Cancellation is an authoritative terminal domain fact even when the
+    // original start is still being prepared or its acknowledgement was lost.
+    // One canonical row fences all later admission attempts for this identity.
+    const runDigest = createHash("sha256")
+      .update(
+        canonicalJson({
+          kind: "cancelled-before-admission",
+          owner: this.rpcSelfId,
+          runId,
+        })
+      )
+      .digest("hex");
+    const cancelled = this.ctx.storage.transactionSync(() => {
+      const inserted = this.sql
+        .exec(
+          `INSERT INTO runs (run_id, args, status, result, started_at)
+         SELECT ?, ?, 'cancelled-before-admission', ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM runs WHERE run_id = ?)
+         RETURNING run_id`,
+          runId,
+          JSON.stringify({ runId, runDigest }),
+          JSON.stringify({
+            success: false,
+            console: "",
+            error: "eval: run cancelled before admission",
+            failureKind: "cancelled",
+            failureCode: evalLifecycleFailureCodes.cancelled,
+          }),
+          Date.now(),
+          runId
+        )
+        .toArray()[0];
+      if (inserted) this.appendRunEvent(runId, "state", { status: "cancelled-before-admission" });
+      return inserted;
+    });
+    if (cancelled) {
+      return { ok: true, forcedReset: false };
+    }
     const claimed = this.sql
       .exec(
         `UPDATE runs SET status = 'cancelling'
@@ -2850,6 +2991,7 @@ export class EvalDO extends DurableObjectBase {
         "docs_search/docs_open tools for full typed schemas in the service/runtime catalog. `importable` " +
         `names come from \`import {…} from "${runtimeModuleName}"\`; \`ambient\` names are pre-injected ` +
         "globals and may also be imported in eval as a compatibility form when present. Use the `imports` parameter for npm/workspace packages. " +
+        "Confined eval has no ambient fetch. Use gatewayFetch for gateway-relative HTTP routes and credentials.fetch for external HTTP. " +
         "Full reference: skills/sandbox/EVAL.md.",
     });
     const bindings: Record<string, unknown> = {
@@ -2890,68 +3032,13 @@ export class EvalDO extends DurableObjectBase {
         }
         if (serviceName === "services") return describeHelpOverview();
         if (serviceName) {
-          const dot = serviceName.indexOf(".");
-          if (dot > 0) {
-            const bindingName = serviceName.slice(0, dot);
-            const methodName = serviceName.slice(dot + 1);
-            const binding = bindings[bindingName];
-            if (binding && typeof binding === "object") {
-              const described = await this.describeInjectedSurface(
-                bindingName,
-                binding as Record<string, unknown>,
-                execution.docs
-              );
-              if (described && typeof described === "object") {
-                const surface = described as { methods?: Record<string, unknown> };
-                if (surface.methods?.[methodName]) {
-                  return describeEvalMethod(serviceName, surface.methods[methodName]);
-                }
-                return {
-                  name: serviceName,
-                  surface: "injected-runtime-method",
-                  error: `Unknown method ${methodName} on ${bindingName}`,
-                  knownMethods: Object.keys(surface.methods ?? {}).sort(),
-                };
-              }
-            }
-          }
-          // Prefer the INJECTED binding's surface (what eval actually calls) over the raw RPC
-          // service — they can diverge (fs's low-level handle* wire methods are hidden behind
-          // open()→FileHandle).
-          const injected = bindings[serviceName];
-          if (injected !== undefined) {
-            if (injected && typeof injected === "object") {
-              const described = await this.describeInjectedSurface(
-                serviceName,
-                injected as Record<string, unknown>,
-                execution.docs
-              );
-              if (described && typeof described === "object") {
-                return describeEvalBindingIndex(
-                  described as import("./evalSurfaceHelp.js").InjectedSurfaceDescription
-                );
-              }
-            }
-            // A function/value runtime export (openPanel, getPanelHandle, callMain, …) —
-            // NOT an RPC service. Point to the docs instead of throwing "Unknown service".
-            return {
-              name: serviceName,
-              surface: "injected-runtime",
-              kind: typeof injected,
-              note:
-                `\`${serviceName}\` is a top-level runtime export from \`${runtimeModuleName}\` (a ` +
-                `${typeof injected}) — call it directly, it is not an RPC service. See its signature ` +
-                `in skills/sandbox/RUNTIME_API.md (panel APIs: skills/workspace-dev/PANEL_API.md). ` +
-                `Use \`help('<name>')\` with a name from the \`services\` list for RPC services.`,
-            };
-          }
-          // Not a rich runtime binding — a plain RPC service. It is reachable as
-          // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
-          // `rpc.call("main", "${serviceName}.<method>", [...])`.
-          return (
-            (await execution.docs.describeService(serviceName)) ??
-            unknownHelpNameResponse(serviceName)
-          );
+          return describeEvalHelpName(serviceName, {
+            bindings,
+            runtimeModuleName,
+            docs: execution.docs,
+            describeBinding: (name, binding) =>
+              this.describeInjectedSurface(name, binding, execution.docs),
+          });
         }
         return describeHelpOverview();
       },
@@ -3175,7 +3262,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   private async materializeResultArtifact(runId: string, result: RunResult): Promise<RunResult> {
-    if (!result.success) return result;
+    if (!result.success || this.getStateValue("eval_execution_closed") !== null) return result;
     const row = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
     if (row?.["status"] !== "running") return result;
     const work = (async () => {
@@ -3884,12 +3971,13 @@ export class EvalDO extends DurableObjectBase {
     };
     // All native receipts use the invoking execution's private journal.
     // Imported modules and retained page handles cannot own an earlier cell.
+    const recordOperation = (entry: Record<string, unknown>) =>
+      this.requireActiveEvalExecution().operationJournal.append(entry);
     const panelRuntime = support.createPanelRuntime({
       rpc: activeRpc,
       operationSignal: () => this.requireActiveEvalExecution().signal,
       contextId: execution.contextId,
-      recordOperation: (entry: Record<string, unknown>) =>
-        this.requireActiveEvalExecution().operationJournal.append(entry),
+      recordOperation,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
       onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {
@@ -3915,12 +4003,16 @@ export class EvalDO extends DurableObjectBase {
       },
     });
     const host: Record<string, unknown> = {
+      recordOperation,
       id: this.rpcSelfId,
       contextId: execution.contextId,
       rpc: activeRpc,
       fs: support.createRpcFs(activeRpc),
       gatewayConfig,
-      gatewayFetch: support.createGatewayFetch(gatewayConfig),
+      gatewayFetch: support.createGatewayFetch({
+        rpc: activeRpc,
+        serverUrl: gatewayConfig.serverUrl,
+      }),
       panelRuntime,
       workers: support.createWorkerdClient(activeRpc),
       openExternal: (url: string, options?: unknown) =>

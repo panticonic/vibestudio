@@ -1,5 +1,7 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -18,6 +20,21 @@ import {
 } from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
+import { createRuntimeService, type RuntimeEntityHooks } from "./services/runtimeService.js";
+import { TaskAuthorityRegistry } from "./services/taskAuthorityRegistry.js";
+import { UnitSupervisor } from "./services/unitSupervisor.js";
+import { createEntityRetirementCleanup } from "./services/entityRetirementCleanup.js";
+import { cleanupRuntimeEntity } from "./runtimeEntityCleanup.js";
+import { WorkspaceEntityStore } from "./workspaceEntityStore.js";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
+import { authoritySessionIdForCaller } from "./services/callerAuthoritySession.js";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  sealAndDrainDurableObjectRelays,
+  releaseDurableObjectRelaySeal,
+} from "./workerdRpcRelay.js";
+import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -31,7 +48,7 @@ import {
   collectWorkspaceRpcCatalog,
   type WorkspaceRpcMethodDoc,
 } from "./buildV2/workspaceRpcCatalog.js";
-import { workspaceRpcSchema } from "./buildV2/workspaceRpcSchemas.js";
+import { workspaceRpcSchema, workspaceRpcSchemaMetadata } from "./buildV2/workspaceRpcSchemas.js";
 import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
 import {
   buildWorkerdPrograms,
@@ -94,6 +111,7 @@ beforeAll(async () => {
 // DOs route through the UniversalDO facet host, which fetches `/_docode` from
 // `getServerUrl`, so the harness must serve those loader endpoints.
 const activeLoaderServers: Server[] = [];
+const activeFixtureRoots: string[] = [];
 
 async function createWorkerdHarness(
   overrides: Partial<WorkerdManagerDeps> & {
@@ -108,6 +126,9 @@ async function createWorkerdHarness(
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the loader-server closure can reference a `const` manager.
   const portHolder = { value: 0 };
+  const workspacePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-"));
+  const statePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-"));
+  activeFixtureRoots.push(workspacePath, statePath);
   const manager = new WorkerdManager({
     tokenManager,
     fsService: {
@@ -118,8 +139,8 @@ async function createWorkerdHarness(
     workerdPrograms: compiledWorkerdPrograms,
     internalDOBundle: compiledInternalDOBundle,
     getInternalDoEnv: () => ({}),
-    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
+    workspacePath,
+    statePath,
     // Internal DO outbound RPCs route through the same loopback harness. The
     // port is resolved only when a DO class is registered, after the server
     // below has bound and populated the holder.
@@ -213,8 +234,9 @@ async function createWorkerdHarness(
       );
       const source = decodeURIComponent(segs[0] ?? "");
       const className = decodeURIComponent(segs[1] ?? "");
+      const objectKey = new URL(u, "http://fixture").searchParams.get("objectKey") ?? undefined;
       if (isV) {
-        const v = manager.getDoVersion(source, className);
+        const v = manager.getDoVersion(source, className, objectKey);
         if (v === null) {
           res.writeHead(404);
           res.end("nf");
@@ -224,7 +246,7 @@ async function createWorkerdHarness(
         res.end(JSON.stringify({ version: v }));
         return;
       }
-      void manager.getDoCode(source, className).then((code) => {
+      void manager.getDoCode(source, className, objectKey).then((code) => {
         if (!code) {
           res.writeHead(404);
           res.end("nf");
@@ -363,7 +385,7 @@ async function bundleWorker(
       .map((entry) => {
         const schema = workspaceRpcSchema(entry.rpcSchema);
         if (!schema) throw new Error(`Unknown workspace RPC schema ${entry.rpcSchema}`);
-        return [entry.className, schema];
+        return [entry.className, workspaceRpcSchemaMetadata(schema)];
       })
   );
   const result = await esbuild.build({
@@ -443,7 +465,71 @@ describe("internal storage DOs under workerd", () => {
       const server = activeLoaderServers.pop()!;
       await new Promise<void>((r) => server.close(() => r()));
     }
+    while (activeFixtureRoots.length) rmSync(activeFixtureRoots.pop()!, { recursive: true });
   });
+
+  it("reopens retained EvalDO storage using the descriptor of its native executable", async () => {
+    const workspaceRef = {
+      source: INTERNAL_DO_SOURCE,
+      className: "WorkspaceDO",
+      objectKey: "eval-reopen-workspace",
+    };
+    const harness = await createWorkerdHarness({
+      mainRpc: async (method, args) => {
+        if (method !== "workspace-state.alarmClear") {
+          throw new Error(`Unexpected storage host callback ${method}`);
+        }
+        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
+    ]);
+    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "retained-eval" };
+    const storage = manager as unknown as {
+      quiesceDurableObjectStorage(ref: DORef): Promise<void>;
+      durableObjectStorageLocation(ref: DORef): { dir: string; hash: string };
+    };
+    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
+    await storage.quiesceDurableObjectStorage(ref);
+    const { dir, hash } = storage.durableObjectStorageLocation(ref);
+    const db = new DatabaseSync(join(dir, `${hash}.sqlite`));
+    const result = { success: true, console: "retained domain truth", returnValue: 42 };
+    const runDigest = "a".repeat(64);
+    const resultDigest = createHash("sha256").update(canonicalJson(result)).digest("hex");
+    try {
+      db.prepare(
+        "INSERT INTO runs(run_id,args,status,result,started_at) VALUES(?,?, 'done',?,1)"
+      ).run("retained", JSON.stringify({ code: "return 42", runDigest }), JSON.stringify(result));
+      db.prepare("INSERT INTO state(key,value) VALUES(?,?)").run(
+        'eval-result-ack:"retained"',
+        JSON.stringify({ runDigest, resultDigest })
+      );
+    } finally {
+      db.close();
+    }
+    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toEqual({
+      runId: "retained",
+      runDigest,
+      resultDigest,
+      result,
+      acknowledged: true,
+    });
+    await storage.quiesceDurableObjectStorage(ref);
+    const reopened = new DatabaseSync(join(dir, `${hash}.sqlite`));
+    try {
+      expect(reopened.prepare("SELECT version FROM _vibestudio_schema").get()).toEqual({
+        version: 5,
+      });
+      expect(reopened.prepare("SELECT result FROM runs WHERE run_id='retained'").get()).toEqual({
+        result: JSON.stringify(result),
+      });
+    } finally {
+      reopened.close();
+    }
+  }, 60_000);
 
   it("resets and restores internal DO storage through a graceful workerd stop", async () => {
     // BrowserVaultDO writes are host-capability attested, which requires the
@@ -676,9 +762,26 @@ describe("internal storage DOs under workerd", () => {
     // With no eval engine declared, background execution fails immediately. That is useful here:
     // the real workerd test proves startRun acknowledges the durable row, schedules under the DO
     // lifetime, and makes the terminal failure observable without a held host request.
-    const harness = await createWorkerdHarness();
+    const workspaceRef = {
+      source: INTERNAL_DO_SOURCE,
+      className: "WorkspaceDO",
+      objectKey: "job-queue-workspace",
+    };
+    const harness = await createWorkerdHarness({
+      mainRpc: async (method, args): Promise<unknown> => {
+        // Eval owns its delivery schedule through the host workspace service,
+        // even when this run has no result receiver. Exercise that real store.
+        if (method !== "workspace-state.alarmClear") {
+          throw new Error(`Unexpected job queue host callback ${method}`);
+        }
+        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
+      },
+    });
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+    ]);
     const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
 
     // The first call acknowledges the newly inserted row before background guest work runs.
@@ -723,12 +826,15 @@ describe("internal storage DOs under workerd", () => {
       observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as typeof observed;
     }
     expect(observed).toMatchObject({ status: "done", result: { success: false } });
+    expect(observed.result?.error).toContain("no `providers.evalEngine` is declared");
+    const terminal = observed.result;
     expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
 
     // Reset preserves terminal history.
     expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
     expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
       status: "done",
+      result: terminal,
     });
 
     // A fresh run after reset is independent.
@@ -761,9 +867,12 @@ describe("internal storage DOs under workerd", () => {
       id: string;
       kind: string;
       status: string;
+      authoritySessionId: string;
     };
     expect(record.kind).toBe("panel");
     expect(record.status).toBe("active");
+    expect(record.authoritySessionId).toBeTypeOf("string");
+    expect(await harness.callDurableObject(ref, "entityActivate", activateInput)).toEqual(record);
 
     const resolved = (await harness.callDurableObject(ref, "entityResolveActive", record.id)) as {
       id: string;
@@ -777,6 +886,36 @@ describe("internal storage DOs under workerd", () => {
       status: string;
     };
     expect(retired.status).toBe("retired");
+    await expect(harness.callDurableObject(ref, "entityActivate", activateInput)).rejects.toThrow(
+      /retirement cleanup/
+    );
+    await harness.callDurableObject(
+      ref,
+      "entityCleanupComplete",
+      record.id,
+      record.authoritySessionId
+    );
+    const reattached = (await harness.callDurableObject(ref, "entityActivate", activateInput)) as {
+      authoritySessionId: string;
+    };
+    expect(reattached.authoritySessionId).not.toBe(record.authoritySessionId);
+    await harness.callDurableObject(ref, "entityRetire", record.id);
+    await harness.callDurableObject(
+      ref,
+      "entityCleanupComplete",
+      record.id,
+      record.authoritySessionId
+    );
+    expect(await harness.callDurableObject(ref, "entityResolve", record.id)).toMatchObject({
+      authoritySessionId: reattached.authoritySessionId,
+      cleanupComplete: false,
+    });
+    await harness.callDurableObject(
+      ref,
+      "entityCleanupComplete",
+      record.id,
+      reattached.authoritySessionId
+    );
 
     const deleted = (await harness.callDurableObject(ref, "entityGc", {
       all: true,
@@ -786,6 +925,209 @@ describe("internal storage DOs under workerd", () => {
     await expect(
       harness.callDurableObject(ref, "entityResolveActive", record.id)
     ).resolves.toBeNull();
+  }, 30_000);
+
+  it("joins native-style domain receipts through real workerd before retiring authority, egress and the facet", async () => {
+    const probeRef = {
+      source: "workers/retirement-probe",
+      className: "RetirementProbeDO",
+      objectKey: "owner",
+    };
+    const probeId = `do:${probeRef.source}:${probeRef.className}:${probeRef.objectKey}`;
+    const build = await bundleWorker(
+      probeRef.source,
+      "src/server/testFixtures/retirementProbeWorker.ts",
+      "retirement-probe"
+    );
+    const order: string[] = [];
+    const egress = new Set<string>();
+    let store!: WorkspaceEntityStore;
+    let dispatch!: DODispatch;
+    let domainEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      domainEntered = resolve;
+    });
+    let completeDomain!: () => void;
+    const allowed = new Promise<void>((resolve) => {
+      completeDomain = resolve;
+    });
+    const harness = await createWorkerdHarness({
+      getBuild: async (source) => {
+        if (source !== probeRef.source) throw new Error(`Unexpected retirement source ${source}`);
+        return build;
+      },
+      registerEgressCaller: (id) => {
+        egress.add(id);
+      },
+      unregisterEgressCaller: (id) => {
+        egress.delete(id);
+        if (id === probeId) order.push("egress-withdrawn");
+      },
+      mainRpc: async (method) => {
+        if (method !== "docs.listServices") throw new Error(`Unexpected domain method ${method}`);
+        expect(await store.resolveRecord(probeId)).toMatchObject({ status: "active" });
+        expect(egress.has(probeId)).toBe(true);
+        const current = store.cache.resolve(probeId)!;
+        expect(authoritySessionIdForCaller(createVerifiedCaller(probeId, "do"), store.cache)).toBe(
+          current.authoritySessionId
+        );
+        order.push("domain-cancellation");
+        domainEntered();
+        await allowed;
+        // A terminal receipt enters the sealed logical receiver while its
+        // prepare call awaits domain cleanup. Relay sealing happens afterwards.
+        await dispatch.dispatch(probeRef, "completeDomainReceipt");
+        order.push("domain-receipt-joined");
+        return [];
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: probeRef.source, className: probeRef.className },
+    ]);
+    dispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
+    store = new WorkspaceEntityStore({
+      doDispatch: dispatch,
+      workspaceId: "workspace-retirement",
+      entityCache: new EntityCache(),
+      materializeExecution: async () => undefined,
+    });
+    const cleanup = createEntityRetirementCleanup({
+      resolveRecord: (id) => store.resolveRecord(id),
+      complete: async (id, lifetime) => {
+        await store.cleanupComplete(id, lifetime);
+        order.push("cleanup-complete");
+      },
+      cleanup: async (record) =>
+        cleanupRuntimeEntity(record, {
+          retireAuthorityOwner: async () => {
+            order.push("authority-retired");
+          },
+          egressProxy: { dropCaller: async () => {} },
+          approvalQueue: { cancelForCaller: () => {} },
+          credentialSessionGrantStore: { dropForCaller: () => 0 },
+          tokenManager: harness.tokenManager,
+          releaseBlobRetentions: async () => {},
+          getWorkerdManager: () => manager,
+          getFsService: () => null,
+          getWebhookIngress: () => null,
+        }),
+    });
+    const runtime = createRuntimeService({
+      entityStore: store,
+      taskAuthorities: new TaskAuthorityRegistry(),
+      testPolicyForContext: () => null,
+      unitSupervisor: new UnitSupervisor(),
+      contextBoundary: { contextExists: () => true, resolveContextOwnerLabel: () => undefined },
+      contextFolders: {
+        ensureContextFolder: async () => "/unused-retirement-context",
+        removeContext: async () => {},
+      },
+      semanticContexts: {
+        ensureContext: async () => {},
+        dropContext: async () => {},
+        forkContext: async () => {},
+        resolveWorkingState: async () => ({ kind: "event", eventId: "event:retirement" }),
+        listContexts: async () => [],
+      },
+      hooks: {
+        prepare: (async ({ spec, key, contextId }) => {
+          if (spec.kind !== "do" || spec.execution.surface !== "code")
+            throw new Error("Retirement proof only creates its DO");
+          const selected = await manager!.ensureDurableObjectEntity({
+            source: spec.execution.source,
+            className: spec.className,
+            key,
+            contextId,
+          });
+          return {
+            surface: "code",
+            target: { id: selected.targetId },
+            effectiveVersion: selected.effectiveVersion,
+            buildKey: selected.buildKey,
+            executionDigest: selected.executionDigest,
+            authority: selected.authority,
+          };
+        }) as RuntimeEntityHooks["prepare"],
+        recoverExactExecution: async (record) => manager!.restoreDurableObjectEntity(record),
+        restartDurableObjectIncarnation: async () => manager!.restartUserlandDOFacet(probeRef),
+        releaseEntity: async (_record, input) => {
+          const released = await dispatch.dispatchLifecycle(probeRef, "prepare", input);
+          if (released.status === "ready") {
+            expect(await dispatch.dispatch(probeRef, "domainState")).toBe("released");
+            order.push("logical-release-joined");
+          }
+          return released;
+        },
+        sealAndDrainEntityRelays: async (id) => {
+          order.push("relay-sealed");
+          await sealAndDrainDurableObjectRelays(id, "retirement-proof");
+        },
+        releaseEntityRelaySeal: (id) => releaseDurableObjectRelaySeal(id, "retirement-proof"),
+        onRetire: cleanup.retire,
+      },
+    });
+    const spec = {
+      kind: "do",
+      execution: { surface: "code", source: probeRef.source },
+      className: probeRef.className,
+      key: probeRef.objectKey,
+      contextId: "ctx-retirement",
+    } as const;
+    const created = (await runtime.definition.handler(
+      { caller: createHostCaller("server") },
+      "createEntity",
+      [spec]
+    )) as RuntimeEntityHandle;
+    const original = await store.resolveRecord(created.id);
+    const retiring = runtime.internal.retireEntity(created.id);
+    let returned = false;
+    const observed = retiring.then(() => {
+      returned = true;
+    });
+    try {
+      await entered;
+      expect(returned).toBe(false);
+      expect(await store.resolveRecord(created.id)).toMatchObject({
+        status: "active",
+        authoritySessionId: original!.authoritySessionId,
+      });
+      expect(egress.has(probeId)).toBe(true);
+      completeDomain();
+      await observed;
+      const record = await store.resolveRecord(created.id);
+      expect(record).toMatchObject({
+        status: "retired",
+        cleanupComplete: true,
+        authoritySessionId: original!.authoritySessionId,
+      });
+      expect(egress.has(probeId)).toBe(false);
+      expect(order.slice(0, 5)).toEqual([
+        "domain-cancellation",
+        "domain-receipt-joined",
+        "logical-release-joined",
+        "relay-sealed",
+        "authority-retired",
+      ]);
+      expect(order.at(-1)).toBe("cleanup-complete");
+      expect(order.indexOf("egress-withdrawn")).toBeGreaterThan(
+        order.indexOf("domain-receipt-joined")
+      );
+      // Reattach through the actual runtime transition with a fresh authority
+      // lifetime. The aborted facet's durable release receipt survives.
+      await runtime.definition.handler({ caller: createHostCaller("server") }, "createEntity", [
+        spec,
+      ]);
+      expect((await store.resolveRecord(created.id))?.authoritySessionId).not.toBe(
+        original!.authoritySessionId
+      );
+      expect(await dispatch.dispatch(probeRef, "domainState")).toBe("released");
+    } finally {
+      completeDomain();
+      await Promise.allSettled([observed]);
+      await cleanup.quiesce();
+    }
   }, 30_000);
 
   it("drives lifecycle prepare and resume through real workerd restart hooks", async () => {
@@ -812,7 +1154,6 @@ describe("internal storage DOs under workerd", () => {
       workerdManager: manager,
       doDispatch,
       workspaceId: "workspace-lifecycle",
-      prepareDeadlineMs: 3_000,
       concurrency: 2,
     });
     const workspaceRef = {
@@ -856,24 +1197,28 @@ describe("internal storage DOs under workerd", () => {
       // A planned workerd restart drives the prepare/resume lifecycle hooks on
       // registered DOs. (Worker create no longer restarts — the worker host is
       // static — so trigger a real restart explicitly via the internal entry.)
+      const previousGeneration = manager.getBootGeneration();
       await (manager as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      const currentGeneration = previousGeneration + 1;
 
-      expect(manager.getBootGeneration()).toBe(2);
-      await expect(doDispatch.dispatch(probeRef, "currentBootGeneration")).resolves.toBe("2");
+      expect(manager.getBootGeneration()).toBe(currentGeneration);
+      await expect(doDispatch.dispatch(probeRef, "currentBootGeneration")).resolves.toBe(
+        String(currentGeneration)
+      );
       await expect(doDispatch.dispatch(probeRef, "lifecycleEvents")).resolves.toMatchObject([
         {
           kind: "prepare",
           input: expect.objectContaining({ reason: "planned" }),
-          bootGeneration: "1",
+          bootGeneration: String(previousGeneration),
         },
         {
           kind: "resume",
           input: expect.objectContaining({
             reason: "planned",
-            previousGeneration: 1,
-            currentGeneration: 2,
+            previousGeneration,
+            currentGeneration,
           }),
-          bootGeneration: "2",
+          bootGeneration: String(currentGeneration),
         },
       ]);
 

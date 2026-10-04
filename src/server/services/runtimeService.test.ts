@@ -7,6 +7,7 @@ import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
+import { createEntityRetirementCleanup } from "./entityRetirementCleanup.js";
 import { createRuntimeService, type RuntimeEntityHooks } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -34,6 +35,7 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
 import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 import { UnitSupervisor } from "./unitSupervisor.js";
+import { authoritySessionIdForCaller } from "./callerAuthoritySession.js";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
@@ -88,6 +90,7 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 interface BuildDepsOptions {
+  prepareResourceBindings?: Parameters<typeof createRuntimeService>[0]["prepareResourceBindings"];
   approvalDecision?: Awaited<ReturnType<ApprovalQueue["request"]>>;
   prepareDurableObject?: (args: {
     source: string;
@@ -208,6 +211,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const unitSupervisor = new UnitSupervisor();
 
   const runtimeResult = createRuntimeService({
+    prepareResourceBindings: opts.prepareResourceBindings,
     taskAuthorities,
     testPolicyForContext: opts.testPolicyForContext ?? (() => null),
     unitSupervisor,
@@ -270,7 +274,13 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
           authority: raw.authority,
         };
       }) as RuntimeEntityHooks["prepare"],
-      onRetire,
+      onRetire: createEntityRetirementCleanup({
+        resolveRecord: async (id) => instance.entityResolve(id),
+        cleanup: onRetire,
+        complete: async (id, lifetime) => {
+          instance.entityCleanupComplete(id, lifetime);
+        },
+      }).retire,
       releaseEntity,
       sealAndDrainEntityRelays: opts.sealAndDrainEntityRelays,
       releaseEntityRelaySeal: opts.releaseEntityRelaySeal,
@@ -311,8 +321,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     request: (input) => acquisition.request(input),
     acquire: (input) => acquisition.requestAndWait(input),
     consume: (grantId) => acquisition.consume(grantId),
-    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-      acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+    invalidate: (inputs) => acquisition.invalidate(inputs),
   });
   dispatcher.registerService(service);
   dispatcher.markInitialized();
@@ -421,7 +430,7 @@ const doCreateSpec = (
     ref?: string;
     execution?: Extract<RuntimeEntityCreateSpec, { kind: "do" }>["execution"];
   } = {}
-): RuntimeEntityCreateSpec => {
+): Extract<RuntimeEntityCreateSpec, { kind: "do" }> => {
   const { source = "workers/example", ref, execution, ...rest } = overrides;
   return {
     kind: "do",
@@ -1562,7 +1571,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       doCreateSpec({ contextId: "ctx-x" }),
     ])) as { id: string };
     // Retire it.
-    instance.entityRetire(handle.id);
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
     expect(instance.entityResolve(handle.id)?.status).toBe("retired");
 
     // Second create — should re-prepare and flip back to active.
@@ -1592,7 +1601,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec({ contextId: "ctx-x" }),
     ])) as { id: string };
-    instance.entityRetire(handle.id);
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
 
     await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec({ contextId: "ctx-x" }),
@@ -1619,7 +1628,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [spec])) as {
       id: string;
     };
-    instance.entityRetire(handle.id);
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
 
     await service.handler({ caller: serverCaller }, "createEntity", [spec]);
 
@@ -1776,7 +1785,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [spec])) as {
       id: string;
     };
-    instance.entityRetire(handle.id);
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
 
     await service.handler({ caller: serverCaller }, "createEntity", [spec]);
 
@@ -2233,6 +2242,209 @@ describe("runtimeService.setTitle", () => {
 });
 
 describe("runtimeService.retireEntity", () => {
+  it.each([false, true])(
+    "owns creation rollback without re-entering its transition queue (cleanup fails: %s)",
+    async (cleanupFails) => {
+      const original = new Error("Exact resource binding failed");
+      const cleanupFailure = new Error("Original retirement resource release failed");
+      const f = await buildDeps({
+        prepareResourceBindings: async () => ({
+          contextId: "ctx-binding",
+          bind: async () => {
+            throw original;
+          },
+        }),
+        onRetire: async () => {
+          if (cleanupFails) throw cleanupFailure;
+        },
+      });
+      const spec = {
+        ...doCreateSpec({ key: "binding-rollback", contextId: "ctx-binding" }),
+        resourceBindings: [
+          {
+            resource: { kind: "panel-slot" as const, id: "slot:one" },
+            capabilities: ["panel.inspect"],
+            scope: { kind: "agent-channel" as const, channelId: "channel:one" },
+          },
+        ],
+      };
+      const creating = f.service.handler({ caller: serverCaller }, "createEntity", [spec]);
+      if (cleanupFails)
+        await expect(creating).rejects.toMatchObject({
+          errors: [original, { cause: cleanupFailure }],
+          cause: original,
+        });
+      else await expect(creating).rejects.toBe(original);
+      const id = canonicalEntityId({
+        kind: "do",
+        source: spec.execution.source,
+        className: spec.className,
+        key: "binding-rollback",
+      });
+      const record = f.instance.entityResolve(id);
+      expect(record).toMatchObject({ status: "retired", cleanupComplete: !cleanupFails });
+      // A failed retirement retains its exact row for explicit recovery; no
+      // second active binding or transient cleanup is manufactured.
+      expect(f.releaseEntity).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("allows release to join a different child entity transition while its own owner stays serviceable", async () => {
+    let f!: Awaited<ReturnType<typeof buildDeps>>;
+    const releaseEntity = vi.fn(async (record: EntityRecord) => {
+      const child = (await f.service.handler({ caller: serverCaller }, "createEntity", [
+        doCreateSpec({ key: "child-during-release", contextId: record.contextId }),
+      ])) as RuntimeEntityHandle;
+      expect(f.instance.entityResolve(child.id)?.status).toBe("active");
+      expect(f.instance.entityResolve(record.id)?.status).toBe("active");
+      return { status: "ready" as const };
+    });
+    f = await buildDeps({ releaseEntity });
+    const parent = (await f.service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ key: "parent-release", contextId: "ctx-parent-release" }),
+    ])) as RuntimeEntityHandle;
+    await f.service.handler({ caller: serverCaller }, "retireEntity", [{ id: parent.id }]);
+    expect(f.instance.entityResolve(parent.id)).toMatchObject({
+      status: "retired",
+      cleanupComplete: true,
+    });
+    expect(releaseEntity).toHaveBeenCalledOnce();
+  });
+
+  it.each(["create", "reserve", "activate", "recover"] as const)(
+    "excludes concurrent %s while the current native owner releases, retaining its host authority for receipts",
+    async (operation) => {
+      let finishRelease!: () => void;
+      let releaseStarted!: () => void;
+      const released = new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        releaseStarted = resolve;
+      });
+      const releaseEntity = vi.fn(async () => {
+        releaseStarted();
+        await released;
+        return { status: "ready" as const };
+      });
+      const f = await buildDeps({ releaseEntity });
+      const spec = doCreateSpec({ key: "native-retirement", contextId: "ctx-native" });
+      const handle = (await f.service.handler({ caller: serverCaller }, "createEntity", [
+        spec,
+      ])) as RuntimeEntityHandle;
+      const lifetime = f.instance.entityResolve(handle.id)!.authoritySessionId;
+      const prepare = f.prepareDurableObject as ReturnType<typeof vi.fn>;
+      const preparationCount = prepare.mock.calls.length;
+      const retiring = f.service.handler({ caller: serverCaller }, "retireEntity", [
+        { id: handle.id },
+      ]);
+      await started;
+      const request =
+        operation === "create"
+          ? f.service.handler({ caller: serverCaller }, "createEntity", [spec])
+          : operation === "reserve"
+            ? f.service.handler({ caller: serverCaller }, "reserveEntity", [spec])
+            : operation === "activate"
+              ? f.service.handler({ caller: serverCaller }, "activateReservedEntity", [spec])
+              : f.service.handler({ caller: shellCaller }, "recoverExecution", [
+                  {
+                    entityId: handle.id,
+                    expectedExecutionDigest: sealedExecution.executionDigest,
+                    strategy: "restore-exact",
+                  },
+                ]);
+      let transitioned = false;
+      const outcome = request.then(
+        (value) => {
+          transitioned = true;
+          return { value };
+        },
+        (error: unknown) => {
+          transitioned = true;
+          return { error };
+        }
+      );
+      try {
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(transitioned).toBe(false);
+        expect(prepare).toHaveBeenCalledTimes(preparationCount);
+        expect(f.recoverExactExecution).not.toHaveBeenCalled();
+        expect(f.restartDurableObjectIncarnation).not.toHaveBeenCalled();
+        expect(f.instance.entityResolve(handle.id)).toMatchObject({
+          status: "active",
+          authoritySessionId: lifetime,
+        });
+        // Completion/inspection RPCs retain the real old lifetime while
+        // destructive transitions wait; there is no alternate authority.
+        expect(
+          authoritySessionIdForCaller(createVerifiedCaller(handle.id, "do"), f.entityCache)
+        ).toBe(lifetime);
+        finishRelease();
+        await retiring;
+        const observed = await outcome;
+        expect(transitioned).toBe(true);
+        if (operation === "create") {
+          expect(observed).toHaveProperty("value");
+          expect(f.instance.entityResolve(handle.id)?.authoritySessionId).not.toBe(lifetime);
+        } else expect(observed).toHaveProperty("error");
+      } finally {
+        finishRelease();
+        await Promise.allSettled([retiring, outcome]);
+      }
+    }
+  );
+
+  it("keeps a queued reattach behind all old-lifetime host teardown and exact completion", async () => {
+    let finishCleanup!: () => void;
+    let cleanupStarted!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    const f = await buildDeps({
+      onRetire: async () => {
+        cleanupStarted();
+        await cleanup;
+      },
+    });
+    const spec = doCreateSpec({ key: "joined-cleanup", contextId: "ctx-native" });
+    const handle = (await f.service.handler({ caller: serverCaller }, "createEntity", [
+      spec,
+    ])) as RuntimeEntityHandle;
+    const lifetime = f.instance.entityResolve(handle.id)!.authoritySessionId;
+    const retiring = f.service.handler({ caller: serverCaller }, "retireEntity", [
+      { id: handle.id },
+    ]);
+    await started;
+    let reattached = false;
+    const next = f.service
+      .handler({ caller: serverCaller }, "createEntity", [spec])
+      .then((value) => {
+        reattached = true;
+        return value;
+      });
+    try {
+      await Promise.resolve();
+      expect(reattached).toBe(false);
+      expect(f.instance.entityResolve(handle.id)).toMatchObject({
+        status: "retired",
+        cleanupComplete: false,
+        authoritySessionId: lifetime,
+      });
+      finishCleanup();
+      await retiring;
+      await next;
+      expect(f.instance.entityResolve(handle.id)).toMatchObject({ status: "active" });
+      expect(f.instance.entityResolve(handle.id)?.authoritySessionId).not.toBe(lifetime);
+    } finally {
+      finishCleanup();
+      await Promise.allSettled([retiring, next]);
+    }
+  });
+
   it("releases the entity before durable retirement, then runs host cleanup", async () => {
     const order: string[] = [];
     const { service, instance } = await buildDeps({
@@ -2291,7 +2503,10 @@ describe("runtimeService.retireEntity", () => {
 
     await expect(
       service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }])
-    ).rejects.toThrow(/refused terminal lifecycle release/u);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/refused terminal lifecycle release.*still busy/u),
+      cause: { error: "still busy" },
+    });
     expect(instance.entityResolve(handle.id)?.status).toBe("active");
     expect(onRetire).not.toHaveBeenCalled();
   });
@@ -2811,6 +3026,57 @@ describe("runtimeService session entities", () => {
     ]);
   });
 
+  it("retires an owned browser through nested lifecycle contexts without granting foreign cleanup", async () => {
+    const { service, dispatch, approvalQueue, instance } = await buildDeps({
+      approvalDecision: "deny",
+    });
+    const root = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/orchestrator" },
+        className: "Orchestrator",
+        key: "browser-owner",
+        contextId: "ctx-browser-owner",
+      },
+    ])) as { id: string };
+    const owner = createVerifiedCaller(root.id, "do");
+    await dispatch(owner, "createContext", [{ contextId: "ctx-browser-child" }]);
+    const child = (await dispatch(owner, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/agent-worker" },
+        className: "AiChatWorker",
+        key: "browser-child",
+        contextId: "ctx-browser-child",
+      },
+    ])) as { id: string };
+    const childCaller = createVerifiedCaller(child.id, "do");
+    await dispatch(childCaller, "createContext", [{ contextId: "ctx-owned-browser" }]);
+    const browser = (await dispatch(childCaller, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "external", url: "about:blank" },
+        key: "owned-browser",
+        contextId: "ctx-owned-browser",
+      },
+    ])) as { id: string };
+    await expect(dispatch(owner, "retireEntity", [{ id: browser.id }])).resolves.toBeUndefined();
+    expect(instance.entityResolve(browser.id)?.status).toBe("retired");
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+
+    const foreign = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "external", url: "about:blank" },
+        key: "foreign-browser",
+        contextId: "ctx-foreign-browser",
+      },
+    ])) as { id: string };
+    await expect(dispatch(owner, "retireEntity", [{ id: foreign.id }])).rejects.toThrow();
+    expect(instance.entityResolve(foreign.id)?.status).toBe("active");
+    expect(approvalQueue.request).toHaveBeenCalled();
+  });
+
   it("records delegated extension contexts under the verified upstream context", async () => {
     const { service, instance } = await buildDeps();
     const upstream = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -3232,7 +3498,7 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("lets the cloning owner durably bind a cloned agent to its child channel", async () => {
-    const { service, instance } = await buildDeps({
+    const { service, instance, cloneDurableStorage } = await buildDeps({
       semanticContexts: { forkContext: vi.fn(async () => {}) },
     });
     const channel = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -3265,6 +3531,13 @@ describe("runtimeService.cloneContext", () => {
     ])) as CloneResult;
     const clonedChannel = clone.entities.find((entity) => entity.sourceId === channel.id)!;
     const clonedAgent = clone.entities.find((entity) => entity.sourceId === agent.id)!;
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "chat-parent", toKey: clonedChannel.newKey })
+    );
+    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "agent-parent" })
+    );
     expect(instance.entityResolve(clonedAgent.newId)?.agentBinding).toBeUndefined();
 
     await service.handler({ caller }, "rebindAgentChannel", [

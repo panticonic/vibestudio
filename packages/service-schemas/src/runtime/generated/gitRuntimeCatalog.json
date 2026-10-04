@@ -1,0 +1,1674 @@
+{
+  "setSharedRemote": {
+    "description": "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "type": "string",
+          "description": "Workspace-relative repo/unit path the remote applies to."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Git remote name, e.g. \"origin\"."
+            },
+            "url": {
+              "type": "string",
+              "description": "Durable HTTP(S) fetch/push URL without embedded credentials, query parameters, or fragments."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Default branch to track/clone; omit to use the remote's default."
+            }
+          },
+          "required": [
+            "name",
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "name": "origin",
+            "url": "https://github.com/werg/bgkit.git",
+            "branch": "main"
+          }
+        ]
+      }
+    ]
+  },
+  "removeSharedRemote": {
+    "description": "Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml, sync the repo's git config, and queue immediate provider reconciliation; may prompt for capability approval.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "type": "string",
+          "description": "Workspace-relative repo/unit path the remote belongs to."
+        },
+        {
+          "type": "string",
+          "description": "Name of the remote to remove, e.g. \"origin\"."
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          "origin"
+        ]
+      }
+    ]
+  },
+  "setUpstream": {
+    "description": "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "type": "string",
+          "description": "Workspace-relative repo/unit path the upstream applies to."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "remote": {
+              "type": "string",
+              "description": "Declared remote name, e.g. \"origin\"."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Remote branch to track; defaults to the remote branch or main."
+            },
+            "autoPush": {
+              "type": "boolean",
+              "description": "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+            },
+            "credential": {
+              "type": "string",
+              "description": "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
+            },
+            "authorEmail": {
+              "type": "string",
+              "description": "Exported git commit author email override."
+            },
+            "authorName": {
+              "type": "string",
+              "description": "Exported git commit author name override."
+            }
+          },
+          "required": [
+            "remote"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "remote": {
+              "type": "string",
+              "description": "Declared remote name, e.g. \"origin\"."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Remote branch to track; defaults to the remote branch or main."
+            },
+            "autoPush": {
+              "type": "boolean",
+              "description": "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+            },
+            "credential": {
+              "type": "string",
+              "description": "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
+            },
+            "authorEmail": {
+              "type": "string",
+              "description": "Exported git commit author email override."
+            },
+            "authorName": {
+              "type": "string",
+              "description": "Exported git commit author name override."
+            }
+          },
+          "required": [
+            "remote"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "remote": "origin",
+            "branch": "main",
+            "autoPush": false,
+            "credential": "github"
+          }
+        ]
+      }
+    ]
+  },
+  "removeUpstream": {
+    "description": "Remove upstream tracking for a workspace repo from meta/vibestudio.yml, then queue immediate provider reconciliation; may prompt for capability approval.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "string",
+          "description": "Workspace-relative repo/unit path the upstream belongs to."
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "remote": {
+              "type": "string",
+              "description": "Declared remote name, e.g. \"origin\"."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Remote branch to track; defaults to the remote branch or main."
+            },
+            "autoPush": {
+              "type": "boolean",
+              "description": "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+            },
+            "credential": {
+              "type": "string",
+              "description": "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
+            },
+            "authorEmail": {
+              "type": "string",
+              "description": "Exported git commit author email override."
+            },
+            "authorName": {
+              "type": "string",
+              "description": "Exported git commit author name override."
+            }
+          },
+          "required": [
+            "remote"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit"
+        ]
+      }
+    ]
+  },
+  "detachUpstream": {
+    "description": "Atomically remove upstream tracking (and optionally the declared remote) for a workspace repo in one config write and one approval, then queue immediate provider reconciliation; may prompt for capability approval.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to detach."
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to detach."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "forgetRemote": {
+                  "type": "boolean"
+                },
+                "remote": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "upstreams": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "remote": {
+                  "type": "string",
+                  "description": "Declared remote name, e.g. \"origin\"."
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "Remote branch to track; defaults to the remote branch or main."
+                },
+                "autoPush": {
+                  "type": "boolean",
+                  "description": "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+                },
+                "credential": {
+                  "type": "string",
+                  "description": "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
+                },
+                "authorEmail": {
+                  "type": "string",
+                  "description": "Exported git commit author email override."
+                },
+                "authorName": {
+                  "type": "string",
+                  "description": "Exported git commit author name override."
+                }
+              },
+              "required": [
+                "remote"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "remotes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "removedRemote": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "required": [
+        "upstreams",
+        "remotes",
+        "removedRemote"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "forgetRemote": true
+          }
+        ]
+      }
+    ]
+  },
+  "setAutoPush": {
+    "description": "Toggle optional outgoing Git push for future exports of already-published protected main, preserving the upstream's exact credential mode, persisting the change to meta/vibestudio.yml, and queueing immediate provider reconciliation; this never publishes import candidates and may prompt for capability approval.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.remotes.manage"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "type": "string",
+          "description": "Workspace-relative repo/unit path the upstream belongs to."
+        },
+        {
+          "type": "boolean",
+          "description": "Whether auto-push should be enabled."
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "remote": {
+              "type": "string",
+              "description": "Declared remote name, e.g. \"origin\"."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Remote branch to track; defaults to the remote branch or main."
+            },
+            "autoPush": {
+              "type": "boolean",
+              "description": "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
+            },
+            "credential": {
+              "type": "string",
+              "description": "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
+            },
+            "authorEmail": {
+              "type": "string",
+              "description": "Exported git commit author email override."
+            },
+            "authorName": {
+              "type": "string",
+              "description": "Exported git commit author name override."
+            }
+          },
+          "required": [
+            "remote"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          true
+        ]
+      }
+    ]
+  },
+  "upstreamStatus": {
+    "description": "Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Call `git.upstreamStatus()` for every configured upstream, or `git.upstreamStatus([imported.path])` for selected repositories. The configured gitInterop provider performs all Git/network work.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 0,
+          "items": []
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "One or more workspace-relative repos to inspect."
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "One or more workspace-relative repos to inspect."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "remote": {
+                  "type": "string"
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "credentialIdOverride": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Call-scoped concrete credential override for this observation; omit to use the configured logical binding, or use null for anonymous Git HTTP."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "repoPath": {
+            "type": "string"
+          },
+          "remote": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "autoPush": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "in-sync",
+              "ahead",
+              "behind",
+              "diverged",
+              "integration-required",
+              "auth-failed",
+              "error",
+              "exporting",
+              "pushing",
+              "local-only",
+              "not-materialized",
+              "fetch-failed",
+              "empty"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "in-sync",
+              "ahead",
+              "behind",
+              "diverged"
+            ],
+            "description": "Relationship derived from the remote observation made by this call."
+          },
+          "aheadBy": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "behindBy": {
+            "$ref": "#/items/properties/aheadBy"
+          },
+          "remoteBranchExists": {
+            "type": "boolean",
+            "description": "Present after a successful remote observation; false means the configured branch is absent, not that the fetch failed."
+          },
+          "observedAt": {
+            "$ref": "#/items/properties/aheadBy",
+            "description": "When this call successfully observed the declared remote."
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure from this observation attempt; never a persisted prior failure."
+          },
+          "lastSuccessfulObservationAt": {
+            "$ref": "#/items/properties/aheadBy",
+            "description": "Historical telemetry from the most recent successful remote observation."
+          },
+          "lastSuccessfulPushCommit": {
+            "type": "string",
+            "description": "Historical telemetry from the most recent successful wire push."
+          },
+          "lastSuccessfulPushAt": {
+            "$ref": "#/items/properties/aheadBy",
+            "description": "Historical telemetry from the most recent successful wire push."
+          },
+          "lastFailureReason": {
+            "type": "string",
+            "description": "Historical telemetry from the most recent failed background operation."
+          },
+          "candidate": {
+            "type": "object",
+            "properties": {
+              "contextId": {
+                "type": "string",
+                "description": "Semantic context containing the external snapshot candidate."
+              },
+              "eventId": {
+                "type": "string",
+                "description": "Committed candidate event created from the external snapshot."
+              }
+            },
+            "required": [
+              "contextId",
+              "eventId"
+            ],
+            "additionalProperties": false,
+            "description": "Unpublished external snapshot awaiting ordinary semantic VCS integration."
+          },
+          "autoPushRequired": {
+            "type": "boolean"
+          },
+          "lastFailureAt": {
+            "$ref": "#/items/properties/aheadBy"
+          },
+          "nextRetryAt": {
+            "$ref": "#/items/properties/aheadBy"
+          }
+        },
+        "required": [
+          "repoPath",
+          "autoPush",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "args": []
+      },
+      {
+        "args": [
+          [
+            "projects/bgkit"
+          ]
+        ]
+      }
+    ]
+  },
+  "pushUpstream": {
+    "description": "Export protected main, observe the declared remote, and return a typed push outcome through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.publish"
+    },
+    "argsSchema": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to push."
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to push."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "expectedMainEventId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Require the exported repository to match this reviewed event; unrelated workspace changes are allowed."
+                },
+                "force": {
+                  "type": "boolean",
+                  "description": "Allow replacement of remote history after explicit approval; the result describes related or unrelated overwritten history."
+                },
+                "credentialIdOverride": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Host-resolved, call-scoped concrete credential; omitted by callers using the configured logical binding."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "exported": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "headCommit": {
+              "type": "string",
+              "nullable": true
+            },
+            "overwrites": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "relationship": {
+                      "type": "string",
+                      "enum": [
+                        "related"
+                      ]
+                    },
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Exact number of remote-only commits that the force update would replace."
+                    },
+                    "commits": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sha": {
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "sha",
+                          "summary"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Bounded examples of remote-only commits."
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "Whether additional examples were omitted."
+                    }
+                  },
+                  "required": [
+                    "relationship",
+                    "count",
+                    "commits",
+                    "truncated"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "relationship": {
+                      "type": "string",
+                      "enum": [
+                        "unrelated"
+                      ]
+                    },
+                    "count": {
+                      "enum": [
+                        "null"
+                      ],
+                      "nullable": true,
+                      "description": "Always null because histories without a common ancestor have no relative count."
+                    },
+                    "commits": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/anyOf/0/properties/overwrites/anyOf/0/properties/commits/items"
+                      },
+                      "description": "Bounded examples from the remote tip."
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "Whether additional examples were omitted."
+                    }
+                  },
+                  "required": [
+                    "relationship",
+                    "count",
+                    "commits",
+                    "truncated"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "clobberedLocalEdits": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "pushed"
+              ]
+            }
+          },
+          "required": [
+            "exported",
+            "headCommit",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exported": {
+              "$ref": "#/anyOf/0/properties/exported"
+            },
+            "headCommit": {
+              "$ref": "#/anyOf/0/properties/headCommit"
+            },
+            "overwrites": {
+              "$ref": "#/anyOf/0/properties/overwrites"
+            },
+            "clobberedLocalEdits": {
+              "$ref": "#/anyOf/0/properties/clobberedLocalEdits"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "already-at-remote"
+              ]
+            }
+          },
+          "required": [
+            "exported",
+            "headCommit",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exported": {
+              "$ref": "#/anyOf/0/properties/exported"
+            },
+            "headCommit": {
+              "$ref": "#/anyOf/0/properties/headCommit"
+            },
+            "overwrites": {
+              "$ref": "#/anyOf/0/properties/overwrites"
+            },
+            "clobberedLocalEdits": {
+              "$ref": "#/anyOf/0/properties/clobberedLocalEdits"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "remote-missing-created"
+              ]
+            }
+          },
+          "required": [
+            "exported",
+            "headCommit",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exported": {
+              "$ref": "#/anyOf/0/properties/exported"
+            },
+            "headCommit": {
+              "$ref": "#/anyOf/0/properties/headCommit"
+            },
+            "overwrites": {
+              "$ref": "#/anyOf/0/properties/overwrites"
+            },
+            "clobberedLocalEdits": {
+              "$ref": "#/anyOf/0/properties/clobberedLocalEdits"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "remote-advanced"
+              ]
+            },
+            "remoteHead": {
+              "type": "string"
+            },
+            "relationship": {
+              "type": "string",
+              "enum": [
+                "behind",
+                "diverged",
+                "unrelated"
+              ]
+            },
+            "aheadBy": {
+              "$ref": "#/anyOf/0/properties/exported"
+            },
+            "behindBy": {
+              "$ref": "#/anyOf/0/properties/exported"
+            }
+          },
+          "required": [
+            "exported",
+            "headCommit",
+            "outcome",
+            "remoteHead",
+            "relationship"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exported": {
+              "$ref": "#/anyOf/0/properties/exported"
+            },
+            "headCommit": {
+              "enum": [
+                "null"
+              ],
+              "nullable": true
+            },
+            "overwrites": {
+              "$ref": "#/anyOf/0/properties/overwrites"
+            },
+            "clobberedLocalEdits": {
+              "$ref": "#/anyOf/0/properties/clobberedLocalEdits"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "empty"
+              ]
+            }
+          },
+          "required": [
+            "exported",
+            "headCommit",
+            "outcome"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "force": false
+          }
+        ]
+      }
+    ]
+  },
+  "pullUpstream": {
+    "description": "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Review and publish an imported candidate only through vcs.compare, vcs.merge, vcs.commit, and vcs.push.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.pull"
+    },
+    "argsSchema": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to pull."
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to pull."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "dryRun": {
+                  "type": "boolean",
+                  "description": "Preview using an isolated temporary checkout; do not mutate the managed checkout, bridge state, semantic state, or remote."
+                },
+                "credentialIdOverride": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Host-resolved, call-scoped concrete credential; omitted by callers using the configured logical binding."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "remote": {
+          "type": "string",
+          "description": "Observed declared remote name."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Observed declared remote branch."
+        },
+        "observedCommit": {
+          "type": "string",
+          "nullable": true,
+          "description": "Exact observed remote branch head, or null when the branch is absent."
+        },
+        "changed": {
+          "type": "boolean",
+          "description": "Whether this pull authored a changed semantic snapshot candidate."
+        },
+        "behindBy": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aheadBy": {
+          "$ref": "#/properties/behindBy"
+        },
+        "remoteBranchExists": {
+          "type": "boolean",
+          "description": "False when the tracked remote branch does not exist yet; counts are 0/0 and a push may create it."
+        },
+        "incoming": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sha": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sha",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "imported": {
+          "type": "object",
+          "properties": {
+            "contextId": {
+              "type": "string",
+              "description": "Semantic context containing the external snapshot candidate."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "Committed candidate event created from the external snapshot."
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "semanticEvidence": {
+              "type": "object",
+              "properties": {
+                "applicationId": {
+                  "type": "string",
+                  "description": "Exact application committed by the import event."
+                },
+                "workUnitId": {
+                  "type": "string",
+                  "description": "Exact import work unit owned by that application."
+                },
+                "externalSnapshot": {
+                  "type": "object",
+                  "properties": {
+                    "sourceKind": {
+                      "type": "string",
+                      "enum": [
+                        "git",
+                        "archive",
+                        "filesystem",
+                        "upload",
+                        "generated"
+                      ]
+                    },
+                    "sourceUri": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "description": "Canonical credential-free identity of the observed external source."
+                    },
+                    "snapshotRevision": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sourceSubdir": {
+                      "type": "string",
+                      "minLength": 1,
+                      "nullable": true
+                    },
+                    "canonicalSnapshot": {
+                      "type": "string",
+                      "pattern": "^v1-sha256:[0-9a-f]{64}$",
+                      "description": "Canonical commitment to the complete admitted external file set."
+                    },
+                    "snapshotDigest": {
+                      "type": "string",
+                      "pattern": "^snapshot:[0-9a-f]{64}$",
+                      "description": "Semantic-workspace-derived commitment to the normalized imported descriptors."
+                    },
+                    "targetRepositoryIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Exact native repositories admitted from this snapshot."
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "sourceKind",
+                    "sourceUri",
+                    "snapshotRevision",
+                    "snapshotDigest",
+                    "targetRepositoryIds"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Canonical external snapshot recorded on the import work unit."
+                }
+              },
+              "required": [
+                "applicationId",
+                "workUnitId",
+                "externalSnapshot"
+              ],
+              "additionalProperties": false,
+              "description": "Identity-joined evidence returned atomically by the canonical semantic import."
+            }
+          },
+          "required": [
+            "contextId",
+            "eventId",
+            "changed",
+            "semanticEvidence"
+          ],
+          "additionalProperties": false
+        },
+        "clobberedLocalEdits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "remote",
+        "branch",
+        "observedCommit",
+        "changed",
+        "behindBy",
+        "aheadBy",
+        "remoteBranchExists",
+        "incoming"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "dryRun": true
+          }
+        ]
+      }
+    ]
+  },
+  "publishRepo": {
+    "description": "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.publish"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "expectedMainEventId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Bind public repository contents to this reviewed event, allowing unrelated workspace configuration changes."
+            },
+            "repoPath": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "organization": {
+              "type": "string"
+            },
+            "private": {
+              "type": "boolean"
+            },
+            "description": {
+              "type": "string"
+            },
+            "remote": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "credentialId": {
+              "type": "string"
+            },
+            "authorEmail": {
+              "type": "string"
+            },
+            "authorName": {
+              "type": "string"
+            },
+            "autoPush": {
+              "type": "boolean"
+            },
+            "force": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "repoPath"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "repoPath": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "remote": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "remoteUrl": {
+          "type": "string"
+        },
+        "webUrl": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "credentialId": {
+          "type": "string"
+        },
+        "credentialLogin": {
+          "type": "string"
+        },
+        "credentialTarget": {
+          "type": "string"
+        },
+        "credentialOwnerSource": {
+          "type": "string",
+          "enum": [
+            "explicit",
+            "credential-target",
+            "authenticated-user"
+          ]
+        },
+        "exported": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "headCommit": {
+          "type": "string",
+          "nullable": true
+        },
+        "pushed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repoPath",
+        "provider",
+        "remote",
+        "branch",
+        "remoteUrl",
+        "webUrl",
+        "owner",
+        "exported",
+        "headCommit",
+        "pushed"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "args": [
+          {
+            "repoPath": "projects/bgkit",
+            "private": true
+          }
+        ]
+      }
+    ]
+  },
+  "commitMapping": {
+    "description": "Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first).",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to inspect."
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "type": "string",
+              "description": "Workspace-relative repo/unit path to inspect."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0,
+                  "maximum": 1000
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "gitSha": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Semantic event represented by this Git commit."
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gitSha",
+          "eventId",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "args": [
+          "projects/bgkit",
+          {
+            "limit": 50
+          }
+        ]
+      }
+    ]
+  },
+  "importProject": {
+    "description": "Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence from the same atomic semantic import. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path])` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.project.import"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Workspace-relative target path for the imported repo; must sit under a supported import dir (e.g. \"projects/<name>\")."
+            },
+            "remote": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Git remote name, e.g. \"origin\"."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Durable HTTP(S) fetch/push URL without embedded credentials, query parameters, or fragments."
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "Default branch to track/clone; omit to use the remote's default."
+                }
+              },
+              "required": [
+                "name",
+                "url"
+              ],
+              "additionalProperties": false,
+              "description": "Remote to clone from and record as a shared remote."
+            },
+            "credentialIdOverride": {
+              "type": "string",
+              "nullable": true,
+              "description": "Call-scoped concrete credential override; omit to use the configured logical binding, or use null for an anonymous clone."
+            }
+          },
+          "required": [
+            "path",
+            "remote"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "remote": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Git remote name, e.g. \"origin\"."
+            },
+            "url": {
+              "type": "string",
+              "description": "Durable HTTP(S) fetch/push URL without embedded credentials, query parameters, or fragments."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Default branch to track/clone; omit to use the remote's default."
+            }
+          },
+          "required": [
+            "name",
+            "url"
+          ],
+          "additionalProperties": false
+        },
+        "candidate": {
+          "type": "object",
+          "properties": {
+            "contextId": {
+              "type": "string",
+              "description": "Semantic context containing the external snapshot candidate."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "Committed candidate event created from the external snapshot."
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "semanticEvidence": {
+              "type": "object",
+              "properties": {
+                "applicationId": {
+                  "type": "string",
+                  "description": "Exact application committed by the import event."
+                },
+                "workUnitId": {
+                  "type": "string",
+                  "description": "Exact import work unit owned by that application."
+                },
+                "externalSnapshot": {
+                  "type": "object",
+                  "properties": {
+                    "sourceKind": {
+                      "type": "string",
+                      "enum": [
+                        "git",
+                        "archive",
+                        "filesystem",
+                        "upload",
+                        "generated"
+                      ]
+                    },
+                    "sourceUri": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "description": "Canonical credential-free identity of the observed external source."
+                    },
+                    "snapshotRevision": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sourceSubdir": {
+                      "type": "string",
+                      "minLength": 1,
+                      "nullable": true
+                    },
+                    "canonicalSnapshot": {
+                      "type": "string",
+                      "pattern": "^v1-sha256:[0-9a-f]{64}$",
+                      "description": "Canonical commitment to the complete admitted external file set."
+                    },
+                    "snapshotDigest": {
+                      "type": "string",
+                      "pattern": "^snapshot:[0-9a-f]{64}$",
+                      "description": "Semantic-workspace-derived commitment to the normalized imported descriptors."
+                    },
+                    "targetRepositoryIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Exact native repositories admitted from this snapshot."
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "sourceKind",
+                    "sourceUri",
+                    "snapshotRevision",
+                    "snapshotDigest",
+                    "targetRepositoryIds"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Canonical external snapshot recorded on the import work unit."
+                }
+              },
+              "required": [
+                "applicationId",
+                "workUnitId",
+                "externalSnapshot"
+              ],
+              "additionalProperties": false,
+              "description": "Identity-joined evidence returned atomically by the canonical semantic import."
+            }
+          },
+          "required": [
+            "contextId",
+            "eventId",
+            "changed",
+            "semanticEvidence"
+          ],
+          "additionalProperties": false,
+          "description": "Semantic candidate to compare and merge before explicitly publishing protected main."
+        }
+      },
+      "required": [
+        "path",
+        "remote",
+        "candidate"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "args": [
+          {
+            "path": "projects/bgkit",
+            "remote": {
+              "name": "origin",
+              "url": "https://github.com/werg/bgkit.git",
+              "branch": "vibestudio-bridge"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

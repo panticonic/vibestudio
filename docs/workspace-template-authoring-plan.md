@@ -42,9 +42,12 @@ reviewed bytes.
    `meta/vibestudio.yml`. Package-addressed provider declarations follow the
    selected package's owning unit.
 3. Review the included units, generated manifest, source event, and fingerprint.
-4. `publishAuthoring({commandId, intent, expectedFingerprint, destination,
-version, creation?, credentialId?})` publishes that exact reviewed release.
-   Use the same command ID and captured arguments when retrying.
+4. `reviewPublication({commandId, intent, expectedFingerprint, destination,
+version, creation?, credentialId?})` checks publication access and returns the
+   upstream diff and exact remote commit.
+5. `publishAuthoring({...reviewedRequest, expectedRemoteCommit})` publishes that
+   exact reviewed release. Use the same command ID and captured arguments when
+   retrying.
 
 The Publish tab captures the reviewed request before submission and retains it
 across reopening, so a connection failure can be retried. The returned URL,
@@ -55,7 +58,8 @@ tag, and commit identify the published release. Registry promotion is separate.
 When publishing to an existing repository, the complete selected closure is
 the next release. Publication preserves Git history and replaces the destination
 tree; units and files omitted from the release disappear from that tree.
-There is no automatic union with the destination and no remote-diff preview.
+Review the upstream diff before publishing; there is no automatic union with
+the destination.
 Choose the entire release deliberately, including every unit you intend to keep.
 
 Selecting Base as a publication destination does not turn a derivative
@@ -67,10 +71,18 @@ CLI example:
 ```sh
 vibestudio templates author-parts
 vibestudio templates author-inspect --name News --description 'News workspace' \
-  --part panels/news --receipt news-plan.json
-vibestudio templates author-publish news-plan.json --owner alice \
-  --repository news --version 1.0.0 --command-id news-1.0.0
+  --part panels/news --part workers/news-agent --receipt news-plan.json
+vibestudio templates author-review news-plan.json --owner alice \
+  --repository news --version 1.0.0 --command-id news-1.0.0 \
+  --receipt news-review.json
+vibestudio templates author-publish news-review.json --receipt news-publication.json
 ```
+
+The plan, reviewed request and publication are separate receipts. The reviewed
+request retains the original source fingerprint and command ID together with
+the compared remote commit; publishing rejects changes to either source.
+Receipt files are created exclusively, so retain them and use a new output
+filename when reconciling an uncertain response.
 
 ## Contribute units to an installed source
 

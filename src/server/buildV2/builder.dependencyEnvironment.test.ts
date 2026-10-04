@@ -19,6 +19,54 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it.each([true, false])(
+    "owns only declared transitive workspace source links (declared=%s)",
+    async (declared) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workspace-dependency-"));
+      try {
+        const modules = path.join(root, "prepared", "node_modules");
+        const source = path.join(root, "packages", "owner");
+        const child = path.join(root, "packages", "child");
+        fs.mkdirSync(modules, { recursive: true });
+        fs.mkdirSync(path.join(source, "node_modules"), { recursive: true });
+        fs.mkdirSync(child, { recursive: true });
+        fs.writeFileSync(
+          path.join(source, "package.json"),
+          JSON.stringify({
+            name: "owner",
+            type: "module",
+            exports: "./index.js",
+            dependencies: declared ? { child: "workspace:*" } : {},
+          })
+        );
+        fs.writeFileSync(path.join(source, "index.js"), 'export { marker } from "child";');
+        fs.writeFileSync(
+          path.join(child, "package.json"),
+          JSON.stringify({ name: "child", type: "module", exports: "./index.js" })
+        );
+        fs.writeFileSync(
+          path.join(child, "index.js"),
+          'export const marker = "declared workspace source";'
+        );
+        fs.symlinkSync(source, path.join(modules, "owner"), "junction");
+        fs.symlinkSync(child, path.join(source, "node_modules", "child"), "junction");
+        const entry = path.join(root, "entry.js");
+        fs.writeFileSync(entry, 'export { marker } from "owner";');
+        const build = esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          write: false,
+          logLevel: "silent",
+          plugins: [createDependencyEnvironmentResolvePlugin([modules])],
+        });
+        if (declared)
+          expect((await build).outputFiles[0]?.text).toContain("declared workspace source");
+        else await expect(build).rejects.toThrow("escaped the prepared build environment");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
   it("resolves absolute entry points and file imports without treating them as packages", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-file-import-"));
     try {

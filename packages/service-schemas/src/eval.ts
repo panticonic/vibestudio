@@ -158,7 +158,7 @@ function refineEvalAuthorityIntent(
   if (
     Array.isArray(value.preauthorize) &&
     value.preauthorize.length > 0 &&
-    value.approvals !== "prompt"
+    (value.approvals ?? "prompt") !== "prompt"
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -302,6 +302,27 @@ export const evalGetArgsSchema = z
   .object({
     ...evalRouteShape,
     runId: z.string().min(1),
+  })
+  .strict();
+
+/** An exact domain-owned terminal receipt; transport credentials are not its identity. */
+export const evalResultIdentitySchema = z
+  .object({
+    runDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    resultDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export const evalResultReceiptSchema = evalResultIdentitySchema
+  .extend({
+    runId: z.string().min(1),
+    result: evalRunResultSchema,
+    acknowledged: z.boolean(),
+  })
+  .strict();
+export type EvalResultReceipt = z.infer<typeof evalResultReceiptSchema>;
+export const evalAcknowledgeArgsSchema = evalGetArgsSchema
+  .extend({
+    receipt: evalResultIdentitySchema,
   })
   .strict();
 
@@ -483,6 +504,42 @@ export const evalMethods = defineServiceMethods({
       "Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push.",
     access: { sensitivity: "read" },
   },
+  receipt: {
+    website: {
+      kind: "eligible",
+      rationale: "Read the authenticated caller's own execution receipt.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.read",
+      rationale: "Owner-scoped read of an immutable result; no new execution or authority.",
+    },
+    args: z.tuple([evalGetArgsSchema]),
+    returns: evalResultReceiptSchema.nullable(),
+    description:
+      "Read the exact canonical terminal result and its admission/result digests. Null means no terminal receipt exists; it never means success.",
+    access: { sensitivity: "read" },
+  },
+  acknowledge: {
+    website: {
+      kind: "eligible",
+      rationale: "Acknowledge only the authenticated caller's exact retained result.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale: "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
+    },
+    args: z.tuple([evalAcknowledgeArgsSchema]),
+    returns: z.object({ acknowledged: z.literal(true), duplicate: z.boolean() }).strict(),
+    description:
+      "Acknowledge a terminal result after durably accepting it. Both admission and result digests must match. The closed identity and result remain retained.",
+    access: { sensitivity: "write" },
+  },
   events: {
     website: {
       kind: "eligible",
@@ -550,7 +607,7 @@ export const evalMethods = defineServiceMethods({
     args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
-      "Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed.",
+      "Permanently retire one explicitly finite eval scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. Persistent notebooks cannot be disposed through this method.",
     access: { sensitivity: "destructive" },
   },
   readScopeTextPage: {
@@ -700,7 +757,8 @@ export function createEvalExecutor(
       }
       throw abortReason(options.signal);
     };
-    if (options.signal?.aborted) return cancel();
+    // No start request has been sent, so this invocation owns nothing to cancel.
+    if (options.signal?.aborted) throw abortReason(options.signal);
 
     const started = await handle.start(options.receiver);
     const immediate = settledResult(started.snapshot);

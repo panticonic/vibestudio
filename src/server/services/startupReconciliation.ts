@@ -4,7 +4,7 @@
  * Runs once during server bootstrap. The order is load-bearing:
  *   1. Hydrate the in-memory entityCache from the DO's active set.
  *   2. Reconcile rows whose cleanup hooks didn't complete before a crash —
- *      after restart their runtime resources are gone, so mark them complete.
+ *      run the same canonical retirement owner before permitting reactivation.
  *   3. Safety GC sweep — hard-delete retired rows older than the grace window
  *      that no slot_history row references. Fires no hooks.
  *   4. Optionally run lifecycle crash/server-restart recovery after WorkspaceDO
@@ -21,6 +21,8 @@ export type StartupReconciliationDispatcher = <T>(method: string, ...args: unkno
 export interface StartupReconciliationDeps {
   dispatchWorkspaceDO: StartupReconciliationDispatcher;
   entityCache: EntityCache;
+  /** The shared cleanup owner performs teardown and exact lifetime completion. */
+  onRetire: (record: EntityRecord) => Promise<void>;
   /** Optional safety-sweep grace window (ms). Default: DO's own DEFAULT_GRACE_MS. */
   gcGraceMs?: number;
   recoverLifecycle?: () => Promise<void>;
@@ -64,9 +66,9 @@ export async function runStartupReconciliation(
     for (const record of incomplete) {
       incompleteCleanupIds.push(record.id);
       try {
-        await deps.dispatchWorkspaceDO<undefined>("entityCleanupComplete", record.id);
+        await deps.onRetire(record);
       } catch (err) {
-        log.warn(`[Bootstrap] entityCleanupComplete failed for ${record.id}:`, err);
+        log.warn(`[Bootstrap] entity retirement cleanup failed for ${record.id}:`, err);
       }
     }
   } catch (err) {

@@ -33,7 +33,7 @@ export const templateRegistryEntrySchema = z
     tags: z.array(z.string().trim().min(1)).optional(),
     recommended: z.boolean().optional(),
     consumers: z
-      .array(z.enum(["base", "personal", "system"]))
+      .array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u))
       .min(1)
       .optional(),
   })
@@ -74,6 +74,20 @@ export const templateRegistrySchema = z
       }
       ids.add(entry.id);
       urls.add(entry.url);
+    }
+    const byId = new Map(registry.templates.map((entry) => [entry.id, entry]));
+    for (const [index, entry] of registry.templates.entries()) {
+      if (entry.role !== "development") continue;
+      for (const [consumerIndex, consumer] of (entry.consumers ?? []).entries()) {
+        const target = byId.get(consumer);
+        if (!target || target.role === "development") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["templates", index, "consumers", consumerIndex],
+            message: !target ? "unknown consumer" : "consumer is not installable",
+          });
+        }
+      }
     }
   });
 export type TemplateRegistry = z.infer<typeof templateRegistrySchema>;

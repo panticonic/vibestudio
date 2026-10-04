@@ -55,6 +55,14 @@ export const streamChunkEnvelopeSchema = z
   })
   .strict();
 
+const publicExtensionInvocationArgs = z.tuple([
+  z.string().describe(
+    "Extension identity: prefer the canonical package name from build.listUnits entries with kind extension. The source path and its exact final segment are also accepted. A display title or guessed abbreviation is not an identifier.",
+  ),
+  z.string().describe("Public method declared by that extension's methodAuthority; use its API contract for the positional arguments."),
+  z.array(z.unknown()).describe("Positional arguments to the selected extension method."),
+]);
+
 export const extensionsMethods = defineServiceMethods({
   invoke: {
     website: { kind: "eligible", rationale: "The host resolves and enforces the exact sealed extension method policy before invocation." },
@@ -67,8 +75,9 @@ export const extensionsMethods = defineServiceMethods({
         "Invocation is limited to an installed, approved extension and preserves the admitted caller and execution-session context; the extension's own sensitive operations remain authority-checked",
     },
     description:
-      "Invoke a public method on a running installed extension and await its result. Provider-namespaced methods are rejected.",
-    args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
+      "Invoke a public method on a declared, approved extension and await its result. Discover canonical extension names with build.listUnits; the invocation boundary builds and activates cold onInvoke extensions. Provider-namespaced methods are rejected.",
+    args: publicExtensionInvocationArgs,
+    argumentNames: ["extension", "method", "args"],
     returns: JsonValueSchema,
     access: INVOKE_ACCESS,
     authority: extensionInvocationAuthority,
@@ -110,7 +119,8 @@ export const extensionsMethods = defineServiceMethods({
     },
     description:
       "Invoke a public streaming method on a running extension; the host proxies its byte stream back. Provider-namespaced methods are rejected.",
-    args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
+    args: publicExtensionInvocationArgs,
+    argumentNames: ["extension", "method", "args"],
     access: INVOKE_ACCESS,
   },
   streamingMethods: {

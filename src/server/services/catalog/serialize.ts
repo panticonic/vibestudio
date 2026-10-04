@@ -18,7 +18,14 @@ export function serializeMethod(method: MethodSchema) {
     ...(method.crossWorkspace === true ? { crossWorkspace: true } : {}),
     ...(method.description ? { description: method.description } : {}),
     ...(method.authority ? { authority: method.authority } : {}),
-    ...(method.access ? { access: method.access } : {}),
+    ...(method.access || method.capability
+      ? {
+          access: {
+            ...(method.access ?? {}),
+            ...(method.capability ? { capability: method.capability } : {}),
+          },
+        }
+      : {}),
     ...(method.examples ? { examples: method.examples } : {}),
     ...(method.errors ? { errors: method.errors } : {}),
     ...(method.seeAlso ? { seeAlso: method.seeAlso } : {}),

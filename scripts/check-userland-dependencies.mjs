@@ -33,10 +33,6 @@ const RUNTIME_DEPENDENCY_SECTIONS = ["dependencies", "peerDependencies", "option
 // `relative/package.json:section:package` entry here only with a concrete
 // interoperability or integrity reason.
 const EXACT_PIN_EXCEPTIONS = new Map([
-  [
-    "packages/pi-ai/package.json:dependencies:@earendil-works/pi-ai",
-    "the package applies a source patch to exactly 0.99.1",
-  ],
   ...[
     "@notifee/react-native",
     "@react-native-community/netinfo",
@@ -62,8 +58,18 @@ const EXACT_PIN_EXCEPTIONS = new Map([
   ]),
 ]);
 
-export function collectExactUserlandDependencyPins(userlandRoot) {
+// Native runtime packages are one reviewed immutable Host/workspace closure.
+// A new consumer must use the same release, regardless of its unit path.
+const GOVERNED_RUNTIME_PACKAGES = new Set([
+  "@panticonic/pi-ai",
+  "@panticonic/pi-chord",
+  "@panticonic/pi-durable",
+]);
+
+export function collectExactUserlandDependencyPins(userlandRoot, appRoot = defaultAppRoot) {
   const root = path.resolve(userlandRoot);
+  const hostManifest = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+  const hostDependencies = hostManifest.dependencies ?? {};
   const findings = [];
   const visit = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -81,6 +87,7 @@ export function collectExactUserlandDependencyPins(userlandRoot) {
         if (!dependencies || typeof dependencies !== "object") continue;
         for (const [name, specifier] of Object.entries(dependencies)) {
           if (typeof specifier !== "string" || !EXACT_SEMVER.test(specifier)) continue;
+          if (GOVERNED_RUNTIME_PACKAGES.has(name) && hostDependencies[name] === specifier) continue;
           const key = `${relative}:${section}:${name}`;
           if (EXACT_PIN_EXCEPTIONS.has(key)) continue;
           findings.push({ relative, section, name, specifier });

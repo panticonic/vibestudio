@@ -3,7 +3,7 @@
  * whose durable retire succeeded but whose post-retire hooks failed.
  *
  * The reaper queries WorkspaceDO for rows with `retired_at IS NOT NULL AND
- * cleanup_complete = 0`, re-runs the hooks, then marks cleanup_complete=1.
+ * cleanup_complete = 0` and calls the shared exact-lifetime cleanup owner.
  * It's a safety net; on a clean run there is nothing to do.
  */
 
@@ -20,7 +20,7 @@ export interface CleanupReaperDeps {
 
 export interface CleanupReaper {
   start: () => void;
-  stop: () => void;
+  stop: () => Promise<void>;
   /** Run one pass synchronously. Returns count processed. */
   sweep: () => Promise<number>;
 }
@@ -30,30 +30,34 @@ const DEFAULT_INTERVAL_MS = 30_000;
 export function createCleanupReaper(deps: CleanupReaperDeps): CleanupReaper {
   const intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let running = false;
+  let flight: Promise<number> | null = null;
 
-  async function sweep(): Promise<number> {
-    if (running) return 0;
-    running = true;
-    try {
-      const rows = (await deps.doDispatch.dispatch(
-        deps.workspaceDORef,
-        "entityFindIncompleteCleanups"
-      )) as EntityRecord[];
-      let processed = 0;
-      for (const record of rows) {
-        try {
-          await deps.onRetire(record);
-          await deps.doDispatch.dispatch(deps.workspaceDORef, "entityCleanupComplete", record.id);
-          processed += 1;
-        } catch (err) {
-          deps.logger?.warn(`cleanupReaper: retry failed for ${record.id}:`, err);
-        }
+  async function runSweep(): Promise<number> {
+    const rows = (await deps.doDispatch.dispatch(
+      deps.workspaceDORef,
+      "entityFindIncompleteCleanups"
+    )) as EntityRecord[];
+    let processed = 0;
+    for (const record of rows) {
+      try {
+        await deps.onRetire(record);
+        processed += 1;
+      } catch (err) {
+        deps.logger?.warn(`cleanupReaper: retry failed for ${record.id}:`, err);
       }
-      return processed;
-    } finally {
-      running = false;
     }
+    return processed;
+  }
+
+  function sweep(): Promise<number> {
+    if (flight) return Promise.resolve(0);
+    const current = runSweep();
+    flight = current;
+    const release = () => {
+      if (flight === current) flight = null;
+    };
+    void current.then(release, release);
+    return current;
   }
 
   return {
@@ -66,10 +70,10 @@ export function createCleanupReaper(deps: CleanupReaperDeps): CleanupReaper {
       }, intervalMs);
       if (typeof timer.unref === "function") timer.unref();
     },
-    stop: () => {
-      if (!timer) return;
-      clearInterval(timer);
+    stop: async () => {
+      if (timer) clearInterval(timer);
       timer = null;
+      if (flight) await flight;
     },
     sweep,
   };

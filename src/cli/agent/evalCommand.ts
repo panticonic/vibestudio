@@ -147,7 +147,6 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     // credential or workspace selection to validate here.
     const { client, session } = resolveSessionScope(inv);
 
-    const evalClient = typedClient("eval", evalMethods, client);
     const scopeKey = session.scopeKey;
 
     const runArgs = {
@@ -159,6 +158,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           ? { kind: "context-file" as const, path: serverPath, syntax }
           : { kind: "inline" as const, code: code!, syntax },
       imports,
+      ...(inv.flags["fresh-scope"] === true ? { reset: true } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     };
     let streamedConsole = "";
@@ -281,15 +281,6 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     );
     let result;
     try {
-      // --fresh-scope wipes the persistent scope (and user db) before the run,
-      // so the snippet starts empty. The event watch is already active so an
-      // approval wait cannot look like a dead CLI request.
-      if (inv.flags["fresh-scope"] === true) {
-        await evalClient.reset({
-          target: { kind: "owner-session", sessionId: session.entityId },
-          scopeKey,
-        });
-      }
       const execution = executeEval(runArgs);
       const observedExecution =
         approvalLevel === 0 ? execution : Promise.race([execution, autoApprovalFailure]);

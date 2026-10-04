@@ -96,6 +96,10 @@ async function fixture(options: { importFailsOnce?: boolean } = {}): Promise<Fix
       await fs.writeFile(path.join(destination, "src", "b.ts"), "b\n", { mode: 0o644 });
       await fs.writeFile(path.join(destination, "a.ts"), "a\n", { mode: 0o644 });
       await fs.writeFile(path.join(destination, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
+      // Materialization establishes exact source modes independently of the caller's umask.
+      await fs.chmod(path.join(destination, "src", "b.ts"), 0o644);
+      await fs.chmod(path.join(destination, "a.ts"), 0o644);
+      await fs.chmod(path.join(destination, "run.sh"), 0o755);
     }
   );
   const semantic: NativeDevelopmentSemanticAdapter = {

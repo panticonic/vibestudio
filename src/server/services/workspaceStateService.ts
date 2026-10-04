@@ -6,6 +6,7 @@
  * Panels and workers manipulate slots via runtime.*, not directly here.
  */
 
+import type { StorageIncarnation, WakeOwnerKey } from "@vibestudio/durable";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
@@ -68,6 +69,7 @@ export type SlotStateChange =
 export interface WorkspaceStateServiceDeps {
   doDispatch: DoDispatcher;
   workspaceId: string;
+  storageIncarnation(key: WakeOwnerKey): StorageIncarnation;
   /** Mechanical transport to Base's single workspace-presentation owner. */
   presentationDispatch(method: string, args: unknown[]): Promise<unknown>;
   /** Resolve compact unit decoration from the exact source coordinate in panel history. */
@@ -593,6 +595,21 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       lifecycleLeaseClear: async (_ctx, [input]) => {
         assertOwnLifecycleKey(_ctx.caller, input, "clear a lifecycle lease for");
         await dispatch<undefined>("lifecycleLeaseClear", [input]);
+      },
+      alarmSourceRegister: async (ctx, [input]) => {
+        assertOwnLifecycleKey(ctx.caller, input, "register a wake source for");
+        return dispatch<string>("alarmSourceRegister", [
+          { ...input, ...deps.storageIncarnation(input) },
+        ]);
+      },
+      alarmSourcePublish: async (ctx, [input]) => {
+        assertOwnLifecycleKey(ctx.caller, input, "publish a wake for");
+        if (input.incarnation !== deps.storageIncarnation(input).incarnation) return "stale";
+        const result = await dispatch<"accepted" | "duplicate" | "stale">("alarmSourcePublish", [
+          input,
+        ]);
+        deps.onAlarmChanged?.();
+        return result;
       },
       alarmSet: async (_ctx, [input]) => {
         assertOwnLifecycleKey(_ctx.caller, input, "set an alarm for");

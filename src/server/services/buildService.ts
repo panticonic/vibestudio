@@ -125,6 +125,7 @@ export function createBuildService(deps: {
         deps.buildSystem.resolveTestSuite(unit, ref, suite),
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
+      prepareTypecheck: (_ctx, [unit, ref]) => deps.buildSystem.prepareTypecheck(unit, ref),
       getBuildMetadata: (_ctx, [key, options]) => {
         const bs = deps.buildSystem;
         const build = bs.getBuildByKey(key);

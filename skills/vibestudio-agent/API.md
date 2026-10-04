@@ -69,6 +69,10 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 | `authority.listTaskRules` | List the active reusable rules for one chat-bound agent task. |
 | `authority.resetTaskRules` | Revoke every reusable rule attached to one chat-bound agent task. |
 | `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |
+| `authority.acquisitionReceipt` | Read canonical admission and outcome for an acquisition in the authenticated session. |
+| `authority.outstandingAcquisitions` | Read one bounded page of acquisitions awaiting acknowledgement in the authenticated session. |
+| `authority.withdrawAcquisition` | Withdraw an exact acquisition after its owning operation ends; retain any outcome already committed. |
+| `authority.acknowledgeAcquisition` | Acknowledge an exact acquisition outcome after the owning agent commits its consumption. |
 | `authority.preflight` | Dry-run a service method's complete authority contract without prompting or consuming authority. |
 
 ## `blobstore`
@@ -120,13 +124,14 @@ Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
-| `build.listUnits` | List declared executable source units and their build readiness. This is not a process list: use runtime.supervision.list for exact live entities. |
+| `build.listUnits` | List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list. |
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildArtifacts` | Return the content-free artifact manifest for an immutable cached build, or null when the build is unavailable. |
 | `build.buildWebsite` | Build a panel package's manifest-declared portable website entry at an exact workspace ref and return a content-free immutable artifact handle. |
 | `build.getTestArtifact` | Build a declared test suite from an exact workspace state. Runtime is read from the unit manifest and cannot be overridden by the caller. |
 | `build.resolveTestSuite` | Resolve one declared test suite and its execution runtime without executing or compiling source. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
+| `build.prepareTypecheck` | Prepare an exact workspace unit for native source analysis, including declared development dependencies, selected installed SDK exports, and the unit's module conditions. Returned paths are read-only native resources valid for the runtime lifetime. This does not compile or execute the unit, publish source, or expose host package-manager workspaces. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. The response is compact by default; pass includeExecutableModules:true only when the sealed source inventory is required. |
 | `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return a compact, agent-actionable report. Read all diagnostics from report.diagnostics or target-specific diagnostics from report.builds. Artifact manifests are intentionally excluded; inspect an immutable build key separately when artifact provenance is needed. This advisory projection does not publish source, authorize publication, or advance any head. |
 | `build.getPerformanceProfile` | Profile the canonical exact-context build report, summarize immutable artifact/module sizes without returning bundle contents, and optionally run the same report again to verify the cache path. The first run is labeled from immutable builtAt evidence rather than assumed cold. |
@@ -169,11 +174,11 @@ Authority principals: `code`, `host`, `user`, `website`
 | `credentials.deleteClientConfig` | Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); requires critical account-provider deletion authority bound to the exact config id. |
 | `credentials.forwardOAuthCallback` | Deliver an inbound OAuth provider callback (code/state, or a full callback URL) to its pending connection transaction, validating the caller against the transaction's redirect strategy. |
 | `credentials.cancelOAuth` | Cancel a pending interactive OAuth connection transaction. |
-| `credentials.listStoredCredentials` | List summaries of stored URL-bound credentials visible to the caller; secret material is never included. |
+| `credentials.listStoredCredentials` | List secret-free lifecycle summaries of stored URL-bound credentials visible to the caller. These summaries are an inventory; use resolveCredential for the host's exact URL/provider/use matching rather than reimplementing audience selection. |
 | `credentials.summarizeStoredCredentials` | Return only the aggregate count and represented lifecycle states for stored credentials; no per-credential fields are included. |
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
-| `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches. |
+| `credentials.resolveCredential` | Resolve the host's exact URL/provider/id and intended-use selection. An unbound audience returns null without opening UI; a matched credential returns a secret-free summary after any required use authorization. Preserve failures other than the canonical null miss. |
 | `credentials.beginWebsitePublication` | Review and open a short-lived provider-neutral publication operation for one exact artifact and destination. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
@@ -208,7 +213,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `docs.describe` | Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller. |
 | `docs.getSchema` | Return just the args/returns JSON Schema for a catalog id. |
 | `docs.listSurfaces` | List catalog surfaces and the number of entries the caller can see in each. |
-| `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...). |
+| `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method with rpc.call("main", "<service>.<method>", args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client. |
 | `docs.describeService` | Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service. |
 
 ## `durableWork`
@@ -231,9 +236,11 @@ Authority principals: `code`, `host`, `user`, `website`
 |--------|-------------|
 | `eval.start` | Durably accept one caller-owned eval run. A new run executes asynchronously in the owner's EvalDO; replaying the same runId and exact input observes the same run, while input drift is rejected. A trivially fast or replayed settled run may return its terminal snapshot immediately. |
 | `eval.get` | Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push. |
+| `eval.receipt` | Read the exact canonical terminal result and its admission/result digests. Null means no terminal receipt exists; it never means success. |
+| `eval.acknowledge` | Acknowledge a terminal result after durably accepting it. Both admission and result digests must match. The closed identity and result remain retained. |
 | `eval.events` | Read one stable, bounded page of durable events for a caller-owned eval run. Subscribe to the canonical eval:run-event through events.watch for live delivery, then use this cursor page to catch up after reconnect or backpressure. |
 | `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
-| `eval.dispose` | Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed. |
+| `eval.dispose` | Permanently retire one explicitly finite eval scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. Persistent notebooks cannot be disposed through this method. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
 | `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
@@ -545,8 +552,8 @@ Authority principals: `code`, `host`, `user`, `website`
 | `runtime.createSubagentContext` | Create a subagent's child context from a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's committed event and exact event/application working head while retaining provenance lineage, ensure its projection directory, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes context lifecycle and registry operations; callers must not hand-roll this. |
 | `runtime.supervision.list` | List supervised executable entities through their exact driver identities. |
 | `runtime.supervision.describe` | Describe one supervised entity, including immutable artifact identity and supported facets. |
-| `runtime.supervision.health` | Read bounded health, failures, logs, and build events for one supervised entity. |
-| `runtime.supervision.logs` | Read retained logs for one exact supervised entity. |
+| `runtime.supervision.health` | Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here. |
+| `runtime.supervision.logs` | Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those. |
 | `runtime.supervision.restart` | Restart one exact supervised entity through its owning driver. |
 | `runtime.supervision.activate` | Activate one exact admitted app or extension release. |
 | `runtime.supervision.prepare` | Prepare an immutable app release from a source ref. |

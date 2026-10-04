@@ -8,8 +8,16 @@ import { describe, it, expect } from "vitest";
 import { docsMethods, serializedServiceMethodSchema } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 import { describeEvalMethod } from "../../../../packages/builtin/src/eval-engine/evalSurfaceHelp.js";
+import { permissionsMethods } from "@vibestudio/service-schemas/permissions";
 
 describe("help('docs.search') via the canonical serializer", () => {
+  it("preserves the receiver's declared capability through serialization and help", () => {
+    const wire = serializedServiceMethodSchema.parse(serializeMethod(permissionsMethods.list));
+    expect(wire.access).toMatchObject({ capability: "permissions.read", sensitivity: "read" });
+    expect(describeEvalMethod("permissions.list", wire).access).toMatchObject({
+      capability: "permissions.read",
+    });
+  });
   it("names parameters from argumentNames and keeps the worked example executable", () => {
     const wire = serializedServiceMethodSchema.parse(serializeMethod(docsMethods.search));
     expect(wire.argumentNames).toEqual(["query", "options"]);

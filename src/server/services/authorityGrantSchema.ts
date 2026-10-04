@@ -1,4 +1,9 @@
 import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
+import {
+  AUTHORITY_ACQUISITION_OBJECTS,
+  AUTHORITY_TARGET_JOIN_INDEX,
+} from "./authorityAcquisitionSchema.js";
+import { TARGET_AUTHORITY_REQUEST_OBJECTS } from "./targetAuthorityRequestSchema.js";
 
 export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   id TEXT PRIMARY KEY,
@@ -29,7 +34,8 @@ export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   subject_generation INTEGER CHECK (subject_generation IS NULL OR subject_generation >= 0),
   document_id TEXT,
   requesting_code_principal TEXT,
-  task_authority TEXT
+  task_authority TEXT,
+  lineage_at_consent TEXT
 )`;
 
 const AUTHORITY_SUBJECTS_SQL = `CREATE TABLE authority_subjects (
@@ -67,11 +73,14 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 11;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 15;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,
   objects: [
+    ...AUTHORITY_ACQUISITION_OBJECTS,
+    ...TARGET_AUTHORITY_REQUEST_OBJECTS,
+    AUTHORITY_TARGET_JOIN_INDEX,
     { type: "table", name: "authority_grants", sql: AUTHORITY_GRANTS_TABLE_SQL },
     { type: "table", name: "authority_subjects", sql: AUTHORITY_SUBJECTS_SQL },
     {
@@ -97,39 +106,3 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
     },
   ],
 };
-
-/** Old consent was workspace-local; NULL preserves that meaning. */
-export const AUTHORITY_GRANTS_MIGRATIONS = [
-  {
-    fromVersion: 10,
-    toVersion: 11,
-    migrate(db: import("node:sqlite").DatabaseSync): void {
-      db.exec("ALTER TABLE authority_grants ADD COLUMN task_authority TEXT");
-    },
-  },
-  {
-    fromVersion: 9,
-    toVersion: 10,
-    migrate(db: import("node:sqlite").DatabaseSync): void {
-      db.exec("ALTER TABLE authority_grants ADD COLUMN requesting_code_principal TEXT");
-    },
-  },
-  {
-    fromVersion: 8,
-    toVersion: 9,
-    migrate(db: import("node:sqlite").DatabaseSync): void {
-      db.exec(
-        "ALTER TABLE authority_grants ADD COLUMN subject_generation INTEGER CHECK (subject_generation IS NULL OR subject_generation >= 0)"
-      );
-      db.exec("ALTER TABLE authority_grants ADD COLUMN document_id TEXT");
-      db.exec(AUTHORITY_SUBJECTS_SQL);
-    },
-  },
-  {
-    fromVersion: 7,
-    toVersion: 8,
-    migrate(db: import("node:sqlite").DatabaseSync): void {
-      db.exec("ALTER TABLE authority_grants ADD COLUMN source_workspace_id TEXT");
-    },
-  },
-];

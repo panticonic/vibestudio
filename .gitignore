@@ -78,3 +78,6 @@ test-results/
 
 # CI-built native release matrix, validated before packaging.
 /native/isolation/artifacts/
+
+# Private Durable Pi verification captures and disposable proof artifacts.
+/experiments/durable-pi/

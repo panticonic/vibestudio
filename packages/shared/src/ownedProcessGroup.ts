@@ -6,18 +6,15 @@ import {
   type OwnedProcessIdentity,
 } from "./ownedProcessIdentity.mjs";
 
-const DEFAULT_TERM_TIMEOUT_MS = 5_000;
-const DEFAULT_KILL_TIMEOUT_MS = 5_000;
-
 export interface OwnedProcessGroupHandle {
   readonly identity: OwnedProcessIdentity | null;
-  /** Resolve only after the detached group has no live members. Idempotent. */
+  /** Observe the original leader exit, retire its orphans, and join producer close. */
+  join(): Promise<void>;
+  /** Request leader-owned shutdown, or explicitly force termination. Idempotent. */
   retire(signal?: NodeJS.Signals): Promise<void>;
 }
 
 export interface OwnedProcessGroupOptions {
-  termTimeoutMs?: number;
-  killTimeoutMs?: number;
   groupExists?: (processGroupId: number) => boolean;
   signalGroup?: (processGroupId: number, signal: NodeJS.Signals) => void;
   requestGracefulStop?: (signal: NodeJS.Signals) => void;
@@ -34,6 +31,8 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   private readonly options: OwnedProcessGroupOptions;
   private retirement: Promise<void> | null = null;
   private readonly childClosed: Promise<void> | null;
+  private readonly childExited: Promise<void> | null;
+  private stopRequested = false;
 
   private constructor(
     child: ChildProcess | null,
@@ -41,6 +40,9 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
     adoptedIdentity: OwnedProcessIdentity | null
   ) {
     this.child = child;
+    this.childExited = child
+      ? new Promise<void>((resolve) => child.once("exit", () => resolve()))
+      : null;
     this.childClosed = child
       ? new Promise<void>((resolve) => child.once("close", () => resolve()))
       : null;
@@ -81,61 +83,77 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   }
 
   retire(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
-    this.retirement ??= this.retireOnce(signal)
-      .then(async () => {
-        await this.childClosed;
-      })
-      .catch((cause: unknown) => {
-        throw Object.assign(new Error("Owned process-group retirement failed", { cause }), {
-          code: "EOWNERSHIP",
-        });
-      });
+    try {
+      // An explicit force request remains authoritative even when graceful
+      // shutdown or an observer join is already in flight.
+      if (signal === "SIGKILL") {
+        if (process.platform === "win32") this.child?.kill(signal);
+        else if (this.groupExists()) this.signal(signal);
+      } else if (!this.stopRequested && this.leaderIsLive()) {
+        this.stopRequested = true;
+        if (this.options.requestGracefulStop) this.options.requestGracefulStop(signal);
+        else if (this.child) {
+          if (!this.child.kill(signal) && this.leaderIsLive()) {
+            throw new Error("Original process leader did not accept shutdown signal");
+          }
+        } else {
+          // A recovered receipt still grants only the exact original leader.
+          // Its children belong to that leader until it has actually exited.
+          try {
+            process.kill(this.identity!.pid, signal);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          }
+        }
+      }
+    } catch (cause) {
+      return Promise.reject(this.ownershipFailure(cause));
+    }
+    return this.join();
+  }
+
+  join(): Promise<void> {
+    this.retirement ??= this.joinOnce().catch((cause: unknown) => {
+      throw this.ownershipFailure(cause);
+    });
     return this.retirement;
   }
 
-  private async retireOnce(signal: NodeJS.Signals): Promise<void> {
-    if (process.platform === "win32") {
-      if (!this.child) throw new Error("Owned Windows process handle is unavailable");
-      if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill(signal);
-      if (await this.waitForChildExit(this.options.termTimeoutMs ?? DEFAULT_TERM_TIMEOUT_MS))
-        return;
-      this.child.kill("SIGKILL");
-      if (!(await this.waitForChildExit(this.options.killTimeoutMs ?? DEFAULT_KILL_TIMEOUT_MS))) {
-        throw Object.assign(new Error("Owned process did not retire after forced termination"), {
-          code: "EOWNERSHIP",
-        });
-      }
-      return;
-    }
+  private ownershipFailure(cause: unknown): Error {
+    return Object.assign(new Error("Owned process-group retirement failed", { cause }), {
+      code: "EOWNERSHIP",
+    });
+  }
 
+  private leaderIsLive(): boolean {
+    if (this.child) return this.child.exitCode === null && this.child.signalCode === null;
     if (!this.identity) throw new Error("Detached process-group identity is unavailable");
-    if (!this.groupExists()) return;
-    if (
-      signal !== "SIGKILL" &&
-      this.options.requestGracefulStop &&
-      this.child &&
-      this.child.exitCode === null &&
-      this.child.signalCode === null
-    ) {
-      this.options.requestGracefulStop(signal);
+    const observation = observeOwnedProcessGroup(this.identity);
+    if (observation === "unknown") {
+      throw new Error("Exact process-group ownership can no longer be proven");
+    }
+    return observation === "owned";
+  }
+
+  private async joinOnce(): Promise<void> {
+    if (this.child) {
+      if (this.leaderIsLive()) await this.childExited;
     } else {
-      this.signal(signal);
+      // Recovered receipts have no ChildProcess event producer. Inspect actual
+      // kernel identity until the original leader exits; elapsed time is never
+      // evidence that it has failed or that its children are orphaned.
+      while (this.leaderIsLive()) await this.observeAgain();
     }
-    if (signal !== "SIGKILL") {
-      const retired = await this.waitForGroupAbsence(
-        this.options.termTimeoutMs ?? DEFAULT_TERM_TIMEOUT_MS
-      );
-      if (retired) return;
-      this.signal("SIGKILL");
+    if (process.platform !== "win32") {
+      if (this.groupExists()) this.signal("SIGKILL");
+      while (this.groupExists()) await this.observeAgain();
     }
-    if (!(await this.waitForGroupAbsence(this.options.killTimeoutMs ?? DEFAULT_KILL_TIMEOUT_MS))) {
-      throw Object.assign(
-        new Error(
-          `Owned process group ${this.identity.processGroupId} did not retire after SIGKILL`
-        ),
-        { code: "EOWNERSHIP" }
-      );
-    }
+    // Exit is not producer close: a retained stdio pipe must still be joined.
+    await this.childClosed;
+  }
+
+  private observeAgain(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 25));
   }
 
   private signal(signal: NodeJS.Signals): void {
@@ -169,31 +187,5 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
       });
     }
     return observation !== "absent";
-  }
-
-  private async waitForGroupAbsence(timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      if (!this.groupExists()) return true;
-      if (Date.now() >= deadline) return false;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-
-  private async waitForChildExit(timeoutMs: number): Promise<boolean> {
-    const child = this.child;
-    if (!child) throw new Error("Owned process handle is unavailable");
-    if (child.exitCode !== null || child.signalCode !== null) return true;
-    return await new Promise<boolean>((resolve) => {
-      const onExit = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        child.off("exit", onExit);
-        resolve(false);
-      }, timeoutMs);
-      child.once("exit", onExit);
-    });
   }
 }

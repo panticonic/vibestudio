@@ -601,3 +601,85 @@ export const blobstoreMethods = defineServiceMethods({
     access: ADMIN_READ_ACCESS,
   },
 });
+
+/** Bounded native observations omit document bodies and search patterns. */
+export const NativeBlobTextObservationSchema = z.discriminatedUnion("method", [
+  z
+    .object({
+      protocol: z.literal("blob-text-observation.v1"),
+      method: z.literal("putText"),
+      digest: DigestSchema,
+      contentDigest: DigestSchema,
+      size: z.number().int().nonnegative(),
+      lineCount: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-text-observation.v1"),
+      method: z.literal("getText"),
+      digest: DigestSchema,
+      contentDigest: DigestSchema.nullable(),
+      size: z.number().int().nonnegative().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-text-observation.v1"),
+      method: z.literal("getRange"),
+      digest: DigestSchema,
+      offset: z.number().int().nonnegative(),
+      length: z.number().int().positive(),
+      present: z.boolean(),
+      decodedSize: z.number().int().nonnegative().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-text-observation.v1"),
+      method: z.literal("grep"),
+      digest: DigestSchema,
+      matchCount: z.number().int().nonnegative().nullable(),
+      maxMatches: z.number().int().positive(),
+    })
+    .strict(),
+]);
+export type NativeBlobTextObservation = z.infer<typeof NativeBlobTextObservationSchema>;
+
+export const NativeBlobTreeObservationSchema = z.discriminatedUnion("method", [
+  z
+    .object({
+      protocol: z.literal("blob-tree-observation.v1"),
+      method: z.literal("putTree"),
+      treeHash: TreeHashSchema,
+      stateHash: StateHashSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-tree-observation.v1"),
+      method: z.literal("listTree"),
+      ref: TreeRefSchema,
+      page: TreeListPageSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-tree-observation.v1"),
+      method: z.literal("diffTrees"),
+      from: TreeRefSchema,
+      to: TreeRefSchema,
+      diff: DiffTreesResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("blob-tree-observation.v1"),
+      method: z.literal("materializeTree"),
+      ref: TreeRefSchema,
+      written: z.number().int().nonnegative(),
+      unchanged: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+export type NativeBlobTreeObservation = z.infer<typeof NativeBlobTreeObservationSchema>;

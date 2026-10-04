@@ -188,7 +188,7 @@ export async function postToDOWithToken(
       // The method's owner defines its semantic lifetime. In particular,
       // `__alarm` may legitimately await an agent model effect, so Undici's
       // response-header/body defaults must never become a hidden deadline.
-      dispatcher: getWorkerdConnectionDispatcher(),
+      dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
   } catch (error) {
     if (signal?.aborted) {

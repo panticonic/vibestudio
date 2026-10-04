@@ -1,5 +1,13 @@
-import { createRpcClient, defineContract, withCausalParent } from "./client.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  createRpcClient,
+  defineContract,
+  withCausalParent,
+  withRpcAbortSignal,
+  withRpcContext,
+} from "./client.js";
 import { createInternalRpcClient, withExecutionAdmission } from "./client-core.js";
+import { bindInvocationParent } from "./internal-types.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
@@ -181,6 +189,99 @@ describe("createRpcClient", () => {
       ["same", 1],
     ]);
   });
+
+  it.each([false, true])(
+    "preserves admitted authority across approval and invocation signal composition (evaluated: %s)",
+    async (evaluated) => {
+      const network = workspaceNetwork();
+      const lifetime = new AbortController();
+      const caller = createInternalRpcClient({
+        selfId: "code:worker",
+        callerKind: "worker",
+        workspaceId: "workspace:a",
+        transport: network.transport("code:worker", "workspace:a"),
+        authorityAcquisition: "wait",
+        invocationSignal: () => lifetime.signal,
+      });
+      const server = createRpcClient({
+        selfId: "main",
+        callerKind: "server",
+        workspaceId: "workspace:a",
+        transport: network.transport("main", "workspace:a"),
+      });
+      const policy = {
+        kind: "eligible",
+        rationale: "Explicit approval propagation fixture.",
+      } as const;
+      let approved = false;
+      server.expose(
+        "protected.run",
+        () => {
+          if (!approved) {
+            throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+              acquisition: { acquisitionId: "acq:execution", ownerRuntimeId: "code:worker" },
+            });
+          }
+          return "done";
+        },
+        policy
+      );
+      server.expose(
+        "authority.awaitDecision",
+        () => {
+          const wait = network.sent.find(
+            (envelope) =>
+              envelope.message.type === "request" &&
+              envelope.message.method === "authority.awaitDecision"
+          )!;
+          // The coordinator checks the acquisition's session, not just its runtime.
+          expect(wait.message).toHaveProperty(
+            evaluated ? "executionSessionNonce" : "authorityParentNonce",
+            evaluated ? "execution:one" : "invocation:one"
+          );
+          approved = true;
+          return { state: "decided" };
+        },
+        policy
+      );
+      const initiatingCaller = { callerId: "human", callerKind: "panel" as const };
+      const causalParent = {
+        kind: "trajectory-invocation",
+        logId: "channel",
+        head: "main",
+        invocationId: "task:one",
+      } as const;
+      const admitted = evaluated ? withExecutionAdmission(caller, "execution:one") : caller;
+      await expect(
+        admitted.call(
+          "main",
+          "protected.run",
+          [],
+          bindInvocationParent(
+            {
+              causalParent,
+              readOnly: true,
+              idempotencyKey: "protected:one",
+              timeoutMs: 1000,
+            },
+            { nonce: "invocation:one", caller: initiatingCaller, provenance: [initiatingCaller] }
+          )
+        )
+      ).resolves.toBe("done");
+      const requests = network.sent.filter((envelope) => envelope.message.type === "request");
+      expect(requests).toHaveLength(3);
+      for (const request of requests) {
+        expect(request.message).toMatchObject({ causalParent });
+        expect(request.delivery).toMatchObject({ caller: initiatingCaller, readOnly: true });
+        expect(request.provenance).toEqual([initiatingCaller]);
+      }
+      expect(requests.map((request) => request.delivery.idempotencyKey)).toEqual([
+        "protected:one",
+        undefined,
+        "protected:one",
+      ]);
+    }
+  );
 
   it("waits at the addressed workspace before retrying an approved operation", async () => {
     const network = workspaceNetwork();
@@ -1521,6 +1622,128 @@ describe("createRpcClient", () => {
     );
     expect(send).not.toHaveBeenCalled();
     await expect(new Response(result.body).text()).resolves.toBe("uploaded");
+  });
+});
+
+describe("operation-owned RPC views", () => {
+  it.each(["owner", "local"] as const)(
+    "cancels calls, peers and both stream APIs when the %s operation ends",
+    async (cancelled) => {
+      const sent: RpcEnvelope[] = [];
+      const invocation = new AsyncLocalStorage<string | undefined>();
+      const effectContexts: (string | undefined)[] = [];
+      const transport: EnvelopeRpcTransport = {
+        send: async (envelope) => {
+          sent.push(envelope);
+          effectContexts.push(invocation.getStore());
+        },
+        onMessage: () => () => {},
+      };
+      const base = createRpcClient({ selfId: "owner", transport });
+      const owner = new AbortController();
+      const local = new AbortController();
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        logId: "trajectory:owner",
+        head: "main",
+        invocationId: "native:call",
+      };
+      const bound = withRpcAbortSignal(
+        withExecutionAdmission(
+          withCausalParent(
+            withRpcContext(base, (operation) => invocation.run(undefined, operation)),
+            causalParent
+          ),
+          "admission:exact"
+        ),
+        owner.signal
+      );
+      const options = { signal: local.signal };
+      const operations = invocation.run("inbound-parent", () => [
+        bound.call("main", "pending", [], options),
+        withRpcAbortSignal(bound, local.signal)
+          .peer<{ pending: () => string }>("main")
+          .call.pending(),
+        bound.stream("main", "pendingStream", [], options),
+        bound.streamReadable("main", "pendingReadable", [], options),
+      ]);
+      const joined = Promise.allSettled(operations);
+      await flushMicrotasks();
+      expect(effectContexts).toEqual([undefined, undefined, undefined, undefined]);
+      expect(
+        sent.filter(
+          ({ message }) => message.type === "request" || message.type === "stream-request"
+        )
+      ).toHaveLength(4);
+      for (const { message } of sent) {
+        if (message.type === "request" || message.type === "stream-request")
+          expect(message).toMatchObject({ causalParent, executionSessionNonce: "admission:exact" });
+      }
+      (cancelled === "owner" ? owner : local).abort(new Error("operation ended"));
+      const outcomes = await joined;
+      expect(outcomes.every((outcome) => outcome.status === "rejected")).toBe(true);
+      expect(owner.signal.aborted).toBe(cancelled === "owner");
+      expect(local.signal.aborted).toBe(cancelled === "local");
+    }
+  );
+
+  it("owns a live authority wait and joins receiver cancellation without retrying the effect", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "owner",
+      authorityAcquisition: "wait",
+      transport: inProcessTransport("owner", network),
+    });
+    const server = createRpcClient({
+      selfId: "main",
+      transport: inProcessTransport("main", network),
+    });
+    const operation = vi.fn(() => {
+      throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+        acquisition: { acquisitionId: "acq:owned", ownerRuntimeId: "owner" },
+      });
+    });
+    const allowed = {
+      kind: "eligible" as const,
+      rationale: "This test explicitly permits receiver entry.",
+    };
+    server.expose("protected.run", operation, allowed);
+    let entered!: () => void;
+    let cancelled!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const receiverCancelled = new Promise<void>((resolve) => {
+      cancelled = resolve;
+    });
+    server.expose(
+      "authority.awaitDecision",
+      async ({ signal, args }) => {
+        expect(args).toEqual([{ acquisitionId: "acq:owned" }]);
+        entered();
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancelled();
+              resolve();
+            },
+            { once: true }
+          );
+        });
+        return { state: "closed" };
+      },
+      allowed
+    );
+    const owner = new AbortController();
+    const pending = withRpcAbortSignal(caller, owner.signal).call("main", "protected.run", [
+      "immutable",
+    ]);
+    await waiting;
+    owner.abort(new Error("native task cancelled"));
+    await expect(pending).rejects.toMatchObject({ code: "RPC_ABORTED" });
+    await receiverCancelled;
+    expect(operation).toHaveBeenCalledTimes(1);
   });
 });
 

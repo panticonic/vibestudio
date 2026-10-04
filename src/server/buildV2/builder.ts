@@ -6,6 +6,7 @@ import {
   NODE_CONDITIONS,
   conditionsForLibraryTarget,
 } from "./moduleConditions.js";
+import { generateExtensionSmokeScript } from "./extensionSmokeScript.js";
 import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 /**
  * Builder — esbuild orchestration for panels, about pages, workers, and extensions.
@@ -715,6 +716,7 @@ export function createDependencyEnvironmentResolvePlugin(
 ): esbuild.Plugin {
   const roots = nodePaths.filter(Boolean).map((entry) => path.resolve(entry));
   const ownedPackageTargets = new Map<string, string>();
+  const workspaceDeclarations = new Map<string, ReadonlyMap<string, string>>();
   const recursionKey = "vibestudioDependencyEnvironmentResolve";
 
   const registerOwnedPackageTarget = (logicalPackageRoot: string): string => {
@@ -756,6 +758,46 @@ export function createDependencyEnvironmentResolvePlugin(
 
         const ownedResolveDir = translateOwnedResolveDir(args.resolveDir);
         const packageName = packageNameFromSpecifier(args.path);
+        // Owned workspace packages have pnpm links to other workspace sources
+        // outside node_modules. The declaring package's own installation is
+        // authoritative; an ambient ancestor must never supply this edge.
+        const declaringRoot = [...ownedPackageTargets.keys()]
+          .filter((root) => pathIsWithin(root, args.resolveDir))
+          .sort((left, right) => right.length - left.length)[0];
+        if (declaringRoot) {
+          let declarations = workspaceDeclarations.get(declaringRoot);
+          if (!declarations) {
+            const manifest = JSON.parse(
+              fs.readFileSync(path.join(declaringRoot, "package.json"), "utf8")
+            ) as {
+              dependencies?: Record<string, string>;
+              peerDependencies?: Record<string, string>;
+            };
+            declarations = new Map(
+              Object.entries({ ...manifest.peerDependencies, ...manifest.dependencies })
+            );
+            workspaceDeclarations.set(declaringRoot, declarations);
+          }
+          const declaration = declarations.get(packageName);
+          if (declaration?.startsWith("workspace:")) {
+            const installedRoot = path.join(
+              declaringRoot,
+              "node_modules",
+              ...packageName.split("/")
+            );
+            const installedManifest = path.join(installedRoot, "package.json");
+            if (fs.existsSync(installedManifest)) {
+              const installed = JSON.parse(fs.readFileSync(installedManifest, "utf8")) as {
+                name?: string;
+              };
+              if (installed.name !== packageName)
+                throw new Error(
+                  `Workspace dependency ${packageName} resolves to a different package`
+                );
+              registerOwnedPackageTarget(installedRoot);
+            }
+          }
+        }
         const declaredRoot = roots.find((root) =>
           fs.existsSync(path.join(root, ...packageName.split("/"), "package.json"))
         );
@@ -2493,7 +2535,6 @@ async function prepareBuildEnv(
   const dependencyEnvironment = await prepareExternalDependencyEnvironment(
     node,
     graph,
-    workspaceRoot,
     sourceRoot,
     _appRoot,
     _appNodeModules
@@ -4720,119 +4761,6 @@ async function smokeTestExtensionBuild(
     }
     throw smokeError;
   }
-}
-
-function generateExtensionSmokeScript(runtimeExternalDeps: string[]): string {
-  return `
-import { createRequire } from "node:module";
-import { pathToFileURL, fileURLToPath } from "node:url";
-process.chdir(fileURLToPath(new URL(".", import.meta.url)));
-const bundlePath = process.env.VIBESTUDIO_EXTENSION_SMOKE_BUNDLE;
-if (!bundlePath) throw new Error("Missing native smoke bundle");
-const runtimeExternalDeps = ${JSON.stringify(runtimeExternalDeps)};
-const require = createRequire(pathToFileURL(bundlePath).href);
-for (const dep of runtimeExternalDeps) {
-  require.resolve(dep);
-}
-function createAsyncNullProxy() {
-  return new Proxy(Object.create(null), {
-    get(_target, prop) {
-      if (typeof prop !== "string" || prop === "then") return undefined;
-      return async () => null;
-    },
-  });
-}
-function createExtensionSmokeContext() {
-  const asyncNull = createAsyncNullProxy();
-  const storage = new Proxy(Object.create(null), {
-    get(_target, prop) {
-      if (prop === "root") return process.cwd();
-      if (prop === "readdir") return async () => [];
-      if (prop === "readFile") {
-        return async () => {
-          const error = new Error("Smoke storage entry does not exist");
-          error.code = "ENOENT";
-          throw error;
-        };
-      }
-      if (typeof prop !== "string" || prop === "then") return undefined;
-      return async () => undefined;
-    },
-  });
-  return {
-    name: "smoke-test",
-    version: "0.0.0",
-    storage,
-    fs: asyncNull,
-    git: asyncNull,
-    panel: asyncNull,
-    workspace: {
-      async getInfo() {
-        return {
-          id: "smoke",
-          name: "smoke",
-          path: process.cwd(),
-          contextProjectionsPath: process.cwd(),
-        };
-      },
-    },
-    rpc: {
-      async call(_target, method) {
-        if (method === "workspace.getConfig") return { id: "smoke" };
-        return null;
-      },
-    },
-    workers: {
-      listServices: asyncNull,
-      resolveService: asyncNull,
-      resolveDurableObject: asyncNull,
-    },
-    credentials: asyncNull,
-    db: asyncNull,
-    webhooks: asyncNull,
-    approvals: {
-      async request() {
-        return { kind: "dismissed" };
-      },
-      async revoke() {
-        return false;
-      },
-      async list() {
-        return [];
-      },
-    },
-    notifications: asyncNull,
-    extensions: {
-      use: () => createAsyncNullProxy(),
-      on: () => ({ dispose() {} }),
-      list: async () => [],
-    },
-    invocation: { current: () => null },
-    subscriptions: [],
-    log: {
-      debug() {},
-      info() {},
-      warn() {},
-      error() {},
-    },
-    health: {
-      report() {},
-      healthy() {},
-      degraded() {},
-      unhealthy() {},
-    },
-    emit() {},
-  };
-}
-const mod = await import(pathToFileURL(bundlePath).href);
-const activate = mod["activate"];
-if (typeof activate === "function") {
-  const api = await activate(createExtensionSmokeContext());
-  if (api !== undefined && (api === null || typeof api !== "object")) {
-    throw new Error("activate() must return an object or undefined");
-  }
-}
-`;
 }
 
 async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<void> {

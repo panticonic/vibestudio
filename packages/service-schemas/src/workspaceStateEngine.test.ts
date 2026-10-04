@@ -2,6 +2,46 @@ import { describe, expect, it } from "vitest";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
 
 describe("workspace state entity source identity", () => {
+  it("requires the exact lifetime for retirement cleanup completion", () => {
+    expect(
+      workspaceStateEngineMethods.entityCleanupComplete.args.parse(["entity", "lifetime"])
+    ).toEqual(["entity", "lifetime"]);
+    expect(
+      workspaceStateEngineMethods.entityCleanupComplete.args.safeParse(["entity"]).success
+    ).toBe(false);
+    expect(
+      workspaceStateEngineMethods.entityCleanupComplete.args.safeParse(["entity", ""]).success
+    ).toBe(false);
+  });
+  it("retains the exact successful-pass token without exposing it on ordinary alarm scheduling", () => {
+    const key = { source: "workers/agent", className: "Agent", objectKey: "one" };
+    const input = {
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: 3,
+      wakeRequest: { incarnation: "owner-1", generation: 5 },
+      nextAlarm: null,
+    };
+    expect(workspaceStateEngineMethods.alarmComplete.args.parse([input])).toEqual([input]);
+    expect(
+      workspaceStateEngineMethods.alarmSourceRequest.args.parse([
+        { ...key, incarnation: "owner-1" },
+      ])
+    ).toEqual([{ ...key, incarnation: "owner-1" }]);
+    expect(() =>
+      workspaceStateEngineMethods.alarmComplete.args.parse([{ ...input, dispatchGeneration: 0 }])
+    ).toThrow();
+    expect(() =>
+      workspaceStateEngineMethods.alarmComplete.args.parse([
+        { ...input, wakeRequest: { incarnation: "owner-1", generation: 0 } },
+      ])
+    ).toThrow();
+    expect(
+      workspaceStateEngineMethods.alarmSet.args.parse([
+        { ...key, wakeAt: 0, wakeRequest: input.wakeRequest },
+      ])
+    ).toEqual([{ ...key, wakeAt: 0 }]);
+  });
   it("accepts an honest absent execution version for an inert session", () => {
     expect(
       workspaceStateEngineMethods.entityActivate.args.parse([

@@ -29,6 +29,9 @@ export interface LiveWorkspaceServiceDoc {
   methods: readonly {
     name: string;
     signature: string;
+    argsSchema?: Record<string, unknown>;
+    returnsSchema?: Record<string, unknown>;
+    argumentNames?: string[];
     website: import("@vibestudio/rpc").WebsiteMethodPolicy;
     description?: string;
     access?: Record<string, unknown>;

@@ -34,11 +34,19 @@ export class ImmutableTreeWorkerClient {
   constructor(private readonly appRoot: string) {}
 
   materialize(source: string, target: string): Promise<void> {
+    return this.project("tree", source, target);
+  }
+
+  materializePackage(source: string, target: string): Promise<void> {
+    return this.project("package", source, target);
+  }
+
+  private project(kind: "tree" | "package", source: string, target: string): Promise<void> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ id, source, target });
+      worker.postMessage({ id, kind, source, target });
     });
   }
 

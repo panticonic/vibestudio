@@ -141,8 +141,7 @@ describe("host terminal native receiver", () => {
       request: (input) => acquisition.request(input),
       acquire: (input, signal) => acquisition.requestAndWait(input, signal),
       consume: (id) => acquisition.consume(id),
-      invalidate: (digest, runtimeId, principal) =>
-        acquisition.invalidate(digest, runtimeId, principal),
+      invalidate: (inputs) => acquisition.invalidate(inputs),
     });
     dispatcher.registerService(service);
     dispatcher.markInitialized();

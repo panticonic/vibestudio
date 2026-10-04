@@ -127,10 +127,14 @@ export interface DurableObjectPublishedSchemaDescriptor {
 
 type DurableObjectRuntimeSchemaDescriptor = DurableObjectPublishedSchemaDescriptor;
 
+const SCHEMA_PROBE_CACHE_VERSION = 1;
+
 interface SchemaProbeBuild {
   source: string;
   className: string;
-  build: BuildResult;
+  version: string;
+  modules: Record<string, string>;
+  wasmModules?: Record<string, string>;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -209,6 +213,11 @@ export interface DurableObjectStorageBackup {
   target: DORef;
   intent: string;
   createdAt: number;
+}
+
+export interface DurableObjectStorageIncarnation {
+  incarnation: string;
+  generation: number;
 }
 
 interface DurableObjectMaintenanceRow {
@@ -615,6 +624,7 @@ export class WorkerdManager {
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
+  private readonly schemaAdmissions = new Map<string, Promise<void>>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
   /** A graceful `stop` ran with live services: the next start owes a
@@ -655,6 +665,11 @@ export class WorkerdManager {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS do_maintenance_one_open_target
         ON do_maintenance(target_id) WHERE status = 'open';
+      CREATE TABLE IF NOT EXISTS do_storage_incarnations (
+        target_id TEXT PRIMARY KEY,
+        incarnation TEXT NOT NULL UNIQUE,
+        generation INTEGER NOT NULL CHECK(generation > 0)
+      );
     `);
     const maintenanceSchema = this.doMaintenanceDb
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
@@ -665,14 +680,31 @@ export class WorkerdManager {
       );
     }
     this.doSchemaDescriptorDb = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
-    this.doSchemaDescriptorDb.exec(`
-      PRAGMA journal_mode = WAL;
+    // These rows are reproducible probe evidence, never execution state.
+    // Effective version alone cannot attest a build: recipes/artifacts can differ.
+    this.doSchemaDescriptorDb.exec("PRAGMA journal_mode = WAL");
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      const epoch = this.doSchemaDescriptorDb.prepare("PRAGMA user_version").get() as {
+        user_version: number;
+      };
+      if (epoch.user_version !== SCHEMA_PROBE_CACHE_VERSION) {
+        // Cache generations are disposable; never reinterpret source-version
+        // evidence as evidence for an immutable execution digest.
+        this.doSchemaDescriptorDb.exec(`
+          DROP TABLE IF EXISTS do_schema_descriptors;
+          DROP TABLE IF EXISTS do_schema_installed;
+          DROP TABLE IF EXISTS do_schema_candidates;
+        `);
+      }
+      this.doSchemaDescriptorDb.exec(`
       CREATE TABLE IF NOT EXISTS do_schema_descriptors (
         source TEXT NOT NULL,
         effective_version TEXT NOT NULL,
+        execution_digest TEXT NOT NULL,
         class_name TEXT NOT NULL,
         descriptor_json TEXT NOT NULL,
-        PRIMARY KEY (source, effective_version, class_name)
+        PRIMARY KEY (source, execution_digest, class_name)
       );
       CREATE TABLE IF NOT EXISTS do_schema_installed (
         source TEXT NOT NULL,
@@ -687,7 +719,14 @@ export class WorkerdManager {
         effective_version TEXT NOT NULL,
         PRIMARY KEY (state_hash, source, class_name)
       );
-    `);
+      PRAGMA user_version = ${SCHEMA_PROBE_CACHE_VERSION};
+      `);
+      this.doSchemaDescriptorDb.exec("COMMIT");
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      this.doSchemaDescriptorDb.close();
+      throw error;
+    }
     const open = this.readOpenDurableObjectMaintenance();
     // Establish admission synchronously before any asynchronous recovery work.
     for (const row of open) void this.fenceDurableObjectMaintenance(row);
@@ -996,6 +1035,9 @@ export class WorkerdManager {
         `ensureDurableObjectEntity: no sealed runtime image for concrete object ${targetId}`
       );
     }
+    if (!isInternalDOSource(args.source)) {
+      await this.admitDurableObjectSchema(image, args.className);
+    }
     return {
       targetId,
       effectiveVersion: image.artifact.sourceState.effectiveVersion,
@@ -1096,6 +1138,7 @@ export class WorkerdManager {
     this.runtimeImages.delete(record.id);
     this.restoreSealedUserlandDOClass(record, sealedImage);
     await this.ensureWorkerdRunning();
+    await this.admitDurableObjectSchema(sealedImage, record.className);
 
     const restored = this.sealedDoImages.get(record.id);
     if (!restored) throw new Error(`Durable Object ${record.id} did not attach a runtime image`);
@@ -1435,7 +1478,7 @@ export class WorkerdManager {
           "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
           "X-Vibestudio-Lifecycle-Secret": this.loaderSecret,
         },
-        dispatcher: getWorkerdConnectionDispatcher(),
+        dispatcher: getWorkerdConnectionDispatcher(`http://127.0.0.1:${assertPresent(this.port)}`),
       } as RequestInit
     );
     if (!response.ok) {
@@ -1898,7 +1941,7 @@ export class WorkerdManager {
   getDoVersion(source: string, className: string, objectKey?: string): string | null {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
     if (probe && probe.source === source && probe.className === className) {
-      return `${probe.build.metadata.ev}:schema-probe:${probe.build.buildKey}`;
+      return `${probe.version}:schema-probe`;
     }
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
@@ -2002,16 +2045,12 @@ export class WorkerdManager {
   } | null> {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
     if (probe && probe.source === source && probe.className === className) {
-      const wasmModules: Record<string, string> = {};
-      for (const artifact of probe.build.artifacts) {
-        if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
-      }
       return {
         compatibilityDate: "2025-12-01",
         compatibilityFlags: ["nodejs_compat"],
         mainModule: "worker.js",
-        modules: workerJavaScriptModules(probe.build),
-        ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
+        modules: probe.modules,
+        ...(probe.wasmModules ? { wasmModules: probe.wasmModules } : {}),
         env: {
           WORKER_SOURCE: source,
           WORKER_CLASS_NAME: className,
@@ -2059,6 +2098,8 @@ export class WorkerdManager {
       RPC_AUTH_TOKEN: serviceToken,
       WORKER_SOURCE: source,
       WORKER_CLASS_NAME: className,
+      WORKER_EXECUTION_DIGEST: image.artifact.executionDigest,
+      WORKER_BUILD_KEY: image.artifact.buildKey,
       WORKER_EFFECTIVE_VERSION: image.artifact.sourceState.effectiveVersion,
       WORKER_SOURCE_REF: workerSourceRef(image, source),
       WORKERD_SESSION_ID: this.sessionId,
@@ -2066,6 +2107,16 @@ export class WorkerdManager {
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKSPACE_ID: this.deps.workspaceId,
     };
+    const schemaDescriptor = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT descriptor_json FROM do_schema_descriptors
+       WHERE source = ? AND execution_digest = ? AND class_name = ?`
+      )
+      .get(source, image.artifact.executionDigest, className) as
+      | { descriptor_json: string }
+      | undefined;
+    if (schemaDescriptor)
+      env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] = JSON.parse(schemaDescriptor.descriptor_json);
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
       if (
@@ -2165,7 +2216,18 @@ export class WorkerdManager {
         executionDigest: serviceIdentity.executionDigest,
         requested: serviceIdentity.authority.requests,
       });
+      const schemaDescriptor = this.doSchemaDescriptorDb
+        .prepare(
+          "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+        )
+        .get(doService.source, serviceIdentity.executionDigest, className) as
+        | { descriptor_json: string }
+        | undefined;
+      if (!schemaDescriptor) {
+        throw new Error(`Internal Durable Object ${className} has no admitted schema descriptor`);
+      }
       const bindings: object[] = [
+        { name: "VIBESTUDIO_SCHEMA_DESCRIPTOR", json: schemaDescriptor.descriptor_json },
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
         // Source-scoped class identity
         { name: "WORKER_SOURCE", text: doService.source },
@@ -2704,7 +2766,11 @@ export class WorkerdManager {
       });
     }
     if (transition.kind === "crash" && transition.alreadyExited) {
-      await destroyWorkerdConnections(`workerd process generation crashed: ${transition.reason}`);
+      if (this.port)
+        await destroyWorkerdConnections(
+          `http://127.0.0.1:${this.port}`,
+          `workerd process generation crashed: ${transition.reason}`
+        );
     }
     transition.state = "reaping";
     await this.stopWorkerd(
@@ -2752,19 +2818,6 @@ export class WorkerdManager {
         this.bootGeneration = nextGeneration;
         this.pendingBootGeneration = null;
         this.writeBootGeneration(this.bootGeneration);
-        const owedStopRecovery = this.resumeLifecycleAfterStop;
-        this.resumeLifecycleAfterStop = false;
-        if (crashStyle || hadRunningProcess || owedStopRecovery) {
-          await this.emitRestartReady({
-            correlationId: transition.correlationId,
-            generation: this.bootGeneration,
-            previousGeneration,
-            // A start owing stop recovery has no prepared epoch of its own:
-            // crash-style ready is the durable-state reconstruction path.
-            reason: crashStyle || owedStopRecovery ? "crash" : "planned",
-          });
-        }
-        return;
       } catch (err) {
         lastError = err;
         this.pendingBootGeneration = null;
@@ -2781,7 +2834,24 @@ export class WorkerdManager {
           log.warn(`workerd startup attempt ${attempt} failed. ${detail}`);
         }
         await this.stopWorkerd("startup-retry", "force");
+        continue;
       }
+      // Process startup and activation recovery have different owners. A
+      // failed resume must reach the restart caller without replacing an
+      // already-started process or rerunning the hook as a startup retry.
+      const owedStopRecovery = this.resumeLifecycleAfterStop;
+      if (crashStyle || hadRunningProcess || owedStopRecovery) {
+        await this.emitRestartReady({
+          correlationId: transition.correlationId,
+          generation: this.bootGeneration,
+          previousGeneration,
+          // A start owing stop recovery has no prepared epoch of its own:
+          // crash-style ready is the durable-state reconstruction path.
+          reason: crashStyle || owedStopRecovery ? "crash" : "planned",
+        });
+      }
+      this.resumeLifecycleAfterStop = false;
+      return;
     }
 
     throw lastError instanceof Error ? lastError : new Error("workerd failed to start");
@@ -2853,13 +2923,19 @@ export class WorkerdManager {
   }
 
   private async emitRestartReady(event: RestartReadyEvent): Promise<void> {
+    const failures: unknown[] = [];
     for (const hook of this.restartReadyHooks) {
       try {
         await hook(event);
       } catch (err) {
-        log.warn("restart ready hook failed:", err);
+        failures.push(err);
       }
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, "Workerd activation recovery failed", {
+        cause: failures[0],
+      });
   }
 
   private async startWorkerdOnce(): Promise<void> {
@@ -3168,7 +3244,11 @@ export class WorkerdManager {
             this.workerdDiagnostics(proc.pid)
           )}`
         );
-        await destroyWorkerdConnections(`workerd process generation ended: ${reason}`);
+        if (this.port)
+          await destroyWorkerdConnections(
+            `http://127.0.0.1:${this.port}`,
+            `workerd process generation ended: ${reason}`
+          );
         let exited = false;
         if (mode === "force") {
           // Crash recovery and terminal server shutdown have already revoked
@@ -3335,6 +3415,7 @@ export class WorkerdManager {
         ? this.persistInternalRuntimeImage(imageId, className)
         : await this.bindRuntimeImage(imageId, source, undefined);
       const buildKey = image.artifact.buildKey;
+      if (isInternalDOSource(source)) await this.admitDurableObjectSchema(image, className);
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
       this.doServices.set(serviceKey, {
@@ -3442,6 +3523,7 @@ export class WorkerdManager {
       if (isInternalDOSource(source)) {
         image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
         buildKey = image.artifact.buildKey;
+        await this.admitDurableObjectSchema(image, className);
       } else {
         image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
         buildKey = image.artifact.buildKey;
@@ -3558,19 +3640,146 @@ export class WorkerdManager {
     );
   }
 
+  /** Admit the schema of the exact executable before its first entity activation. */
+  private async admitDurableObjectSchema(
+    image: RuntimeImageRecord,
+    className: string
+  ): Promise<void> {
+    const key = canonicalJson([image.source, image.artifact.executionDigest, className]);
+    const pending = this.schemaAdmissions.get(key);
+    if (pending) return pending;
+    if (
+      this.doSchemaDescriptorDb
+        .prepare(
+          "SELECT 1 FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+        )
+        .get(image.source, image.artifact.executionDigest, className)
+    )
+      return;
+    const admission = (async () => {
+      if (isInternalDOSource(image.source)) {
+        const bundle = this.internalDOBundle();
+        const identity = internalDOExecutionIdentity(bundle, className);
+        if (identity.executionDigest !== image.artifact.executionDigest) {
+          throw new RuntimeImageUnavailableError(
+            `Internal Durable Object ${image.id} schema executable failed sealed identity verification`
+          );
+        }
+        const descriptor = await this.probeSchemaExecutable(image.source, className, {
+          version: identity.executionDigest,
+          modules: { "worker.js": bundle.bundle },
+        });
+        this.recordDurableObjectSchema({
+          source: image.source,
+          effectiveVersion: identity.effectiveVersion,
+          executionDigest: identity.executionDigest,
+          descriptor,
+        });
+        return;
+      }
+      const build = this.requireWorkspaceProvider("schema admission").getBuildByExecution(
+        image.artifact.buildKey,
+        image.artifact.executionDigest
+      );
+      if (
+        !build ||
+        build.metadata.kind !== "worker" ||
+        build.metadata.sourcePath !== image.source
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${image.id} has no exact executable for schema admission`
+        );
+      }
+      const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+      if (
+        artifact.executionDigest !== image.artifact.executionDigest ||
+        canonicalJson(build.metadata.authority) !== canonicalJson(image.authority)
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${image.id} schema executable failed sealed identity verification`
+        );
+      }
+      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
+      this.recordDurableObjectSchema({
+        source: image.source,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        executionDigest: image.artifact.executionDigest,
+        descriptor,
+      });
+    })();
+    this.schemaAdmissions.set(key, admission);
+    try {
+      await admission;
+    } finally {
+      this.schemaAdmissions.delete(key);
+    }
+  }
+
+  private recordDurableObjectSchema(candidate: {
+    source: string;
+    effectiveVersion: string;
+    executionDigest: string;
+    descriptor: DurableObjectPublishedSchemaDescriptor;
+  }): void {
+    if (!/^[a-f0-9]{64}$/.test(candidate.executionDigest)) {
+      throw new Error("Schema evidence requires an exact execution digest");
+    }
+    const previous = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(candidate.source, candidate.executionDigest, candidate.descriptor.className) as
+      | { descriptor_json: string }
+      | undefined;
+    const serialized = canonicalJson(candidate.descriptor);
+    if (previous && previous.descriptor_json !== serialized) {
+      throw new Error("Schema probe changed for the same immutable execution artifact");
+    }
+    this.doSchemaDescriptorDb
+      .prepare(
+        `INSERT OR IGNORE INTO do_schema_descriptors
+         (source, effective_version, execution_digest, class_name, descriptor_json) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        candidate.source,
+        candidate.effectiveVersion,
+        candidate.executionDigest,
+        candidate.descriptor.className,
+        serialized
+      );
+  }
+
   /** Run schema installation in the serving workerd, over an isolated disposable facet. */
   async probeDurableObjectSchema(
     source: string,
     className: string,
-    build: BuildResult,
-    timeoutMs = 10_000
+    build: BuildResult
   ): Promise<DurableObjectPublishedSchemaDescriptor> {
     if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
       throw new Error(`Schema probe build does not belong to worker source ${source}`);
     }
+    const wasmModules: Record<string, string> = {};
+    for (const artifact of build.artifacts) {
+      if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
+    }
+    return this.probeSchemaExecutable(source, className, {
+      version: `${build.metadata.ev}:${build.buildKey}`,
+      modules: workerJavaScriptModules(build),
+      ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
+    });
+  }
+
+  private async probeSchemaExecutable(
+    source: string,
+    className: string,
+    executable: Omit<SchemaProbeBuild, "source" | "className">
+  ): Promise<DurableObjectPublishedSchemaDescriptor> {
     const objectKey = `__vibestudio_schema_probe:${crypto.randomUUID()}`;
     const ref = { source, className, objectKey };
-    this.schemaProbeBuilds.set(objectKey, { source, className, build });
+    this.schemaProbeBuilds.set(objectKey, { source, className, ...executable });
+    let outcome:
+      | { ok: true; descriptor: DurableObjectPublishedSchemaDescriptor }
+      | { ok: false; error: unknown };
     try {
       await this.ensureWorkerdRunning();
       const key = encodeUniversalKey(ref);
@@ -3581,8 +3790,9 @@ export class WorkerdManager {
             Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
             "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
           },
-          signal: AbortSignal.timeout(timeoutMs),
-          dispatcher: getWorkerdConnectionDispatcher(),
+          dispatcher: getWorkerdConnectionDispatcher(
+            `http://127.0.0.1:${assertPresent(this.port)}`
+          ),
         } as RequestInit
       );
       if (!response.ok) {
@@ -3595,21 +3805,39 @@ export class WorkerdManager {
         descriptor.className !== className ||
         !Number.isSafeInteger(descriptor.version) ||
         descriptor.version < 1 ||
-        typeof descriptor.freshSchemaFingerprint !== "string"
+        typeof descriptor.freshSchemaFingerprint !== "string" ||
+        !descriptor.freshSchemaFingerprint
       ) {
         throw new Error(
           `${source}:${className} returned a malformed schema descriptor: ${JSON.stringify(descriptor)}`
         );
       }
-      return descriptor;
-    } finally {
-      await this.abortUserlandDOFacet(ref, "__vibestudio_retire").catch(() => undefined);
-      this.schemaProbeBuilds.delete(objectKey);
-      await this.destroyDO(ref).catch((error) => {
-        log.warn(`Failed to destroy schema probe storage for ${source}:${className}`, error);
-      });
-      await this.stopWorkerdIfIdle();
+      outcome = { ok: true, descriptor };
+    } catch (error) {
+      outcome = { ok: false, error };
     }
+    try {
+      // Keep the exact probe image owned until its facet and files are retired.
+      // A failed retirement must never permit deletion underneath a live facet.
+      await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
+      await this.destroyStorageFiles({
+        dir: this.universalDoStorageDir(),
+        hash: this.universalHostHash(ref),
+      });
+      this.schemaProbeBuilds.delete(objectKey);
+      await this.stopWorkerdIfIdle();
+    } catch (cleanupFailure) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, cleanupFailure],
+          `${source}:${className} schema probe failed and retirement was incomplete`,
+          { cause: outcome.error }
+        );
+      }
+      throw cleanupFailure;
+    }
+    if (!outcome.ok) throw outcome.error;
+    return outcome.descriptor;
   }
 
   /** Stage exact current-candidate descriptors; no prior generation is admitted. */
@@ -3618,14 +3846,11 @@ export class WorkerdManager {
     candidates: ReadonlyArray<{
       source: string;
       effectiveVersion: string;
+      executionDigest: string;
       descriptor: DurableObjectPublishedSchemaDescriptor;
     }>
   ): string[] {
     const failures: string[] = [];
-    const insertDescriptor = this.doSchemaDescriptorDb.prepare(
-      `INSERT OR REPLACE INTO do_schema_descriptors
-       (source, effective_version, class_name, descriptor_json) VALUES (?, ?, ?, ?)`
-    );
     const insertCandidate = this.doSchemaDescriptorDb.prepare(
       `INSERT OR REPLACE INTO do_schema_candidates
        (state_hash, source, class_name, effective_version) VALUES (?, ?, ?, ?)`
@@ -3636,12 +3861,7 @@ export class WorkerdManager {
         .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
         .run(stateHash);
       for (const candidate of candidates) {
-        insertDescriptor.run(
-          candidate.source,
-          candidate.effectiveVersion,
-          candidate.descriptor.className,
-          canonicalJson(candidate.descriptor)
-        );
+        this.recordDurableObjectSchema(candidate);
         insertCandidate.run(
           stateHash,
           candidate.source,
@@ -3747,6 +3967,38 @@ export class WorkerdManager {
           createdAt: Number(row["created_at"]),
         };
       });
+  }
+
+  /** Host authority survives restoring either an agent database or WorkspaceDO's derived registry. */
+  durableObjectStorageIncarnation(ref: DORef): DurableObjectStorageIncarnation {
+    const targetId = this.durableObjectTargetId(ref);
+    this.doMaintenanceDb
+      .prepare(
+        `INSERT OR IGNORE INTO do_storage_incarnations(target_id, incarnation, generation) VALUES (?, ?, 1)`
+      )
+      .run(targetId, crypto.randomUUID());
+    const row = this.doMaintenanceDb
+      .prepare(`SELECT incarnation, generation FROM do_storage_incarnations WHERE target_id = ?`)
+      .get(targetId) as { incarnation: string; generation: number };
+    return { incarnation: row.incarnation, generation: row.generation };
+  }
+
+  /** File replacement is idempotent; identity rotation and its journal cursor commit together. */
+  private acceptDurableObjectStorageReplacement(row: DurableObjectMaintenanceRow): void {
+    this.doMaintenanceDb.exec("BEGIN IMMEDIATE");
+    try {
+      this.doMaintenanceDb
+        .prepare(
+          `INSERT INTO do_storage_incarnations(target_id, incarnation, generation) VALUES (?, ?, 1)
+         ON CONFLICT(target_id) DO UPDATE SET incarnation = excluded.incarnation, generation = generation + 1`
+        )
+        .run(row.targetId, row.operationId);
+      this.updateDurableObjectMaintenance(row.operationId, "replaced");
+      this.doMaintenanceDb.exec("COMMIT");
+    } catch (error) {
+      this.doMaintenanceDb.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private updateDurableObjectMaintenance(operationId: string, step: string): void {
@@ -3905,7 +4157,7 @@ export class WorkerdManager {
       if (row.step === "retired") {
         if (row.kind === "destroy") {
           await this.destroyDurableObjectStorageFiles(ref);
-          this.updateDurableObjectMaintenance(row.operationId, "replaced");
+          this.acceptDurableObjectStorageReplacement(row);
           row.step = "replaced";
         }
       }
@@ -3927,7 +4179,7 @@ export class WorkerdManager {
       if (row.step === "verified") {
         if (row.kind === "reset") await this.destroyDurableObjectStorageFiles(ref);
         else await this.restoreDurableObjectFiles(ref, assertPresent(row.backupOperationId));
-        this.updateDurableObjectMaintenance(row.operationId, "replaced");
+        this.acceptDurableObjectStorageReplacement(row);
         row.step = "replaced";
       }
       if (row.step === "replaced") this.completeDurableObjectMaintenance(row.operationId);
@@ -4254,7 +4506,10 @@ export class WorkerdManager {
    *  callers own quiesce and fencing; internal refs are reachable only through
    *  the journaled maintenance flow, never the userland destroy surface. */
   private async destroyDurableObjectStorageFiles(ref: DORef): Promise<void> {
-    const { dir, hash } = this.durableObjectStorageLocation(ref);
+    await this.destroyStorageFiles(this.durableObjectStorageLocation(ref));
+  }
+
+  private async destroyStorageFiles({ dir, hash }: { dir: string; hash: string }): Promise<void> {
     const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
     await Promise.all(
       files
@@ -4300,10 +4555,24 @@ export class WorkerdManager {
       });
     }
     await attempt(() => this.stopWorkerd("shutdown", "force"));
+    const schemaResults = await Promise.allSettled([...this.schemaAdmissions.values()]);
+    for (const result of schemaResults) {
+      if (result.status === "rejected") failures.push(result.reason);
+    }
     // Internal-object destruction is a tombstone while the shared process is
     // live. Once shutdown owns a stopped process, collect every tombstone and
     // retain all failures rather than abandoning the rest of the sweep.
     if (!(this.process && this.process.exitCode === null)) {
+      for (const [objectKey, probe] of this.schemaProbeBuilds) {
+        await attempt(async () => {
+          const ref = { source: probe.source, className: probe.className, objectKey };
+          await this.destroyStorageFiles({
+            dir: this.universalDoStorageDir(),
+            hash: this.universalHostHash(ref),
+          });
+          this.schemaProbeBuilds.delete(objectKey);
+        });
+      }
       const pendingDestructions = this.readOpenDurableObjectMaintenance().filter(
         (row) => row.kind === "destroy"
       );

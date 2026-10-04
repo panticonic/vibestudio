@@ -73,17 +73,31 @@ export function runNativeCommand(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
-      stdio: options.stdio ?? "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    // Keep failure evidence bounded while preserving the native process output.
+    let diagnostic = Buffer.alloc(0);
+    const collect = (chunk, stream) => {
+      if (options.stdio === "inherit") stream.write(chunk);
+      diagnostic = Buffer.concat([diagnostic, Buffer.from(chunk)]).subarray(-65536);
+    };
+    child.stdout.on("data", (chunk) => collect(chunk, process.stdout));
+    child.stderr.on("data", (chunk) => collect(chunk, process.stderr));
     child.on("error", reject);
-    child.on("exit", (code) => {
+    // close joins the output streams; exit can precede the final diagnostic.
+    child.on("close", (code, signal) => {
       if (code === 0) resolve();
-      else
+      else {
+        const detail = diagnostic.toString("utf8").trim();
         reject(
-          Object.assign(new Error(`${command} ${args.join(" ")} exited ${code}`), {
-            code: options.errorCode ?? "ENATIVE",
-          })
+          Object.assign(
+            new Error(
+              `${command} ${args.join(" ")} ${signal ? `terminated by ${signal}` : `exited ${code}`}${detail ? `\n${detail}` : ""}`
+            ),
+            { code: options.errorCode ?? "ENATIVE" }
+          )
         );
+      }
     });
   });
 }
@@ -228,6 +242,7 @@ export async function buildAndroidApp(options) {
     [
       variant === "release" ? "assembleRelease" : "assembleInternal",
       "--no-daemon",
+      "--stacktrace",
       "--max-workers=2",
       "-Pkotlin.compiler.execution.strategy=in-process",
       ...(options.rerunTasks ? ["--rerun-tasks"] : []),

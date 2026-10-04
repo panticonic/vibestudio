@@ -1,5 +1,11 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { AcquisitionOwner, AuthorityAcquisitionRecord } from "./authorityAcquisitionStore.js";
+import {
+  authorityAcquisitionReceiptSchema,
+  type AuthorityAcquisitionReceipt,
+} from "@vibestudio/service-schemas/authority";
 import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import { isAccountUserId } from "@vibestudio/identity/types";
 import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
@@ -17,6 +23,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
+import { acquisitionInvocationProjection } from "./acquisitionInvocationProjection.js";
 
 export function createAuthorityService(deps: {
   dispatcher: ServiceDispatcher;
@@ -80,13 +87,42 @@ export function createAuthorityService(deps: {
       awaitDecision: async (ctx, [input]) => {
         const outcome = await deps.acquisitions.awaitDecision({
           acquisitionId: input.acquisitionId,
-          ownerRuntimeId: ctx.caller.runtime.id,
+          ...acquisitionOwner(ctx),
           signal: ctx.signal,
         });
         return {
           state: outcome.state,
           ...(outcome.decision ? { decision: outcome.decision } : {}),
         };
+      },
+      acquisitionReceipt: (ctx, [input]) => {
+        const owner = acquisitionOwner(ctx);
+        const grants = requireDependency(deps.grants, "Acquisition receipt inspection");
+        const record = grants.acquisitions.get(input.acquisitionId, owner);
+        return record ? acquisitionReceipt(record) : null;
+      },
+      outstandingAcquisitions: (ctx, [input]) => {
+        const owner = acquisitionOwner(ctx);
+        const grants = requireDependency(deps.grants, "Acquisition recovery");
+        const records = grants.acquisitions.outstanding(owner, input);
+        const last = records[records.length - 1];
+        return {
+          receipts: records.map(acquisitionReceipt),
+          next:
+            records.length === 64 && last
+              ? { createdAt: last.createdAt, acquisitionId: last.acquisitionId }
+              : null,
+        };
+      },
+      withdrawAcquisition: async (ctx, [input]) =>
+        acquisitionReceipt(
+          await deps.acquisitions.withdrawAcquisition({ ...input, ...acquisitionOwner(ctx) })
+        ),
+      acknowledgeAcquisition: (ctx, [input]) => {
+        const owner = acquisitionOwner(ctx);
+        const grants = requireDependency(deps.grants, "Acquisition acknowledgement");
+        grants.acquisitions.acknowledge(input.acquisitionId, owner, input.resolutionDigest);
+        return { acknowledged: true };
       },
       preflight: (ctx, [input]) =>
         deps.dispatcher.preflightAuthority(ctx, input.service, input.method, input.args),
@@ -353,10 +389,11 @@ export function createAuthorityService(deps: {
         taskAuthorities.bindExecution(fact);
         return { authoritySessionId: fact.authoritySessionId, nonce: fact.nonce };
       },
-      finishExecution: (ctx, [input]) => {
-        requireDependency(deps.executionAdmissions, "Execution admission").finishExecution(
+      finishExecution: async (ctx, [input]) => {
+        await requireDependency(deps.executionAdmissions, "Execution admission").finishExecution(
           input.authoritySessionId,
-          ctx.caller.runtime.id
+          ctx.caller.runtime.id,
+          (sessionId) => deps.acquisitions.closeSession(sessionId)
         );
       },
       retireTarget: (ctx, [input]) => {
@@ -421,4 +458,33 @@ function requireWorkspaceMember(
       code: "EACCES",
     });
   }
+}
+
+/** The dispatcher installs these facts after authenticating the live caller. No service argument selects a session. */
+function acquisitionOwner(ctx: Pick<ServiceContext, "caller" | "authorization">): AcquisitionOwner {
+  const sessionId = ctx.authorization?.session.id;
+  if (!sessionId)
+    throw Object.assign(new Error("Acquisition access requires its authenticated session"), {
+      code: "EACCES",
+    });
+  return { ownerRuntimeId: ctx.caller.runtime.id, sessionId };
+}
+
+function acquisitionReceipt(record: AuthorityAcquisitionRecord): AuthorityAcquisitionReceipt {
+  return authorityAcquisitionReceiptSchema.parse({
+    acquisitionId: record.acquisitionId,
+    admission: record.admission,
+    invocations: acquisitionInvocationProjection(record),
+    bindingDigest: record.bindingDigest,
+    createdAt: record.createdAt,
+    state: record.state,
+    ...(record.resolution
+      ? {
+          resolution: record.resolution.value,
+          resolutionDigest: record.resolutionDigest,
+          settledAt: record.settledAt,
+          ...(record.acknowledgedAt !== undefined ? { acknowledgedAt: record.acknowledgedAt } : {}),
+        }
+      : {}),
+  });
 }

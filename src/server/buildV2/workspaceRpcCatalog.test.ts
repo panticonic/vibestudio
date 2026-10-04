@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { workspaceRpcSchema, workspaceRpcSchemaMetadata } from "./workspaceRpcSchemas.js";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 import { BuildDiagnosticsError } from "./diagnostics.js";
 
@@ -18,6 +19,29 @@ afterEach(() => {
 });
 
 describe("workspace RPC build catalog", () => {
+  it("seals argument validation in the same method contract as the exact provider signature", () => {
+    const root = ownedTempRoot("vibestudio-schema-rpc-bounds-");
+    writeFileSync(
+      join(root, "provider.ts"),
+      `class MissionsDO {
+      @schemaRpc() overview(options: { limit?: number }) {}
+    }`
+    );
+    const metadata = workspaceRpcSchemaMetadata(workspaceRpcSchema("vibestudio.missions.v1")!);
+    const collect = () =>
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/missions",
+        authority: { requests: [], provides: [] },
+        rpcSchemas: { MissionsDO: metadata },
+      })[0]!;
+    const original = collect();
+    expect(original.argumentNames).toEqual(["options"]);
+    expect(original.argsSchema).toEqual(metadata["overview"]!.argsSchema);
+    const changed = JSON.parse(JSON.stringify(metadata["overview"]!.argsSchema));
+    changed.items[0].properties.limit.maximum = 25;
+    metadata["overview"]!.argsSchema = changed;
+    expect(collect().inputContractDigest).not.toBe(original.inputContractDigest);
+  });
   it("reports all independent declaration defects across methods without exposing a partial catalog", () => {
     const root = ownedTempRoot("vibestudio-rpc-all-errors-");
     writeFileSync(
@@ -263,26 +287,28 @@ describe("workspace RPC build catalog", () => {
         ],
       },
       rpcSchemas: {
-        NotesDO: defineServiceMethods({
-          deleteNote: {
-            website: {
-              kind: "eligible",
-              rationale: "Explicit receiver policy for this test fixture.",
-            } as const,
-            crossWorkspace: true,
-            args: z.tuple([z.string()]),
-            returns: z.void(),
-            capability: "notes.delete",
-            authority: { principals: ["host", "code"] },
-            tier: { tier: "critical", session: "family", rationale: "Destructive mutation." },
-            access: { sensitivity: "destructive" },
-            directEffect: {
-              kind: "userland-capability",
+        NotesDO: workspaceRpcSchemaMetadata(
+          defineServiceMethods({
+            deleteNote: {
+              website: {
+                kind: "eligible",
+                rationale: "Explicit receiver policy for this test fixture.",
+              } as const,
+              crossWorkspace: true,
+              args: z.tuple([z.string()]),
+              returns: z.void(),
               capability: "notes.delete",
-              resource: { kind: "receiver-object" },
+              authority: { principals: ["host", "code"] },
+              tier: { tier: "critical", session: "family", rationale: "Destructive mutation." },
+              access: { sensitivity: "destructive" },
+              directEffect: {
+                kind: "userland-capability",
+                capability: "notes.delete",
+                resource: { kind: "receiver-object" },
+              },
             },
-          },
-        }),
+          })
+        ),
       },
     });
     expect(catalog[0]).toMatchObject({

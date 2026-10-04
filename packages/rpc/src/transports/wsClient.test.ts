@@ -87,8 +87,8 @@ describe("wsClientTransport", () => {
     vi.useRealTimers();
   });
 
-  it("cancels and joins connection work at an explicit first-connect deadline", async () => {
-    const { transport } = createTransportHarness();
+  it("honors an explicitly requested first-connect deadline and joins socket closure", async () => {
+    const { sockets, transport } = createTransportHarness();
     const promise = transport.connectAndWait(10_000);
     const assertion = expect(promise).rejects.toThrow(
       "Server WS connection timeout (10000ms): wss://server.example/rpc"
@@ -98,9 +98,10 @@ describe("wsClientTransport", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     await assertion;
+    expect(sockets[0]?.readyState).toBe(3);
   });
 
-  it("waits for readiness without a default first-connect deadline", async () => {
+  it("waits without a default first-connect deadline", async () => {
     const { sockets, transport } = createTransportHarness();
     let settled = false;
     const promise = transport.connectAndWait().finally(() => {
@@ -181,21 +182,23 @@ describe("wsClientTransport", () => {
 
   it("aborts an in-flight admission attempt when the transport closes", async () => {
     let admissionSignal: AbortSignal | undefined;
-    let releaseAdmission!: () => void;
-    let joined = false;
+    let releaseCleanup!: () => void;
+    const cleanupAllowed = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let cleanupJoined = false;
     const transport = wsClientTransport({
       adapter: {
         requestAdmission: async (_url, _request, options) => {
           admissionSignal = options?.signal;
-          return await new Promise((_, reject) => {
-            options?.signal?.addEventListener(
-              "abort",
-              () => {
-                releaseAdmission = () => reject(options.signal?.reason);
-              },
-              { once: true }
-            );
+          if (!admissionSignal) throw new Error("Admission has no owning cancellation signal");
+          await new Promise<void>((resolve) => {
+            if (admissionSignal!.aborted) resolve();
+            else admissionSignal!.addEventListener("abort", () => resolve(), { once: true });
           });
+          await cleanupAllowed;
+          cleanupJoined = true;
+          throw admissionSignal.reason;
         },
         createSocket: () => new FakeSocket(),
         getAuthToken: async () => "token",
@@ -209,15 +212,17 @@ describe("wsClientTransport", () => {
     await flushAsyncWork();
     expect(admissionSignal?.aborted).toBe(false);
 
-    const closing = transport.close().then(() => {
-      joined = true;
+    let closeJoined = false;
+    const closed = transport.close().then(() => {
+      closeJoined = true;
     });
     expect(admissionSignal?.aborted).toBe(true);
     await flushAsyncWork();
-    expect(joined).toBe(false);
-    releaseAdmission();
-    await closing;
-    expect(joined).toBe(true);
+    expect(closeJoined).toBe(false);
+    expect(cleanupJoined).toBe(false);
+    releaseCleanup();
+    await closed;
+    expect(cleanupJoined).toBe(true);
   });
 
   it("closes a socket whose upgrade is still connecting", async () => {

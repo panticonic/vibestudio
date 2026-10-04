@@ -227,7 +227,7 @@ describe("vibestudio eval commands", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("eval run --fresh-scope resets before running", async () => {
+  it("eval run --fresh-scope resets atomically with execution admission", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const { rpcBodies } = stubServer((body) =>
@@ -239,10 +239,11 @@ describe("vibestudio eval commands", () => {
       0
     );
 
-    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.reset", "eval.start"]);
-    expect(rpcBodies[0]!.args[0]).toEqual({
+    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.start"]);
+    expect(rpcBodies[0]!.args[0]).toMatchObject({
       target: { kind: "owner-session", sessionId: "session:default" },
-      scopeKey: "default",
+      scope: { key: "default" },
+      reset: true,
     });
   });
 

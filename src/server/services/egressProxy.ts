@@ -65,6 +65,7 @@ import {
 } from "./networkDestination.js";
 
 import { EgressListener } from "./egressListener.js";
+import { EGRESS_CREDENTIAL_HEADER } from "@vibestudio/shared/runtime/egressCredential";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -87,6 +88,7 @@ const VIBESTUDIO_WS_HEADERS_PARAM = "__vibestudio_ws_headers";
 const INTERNAL_EGRESS_HEADERS = new Set([
   EGRESS_CALLER_HEADER,
   EGRESS_SECRET_HEADER,
+  EGRESS_CREDENTIAL_HEADER,
   CDP_INTERNAL_GRANT_HEADER,
   "x-forwarded-proto",
 ]);
@@ -1009,6 +1011,7 @@ export class EgressProxy {
           method: (req.method ?? "GET").toUpperCase(),
           targetUrl,
           inputHeaders: req.headers,
+          credential: egressRequestCredential(req),
           credentialUse: "fetch",
           execute: async (preparedUrl, headers, _authorization, transport) => {
             transport.hold(res);
@@ -1062,7 +1065,7 @@ export class EgressProxy {
     const headers: OutgoingHttpHeaders = {};
     for (const [name, value] of this.iterateHeaders(inputHeaders)) {
       const lower = name.toLowerCase();
-      if (HOP_BY_HOP_REQUEST_HEADERS.has(lower)) continue;
+      if (HOP_BY_HOP_REQUEST_HEADERS.has(lower) || INTERNAL_EGRESS_HEADERS.has(lower)) continue;
       headers[lower] = value;
     }
     headers.host = targetUrl.host;
@@ -2318,6 +2321,7 @@ export class EgressProxy {
           method: "GET",
           targetUrl: policyUrl,
           inputHeaders,
+          credential: egressRequestCredential(req),
           credentialUse: "fetch",
           replaySafe: false,
           maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
@@ -3247,6 +3251,24 @@ function attributionWorkerId(attribution: RequestAttribution): string {
 
 function hostOperationAuditId(operation: HostHttpOperation): string {
   return `host:${operation.service}.${operation.method}:${operation.preparedStateDigest.slice(0, 16)}`;
+}
+
+/** A supplied selection must never fall back to automatic matching. */
+function egressRequestCredential(req: IncomingMessage): GitCredentialSelection {
+  const selected = req.headers[EGRESS_CREDENTIAL_HEADER];
+  const occurrences = req.rawHeaders.filter(
+    (name, index) => index % 2 === 0 && name.toLowerCase() === EGRESS_CREDENTIAL_HEADER
+  ).length;
+  if (selected === undefined && occurrences === 0) return { kind: "automatic" };
+  if (
+    occurrences !== 1 ||
+    typeof selected !== "string" ||
+    selected.length === 0 ||
+    selected !== selected.trim()
+  ) {
+    throw new ForwardRejection(400, "Invalid egress credential selection");
+  }
+  return { kind: "credential", credentialId: selected };
 }
 
 function credentialSelection(credentialId: string | null | undefined): GitCredentialSelection {

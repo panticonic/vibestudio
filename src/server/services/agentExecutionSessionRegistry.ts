@@ -274,7 +274,12 @@ export class AgentExecutionSessionRegistry {
     return fact;
   }
 
-  finishExecution(authoritySessionId: string, controllerRuntimeId: string): boolean {
+  /** Canonical session closure must commit before releasing its controller-bound retry authority. */
+  async finishExecution(
+    authoritySessionId: string,
+    controllerRuntimeId: string,
+    closeSession: (authoritySessionId: string) => Promise<void>
+  ): Promise<boolean> {
     const fact = [...this.byAdmissionKey.values()].find(
       (candidate) => candidate.authoritySessionId === authoritySessionId
     );
@@ -284,6 +289,7 @@ export class AgentExecutionSessionRegistry {
     }
     if (fact.executor.kind === "eval")
       return this.close(fact.executor.runtimeId, fact.executor.evalRunId);
+    await closeSession(fact.authoritySessionId);
     this.removeGeneric(fact);
     return true;
   }
@@ -487,7 +493,8 @@ export class AgentExecutionSessionRegistry {
   }
 
   private removeGeneric(fact: ExecutionAdmissionFact): void {
-    this.byAdmissionKey.delete(fact.admissionKey);
+    if (this.byAdmissionKey.get(fact.admissionKey) === fact)
+      this.byAdmissionKey.delete(fact.admissionKey);
     this.byNonce.delete(fact.nonce);
   }
 

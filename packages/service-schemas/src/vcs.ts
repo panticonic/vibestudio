@@ -9,6 +9,7 @@ import {
 } from "@vibestudio/shared/vcs/pathAdmission";
 import { DigestSchema } from "./blobstore.js";
 import { buildDiagnosticSchema } from "./build.js";
+import { nativeInvocationIdentitySchema, nativeOriginatingInputSchema } from "./nativeInvocation.js";
 
 /**
  * Public semantic VCS contract.
@@ -1442,6 +1443,8 @@ export const vcsInspectedTrajectoryInvocationSchema = z
     logId: id("Trajectory log identity."),
     head: id("Exact trajectory head."),
     invocationId: id("Exact tool invocation identity."),
+    nativeInvocation: nativeInvocationIdentitySchema.nullable(),
+    originatingInput: nativeOriginatingInputSchema.nullable(),
     turnId: id("Agent turn containing this invocation.").nullable(),
     name: nonEmptyText.nullable(),
     status: nonEmptyText,
@@ -1610,6 +1613,7 @@ export const vcsProvenanceRelationRegistry = {
   ],
   "triggered-by": [
     { from: "trajectory-turn", to: "trajectory-message", fact: "turn.trigger-message" },
+    { from: "trajectory-invocation", to: "trajectory-message", fact: "invocation.originating-input" },
   ],
 } as const;
 
@@ -1996,6 +2000,21 @@ export const vcsReadMemoryArrivalSchema = z
   })
   .strict();
 
+/** Exact causal coordinates plus bounded statement evidence from the journal. */
+export const vcsReadMemoryCauseSchema = z.object({
+  invocation: vcsTrajectoryInvocationRefSchema,
+  nativeInvocation: nativeInvocationIdentitySchema.nullable(),
+  originatingInput: nativeOriginatingInputSchema.nullable(),
+  turn: vcsTrajectoryTurnRefSchema.nullable(),
+  message: vcsTrajectoryMessageRefSchema.nullable(),
+  toolName: nonEmptyText.nullable(),
+  terminalOutcome: nonEmptyText.nullable(),
+  requestRef: vcsTrajectoryRequestRefSchema.nullable(),
+  turnSummary: z.string().max(600).nullable(),
+  triggerText: z.string().max(1_200).nullable(),
+  sender: vcsTrajectorySenderRefSchema.nullable(),
+}).strict();
+
 export const vcsReadMemoryEpisodeSchema = z
   .object({
     ranges: z.array(vcsReadMemoryRangeSchema).min(1).max(500),
@@ -2019,6 +2038,7 @@ export const vcsReadMemoryEpisodeSchema = z
       .strict()
       .nullable(),
     arrival: vcsReadMemoryArrivalSchema.nullable(),
+    cause: vcsReadMemoryCauseSchema.nullable(),
   })
   .strict();
 export type VcsReadMemoryEpisode = z.infer<typeof vcsReadMemoryEpisodeSchema>;

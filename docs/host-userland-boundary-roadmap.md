@@ -60,10 +60,15 @@ inspection, a fresh managed-instance proof, official-template promotion, and
 the destructive pre-release recreation all pass. No incomplete workstream may
 be hidden behind an old route or fallback while those gates are pending.
 
-## Pre-release cut rule
+## Pre-release cut option and release transition
 
-All workstreams in this roadmap land before the first supported release. They
-use coordinated destructive cuts, not migration infrastructure:
+The original roadmap assumed these workstreams would land before the first
+supported release and could use disposable-state clean cuts. That assumption
+does not prohibit migrations. The current policy is
+[upgrade and migration policy](agentic-upgrade-migrations-plan.md): reuse sound
+dependency-owned migrations, preserve valuable data, and define supported release
+upgrades before launch. The following destructive procedure is an option only
+for state explicitly designated disposable:
 
 1. Define the target owner and current schema.
 2. Implement and validate the target against freshly created workspaces.
@@ -75,17 +80,17 @@ use coordinated destructive cuts, not migration infrastructure:
 
 There is no old-owner/new-owner coexistence protocol, maintenance admission,
 route receipt, storage-transfer envelope, skipped-upgrade adapter, or downgrade
-path. Pre-release internal databases and runtime state are disposable. Valuable
+path in this historical clean-cut procedure. Only explicitly designated
+development databases and runtime state are disposable. Valuable
 user-level facts may be exported explicitly before the cut and imported through
 the fresh product's current interface; obsolete internal stores are not
 translated.
 
-This includes Durable Object schemas. Delete the current generic
-production-baseline, ordered-migration, migration-ledger, retained-fixture, and
-Build V2 migration-chain machinery. The replacement is smaller: initialize a
-truly empty store at the one canonical current schema; validate exact version
-and shape on later opens; reject every other store unchanged. Host SQLite
-stores already follow this model and provide the reference behavior.
+The earlier Durable Object simplification removed a bespoke generic migration
+framework and aligned native helpers with empty-or-exact-current validation.
+That is today's implementation, not a required design for dependency-owned
+schemas or future supported upgrades. Integrate a chosen migration mechanism
+with native admission/validation rather than preserving two schema authorities.
 
 If any workstream slips past the first supported release, stop. Its destructive
 sequence is no longer authorized. Re-plan it from the actual durable user data
@@ -126,12 +131,14 @@ effect that consumes the fact.
 8. Exact epoch equality is the only declared host/workspace generation gate.
    Typed contracts and Build V2 prove the exact current composition.
 9. Current-generation crash recovery may use leases, CAS, and idempotent effect
-   receipts. It must not parse or translate an obsolete generation.
+   receipts. Supported format conversion belongs to an explicit storage-owner
+   upgrade, not an improvised execution recovery path.
 10. Verify authority, recovery, workspace switching, and fresh provisioning;
-    representative old state must fail closed.
-11. Persistent schemas are empty-or-exact-current. There are no production
-    baselines, ordered migration callbacks, migration ledgers, or retained
-    migration fixtures.
+    unsupported old state must fail closed; supported upgrades preserve data.
+11. Native Durable Object helpers support explicit trusted owner-provided
+    upgrades under one async lifecycle. Classes without declared upgrades and
+    host SQLite helpers retain exact-current admission. Supported source/target
+    proofs belong to the storage owner; migrations and fixtures are permitted.
 
 ## Where agentic intelligence replaces machinery
 

@@ -150,6 +150,14 @@ const PUBLICATION_REVIEW_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 
+/** Native lookup evidence retains neither credential data nor the requested audience. */
+export const NativeCredentialResolutionObservationSchema = z.object({
+  protocol: z.literal("credential-resolution-observation.v1"),
+  method: z.literal("credentials.resolveCredential"),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  found: z.boolean(),
+}).strict();
+
 export const IdentifierSchema = z
   .string()
   .regex(
@@ -1446,7 +1454,7 @@ export const credentialsMethods = defineServiceMethods({
         "Secret-free lifecycle projection used by the open model-availability catalog; credential inspection and use remain gated",
     },
     description:
-      "List summaries of stored URL-bound credentials visible to the caller; secret material is never included.",
+      "List secret-free lifecycle summaries of stored URL-bound credentials visible to the caller. These summaries are an inventory; use resolveCredential for the host's exact URL/provider/use matching rather than reimplementing audience selection.",
     args: z.tuple([]),
     returns: z.array(StoredCredentialSummarySchema),
     access: READ_ACCESS,
@@ -1554,7 +1562,7 @@ export const credentialsMethods = defineServiceMethods({
         "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context",
     },
     description:
-      "Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches.",
+      "Resolve the host's exact URL/provider/id and intended-use selection. An unbound audience returns null without opening UI; a matched credential returns a secret-free summary after any required use authorization. Preserve failures other than the canonical null miss.",
     args: z.tuple([ResolveCredentialParamsSchema]),
     returns: z.union([StoredCredentialSummarySchema, z.null()]),
     access: RESOLVE_CREDENTIAL_ACCESS,

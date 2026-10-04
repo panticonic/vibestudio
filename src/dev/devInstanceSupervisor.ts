@@ -6,8 +6,6 @@ import type { OwnedProcessIdentity } from "./ownedProcessIdentity.js";
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 
-const DEFAULT_STOP_TIMEOUT_MS = 10_000;
-
 export interface DevInstanceSupervisorOptions {
   /** Exact materialized source/execution root. Never inferred from process.cwd(). */
   sourceRoot: string;
@@ -27,8 +25,6 @@ export interface DevInstanceSupervisorOptions {
   };
   /** CLI adapter behavior. Call close() after owned state cleanup to release it. */
   forwardParentSignals?: boolean;
-  /** Grace period before the exact owned process group is killed. */
-  stopTimeoutMs?: number;
   /** Durable, PID-reuse-resistant identity is available before readiness. */
   onSpawn?(identity: OwnedProcessIdentity): void | Promise<void>;
 }
@@ -110,6 +106,8 @@ export class DevInstanceSupervisor {
   private ownedIdentity: OwnedProcessIdentity | null = null;
   private ownedGroup: OwnedProcessGroup | null = null;
   private registeredGroups: ReturnType<typeof createOwnedProcessGroupReceiver> | null = null;
+  private stopRequested = false;
+  private retirement: Promise<number> | null = null;
 
   constructor(private readonly options: DevInstanceSupervisorOptions) {
     if (!path.isAbsolute(options.sourceRoot)) {
@@ -157,11 +155,8 @@ export class DevInstanceSupervisor {
       child.once("error", reject);
     });
     try {
-      if (child.pid === undefined) throw new Error("DevInstanceSupervisor child has no PID");
-      this.ownedGroup = OwnedProcessGroup.create(child, {
-        termTimeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
-        requestGracefulStop: (signal) => child.kill(signal),
-      });
+      if (child.pid === undefined) await spawnFailure;
+      this.ownedGroup = OwnedProcessGroup.create(child);
       this.ownedIdentity = this.ownedGroup.identity;
       if (this.options.forwardParentSignals) {
         this.stopForwarding = forwardSignals((signal) => this.stop(signal));
@@ -170,10 +165,7 @@ export class DevInstanceSupervisor {
         this.registeredGroups = createOwnedProcessGroupReceiver(
           child,
           this.ownedIdentity,
-          (identity) =>
-            OwnedProcessGroup.adopt(identity, {
-              termTimeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
-            })
+          (identity) => OwnedProcessGroup.adopt(identity)
         );
       }
       if (this.ownedIdentity) await this.options.onSpawn?.(this.ownedIdentity);
@@ -191,10 +183,12 @@ export class DevInstanceSupervisor {
       try {
         await this.stop("SIGTERM");
       } catch (cleanupError) {
+        if (cleanupError === error) throw error;
         throw Object.assign(
           new AggregateError(
             [error, cleanupError],
-            "Developer instance startup and resource retirement failed"
+            "Developer instance startup and resource retirement failed",
+            { cause: error }
           ),
           { code: "EOWNERSHIP" }
         );
@@ -207,28 +201,51 @@ export class DevInstanceSupervisor {
 
   wait(): Promise<number> {
     if (!this.exit) throw new Error("DevInstanceSupervisor has not started");
-    return this.exit.finally(async () => {
+    this.retirement ??= (async () => {
+      const [leader] = await Promise.allSettled([this.exit!]);
       // Join the exact original group and every acknowledged detached group
-      // before the instance owner is permitted to remove its storage.
+      // after authoritative leader exit. Remaining executors are orphaned,
+      // so force retirement is warranted without a graceful time budget.
       const results = await Promise.allSettled([
-        this.ownedGroup?.retire(),
+        this.ownedGroup?.retire("SIGKILL"),
         this.registeredGroups?.close(),
       ]);
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
+      const failures = [
+        ...(leader!.status === "rejected" ? [leader!.reason] : []),
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      ];
+      if (failures.length === 1 && leader!.status === "rejected") throw leader!.reason;
       if (failures.length)
         throw Object.assign(
-          new AggregateError(failures, "Developer instance resources did not retire"),
+          new AggregateError(failures, "Developer instance resources did not retire", {
+            cause: failures[0],
+          }),
           { code: "EOWNERSHIP" }
         );
-    });
+      return (leader as PromiseFulfilledResult<number>).value;
+    })();
+    return this.retirement;
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<number> {
     this.lifetime.abort(new Error("Developer instance stopped"));
     if (!this.child || !this.exit) return 0;
-    await this.ownedGroup?.retire(signal);
+    if (signal === "SIGKILL") {
+      // An explicit force request can preempt an existing graceful stop. The
+      // retained group receipt fences PID reuse and joins physical retirement.
+      await this.ownedGroup?.retire("SIGKILL");
+    } else if (
+      !this.stopRequested &&
+      this.child.pid !== undefined &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null
+    ) {
+      this.stopRequested = true;
+      const delivered = this.child.kill(signal);
+      if (!delivered && this.child.exitCode === null && this.child.signalCode === null) {
+        throw new Error(`Could not signal developer instance child ${this.child.pid ?? "unknown"}`);
+      }
+    }
     await Promise.allSettled([this.readinessWait]);
     return this.wait();
   }

@@ -169,6 +169,11 @@ export class PanelView implements PanelViewLike {
     string,
     { documentKey: string; promise: Promise<void> }
   >();
+  /** Repeated activation of a link joins the native view's pending navigation. */
+  private readonly managedNavigationFlights = new WeakMap<
+    Electron.WebContents,
+    Map<string, Promise<void>>
+  >();
   private linkInterceptionHandlers = new Map<
     string,
     (event: Electron.Event, url: string) => void
@@ -1266,22 +1271,33 @@ export class PanelView implements PanelViewLike {
     return { panelId: result.id, url };
   }
 
-  private async navigateManagedLink(
-    panelId: string,
-    parsed: ParsedPanelUrl,
-    url: string
-  ): Promise<void> {
+  private navigateManagedLink(panelId: string, parsed: ParsedPanelUrl, url: string): Promise<void> {
+    const contents = this.viewManager.getWebContents(panelId);
+    if (!contents || contents.isDestroyed()) {
+      return Promise.reject(new Error(`Panel view is unavailable: ${panelId}`));
+    }
+    let flights = this.managedNavigationFlights.get(contents);
+    if (!flights) {
+      flights = new Map();
+      this.managedNavigationFlights.set(contents, flights);
+    }
+    const pending = flights.get(url);
+    if (pending) return pending;
     // Same-frame navigation only happens for panel-hosted slots (app views open
     // links as new root panels), so this is always a trusted-chrome translation
     // of the source slot — no scoped caller.
-    const result = await this.panelOrchestrator.navigatePanel(
-      panelId,
-      parsed.source,
-      this.navigateOptionsForParsedLink(parsed)
-    );
-    if (result) {
-      this.sendPanelEvent?.(panelId, "runtime:managed-navigation", { panelId: result.id, url });
-    }
+    const navigation = this.panelOrchestrator
+      .navigatePanel(panelId, parsed.source, this.navigateOptionsForParsedLink(parsed))
+      .then((result) => {
+        if (result) {
+          this.sendPanelEvent?.(panelId, "runtime:managed-navigation", { panelId: result.id, url });
+        }
+      })
+      .finally(() => {
+        flights.delete(url);
+      });
+    flights.set(url, navigation);
+    return navigation;
   }
 
   private handlePanelLinkError(viewId: string, error: unknown, url: string): void {

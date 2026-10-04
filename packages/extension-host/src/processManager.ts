@@ -1,7 +1,9 @@
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import { type ProcessAdapter } from "@vibestudio/process-adapter";
 
 import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
+import { isExtensionShutdownResult, restoreShutdownError } from "./shutdownProtocol.js";
 
 interface RunningExtension {
   state: ExtensionProcessState;
@@ -20,6 +22,7 @@ interface RunningExtension {
   >;
   lastStartedAt: number;
   stopping: boolean;
+  stopFlight?: Promise<void>;
   health: ExtensionHealth | null;
   inspectorUrl: string | null;
   stderrTail: string[];
@@ -138,36 +141,101 @@ export class ExtensionProcessManager {
     }
     const running = this.running.get(name);
     if (!running) return;
+    if (running.stopFlight) return running.stopFlight;
     running.stopping = true;
-    running.retireRpc();
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        running.proc.off("exit", waitHandler);
+    running.ready = false;
+    const flight = this.stopGeneration(running, reason);
+    running.stopFlight = flight;
+    void flight.catch(() => {
+      if (running.stopFlight === flight) running.stopFlight = undefined;
+    });
+    try {
+      await flight;
+    } catch (error) {
+      // A failed stop also prevents an awaited replacement from becoming ready.
+      // Settle its callers even when the child remains available for cleanup retry.
+      this.rejectReadyWaiters(
+        name,
+        error instanceof Error ? error : new Error(String(error), { cause: error })
+      );
+      throw error;
+    }
+  }
+
+  private async stopGeneration(running: RunningExtension, reason: string): Promise<void> {
+    const requestId = randomUUID();
+    await new Promise<void>((resolve, reject) => {
+      let acknowledged = false;
+      let exited = false;
+      const finish = () => {
+        if (!acknowledged || !exited) return;
+        cleanup();
         resolve();
       };
-      const waitHandler = () => settle();
-      const timeout = setTimeout(() => {
-        running.proc.kill();
-        // If kill doesn't produce an exit within the grace window we still
-        // resolve; the existing spawn-time exit handler will deal with the
-        // late exit (it short-circuits respawn via running.stopping).
-        setTimeout(settle, 500).unref?.();
-      }, 2_000);
-      running.proc.on("exit", waitHandler);
+      const cleanup = () => {
+        running.proc.off("exit", onExit);
+        running.proc.off("message", onMessage);
+        running.proc.off("error", onError);
+      };
+      const onMessage = (message: unknown) => {
+        if (!isExtensionShutdownResult(message) || message.requestId !== requestId) return;
+        if (!message.ok) {
+          cleanup();
+          reject(restoreShutdownError(message.error));
+          return;
+        }
+        acknowledged = true;
+        finish();
+      };
+      const onExit = (code: number | null) => {
+        exited = true;
+        if (!acknowledged || code !== 0) {
+          cleanup();
+          reject(
+            new Error(
+              `Extension ${running.state.name} ${acknowledged ? "failed after shutdown acknowledgement" : "exited without completing shutdown"} (code ${code ?? "signal"})${running.stderrTail.length ? `: ${running.stderrTail.join("\n")}` : ""}`
+            )
+          );
+          return;
+        }
+        finish();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      running.proc.on("exit", onExit);
+      running.proc.on("message", onMessage);
+      running.proc.on("error", onError);
+      try {
+        running.proc.postMessage({ type: "shutdown", requestId });
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
     });
-    this.running.delete(name);
+    // The exact child has joined its cleanup and exited. Outbound cleanup RPCs
+    // keep their authenticated route until this authoritative boundary.
+    // The existing generation-scoped exit handler retires the route and row.
     if (reason !== "restart") {
-      this.rejectReadyWaiters(name, extensionNotReadyError(name, `Extension stopped (${reason})`));
-      this.deps.onStatus(name, "stopped", null);
+      this.rejectReadyWaiters(
+        running.state.name,
+        extensionNotReadyError(running.state.name, `Extension stopped (${reason})`)
+      );
+      this.deps.onStatus(running.state.name, "stopped", null);
     }
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all([...this.running.keys()].map((name) => this.stop(name)));
+    const results = await Promise.allSettled(
+      [...this.running.keys()].map((name) => this.stop(name))
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Extension shutdown failed", { cause: failures[0] });
   }
 
   listRunning(): Array<{
@@ -227,7 +295,7 @@ export class ExtensionProcessManager {
 
   markReady(name: string, readyState: { methods: string[]; hasFetch: boolean }): void {
     const running = this.running.get(name);
-    if (!running) return;
+    if (!running || running.stopping) return;
     running.ready = true;
     running.methods = readyState.methods;
     running.hasFetch = readyState.hasFetch;

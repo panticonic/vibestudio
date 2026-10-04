@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { builtinProviders, getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinProviders, getBuiltinModels } from "@panticonic/pi-ai/providers/all";
 
 // Endpoint configuration and subscription-only providers have explicit policy.
 const configured = new Set([

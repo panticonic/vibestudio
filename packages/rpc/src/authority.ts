@@ -1,6 +1,6 @@
 /** Wire-safe authority facts shared by host-service and direct-RPC dispatch. */
 
-import type { CallerKind } from "./types.js";
+import type { CallerKind, RpcCausalParent } from "./types.js";
 
 export const PRINCIPAL_KINDS = ["host", "user", "code", "session", "mission", "website"] as const;
 export type PrincipalKind = (typeof PRINCIPAL_KINDS)[number];
@@ -454,7 +454,26 @@ export interface AuthorizationDecision {
   standing?: boolean;
 }
 
+/** Actual task coordinates authenticated from the canonical native invocation source. */
+export interface NativeInvocationIdentity {
+  readonly owner: { readonly runtimeId: string; readonly authoritySessionId: string };
+  readonly task: { readonly conversationId: number; readonly taskId: number };
+  readonly operation:
+    | { readonly kind: "tool"; readonly assistantEntryId: number; readonly callId: string }
+    | { readonly kind: "direct-tool"; readonly directEntryId: number; readonly callId: string }
+    | {
+        readonly kind: "model";
+        readonly purpose: "generation" | "compaction";
+        readonly attempt: number;
+        readonly cutoff: number;
+      };
+}
+
 export interface InvocationSnapshot {
+  /** Original native coordinates, verified by the host rather than the wire caller. */
+  nativeInvocation?: NativeInvocationIdentity;
+  /** Exact host-verified originating invocation; attribution never grants authority. */
+  causalParent?: RpcCausalParent;
   /** Review/audit attribution, independent of the current caller's authority and lifetime. */
   initiatingWebsite?: WebsiteAuthorityFact;
   subjectBinding?: AuthoritySubjectBinding;
@@ -523,36 +542,42 @@ export interface AcquisitionInfo {
   decidedBy?: "user" | "rule";
 }
 
-export type AuthorityFailureReasonCode =
-  | Exclude<AuthorizationDecision["code"], "allowed">
-  | "receiver-undeclared"
-  | "attestation-required"
-  | "attestation-invalid"
-  | "eval-read-only"
-  | "run-manifest-denied"
-  | "run-pregranted-only"
-  | "attached-route-ceiling-denied"
-  // A review covering this exact unit version is open and unresolved. The call
-  // gets one recoverable error instead of an acquisition entry, so an
-  // unanswered review can never turn into a prompt per method
-  // (docs/template-install-unit-approval-ux-plan.md U6).
-  | "review-pending";
+export const AUTHORITY_FAILURE_REASON_CODES = [
+  "approval-required",
+  "user-denied",
+  "receiver-rejected",
+  "fixed-code-not-requested",
+  "invalid-session",
+  "connection-required",
+  "invalid-attestation",
+  "receiver-undeclared",
+  "attestation-required",
+  "attestation-invalid",
+  "eval-read-only",
+  "run-manifest-denied",
+  "run-pregranted-only",
+  "attached-route-ceiling-denied",
+  "review-pending",
+] as const;
+export type AuthorityFailureReasonCode = (typeof AUTHORITY_FAILURE_REASON_CODES)[number];
 
-export type AuthorityRemediationKind =
-  | "connect-workspace"
-  | "request-user-approval"
-  | "update-installed-code-manifest"
-  | "declare-rpc-receiver"
-  | "use-admitted-principal"
-  | "satisfy-relationship"
-  | "refresh-session"
-  | "respect-denial"
-  | "use-writable-session"
-  | "broaden-run-manifest"
-  | "use-prompt-enabled-run"
-  | "restart-attached-run"
-  | "retry-through-host"
-  | "resolve-open-review";
+export const AUTHORITY_REMEDIATION_KINDS = [
+  "connect-workspace",
+  "request-user-approval",
+  "update-installed-code-manifest",
+  "declare-rpc-receiver",
+  "use-admitted-principal",
+  "satisfy-relationship",
+  "refresh-session",
+  "respect-denial",
+  "use-writable-session",
+  "broaden-run-manifest",
+  "use-prompt-enabled-run",
+  "restart-attached-run",
+  "retry-through-host",
+  "resolve-open-review",
+] as const;
+export type AuthorityRemediationKind = (typeof AUTHORITY_REMEDIATION_KINDS)[number];
 
 /**
  * Machine-readable explanation for an authority refusal. Callers and agents

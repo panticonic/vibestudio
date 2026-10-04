@@ -307,6 +307,7 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(b.id).toBe(a.id);
     expect(b.status).toBe("active");
     expect(b.createdAt).toBe(a.createdAt);
+    expect(b.authoritySessionId).toBe(a.authoritySessionId);
   });
 
   it("persists the validated authority envelope with the active incarnation", () => {
@@ -345,6 +346,7 @@ describe("WorkspaceDO.entityActivate", () => {
       activeBuildKey: "b".repeat(64),
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: ACTIVE_AUTHORITY,
+      authoritySessionId: activated.authoritySessionId,
     });
   });
 
@@ -369,6 +371,7 @@ describe("WorkspaceDO.entityActivate", () => {
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: ACTIVE_AUTHORITY,
       createdAt: reserved.createdAt,
+      authoritySessionId: reserved.authoritySessionId,
     });
     expect(instance.entityResolveActive(reserved.id)?.id).toBe(reserved.id);
   });
@@ -487,6 +490,7 @@ describe("WorkspaceDO.entityActivate", () => {
       activeExecutionDigest: "d".repeat(64),
       activeAuthority: ACTIVE_AUTHORITY,
       createdAt: initial.createdAt,
+      authoritySessionId: initial.authoritySessionId,
     });
     expect(() =>
       instance.entityAdvanceExecution(
@@ -702,11 +706,53 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(retired?.status).toBe("retired");
     expect(retired?.retiredAt).toBeTypeOf("number");
 
+    expect(() => instance.entityActivate(panelInput())).toThrow(/retirement cleanup/);
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+
     const reactivated = instance.entityActivate(panelInput());
     expect(reactivated.id).toBe(initial.id);
     expect(reactivated.status).toBe("active");
     expect(reactivated.retiredAt).toBeUndefined();
     expect(reactivated.cleanupComplete).toBe(true);
+    expect(reactivated.authoritySessionId).toBeTypeOf("string");
+    expect(reactivated.authoritySessionId).not.toBe(initial.authoritySessionId);
+  });
+
+  it("fences stale cleanup completion across repeated lifetimes of the same entity", () => {
+    const initial = instance.entityActivate(doInput());
+    instance.entityRetire(initial.id);
+    instance.entityCleanupComplete(initial.id, "foreign-lifetime");
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(false);
+    expect(() => instance.entityActivate(doInput())).toThrow(/retirement cleanup/);
+
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    const reattached = instance.entityActivate(doInput());
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    expect(instance.entityResolveActive(initial.id)).toEqual(reattached);
+    instance.entityRetire(reattached.id);
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(false);
+    instance.entityCleanupComplete(reattached.id, reattached.authoritySessionId!);
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(true);
+  });
+
+  it("rolls back failed lifetime renewal without making the retired owner executable", async () => {
+    const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
+    const initial = owner.entityActivate(doInput());
+    owner.entityRetire(initial.id);
+    owner.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    sql.exec(`CREATE TRIGGER reject_lifetime_renewal
+      BEFORE UPDATE OF authority_session_id ON entities
+      BEGIN SELECT RAISE(ABORT, 'lifetime commit rejected'); END`);
+    expect(() => owner.entityActivate(doInput())).toThrow(/lifetime commit rejected/);
+    expect(owner.entityResolve(initial.id)).toMatchObject({
+      status: "retired",
+      authoritySessionId: initial.authoritySessionId,
+      cleanupComplete: true,
+    });
+    expect(owner.entityResolveActive(initial.id)).toBeNull();
+    sql.exec("DROP TRIGGER reject_lifetime_renewal");
+    expect(owner.entityActivate(doInput()).authoritySessionId).not.toBe(initial.authoritySessionId);
   });
 
   it("throws IDENTITY_COLLISION when source differs for a panel (canonical id collides on key)", () => {
@@ -1544,7 +1590,7 @@ describe("WorkspaceDO entity reads", () => {
     const r2 = instance.entityActivate(panelInput({ key: "b" }));
     instance.entityRetire(r1.id);
     instance.entityRetire(r2.id);
-    instance.entityCleanupComplete(r1.id);
+    instance.entityCleanupComplete(r1.id, r1.authoritySessionId!);
     const incomplete = instance.entityFindIncompleteCleanups();
     expect(incomplete.map((r: EntityRecord) => r.id)).toEqual([r2.id]);
   });
@@ -1555,6 +1601,210 @@ describe("WorkspaceDO lifecycle registry", () => {
   beforeEach(async () => {
     ({ instance } = await createTestDO(WorkspaceDOTestable));
     instance.alarmAdoptWorker("driver-1");
+  });
+
+  it("acknowledges only captured host wakes while later events survive source null publication", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(doInput());
+    const incarnation = instance.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    instance.alarmSourceRequest({ ...key, incarnation });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(first!.wakeRequest).toEqual({ incarnation, generation: 1 });
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: null });
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+        wakeRequest: first!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "accepted", wakeAt: 0 });
+    const [second] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(second!.wakeRequest).toEqual({ incarnation, generation: 2 });
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+        wakeRequest: first!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "stale" });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: second!.dispatchGeneration,
+      wakeRequest: second!.wakeRequest,
+      nextAlarm: null,
+    });
+    expect(instance.alarmListScheduled()).toEqual([]);
+  });
+
+  it("failed dispatch rearming retains host debt and invalid acknowledgement rolls back the claim", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(doInput());
+    const incarnation = instance.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    instance.alarmSourceRequest({ ...key, incarnation });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    instance.alarmSet({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: first!.dispatchGeneration,
+      wakeAt: 100,
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(100);
+    const [second] = instance.alarmClaimDue({ now: 100, workerId: "driver-1", limit: 1 });
+    expect(second!.wakeRequest).toEqual(first!.wakeRequest);
+    expect(() =>
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: second!.dispatchGeneration,
+        wakeRequest: { incarnation: "foreign", generation: 1 },
+        nextAlarm: null,
+      })
+    ).toThrow(/dispatch claim/);
+    expect(instance.alarmNextWakeAt(100)).toBeNull();
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: second!.dispatchGeneration,
+        wakeRequest: second!.wakeRequest,
+        nextAlarm: { wakeAt: 200 },
+      })
+    ).toEqual({ status: "accepted", wakeAt: 200 });
+    expect(instance.alarmNextWakeAt(100)).toBe(200);
+  });
+
+  it("a SQL failure after receipt-wake acknowledgement rolls back both debt and scheduling for exact retry", async () => {
+    const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    owner.entityActivate(doInput());
+    owner.alarmAdoptWorker("driver-1");
+    const incarnation = owner.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    owner.alarmSourceRequest({ ...key, incarnation });
+    const [claim] = owner.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    const completion = {
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: claim!.dispatchGeneration,
+      wakeRequest: claim!.wakeRequest,
+      nextAlarm: { wakeAt: 200 },
+    };
+    sql.exec(
+      "CREATE TRIGGER refuse_completion BEFORE UPDATE ON do_alarms BEGIN SELECT RAISE(ABORT, 'original completion SQL failure'); END"
+    );
+    expect(() => owner.alarmComplete(completion)).toThrow(/original completion SQL failure/);
+    expect(owner.alarmNextWakeAt(1)).toBeNull();
+    sql.exec("DROP TRIGGER refuse_completion");
+    expect(owner.alarmComplete(completion)).toEqual({ status: "accepted", wakeAt: 200 });
+    expect(owner.alarmComplete(completion)).toEqual({ status: "stale" });
+    expect(owner.alarmNextWakeAt(1)).toBe(200);
+  });
+
+  it("ordinary clears preserve host wakes, but entity retirement releases them", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(doInput());
+    const incarnation = instance.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmClear(key);
+    expect(instance.alarmNextWakeAt(1)).toBe(0);
+    instance.entityRetire(entity.id);
+    expect(instance.alarmListScheduled()).toEqual([]);
+    expect(() => instance.alarmSourceRequest({ ...key, incarnation })).toThrow(/active/);
+  });
+
+  it("an event first arriving during a pass survives its distant next schedule and host adoption", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(doInput());
+    const incarnation = instance.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: 0 });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(first).not.toHaveProperty("wakeRequest");
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 2, wakeAt: 1_000_000 });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: first!.dispatchGeneration,
+      nextAlarm: { wakeAt: 1_000_000 },
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(0);
+    const [unacknowledged] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    instance.alarmAdoptWorker("driver-2");
+    const [replacement] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(replacement!.wakeRequest).toEqual(unacknowledged!.wakeRequest);
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: unacknowledged!.dispatchGeneration,
+        wakeRequest: unacknowledged!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "stale" });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-2",
+      dispatchGeneration: replacement!.dispatchGeneration,
+      wakeRequest: replacement!.wakeRequest,
+      nextAlarm: { wakeAt: 1_000_000 },
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(1_000_000);
+  });
+
+  it("recovers registered sources with no delivered schedule once per host generation and excludes retired owners", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(doInput());
+    const incarnation = instance.alarmSourceRegister({
+      ...key,
+      incarnation: crypto.randomUUID(),
+      generation: 1,
+    });
+    expect(instance.alarmListScheduled()).toEqual([]);
+    instance.alarmAdoptWorker("driver-2");
+    expect(instance.alarmListScheduled()).toEqual([key]);
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(first).toMatchObject({ ...key, wakeAt: 0 });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 0, wakeAt: null });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: 0 });
+    const [second] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(second!.dispatchGeneration).toBeGreaterThan(first!.dispatchGeneration);
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-2",
+        dispatchGeneration: first!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(instance.alarmListScheduled()).toEqual([key]);
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 2, wakeAt: null });
+    instance.entityRetire(entity.id);
+    instance.alarmAdoptWorker("driver-3");
+    expect(instance.alarmListScheduled()).toEqual([]);
   });
 
   it("upserts, refreshes, lists, and clears active-work leases", () => {

@@ -62,26 +62,45 @@ export class ProblemReportingStore {
     chmodSync(directory, 0o700);
     const file = join(directory, "reports.db");
     this.db = new DatabaseSync(file);
-    chmodSync(file, 0o600);
-    openCanonicalSqliteDatabase(
-      this.db,
-      {
-        version: 1,
-        objects: [
-          ...Object.entries(tables).map(([name, sql]) => ({ type: "table" as const, name, sql })),
-          ...Object.entries(indexes).map(([name, sql]) => ({ type: "index" as const, name, sql })),
-        ],
-      },
-      { description: "problem reporting store" }
-    );
-    this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;");
-    this.transaction(() => {
-      if (!this.db.prepare("SELECT id FROM installation LIMIT 1").get())
-        this.db
-          .prepare("INSERT INTO installation VALUES (?,?)")
-          .run(randomUUID(), new Date().toISOString());
-    });
-    this.installationId = String(this.db.prepare("SELECT id FROM installation").get()!["id"]);
+    try {
+      chmodSync(file, 0o600);
+      // Workspace children share this installation database. Apply its existing
+      // SQLite writer contention policy before canonical schema admission, too.
+      this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
+      openCanonicalSqliteDatabase(
+        this.db,
+        {
+          version: 1,
+          objects: [
+            ...Object.entries(tables).map(([name, sql]) => ({ type: "table" as const, name, sql })),
+            ...Object.entries(indexes).map(([name, sql]) => ({
+              type: "index" as const,
+              name,
+              sql,
+            })),
+          ],
+        },
+        { description: "problem reporting store" }
+      );
+      this.db.exec("PRAGMA journal_mode=WAL;");
+      this.transaction(() => {
+        if (!this.db.prepare("SELECT id FROM installation LIMIT 1").get())
+          this.db
+            .prepare("INSERT INTO installation VALUES (?,?)")
+            .run(randomUUID(), new Date().toISOString());
+      });
+      this.installationId = String(this.db.prepare("SELECT id FROM installation").get()!["id"]);
+    } catch (error) {
+      try {
+        this.db.close();
+      } catch (closeError) {
+        throw new AggregateError(
+          [error, closeError],
+          "Problem reporting store admission and close failed"
+        );
+      }
+      throw error;
+    }
   }
   localIdentity(): { userId: string; handle: string } | null {
     const row = this.db.prepare("SELECT * FROM local_identity WHERE id=1").get();

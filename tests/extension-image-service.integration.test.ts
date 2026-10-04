@@ -11,6 +11,7 @@ import {
   resolveDevelopmentTemplateSet,
 } from "../src/dev/developmentTemplateSet.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { ownChild } from "./setup/ownedChild.js";
 
 interface ReadyPayload {
   gatewayUrl: string;
@@ -25,19 +26,12 @@ const maybeDescribe =
 
 let proc: ChildProcessWithoutNullStreams | null = null;
 let tempRoot: string | null = null;
+let serverOwner: ReturnType<typeof ownChild> | null = null;
 
 afterEach(async () => {
-  if (proc && proc.exitCode === null) {
-    proc.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, 8_000);
-      proc?.once("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-  }
+  await serverOwner?.retire();
   proc = null;
+  serverOwner = null;
   if (tempRoot) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     tempRoot = null;
@@ -74,6 +68,8 @@ maybeDescribe("image-service extension server smoke", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
+
+    serverOwner = ownChild(proc);
 
     let serverOutput = "";
     const appendServerOutput = (chunk: Buffer | string): void => {

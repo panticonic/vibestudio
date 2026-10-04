@@ -14,8 +14,16 @@ import {
   WEBHOOKS_MEMBERS,
 } from "./runtimeSurface.portable.js";
 import { vcsMethods } from "../vcs.js";
+import { runtimeMethods } from "../runtime.js";
 
 describe("runtime surface schemaRef parity", () => {
+  it("publishes the generated runtime client's grouped supervision contracts", () => {
+    expect(portableExports["runtime"]).toMatchObject({
+      kind: "namespace", schemaRef: "runtime", members: Object.keys(runtimeMethods),
+    });
+    expect(portableExports["runtime"]?.members).toContain("supervision.logs");
+    expect(portableExports["runtime"]?.members).toContain("supervision.health");
+  });
   it("distinguishes a CDP refresh receipt from its replacement session", () => {
     expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("let session = await handle.cdp.session()");
     expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("session = (await session.refresh()).session");
@@ -111,6 +119,13 @@ describe("runtime surface schemaRef parity", () => {
     expect(webhooks.schemaRef).toBe("webhookIngress");
     expect(webhooks.description).toContain("rotateSecret(subscriptionId, secret?)");
     expect(webhooks.description).toContain("agent eval");
+    expect(Object.keys(webhooks.methodCatalog ?? {})).toEqual(WEBHOOKS_MEMBERS);
+    expect(webhooks.methodCatalog?.["rotateSecret"]?.signature).toContain(
+      "subscriptionId: string, secret?: string"
+    );
+    expect(webhooks.methodCatalog?.["revokeSubscription"]?.signature).toContain(
+      "subscriptionId: string"
+    );
   });
 
   it("keeps panel-tree help aligned with the runtime contract", () => {

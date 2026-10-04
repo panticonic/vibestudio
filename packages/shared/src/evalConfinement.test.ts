@@ -27,7 +27,7 @@ describe("tameRealmCodegen", () => {
 
     tameRealmCodegen(realm);
 
-    expect(() => reachBefore()).toThrow(TypeError);
+    expect(() => reachBefore()).toThrow(realm["TypeError"] as ErrorConstructor);
     for (const source of [
       `({}).constructor.constructor("return 1")`,
       `(async function () {}).constructor("return 1")`,
@@ -36,7 +36,7 @@ describe("tameRealmCodegen", () => {
       `Function("return 1")`,
       `eval("1")`,
     ]) {
-      expect(() => vm.runInContext(source, context)).toThrow(TypeError);
+      expect(() => vm.runInContext(source, context)).toThrow(realm["TypeError"] as ErrorConstructor);
     }
     expect(isCodegenReachable(realm)).toBe(false);
   });
@@ -87,11 +87,34 @@ describe("createPrivateGuestGlobal", () => {
 
     expect(guest["fetch"]).toBeUndefined();
     expect(guest["process"]).toBeUndefined();
-    expect(guest["Function"]).toBeUndefined();
+    // The constructor is safe because realm code generation is already disabled.
+    // Libraries may still inspect standard Function.prototype intrinsics.
+    expect(guest["Function"]).toBe(realm["Function"]);
+    expect(() => (guest["Function"] as FunctionConstructor)("return globalThis")).toThrow();
     expect(guest["Array"]).toBe(realm["Array"]);
     expect(guest["globalThis"]).toBe(guest);
     expect(guest["self"]).toBe(guest);
     expect(guest["global"]).toBe(guest);
+  });
+
+  it("preserves Function reflection while refusing every reachable code generator", () => {
+    const realm = tamedRealm();
+    const guest = createPrivateGuestGlobal(realm);
+    const FunctionIntrinsic = guest["Function"] as FunctionConstructor;
+    const toSource = FunctionIntrinsic.prototype.toString;
+    expect(toSource.call(realm["Object"])).toContain("Object");
+    expect(FunctionIntrinsic.prototype.call).toBeDefined();
+    expect(FunctionIntrinsic.prototype.apply).toBeDefined();
+    expect(() => new FunctionIntrinsic("return globalThis")).toThrow();
+    expect(() => FunctionIntrinsic.constructor("return globalThis")).toThrow();
+    expect(() => FunctionIntrinsic.prototype.constructor("return globalThis")).toThrow();
+    expect(() => (guest["Object"] as ObjectConstructor).constructor("return globalThis")).toThrow();
+    expect(() => (guest["hasOwnProperty"] as Function).constructor("return globalThis")).toThrow();
+    try {
+      FunctionIntrinsic("return globalThis");
+    } catch (error) {
+      expect(() => (error as Error).constructor.constructor("return globalThis")).toThrow();
+    }
   });
 
   it("preserves authority-free Object prototype globals on the null-prototype facade", () => {

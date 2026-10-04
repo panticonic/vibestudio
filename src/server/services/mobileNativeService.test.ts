@@ -10,6 +10,19 @@ import {
 } from "./mobileNativeService.js";
 
 describe("mobileNative service", () => {
+  it("propagates native failure output after joining the process streams", async () => {
+    const { runNativeCommand } = await import("../../../scripts/cli/lib/mobile-native-android.mjs");
+    await expect(
+      runNativeCommand(
+        process.execPath,
+        ["-e", "process.stderr.write('original packaging failure'); process.exitCode = 3"],
+        { errorCode: "EINSTALL" }
+      )
+    ).rejects.toMatchObject({
+      code: "EINSTALL",
+      message: expect.stringContaining("original packaging failure"),
+    });
+  });
   it("owns the complete typed facade without exposing appRoot", () => {
     const service = createMobileNativeService({ appRoot: "/installed/vibestudio" });
     expect(service.name).toBe("mobileNative");

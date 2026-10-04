@@ -74,6 +74,7 @@ export type {
   AuthorizationOrigin,
   AuthorizationDecision,
   InvocationSnapshot,
+  NativeInvocationIdentity,
   EvalAuthorityManifest,
   AcquisitionInfo,
   AuthorityFailureInfo,
@@ -113,12 +114,18 @@ export type {
   OpaqueHandlePreparation,
   OpaqueHandlePresentation,
 } from "./authority.js";
-export { prepareOpaqueHandle } from "./authority.js";
+export {
+  prepareOpaqueHandle,
+  AUTHORITY_FAILURE_REASON_CODES,
+  AUTHORITY_REMEDIATION_KINDS,
+} from "./authority.js";
 export { isParentPortEnvelope } from "./types.js";
 export {
   createRpcClient,
   defineContract,
   withCausalParent,
+  withRpcAbortSignal,
+  withRpcContext,
   type RpcClientRecoveryOptions,
 } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";

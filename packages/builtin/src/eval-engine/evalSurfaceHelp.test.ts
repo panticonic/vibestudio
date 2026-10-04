@@ -1,7 +1,10 @@
 import templatesRuntimeCatalog from "../../../service-schemas/src/runtime/generated/templatesRuntimeCatalog.json";
-import { describe, expect, it } from "vitest";
+import gitRuntimeCatalog from "../../../service-schemas/src/runtime/generated/gitRuntimeCatalog.json";
+import { describe, expect, it, vi } from "vitest";
 import {
   describeEvalBindingSurface,
+  describeEvalHelpName,
+  evalBindingMethodNames,
   describeEvalBindingIndex,
   describeEvalMethod,
   EVAL_RUNTIME_METHOD_NOTES,
@@ -77,7 +80,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
 
     expect(evalRuntimeServiceName("git")).toBe("gitInterop");
     expect(evalRuntimeServiceName("vcs")).toBe("vcs");
-    expect(out!.methods["importProject"]).toBe(importSchema);
+    expect(out!.methods["importProject"]).toBe(gitRuntimeCatalog.importProject);
     expect(out!.note).toContain('rpc.call("main", "gitInterop.…"');
   });
 
@@ -200,10 +203,35 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
 });
 
 describe("describeEvalMethod", () => {
+  it("preserves numeric argument validation in compact help", () => {
+    const method = describeEvalMethod("inventory.list", {
+      argsSchema: { type: "array", items: [{ type: "object", properties: {
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+        ratio: { type: "number", minimum: 10, exclusiveMinimum: 2 },
+      } }] },
+    });
+    expect(method.parameters?.[0]?.type).toContain("limit?: integer (>= 1, <= 50)");
+    expect(method.parameters?.[0]?.type).toContain("ratio?: number (>= 10, > 2)");
+  });
+  it("renders the real Git positional overloads without turning the argument list into an argument", () => {
+    const method = describeEvalMethod("git.upstreamStatus", gitRuntimeCatalog.upstreamStatus);
+    expect(method.call).toBe("await git.upstreamStatus()");
+    expect(method.parameters).toEqual([]);
+    expect(method.overloads).toEqual([
+      "git.upstreamStatus()",
+      "git.upstreamStatus((string)[])",
+      "git.upstreamStatus((string)[], { remote?: string; branch?: string; credentialIdOverride?: string | null })",
+    ]);
+    expect(method.examples?.map((example) => example.call)).toEqual([
+      "await git.upstreamStatus()",
+      'await git.upstreamStatus(["projects/bgkit"])',
+    ]);
+  });
   it("renders nested discriminated unions completely without returning a deep raw schema", () => {
     const result = describeEvalMethod("vcs.edit", {
       description: "Author exact edits.",
       access: { sensitivity: "write" },
+      authority: { kind: "every-origin" },
       errors: [{ code: "RevisionChanged", description: "The basis advanced." }],
       seeAlso: ["vcs.revert"],
       argsSchema: {
@@ -272,6 +300,7 @@ describe("describeEvalMethod", () => {
       ],
       returns: "{ applicationId: string }",
       access: { sensitivity: "write" },
+      authority: { kind: "every-origin" },
       errors: [{ code: "RevisionChanged", description: "The basis advanced." }],
       seeAlso: ["vcs.revert"],
       note: "Compact exact types for the injected call. Use the docs service only when machine-readable JSON Schema is needed.",
@@ -391,5 +420,128 @@ describe("runtime methods without argument schemas", () => {
       call: "await service.list()",
       parameters: [],
     });
+  });
+});
+
+describe("canonical injected runtime help", () => {
+  it("describes webhook helpers from their public client rather than wire-object arguments", () => {
+    const surface = describeEvalBindingSurface(
+      "webhooks",
+      ["rotateSecret", "revokeSubscription", "createSubscription"],
+      {
+        rotateSecret: {
+          argsSchema: {
+            type: "array",
+            items: [{ type: "object", properties: { subscriptionId: { type: "string" } } }],
+          },
+        },
+      }
+    )!;
+    const rotate = describeEvalMethod("webhooks.rotateSecret", surface.methods["rotateSecret"]);
+    expect(rotate.signature).toContain("rotateSecret(subscriptionId: string, secret?: string)");
+    expect(rotate.description).toContain("subscription: WebhookIngressSubscriptionSummary");
+    expect(rotate).not.toHaveProperty("parameters");
+    const revoke = describeEvalMethod(
+      "webhooks.revokeSubscription",
+      surface.methods["revokeSubscription"]
+    );
+    expect(revoke.signature).toContain("revokeSubscription(subscriptionId: string)");
+    const create = describeEvalMethod(
+      "webhooks.createSubscription",
+      surface.methods["createSubscription"]
+    );
+    expect(create.description).toContain("target: WebhookTarget");
+    expect(create.description).toContain("(await agent.describe()).identity");
+    expect(create.access).toMatchObject({ capability: "webhooks.manage", sensitivity: "write" });
+  });
+
+  it("retains owned DO creation and shared-resolution contracts despite a nonempty raw workers catalog", () => {
+    const surface = describeEvalBindingSurface(
+      "workers",
+      ["createDurableObject", "resolveDurableObject", "destroy"],
+      {
+        resolveDurableObject: { description: "Raw relay resolver" },
+        destroy: { description: "Raw deletion" },
+      }
+    )!;
+    const create = describeEvalMethod(
+      "workers.createDurableObject",
+      surface.methods["createDurableObject"]
+    );
+    expect(create.signature).toContain("DurableObjectEntityHandle");
+    expect(create.description).toContain("owned by the caller");
+    expect(create.parameters).toHaveLength(3);
+    expect(create.parameters![2]!.type).toContain("stateArgs");
+    const resolve = describeEvalMethod(
+      "workers.resolveDurableObject",
+      surface.methods["resolveDurableObject"]
+    );
+    expect(resolve.description).toContain("never lifecycle ownership");
+    expect(resolve.parameters).toHaveLength(3);
+    const destroy = describeEvalMethod("workers.destroy", surface.methods["destroy"]);
+    expect(destroy.description).toContain(
+      "Resolving an object or service does not transfer lifecycle ownership"
+    );
+    expect(destroy.description).toContain("finally");
+  });
+});
+
+describe("named live help lookup", () => {
+  it("discovers grouped live methods and resolves their namespace and exact contract", async () => {
+    const binding = { createEntity() {}, supervision: { logs() {}, health() {} } };
+    expect(evalBindingMethodNames(binding)).toEqual([
+      "createEntity", "supervision.health", "supervision.logs",
+    ]);
+    const d = deps();
+    d.bindings["runtime"] = binding;
+    d.describeBinding.mockResolvedValue({ methods: {
+      "createEntity": {},
+      "supervision.logs": { description: "Exact incarnation logs", argsSchema: { type: "array", items: [{ type: "string" }] } },
+      "supervision.health": { description: "Exact incarnation health" },
+    } });
+    expect(await describeEvalHelpName("runtime.supervision", d)).toMatchObject({
+      name: "runtime.supervision", methods: [
+        { name: "logs", description: "Exact incarnation logs" },
+        { name: "health", description: "Exact incarnation health" },
+      ],
+    });
+    expect(await describeEvalHelpName("runtime.supervision.logs", d)).toMatchObject({
+      name: "runtime.supervision.logs", call: "await runtime.supervision.logs(input)",
+      parameters: [{ name: "input", type: "string" }],
+    });
+    expect(d.docs.describe).not.toHaveBeenCalled();
+  });
+  function deps() {
+    return {
+      bindings: {} as Record<string, unknown>, runtimeModuleName: "@workspace/runtime",
+      describeBinding: vi.fn(async () => null as unknown),
+      docs: { describe: vi.fn(async () => null as unknown), describeService: vi.fn(async () => null as unknown) },
+    };
+  }
+  it("resolves qualified plain service methods through their exact canonical catalog entry", async () => {
+    const d = deps();
+    const entry = {
+      id: "service:authority.preflight", qualifiedName: "authority.preflight", parent: "service:authority",
+      argsSchema: { type: "array", items: [{ type: "object", properties: { service: { type: "string" }, method: { type: "string" }, args: { type: "array", items: {} } }, required: ["service", "method", "args"] }] },
+    };
+    d.docs.describe.mockResolvedValue(entry);
+    expect(await describeEvalHelpName("authority.preflight", d)).toMatchObject({
+      name: "services.authority.preflight", call: "await services.authority.preflight(input)",
+      parameters: [{ name: "input", type: "{ service: string; method: string; args: (unknown)[] }" }],
+    });
+    expect(d.docs.describe).toHaveBeenCalledWith("service:authority.preflight");
+    expect(d.docs.describeService).not.toHaveBeenCalled();
+  });
+  it("keeps hidden raw methods out of an injected ergonomic binding", async () => {
+    const d = deps(); d.bindings["fs"] = { open() {} };
+    d.describeBinding.mockResolvedValue({ methods: { open: { description: "FileHandle" } } });
+    expect(await describeEvalHelpName("fs.handleClose", d)).toMatchObject({ error: "Unknown method handleClose on fs", knownMethods: ["open"] });
+    expect(d.docs.describe).not.toHaveBeenCalled();
+  });
+  it("preserves normal service indexes and truthful unknown methods", async () => {
+    const d = deps(); const service = { name: "authority", methods: { preflight: {} } };
+    d.docs.describeService.mockResolvedValue(service);
+    expect(await describeEvalHelpName("authority", d)).toBe(service);
+    expect(await describeEvalHelpName("authority.invented", d)).toMatchObject({ name: "authority.invented", error: expect.stringContaining("No injected") });
   });
 });

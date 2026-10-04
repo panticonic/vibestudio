@@ -1,10 +1,14 @@
 import { parentPort } from "node:worker_threads";
-import { materializeImmutableTree } from "./immutableTreeMaterializer.js";
+import {
+  materializeImmutableTree,
+  materializePackageResources,
+} from "./immutableTreeMaterializer.js";
 
 interface Request {
   id: number;
   source: string;
   target: string;
+  kind: "tree" | "package";
 }
 
 const port = parentPort;
@@ -14,7 +18,9 @@ let queue = Promise.resolve();
 port.on("message", (request: Request) => {
   queue = queue.then(async () => {
     try {
-      await materializeImmutableTree(request.source, request.target);
+      if (request.kind === "package")
+        await materializePackageResources(request.source, request.target);
+      else await materializeImmutableTree(request.source, request.target);
       port.postMessage({ id: request.id, result: true });
     } catch (error) {
       port.postMessage({

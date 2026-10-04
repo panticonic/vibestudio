@@ -26,8 +26,23 @@ import { spawn } from "node:child_process";
 import { tsImport } from "tsx/esm/api";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
-const { createOwnedProcessLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
-const { OwnedProcessGroup } = await tsImport("@vibestudio/shared/ownedProcessGroup", import.meta.url);
+import {
+  createDesktopObservationOwner,
+  createOwnedTemporaryDirectory,
+} from "./lib/desktop-observation-owner.mjs";
+import { inspectPresentedDesktopDocuments } from "./lib/presented-desktop-documents.mjs";
+import {
+  approveOwnedOnboardingCredential,
+  readOwnedOnboardingFromPanel,
+} from "./lib/desktop-onboarding-reviews.mjs";
+const { createOwnedProcessLifetime } = await tsImport(
+  "./development-client-lifecycle.ts",
+  import.meta.url
+);
+const { OwnedProcessGroup } = await tsImport(
+  "@vibestudio/shared/ownedProcessGroup",
+  import.meta.url
+);
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
@@ -37,11 +52,16 @@ import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import {
   assertTemplateCheckoutBootable,
   createRemoteServeArgs,
+  createRemoteSmokeServerEnvironment,
   resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
-import { terminateOwnedProcessTree } from "./owned-process-tree.mjs";
-import { readCurrentHostBuildGeneration, releaseHostBuildGeneration } from "./host-build-generations.mjs";
+import { captureOwnedProcessIdentity } from "./owned-process-identity.mjs";
+import { closeOwnedDesktop } from "./lib/owned-desktop-close.mjs";
+import {
+  readCurrentHostBuildGeneration,
+  releaseHostBuildGeneration,
+} from "./host-build-generations.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createMacosTestKeychain } from "./macos-test-keychain.mjs";
 import {
@@ -65,7 +85,7 @@ let desktopGeneration = null;
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = "@workspace-apps/shell";
 const desktopProcessOwners = new WeakMap();
-const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
+const desktopObservationOwners = new WeakMap();
 // Capture the profile cache before the smoke replaces HOME/XDG_CONFIG_HOME.
 // Mutable server/app state remains isolated; only receipt-validated,
 // content-addressed derived artifacts are shared between independent instances.
@@ -293,17 +313,10 @@ async function runBrowserImportApprovalAcceptance(app, workspaceId, deadline) {
   );
 }
 
-function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_MS) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`Electron evaluation timed out while ${label}`)),
-      timeoutMs
-    );
-  });
-  return Promise.race([app.evaluate(pageFunction, arg), timeout]).finally(() => {
-    clearTimeout(timer);
-  });
+function evaluateElectron(app, pageFunction, arg, label) {
+  const owner = desktopObservationOwners.get(app);
+  if (!owner) throw new Error(`Desktop observation lost its app owner while ${label}`);
+  return owner.observe(() => app.evaluate(pageFunction, arg));
 }
 
 /**
@@ -331,7 +344,6 @@ function isTransientDesktopObservation(error) {
     /temporarily unavailable/iu.test(message) ||
     /CONNECTION_LOST/u.test(message) ||
     /connection lost/iu.test(message) ||
-    /evaluation timed out/iu.test(message) ||
     /Hosted desktop chrome is unavailable/iu.test(message) ||
     // The host types this one properly — `RpcBoundaryError(.., "transport",
     // "CONNECTION_LOST")` in uiSessions.ts — but only its message survives the
@@ -734,7 +746,7 @@ async function waitForDesktopShell(app, timeoutMs) {
   let lastSnapshots = [];
   let clickedApprovals = 0;
   while (Date.now() < deadlineMs) {
-    const snapshots = await collectShellSnapshots(app, Math.max(1_000, deadlineMs - Date.now()));
+    const snapshots = await collectShellSnapshots(app);
     lastSnapshots = snapshots;
     const errorText = snapshots
       .map((snapshot) => snapshot.text)
@@ -824,127 +836,22 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
   );
 }
 
-async function collectShellSnapshots(app, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_MS) {
+async function collectShellSnapshots(app) {
   return evaluateElectron(
     app,
-    async ({ webContents }) => {
-      const snapshots = [];
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        const url = contents.getURL();
-        if (!url || contents.isLoadingMainFrame()) {
-          snapshots.push({ id: contents.id, url, pendingNavigation: true });
-          continue;
-        }
-        try {
-          const dom = await contents.executeJavaScript(
-              `(() => {
-            const text = document.body?.innerText ?? "";
-            const buttons = Array.from(document.querySelectorAll("button"))
-              .map((button) => button.textContent?.trim() ?? "")
-              .filter(Boolean);
-            const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-              && buttons.some((label) =>
-                /^(Trust and (start|connect)|Approve and (start|connect)|Deny)$/i.test(label)
-              );
-            const hasHostedShellChrome = Boolean(
-              document.querySelector('[data-shell-top-chrome="titlebar"]')
-                || document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]')
-                || document.querySelector('[data-hosted-shell="true"]')
-            );
-            return {
-              text: text.slice(0, 3000),
-              buttons,
-              hasLaunchGateApproval,
-              hasHostedShellChrome,
-            };
-          })()`,
-              true
-            );
-          snapshots.push({
-            id: contents.id,
-            url,
-            title: contents.getTitle(),
-            ...dom,
-          });
-        } catch {
-          // Ignore non-DOM webContents.
-        }
-      }
-      return snapshots;
-    },
-    undefined,
-    "collecting shell snapshots",
-    timeoutMs
+    inspectPresentedDesktopDocuments,
+    { kind: "snapshots" },
+    "collecting shell snapshots"
   );
 }
 
 async function clickDesktopButton(app, label) {
-  try {
-    return await evaluateElectron(
-      app,
-      async ({ webContents }, labelSource) => {
-        const label = new RegExp(labelSource, "i");
-        const candidates = [];
-        for (const contents of webContents.getAllWebContents()) {
-          // Prepared panel views have no document until their launch is approved.
-          // executeJavaScript on such a view waits for its first navigation,
-          // which would strand the click that must approve that very launch.
-          if (contents.isDestroyed() || !contents.getURL() || contents.isLoadingMainFrame())
-            continue;
-          try {
-            const priority = await contents.executeJavaScript(
-              `(() => {
-              const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
-              const hasHostedShellChrome = Boolean(
-                document.querySelector('[data-shell-top-chrome="titlebar"]')
-                  || document.querySelector(".titlebar-breadcrumb-scroll")
-                  || document.querySelector('[aria-label="Menu"]')
-              );
-              if (hasLaunchGateApproval) return 0;
-              if (hasHostedShellChrome) return 2;
-              return 3;
-            })()`,
-              true
-            );
-            candidates.push({ contents, priority });
-          } catch {
-            // Ignore non-DOM webContents.
-          }
-        }
-        candidates.sort((a, b) => a.priority - b.priority);
-        for (const { contents } of candidates) {
-          if (contents.isDestroyed()) continue;
-          try {
-            const clicked = await contents.executeJavaScript(
-              `(() => {
-              const label = new RegExp(${JSON.stringify(labelSource)}, "i");
-              const button = Array.from(document.querySelectorAll("button"))
-                .find((item) => item.getClientRects().length > 0 && !item.closest('[hidden]') && label.test(
-                  item.getAttribute("aria-label")?.trim()
-                    || item.textContent?.trim()
-                    || ""
-                ));
-              if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-              button.click();
-              return true;
-            })()`,
-              true
-            );
-            if (clicked) return true;
-          } catch {
-            // Ignore non-DOM webContents.
-          }
-        }
-        return false;
-      },
-      label.source,
-      "clicking a desktop button"
-    );
-  } catch {
-    return false;
-  }
+  return evaluateElectron(
+    app,
+    inspectPresentedDesktopDocuments,
+    { kind: "click", labelSource: label.source },
+    "clicking a desktop button"
+  );
 }
 
 async function waitAndClickHostedShellButton(app, label, timeoutMs) {
@@ -987,12 +894,11 @@ async function waitAndClickHostedShellButton(app, label, timeoutMs) {
       return false;
     },
     { timeoutMs, labelSource: label.source },
-    "waiting for an enabled desktop button",
-    timeoutMs + 5_000
+    "waiting for an enabled desktop button"
   );
 }
 
-async function evaluateHostedChrome(app, expression, label, timeoutMs = 5000) {
+async function evaluateHostedChrome(app, expression, label) {
   return evaluateElectron(
     app,
     async ({ webContents }, expression) => {
@@ -1000,12 +906,12 @@ async function evaluateHostedChrome(app, expression, label, timeoutMs = 5000) {
       const chrome = webContents
         .getAllWebContents()
         .find((entry) => !entry.isDestroyed() && entry.getURL() === url);
-      if (!chrome) throw new Error("Hosted desktop chrome is unavailable");
+      if (!chrome || chrome.isLoadingMainFrame())
+        throw new Error("Hosted desktop chrome is unavailable");
       return chrome.executeJavaScript(expression, true);
     },
     expression,
-    label,
-    timeoutMs
+    label
   );
 }
 
@@ -1342,7 +1248,13 @@ async function captureDesktopFailureDiagnostics(app, failure) {
       "capturing owned panel asset transfers"
     ),
   ]);
-  const names = ["nativeViews", "hostedChrome", "rendererDiagnostics", "mainProcessErrors", "assetTransfers"];
+  const names = [
+    "nativeViews",
+    "hostedChrome",
+    "rendererDiagnostics",
+    "mainProcessErrors",
+    "assetTransfers",
+  ];
   const packet = {
     failure: failure instanceof Error ? failure.message : String(failure),
     assetFailures: desktopAssetFailures.get(app) ?? [],
@@ -1417,21 +1329,36 @@ async function readInitialPanelHistory(app, webContentsId, workspaceId) {
       return contents.executeJavaScript(`(${query.toString()})(${JSON.stringify(workspaceId)})`);
     },
     { webContentsId, workspaceId },
-    "reading history through the actual initial panel identity",
-    20_000
+    "reading history through the actual initial panel identity"
   );
 }
 
-async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) {
+async function readOwnedOnboardingRequest(app, webContentsId) {
+  return evaluateElectron(
+    app,
+    async ({ webContents }, { id, script }) => {
+      const contents = webContents.fromId(id);
+      if (!contents || contents.isDestroyed() || contents.isLoadingMainFrame())
+        throw new Error("Original onboarding panel is not ready for review");
+      return contents.executeJavaScript(script);
+    },
+    { id: webContentsId, script: `(${readOwnedOnboardingFromPanel.toString()})()` },
+    "binding the original onboarding credential review"
+  );
+}
+
+async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, ownerSignal) {
   let latestObservation = null;
   let latestWebContentsId;
   while (Date.now() < deadline) {
+    ownerSignal.throwIfAborted();
     const reportingFailure = await evaluateHostedChrome(
       app,
       `document.querySelector('[data-shell-top-chrome="reporting-choice-status"] [role="alert"]')?.textContent ?? null`,
       "checking reporting readiness before workspace admission"
     );
-    if (reportingFailure) throw new Error(`Reporting preference blocked startup: ${reportingFailure}`);
+    if (reportingFailure)
+      throw new Error(`Reporting preference blocked startup: ${reportingFailure}`);
     if (await clickDesktopButton(app, /^Add to workspace$/i)) {
       await sleep(750);
       continue;
@@ -1561,6 +1488,18 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
           if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
           if (!rendered.submittedPrompt || !rendered.setupReady) {
+            if (rendered.submittedPrompt) {
+              const review = await approveOwnedOnboardingCredential(
+                app,
+                workspaceId,
+                () => readOwnedOnboardingRequest(app, snapshot.presentation.webContentsId),
+                deadline
+              );
+              if (review)
+                console.log(
+                  `[desktop-smoke] Approved exact onboarding credential review through visible Use once: ${JSON.stringify(review)}`
+                );
+            }
             await sleep(500);
             continue;
           }
@@ -1669,28 +1608,46 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
       ];
       const sourceTarget = { kind: "workspace", workspaceId };
       const sourceStatePromise = nativeRpc(chrome, sourceTarget, "vcs.mainState", []);
-      const sourceResults = await Promise.allSettled(sourcePaths.map(async (sourcePath) => {
-        const sourceState = await sourceStatePromise;
-        const [category, unit, ...relativePath] = sourcePath.split("/");
-        const repository = await nativeRpc(chrome, sourceTarget, "vcs.resolveRepository", [
-          { state: sourceState, repoPath: `${category}/${unit}` },
-        ]);
-        if (!repository) throw new Error(`Source repository is missing: ${category}/${unit}`);
-        const file = await nativeRpc(chrome, sourceTarget, "vcs.readFile", [{
-          state: sourceState, repositoryId: repository.repositoryId,
-          file: { kind: "path", path: relativePath.join("/") },
-        }]);
-        if (file?.content.kind !== "text") throw new Error("Source read did not return text");
-        const source = file.content.text;
-        return { path: sourcePath, sha256: createHash("sha256").update(source).digest("hex"),
-          bytes: Buffer.byteLength(source),
-          ...(sourcePath === "packages/eval/src/sandbox.ts"
-            ? { linksCompilerDependencies: source.includes("artifact.requiredModules") } : {}) };
-      }));
-      const sourceContracts = sourceResults.map((result, index) => result.status === "fulfilled"
-        ? result.value : { path: sourcePaths[index], error: String(result.reason).slice(0, 1000) });
-      const packet = { workspaceId, observation: latestObservation, panel: diagnostics,
-        sourceContracts, rendererDiagnostics: rendererDiagnostics.slice(-30), mainProcessErrors: await readMainProcessErrors(app) };
+      const sourceResults = await Promise.allSettled(
+        sourcePaths.map(async (sourcePath) => {
+          const sourceState = await sourceStatePromise;
+          const [category, unit, ...relativePath] = sourcePath.split("/");
+          const repository = await nativeRpc(chrome, sourceTarget, "vcs.resolveRepository", [
+            { state: sourceState, repoPath: `${category}/${unit}` },
+          ]);
+          if (!repository) throw new Error(`Source repository is missing: ${category}/${unit}`);
+          const file = await nativeRpc(chrome, sourceTarget, "vcs.readFile", [
+            {
+              state: sourceState,
+              repositoryId: repository.repositoryId,
+              file: { kind: "path", path: relativePath.join("/") },
+            },
+          ]);
+          if (file?.content.kind !== "text") throw new Error("Source read did not return text");
+          const source = file.content.text;
+          return {
+            path: sourcePath,
+            sha256: createHash("sha256").update(source).digest("hex"),
+            bytes: Buffer.byteLength(source),
+            ...(sourcePath === "packages/eval/src/sandbox.ts"
+              ? { linksCompilerDependencies: source.includes("artifact.requiredModules") }
+              : {}),
+          };
+        })
+      );
+      const sourceContracts = sourceResults.map((result, index) =>
+        result.status === "fulfilled"
+          ? result.value
+          : { path: sourcePaths[index], error: String(result.reason).slice(0, 1000) }
+      );
+      const packet = {
+        workspaceId,
+        observation: latestObservation,
+        panel: diagnostics,
+        sourceContracts,
+        rendererDiagnostics: rendererDiagnostics.slice(-30),
+        mainProcessErrors: await readMainProcessErrors(app),
+      };
       await fsp.mkdir(screenshotDir, { recursive: true, mode: 0o700 });
       const diagnosticPath = path.join(screenshotDir, `onboarding-diagnostics-${Date.now()}.json`);
       await fsp.writeFile(diagnosticPath, `${JSON.stringify(packet, null, 2)}\n`, { mode: 0o600 });
@@ -1706,50 +1663,107 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
 }
 
 async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
-  const parentId = await until(() => evaluateElectron(app, async (_electron, id) => {
-    const owner = await globalThis.__testApi.forWorkspace(id);
-    return owner.getRootPanels()[0]?.id ?? null;
-  }, workspaceId, "finding the current workspace panel root"),
-  "waiting for the current workspace panel root", deadline);
-  const browserPanel = await evaluateElectron(app, async (_electron, input) => {
-    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
-    return owner.createBrowserPanel(input.parentId, "https://vibestudio.app/", { focus: true });
-  }, { workspaceId, parentId }, "opening vibestudio.app through the desktop browser panel lifecycle");
+  const parentId = await until(
+    () =>
+      evaluateElectron(
+        app,
+        async (_electron, id) => {
+          const owner = await globalThis.__testApi.forWorkspace(id);
+          return owner.getRootPanels()[0]?.id ?? null;
+        },
+        workspaceId,
+        "finding the current workspace panel root"
+      ),
+    "waiting for the current workspace panel root",
+    deadline
+  );
+  const browserPanel = await evaluateElectron(
+    app,
+    async (_electron, input) => {
+      const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+      return owner.createBrowserPanel(input.parentId, "https://vibestudio.app/", { focus: true });
+    },
+    { workspaceId, parentId },
+    "opening vibestudio.app through the desktop browser panel lifecycle"
+  );
   console.log(`[desktop-smoke] Website: opened browser panel ${browserPanel.id}`);
-  const focus = await evaluateElectron(app, async (_electron, input) => {
-    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
-    return owner.focusPanel(input.panelId);
-  }, { workspaceId, panelId: browserPanel.id }, "focusing the website browser panel");
+  const focus = await evaluateElectron(
+    app,
+    async (_electron, input) => {
+      const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+      return owner.focusPanel(input.panelId);
+    },
+    { workspaceId, panelId: browserPanel.id },
+    "focusing the website browser panel"
+  );
   console.log(`[desktop-smoke] Website: browser focus ${JSON.stringify(focus)}`);
 
-  const website = await until(async () => {
-    for (const page of app.context().pages()) {
-      if (page.isClosed() || !page.url().startsWith("https://vibestudio.app/")) continue;
-      if (await page.locator("#workspace-connect-button").isVisible().catch(() => false))
-        return page;
-    }
-    return null;
-  }, "loading vibestudio.app in a desktop browser panel", deadline);
+  const website = await until(
+    async () => {
+      for (const page of app.context().pages()) {
+        if (page.isClosed() || !page.url().startsWith("https://vibestudio.app/")) continue;
+        if (
+          await page
+            .locator("#workspace-connect-button")
+            .isVisible()
+            .catch(() => false)
+        )
+          return page;
+      }
+      return null;
+    },
+    "loading vibestudio.app in a desktop browser panel",
+    deadline
+  );
   console.log(`[desktop-smoke] Website: loaded ${website.url()}`);
-  await until(async () => evaluateElectron(app, async (_electron, input) => {
-    const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
-    return owner.getPanelTree().some((panel) => panel.id === input.panelId &&
-      panel.snapshot?.source === "browser:https://vibestudio.app/");
-  }, { workspaceId, panelId: browserPanel.id }, "checking current workspace browser ownership"),
-  "registering vibestudio.app in the current workspace panel tree", deadline);
+  await until(
+    async () =>
+      evaluateElectron(
+        app,
+        async (_electron, input) => {
+          const owner = await globalThis.__testApi.forWorkspace(input.workspaceId);
+          return owner
+            .getPanelTree()
+            .some(
+              (panel) =>
+                panel.id === input.panelId &&
+                panel.snapshot?.source === "browser:https://vibestudio.app/"
+            );
+        },
+        { workspaceId, panelId: browserPanel.id },
+        "checking current workspace browser ownership"
+      ),
+    "registering vibestudio.app in the current workspace panel tree",
+    deadline
+  );
   const connect = website.locator("#workspace-connect-button");
   await until(() => connect.isEnabled(), "enabling the website connection control", deadline);
   console.log("[desktop-smoke] Website: connection control enabled");
   const chrome = await chromePage(app, deadline);
-  await until(async () => {
-    const history = await nativeRpc(chrome, { kind: "workspace", workspaceId },
-      "extensions.invokeProvider", ["browserData", "getHistory", [{ limit: 10 }]]);
-    return history.some((entry) => entry.url === "https://vibestudio.app/");
-  }, "recording the website visit without browser-data approval", deadline);
-  const beforeConnection = await nativeRpc(chrome, { kind: "workspace", workspaceId },
-    "shellApproval.listPending", []);
-  if (beforeConnection.some((entry) => entry.kind === "capability" &&
-      entry.capability?.includes("browser-data.write")))
+  await until(
+    async () => {
+      const history = await nativeRpc(
+        chrome,
+        { kind: "workspace", workspaceId },
+        "extensions.invokeProvider",
+        ["browserData", "getHistory", [{ limit: 10 }]]
+      );
+      return history.some((entry) => entry.url === "https://vibestudio.app/");
+    },
+    "recording the website visit without browser-data approval",
+    deadline
+  );
+  const beforeConnection = await nativeRpc(
+    chrome,
+    { kind: "workspace", workspaceId },
+    "shellApproval.listPending",
+    []
+  );
+  if (
+    beforeConnection.some(
+      (entry) => entry.kind === "capability" && entry.capability?.includes("browser-data.write")
+    )
+  )
     throw new Error("Ordinary website navigation requested Browser Data write approval");
   console.log("[desktop-smoke] Website: visit recorded without Browser Data approval");
   if (await website.locator("#workspace-capabilities").textContent())
@@ -1757,12 +1771,26 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
   await connect.click();
   console.log("[desktop-smoke] Website: requested workspace connection");
 
-  const approval = await until(async () => {
-    const pending = await nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []);
-    return pending.find((entry) => entry.kind === "capability" &&
-      entry.capability === "workspace.connect" &&
-      entry.authoritySubject?.website?.origin === "https://vibestudio.app") ?? null;
-  }, "receiving the website connection approval", deadline);
+  const approval = await until(
+    async () => {
+      const pending = await nativeRpc(
+        chrome,
+        { kind: "workspace", workspaceId },
+        "shellApproval.listPending",
+        []
+      );
+      return (
+        pending.find(
+          (entry) =>
+            entry.kind === "capability" &&
+            entry.capability === "workspace.connect" &&
+            entry.authoritySubject?.website?.origin === "https://vibestudio.app"
+        ) ?? null
+      );
+    },
+    "receiving the website connection approval",
+    deadline
+  );
   console.log(`[desktop-smoke] Website: approval ${approval.approvalId} received`);
   const findCard = async () => {
     for (const page of app.context().pages()) {
@@ -1776,53 +1804,97 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
   };
   let card;
   try {
-    card = await until(findCard, "showing the website connection approval", Math.min(deadline, Date.now() + 15_000));
+    card = await until(
+      findCard,
+      "showing the website connection approval",
+      Math.min(deadline, Date.now() + 15_000)
+    );
   } catch (error) {
-    const pages = await Promise.all(app.context().pages().map(async (page) => ({
-      url: page.url().slice(0, 140),
-      cards: await page.locator("[data-approval-id]").evaluateAll((nodes) =>
-        nodes.map((node) => ({ id: node.getAttribute("data-approval-id"), text: node.textContent?.slice(0, 180) }))
-      ).catch(() => []),
-      pills: await page.locator("[data-approval-pill]").count().catch(() => 0),
-    })));
-    throw new Error(`Website approval is pending but absent from native chrome: ${JSON.stringify(pages)}`, { cause: error });
+    const pages = await Promise.all(
+      app
+        .context()
+        .pages()
+        .map(async (page) => ({
+          url: page.url().slice(0, 140),
+          cards: await page
+            .locator("[data-approval-id]")
+            .evaluateAll((nodes) =>
+              nodes.map((node) => ({
+                id: node.getAttribute("data-approval-id"),
+                text: node.textContent?.slice(0, 180),
+              }))
+            )
+            .catch(() => []),
+          pills: await page
+            .locator("[data-approval-pill]")
+            .count()
+            .catch(() => 0),
+        }))
+    );
+    throw new Error(
+      `Website approval is pending but absent from native chrome: ${JSON.stringify(pages)}`,
+      { cause: error }
+    );
   }
   const connectPage = card.locator('[data-approval-decision="session"]');
   if (!(await connectPage.isEnabled()))
-    throw new Error(`Website connection approval has no enabled page-scoped action: ${await card.innerText()}`);
+    throw new Error(
+      `Website connection approval has no enabled page-scoped action: ${await card.innerText()}`
+    );
   // CDP pointer coordinates do not map reliably to the separate native overlay
   // WebContentsView; activate its visible control inside that renderer.
   await connectPage.evaluate((button) => button.click());
   console.log("[desktop-smoke] Website: approved connection in native chrome");
   try {
-    await until(async () => {
-      const text = await website.locator("#workspace-capabilities").textContent();
-      if (text?.startsWith("Could not")) throw new Error(text);
-      return /^[1-9]\d* workspace capabilities available to this page\.$/.test(text ?? "");
-    }, "reading workspace capability discovery through the connected website", Math.min(deadline, Date.now() + 20_000));
+    await until(
+      async () => {
+        const text = await website.locator("#workspace-capabilities").textContent();
+        if (text?.startsWith("Could not")) throw new Error(text);
+        return /^[1-9]\d* workspace capabilities available to this page\.$/.test(text ?? "");
+      },
+      "reading workspace capability discovery through the connected website",
+      Math.min(deadline, Date.now() + 20_000)
+    );
   } catch (error) {
-    const pending = await nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []);
-    const cardState = await card.evaluate((element) => ({
-      text: element.textContent?.slice(0, 700),
-      html: element.outerHTML.slice(0, 1200),
-    })).catch((problem) => ({ error: String(problem) }));
+    const pending = await nativeRpc(
+      chrome,
+      { kind: "workspace", workspaceId },
+      "shellApproval.listPending",
+      []
+    );
+    const cardState = await card
+      .evaluate((element) => ({
+        text: element.textContent?.slice(0, 700),
+        html: element.outerHTML.slice(0, 1200),
+      }))
+      .catch((problem) => ({ error: String(problem) }));
     const pageState = await website.evaluate(() => ({
       status: document.querySelector("#workspace-connection-status")?.textContent,
       capabilities: document.querySelector("#workspace-capabilities")?.textContent,
       button: document.querySelector("#workspace-connect-button")?.textContent,
     }));
-    throw new Error(`Website connection did not complete: ${JSON.stringify({ pageState, cardState, pending: pending.map((entry) => ({ id: entry.approvalId, capability: entry.capability })) })}`, { cause: error });
+    throw new Error(
+      `Website connection did not complete: ${JSON.stringify({ pageState, cardState, pending: pending.map((entry) => ({ id: entry.approvalId, capability: entry.capability })) })}`,
+      { cause: error }
+    );
   }
-  if ((await website.locator("#workspace-connection-status").textContent()) !==
-      "Connected to this workspace.")
+  if (
+    (await website.locator("#workspace-connection-status").textContent()) !==
+    "Connected to this workspace."
+  )
     throw new Error("Website did not display its connected state");
   await website.getByRole("button", { name: "Disconnect" }).click();
-  await until(async () =>
-    (await website.locator("#workspace-connection-status").textContent()) ===
-      "This page starts without workspace access." &&
-    (await website.locator("#workspace-capabilities").textContent()) === "",
-  "disconnecting the website and clearing workspace data", deadline);
-  console.log("[desktop-smoke] PASS vibestudio.app connected, read workspace capabilities, and disconnected");
+  await until(
+    async () =>
+      (await website.locator("#workspace-connection-status").textContent()) ===
+        "This page starts without workspace access." &&
+      (await website.locator("#workspace-capabilities").textContent()) === "",
+    "disconnecting the website and clearing workspace data",
+    deadline
+  );
+  console.log(
+    "[desktop-smoke] PASS vibestudio.app connected, read workspace capabilities, and disconnected"
+  );
 }
 
 async function waitForWebsiteWorkspacePresentation(app, workspaceId, deadline) {
@@ -1833,17 +1905,26 @@ async function waitForWebsiteWorkspacePresentation(app, workspaceId, deadline) {
       await waitForShellOverlayCleared(app, Math.max(1_000, deadline - Date.now()));
       continue;
     }
-    latest = await evaluateElectron(app, async (_electron, id) => {
-      const owner = await globalThis.__testApi.forWorkspace(id);
-      const root = owner.getRootPanels()[0];
-      return root ? owner.getPanelReadiness(root.id) : null;
-    }, workspaceId, "checking current workspace panel presentation");
+    latest = await evaluateElectron(
+      app,
+      async (_electron, id) => {
+        const owner = await globalThis.__testApi.forWorkspace(id);
+        const root = owner.getRootPanels()[0];
+        return root ? owner.getPanelReadiness(root.id) : null;
+      },
+      workspaceId,
+      "checking current workspace panel presentation"
+    );
     if (latest?.contentReady && latest.nativeSlotBound) return;
     if (latest?.terminal && !latest.contentReady)
-      throw new Error(`Current workspace panel failed before website navigation: ${JSON.stringify(latest)}`);
+      throw new Error(
+        `Current workspace panel failed before website navigation: ${JSON.stringify(latest)}`
+      );
     await sleep(250);
   }
-  throw new Error(`Current workspace panel never presented before website navigation: ${JSON.stringify(latest)}`);
+  throw new Error(
+    `Current workspace panel never presented before website navigation: ${JSON.stringify(latest)}`
+  );
 }
 
 async function getPanelTree(app) {
@@ -1939,8 +2020,7 @@ async function waitForSystemNewPanel(app, timeoutMs) {
           };
         },
         undefined,
-        "reading canonical panel readiness",
-        Math.min(30_000, Math.max(1_000, deadline - Date.now()))
+        "reading canonical panel readiness"
       );
     } catch (error) {
       if (!isTransientDesktopObservation(error) || Date.now() >= deadline) throw error;
@@ -2108,12 +2188,7 @@ async function saveScreenshot(app) {
     screenshotDir,
     `desktop-${new Date().toISOString().replace(/[:.]/g, "-")}.png`
   );
-  await Promise.race([
-    page.screenshot({ path: screenshotPath, fullPage: false }),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Desktop smoke screenshot timed out")), 5_000)
-    ),
-  ]);
+  await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 0 });
   return screenshotPath;
 }
 
@@ -2123,57 +2198,36 @@ function summarizeText(text) {
 
 async function closeElectron(app) {
   if (!app) return;
-  // Capture the pid up front: app.process() can THROW if Playwright's underlying
-  // _object was already torn down (the failure mode that left orphan windows).
-  let pid;
-  try {
-    pid = app.process()?.pid;
-  } catch {
-    pid = undefined;
-  }
-  if (process.platform === "win32" && typeof pid === "number") {
-    // Electron owns renderer and utility children that can keep the profile
-    // lockfile open after its main process exits. Retire the owned tree while
-    // its root still identifies those children.
-    const result = await terminateOwnedProcessTree(pid);
-    if (!result.gone) throw new Error(result.detail ?? "Electron process tree survived cleanup");
-    await Promise.race([
-      app.close().catch(() => undefined),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    return;
-  }
-  try {
-    await Promise.race([
-      app.close(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("close timed out")), 5_000)),
-    ]);
-  } catch {
-    // app.close() threw or timed out — fall through to the pid kill below.
-  }
   const owner = desktopProcessOwners.get(app);
   if (!owner) throw new Error("Electron launch lost its owned process-group receipt");
-  await owner.retire();
+  await closeOwnedDesktop(app, owner);
 }
 
-async function main(ownerSignal) {
+async function main(parentOwnerSignal) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
     return;
   }
 
+  const deadlineController = new AbortController();
+  const ownerSignal = AbortSignal.any([parentOwnerSignal, deadlineController.signal]);
+  let deadlineFailure;
+  let testDeadline;
   const processLifetime = createOwnedProcessLifetime();
-  ownerSignal.throwIfAborted();
   const acquireProcess = (start) => {
-    if (cleanupPromise || ownerSignal.aborted) throw new Error("Desktop smoke lifetime is stopping");
+    if (cleanupPromise || ownerSignal.aborted)
+      throw new Error("Desktop smoke lifetime is stopping");
     return processLifetime.acquire(start);
   };
   const desktopApps = [];
   const registerDesktopApp = (app) => {
     desktopApps.push(app);
+    desktopObservationOwners.set(app, createDesktopObservationOwner());
     if (ownerSignal.aborted) {
-      void desktopProcessOwners.get(app).retire().catch(() => undefined);
+      // The registered app is retained by cleanup; do not independently signal
+      // its children while the same owner is closing the application.
+      void cleanup().catch(() => undefined);
       ownerSignal.throwIfAborted();
     }
   };
@@ -2181,67 +2235,62 @@ async function main(ownerSignal) {
   let electronApp = null;
   let cleanupPromise;
   let tempRoot = "";
+  const rootOwner = createOwnedTemporaryDirectory(
+    () => fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-")),
+    (root) => fsp.rm(root, { recursive: true, force: true })
+  );
   let desktopEnvironment;
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = () => {
     if (cleanupPromise) return cleanupPromise;
+    clearTimeout(testDeadline);
+    rootOwner.seal();
     cleanupPromise = (async () => {
       const cleanupErrors = [];
       let localTreesGone = true;
+      for (const app of desktopApps) desktopObservationOwners.get(app)?.seal();
+      tempRoot = (await rootOwner.join()) ?? "";
       // Attempt every registered owner even when one cleanup reports failure.
       for (const app of desktopApps.toReversed()) {
-        try {
-          if (options.local) {
-            // The normal ephemeral quit owns ordered runtime and hub shutdown.
-            // Retain its exact ready PID before the inspector/app can disappear,
-            // so a crashed native process cannot orphan its detached hub.
-            let hubPid;
-            try {
-              const ready = parseHubReadyPayload(
-                JSON.parse(
-                  await fsp.readFile(
-                    path.join(tempRoot, "instance", "server-auth", "hub-ready.json"),
-                    "utf8"
-                  )
-                )
-              );
-              hubPid = ready.pid;
-            } catch (error) {
-              if (error.code !== "ENOENT") throw error;
-            }
-            let timer;
-            try {
-              await Promise.race([
-                app.close(),
-                new Promise((_, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error("Local native quit timed out")),
-                    90_000
-                  );
-                }),
-              ]);
-            } catch {
-              // Always prove the retained hub is gone, even after native failure.
-            } finally {
-              clearTimeout(timer);
-            }
-            if (hubPid) {
-              const result = await terminateOwnedProcessTree(hubPid);
-              if (!result.gone)
-                throw new Error(result.detail ?? "Local desktop hub survived cleanup");
-            }
-          }
-        } catch (error) {
-          // Continue closing every owner, but retain a local profile whose
-          // detached hub could still be using it and report the failed proof.
-          if (options.local) {
-            localTreesGone = false;
-            cleanupErrors.push(error);
-          }
-        } finally {
+        let hubOwner;
+        if (options.local) {
           try {
-            await closeElectron(app);
+            const ready = parseHubReadyPayload(
+              JSON.parse(
+                await fsp.readFile(
+                  path.join(tempRoot, "instance", "server-auth", "hub-ready.json"),
+                  "utf8"
+                )
+              )
+            );
+            if (process.platform !== "win32") {
+              hubOwner = OwnedProcessGroup.adopt(captureOwnedProcessIdentity(ready.pid));
+            }
+          } catch (error) {
+            if (error.code !== "ENOENT" && error.code !== "ESRCH") cleanupErrors.push(error);
+          }
+        }
+        try {
+          await closeElectron(app);
+        } catch (error) {
+          localTreesGone = false;
+          cleanupErrors.push(error);
+        }
+        await desktopObservationOwners.get(app)?.join();
+        let mainJoined = false;
+        try {
+          await desktopProcessOwners.get(app).join();
+          mainJoined = true;
+        } catch (error) {
+          localTreesGone = false;
+          cleanupErrors.push(error);
+        }
+        if (hubOwner && mainJoined) {
+          try {
+            // Electron has actually exited; this retained detached hub can no
+            // longer be owned by its creator. Join explicit orphan retirement.
+            await hubOwner.retire("SIGKILL");
           } catch (error) {
             localTreesGone = false;
             cleanupErrors.push(error);
@@ -2268,7 +2317,7 @@ async function main(ownerSignal) {
       }
       if (tempRoot && localTreesGone) {
         try {
-          await fsp.rm(tempRoot, { recursive: true, force: true });
+          await rootOwner.retire();
         } catch (error) {
           cleanupErrors.push(error);
         }
@@ -2284,10 +2333,12 @@ async function main(ownerSignal) {
   };
 
   const ownerLost = () => {
-    processLifetime.requestStop();
-    for (const app of desktopApps) {
-      void desktopProcessOwners.get(app).retire().catch(() => undefined);
-    }
+    // Closing the actual client settles observations before its process tree
+    // disappears. The same cleanup promise owns every resource and the root.
+    void cleanup().catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
   };
   process.once("SIGINT", ownerLost);
   process.once("SIGTERM", ownerLost);
@@ -2295,12 +2346,19 @@ async function main(ownerSignal) {
   if (ownerSignal.aborted) ownerLost();
 
   try {
+    ownerSignal.throwIfAborted();
+    testDeadline = setTimeout(() => {
+      deadlineFailure = new Error(
+        `Desktop pairing acceptance deadline reached (${options.timeoutMs}ms)`
+      );
+      deadlineController.abort(deadlineFailure);
+    }, options.timeoutMs);
     if (options.readyFile) {
       try {
         await fsp.unlink(options.readyFile);
       } catch {}
     }
-    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+    tempRoot = await rootOwner.acquire();
     ownerSignal.throwIfAborted();
     // The implicit ready record belongs to this exact smoke root. Keeping it
     // inside that root makes process-tree cleanup sufficient even when an
@@ -2317,23 +2375,13 @@ async function main(ownerSignal) {
     // supplied, so this exercises the production public-relay defaults.
     const gatewayPort = await findFreePort();
     const serverArgs = createRemoteServeArgs(repoRoot, options.readyFile, gatewayPort);
-    const serverHome = path.join(tempRoot, "server-home");
-    const serverConfig = path.join(tempRoot, "server-config");
-    await Promise.all([
-      fsp.mkdir(serverHome, { recursive: true }),
-      fsp.mkdir(serverConfig, { recursive: true }),
-    ]);
-    const serverEnv = {
-      ...process.env,
-      NODE_ENV: process.env.NODE_ENV ?? "development",
-      VIBESTUDIO_TEST_MODE: "1",
-      VIBESTUDIO_SERVER_ENTRY: "live",
-      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: sharedDerivedCacheDir,
-      HOME: serverHome,
-      XDG_CONFIG_HOME: serverConfig,
-    };
-    delete serverEnv.VIBESTUDIO_INSTANCE_ROOT;
-    delete serverEnv.VIBESTUDIO_WORKSPACE;
+    const serverInstanceRoot = path.join(tempRoot, "server-instance");
+    await fsp.mkdir(serverInstanceRoot, { recursive: true });
+    const serverEnv = createRemoteSmokeServerEnvironment(
+      process.env,
+      serverInstanceRoot,
+      sharedDerivedCacheDir
+    );
     const developmentTemplates = await resolveDevelopmentTemplates({
       repoRoot,
       checkpointRoot: path.join(tempRoot, "template-checkpoints"),
@@ -2427,7 +2475,8 @@ async function main(ownerSignal) {
         electronApp,
         personal.workspaceId,
         "panels/chat",
-        deadlineMs
+        deadlineMs,
+        ownerSignal
       );
       console.log(
         `[desktop-smoke] Local launch to onboarding readiness: ${Math.round(performance.now() - localLaunchStartedAt)}ms`
@@ -2462,7 +2511,8 @@ async function main(ownerSignal) {
         electronApp,
         personal.workspaceId,
         "about/new",
-        deadlineMs
+        deadlineMs,
+        ownerSignal
       );
       console.log(
         `[desktop-smoke] Separately opened Personal New and read history: ${JSON.stringify(newPanel)}`
@@ -2482,9 +2532,10 @@ async function main(ownerSignal) {
       const launcher = await until(
         async () => {
           ownerSignal.throwIfAborted();
-          return electronApp.context().pages().find(
-            (candidate) => !candidate.isClosed() && candidate.url() === launcherUrl
-          );
+          return electronApp
+            .context()
+            .pages()
+            .find((candidate) => !candidate.isClosed() && candidate.url() === launcherUrl);
         },
         "finding the native Personal launcher page",
         deadlineMs
@@ -2495,22 +2546,28 @@ async function main(ownerSignal) {
         input: document.querySelector("textarea")?.value,
         titles: [...document.querySelectorAll(".launcher-title")].map((entry) => entry.textContent),
         selected: document.querySelector('[aria-selected="true"]')?.textContent,
-        links: [...document.querySelectorAll("a.launcher-row")].map((entry) => entry.getAttribute("href")),
+        links: [...document.querySelectorAll("a.launcher-row")].map((entry) =>
+          entry.getAttribute("href")
+        ),
       }));
       console.log(`[desktop-smoke] Filtered launcher: ${JSON.stringify(launcherState)}`);
-      await launcher.locator("a.launcher-row").filter({
-        has: launcher.locator(".launcher-title").filter({ hasText: /^Help$/ }),
-      }).waitFor({
-        state: "visible",
-        timeout: Math.min(15_000, Math.max(1_000, deadlineMs - Date.now())),
-      });
+      await launcher
+        .locator("a.launcher-row")
+        .filter({
+          has: launcher.locator(".launcher-title").filter({ hasText: /^Help$/ }),
+        })
+        .waitFor({
+          state: "visible",
+          timeout: Math.min(15_000, Math.max(1_000, deadlineMs - Date.now())),
+        });
       await launcherInput.press("Enter");
       await until(
         async () => {
           ownerSignal.throwIfAborted();
           for (const candidate of electronApp.context().pages()) {
             if (candidate.isClosed() || !candidate.url().includes("/about/help/")) continue;
-            if (await candidate.getByText("Getting Started", { exact: true }).isVisible()) return true;
+            if (await candidate.getByText("Getting Started", { exact: true }).isVisible())
+              return true;
           }
           return false;
         },
@@ -2525,11 +2582,13 @@ async function main(ownerSignal) {
       await cleanup();
       return;
     }
-    const serverChild = acquireProcess(() => spawnManaged(process.execPath, serverArgs, {
-      cwd: repoRoot,
-      env: serverEnv,
-      label: "server",
-    }));
+    const serverChild = acquireProcess(() =>
+      spawnManaged(process.execPath, serverArgs, {
+        cwd: repoRoot,
+        env: serverEnv,
+        label: "server",
+      })
+    );
     await waitForSpawn(serverChild, process.execPath, serverArgs);
 
     await waitForServerReady(
@@ -2595,7 +2654,8 @@ async function main(ownerSignal) {
       electronApp,
       pairedPersonal.workspaceId,
       "panels/chat",
-      deadlineMs
+      deadlineMs,
+      ownerSignal
     );
     console.log(
       `[desktop-smoke] Initial Personal onboarding completed: ${JSON.stringify(onboarding)}`
@@ -2632,8 +2692,7 @@ async function main(ownerSignal) {
         })`);
       },
       undefined,
-      "checking workspace-owned chrome icon bytes",
-      15000
+      "checking workspace-owned chrome icon bytes"
     );
     if (!workspaceIconLoaded)
       throw new Error("System workspace icon bytes did not render in chrome");
@@ -2707,11 +2766,13 @@ async function main(ownerSignal) {
       process.platform === "win32" ? 90_000 : 30_000
     );
     await fsp.rm(options.readyFile, { force: true });
-    const restoredServer = acquireProcess(() => spawnManaged(process.execPath, serverArgs, {
-      cwd: repoRoot,
-      env: serverEnv,
-      label: "server-restored",
-    }));
+    const restoredServer = acquireProcess(() =>
+      spawnManaged(process.execPath, serverArgs, {
+        cwd: repoRoot,
+        env: serverEnv,
+        label: "server-restored",
+      })
+    );
     await waitForSpawn(restoredServer, process.execPath, serverArgs);
     await waitForServerReady(
       options.readyFile,
@@ -2729,8 +2790,7 @@ async function main(ownerSignal) {
           electronApp,
           () => globalThis.__testApi.rpcCall("workspace", "getInfo", []),
           undefined,
-          "checking restored System workspace identity",
-          30000
+          "checking restored System workspace identity"
         ),
       Math.max(1000, deadlineMs - Date.now())
     );
@@ -2761,7 +2821,8 @@ async function main(ownerSignal) {
       electronApp,
       personalWorkspace.workspaceId,
       "panels/chat",
-      Math.min(deadlineMs, Date.now() + 30000)
+      Math.min(deadlineMs, Date.now() + 30000),
+      ownerSignal
     );
     if (recoveredOnboarding.panelId !== onboarding.panelId) {
       throw new Error("Reconnect replaced the automatic onboarding panel");
@@ -2841,7 +2902,12 @@ async function main(ownerSignal) {
               []
             );
             if (state.status === "resolved" || state.status === "not-required") {
-              await selectWorkspace(app, workspaceLabel, Math.max(1000, deadlineMs - Date.now()), ownerSignal);
+              await selectWorkspace(
+                app,
+                workspaceLabel,
+                Math.max(1000, deadlineMs - Date.now()),
+                ownerSignal
+              );
               await waitForShellOverlayCleared(app, Math.max(1000, deadlineMs - Date.now()));
               const panelIds = await workspaceTreeIds(
                 app,
@@ -2890,19 +2956,29 @@ async function main(ownerSignal) {
     );
     await cleanup();
   } catch (error) {
-    if (!ownerSignal.aborted) console.error(`[desktop-smoke] ${error instanceof Error ? error.message : String(error)}`);
-    if (!ownerSignal.aborted) {
-      for (const app of desktopApps) {
-        try {
-          await captureDesktopFailureDiagnostics(app, error);
-        } catch (diagnosticError) {
-          console.error(`[desktop-smoke] Could not retain desktop failure diagnostics: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
-        }
+    const original = deadlineFailure ?? error;
+    if (!parentOwnerSignal.aborted || deadlineFailure)
+      console.error(
+        `[desktop-smoke] ${original instanceof Error ? (original.stack ?? original.message) : String(original)}`
+      );
+    for (const app of desktopApps) {
+      try {
+        await captureDesktopFailureDiagnostics(app, original);
+      } catch (diagnosticError) {
+        console.error(
+          `[desktop-smoke] Could not retain desktop failure diagnostics: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`
+        );
       }
     }
-    await cleanup();
-    if (!ownerSignal.aborted) process.exitCode = 1;
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      if (cleanupError === original) throw original;
+      throw new AggregateError([original, cleanupError], "Desktop smoke and cleanup failed");
+    }
+    if (!parentOwnerSignal.aborted || deadlineFailure) process.exitCode = 1;
   } finally {
+    clearTimeout(testDeadline);
     ownerSignal.removeEventListener("abort", ownerLost);
     process.off("SIGINT", ownerLost);
     process.off("SIGTERM", ownerLost);

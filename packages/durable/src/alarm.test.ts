@@ -3,8 +3,11 @@ import { rpcMethodAuthority } from "@vibestudio/rpc";
 import type { ResidentChannelDeliveryInput } from "@vibestudio/shared/residentSession";
 import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { z } from "zod";
+import { createModels } from "@panticonic/pi-ai";
+import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
+import { createRegistry, Harness, MemoryStorage } from "@panticonic/pi-durable";
 import { DurableObjectBase, rpc, schemaRpc, type AlarmSchedule } from "./index.js";
-import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
+import { createTestDO, createTestDirectAuthority, successfulTestRpcFetch } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
   nextAlarm: AlarmSchedule | null = null;
@@ -25,7 +28,8 @@ class AlarmProbeDO extends DurableObjectBase {
     return this.nextAlarm;
   }
 
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -36,7 +40,8 @@ class AlarmProbeDO extends DurableObjectBase {
     return "scheduled";
   }
 
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -51,7 +56,8 @@ class AlarmProbeDO extends DurableObjectBase {
     return "deferred";
   }
 
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -67,7 +73,10 @@ class AlarmProbeDO extends DurableObjectBase {
 class OpenSchemaProbeDO extends DurableObjectBase {
   static override rpcMethods = defineReceiverServiceMethods({
     inspect: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       args: z.tuple([]),
       returns: z.string(),
       authority: { principals: ["host"] },
@@ -88,11 +97,198 @@ class OpenSchemaProbeDO extends DurableObjectBase {
   }
 }
 
+class AsyncWakeProbeDO extends AlarmProbeDO {
+  publishWake: () => Promise<AlarmSchedule | null | undefined> = async () => undefined;
+
+  protected override nextAlarmAfterRequest(): Promise<AlarmSchedule | null | undefined> {
+    return this.publishWake();
+  }
+
+  @rpc({
+    website: { kind: "closed", reason: "Test request wake ownership." },
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  complete(): string {
+    return "complete";
+  }
+
+  startWakeChild(): void {
+    void this.rpc.call("main", "probe.wake", []);
+  }
+
+  observedCallerId(): string | null {
+    return this.rpcCallerId;
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("joins an asynchronous wake before acknowledging the request and persists its exact schedule", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
+    const { instance, call, db } = await createTestDO(AsyncWakeProbeDO);
+    let entered!: () => void;
+    const publishing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    instance.publishWake = async () => {
+      entered();
+      await held;
+      expect(instance.observedCallerId()).toBe("main");
+      return { wakeAt: 271 };
+    };
+    let settled = false;
+    const request = call("complete").finally(() => {
+      settled = true;
+    });
+    try {
+      await publishing;
+      expect(settled).toBe(false);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      release();
+      await expect(request).resolves.toBe("complete");
+      const body = JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body));
+      expect(body.message.args[0].wakeAt).toBe(271);
+    } finally {
+      release();
+      await request;
+      db.close();
+    }
+  });
+
+  it("keeps causal wake RPCs owned after the asynchronous hook returns", async () => {
+    let entered!: () => void;
+    const childEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let outboundBody = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      outboundBody = String(init?.body);
+      entered();
+      await held;
+      return successfulTestRpcFetch(input, init);
+    });
+    const { instance, call, db } = await createTestDO(AsyncWakeProbeDO);
+    instance.publishWake = async () => {
+      await Promise.resolve();
+      instance.startWakeChild();
+      return undefined;
+    };
+    let settled = false;
+    const request = call("complete").finally(() => {
+      settled = true;
+    });
+    try {
+      await childEntered;
+      expect(settled).toBe(false);
+      expect(outboundBody).toContain("authorityParentNonce");
+      release();
+      await expect(request).resolves.toBe("complete");
+    } finally {
+      release();
+      await request;
+      db.close();
+    }
+  });
+
+  it("propagates the original asynchronous wake failure through the request error boundary", async () => {
+    const { instance, call, db } = await createTestDO(AsyncWakeProbeDO);
+    const original = Object.assign(new Error("Original native wake publication failed"), {
+      code: "WAKE_FAILED",
+    });
+    instance.publishWake = async () => {
+      throw original;
+    };
+    const fetched = vi.spyOn(instance, "fetch");
+    try {
+      await expect(call("complete")).rejects.toThrow(original.message);
+      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 500 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("maps a genuinely closed native alarm pass through the existing request error boundary", async () => {
+    const harness = await Harness.open(
+      new MemoryStorage(),
+      {
+        registry: createRegistry(),
+        models: createModels(),
+      },
+      BACKGROUND_CONTEXT
+    );
+    const { instance, call, db } = await createTestDO(AlarmProbeDO);
+    let entered!: () => void;
+    const running = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    instance.alarm = async () => {
+      const pass = harness.runPass(BACKGROUND_CONTEXT);
+      entered();
+      const schedule = await pass;
+      return schedule.wakeAt === null ? null : { wakeAt: schedule.wakeAt };
+    };
+    const fetched = vi.spyOn(instance, "fetch");
+    const request = call("__alarm");
+    const failed = expect(request).rejects.toThrow("Harness is closed");
+    try {
+      await running;
+      await harness.close(BACKGROUND_CONTEXT);
+      await failed;
+      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 500 });
+    } finally {
+      await harness.close(BACKGROUND_CONTEXT);
+      await failed;
+      db.close();
+    }
+  });
+
+  it("maps an original lifecycle release rejection through the request error boundary", async () => {
+    const { instance, db } = await createTestDO(AlarmProbeDO);
+    const original = new Error("Original activation release failed");
+    instance.releaseForLifecycle = async () => {
+      throw original;
+    };
+    try {
+      const response = await instance.fetch(
+        new Request("http://test/test-key/__lifecycle/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            args: [{ mode: "suspend", reason: "shutdown", deadlineMs: 0 }],
+            __instanceToken: "token",
+            __instanceId: "do:internal/WorkspaceDO:test-key",
+            __caller: {
+              callerId: "main",
+              callerKind: "server",
+              authorization: createTestDirectAuthority({
+                callerKind: "server",
+                method: "__lifecycle/prepare",
+              }),
+            },
+          }),
+        })
+      );
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({ error: original.message });
+    } finally {
+      db.close();
+    }
+  });
+
   it("accepts an explicitly open typed receiver without a ceremonial capability", async () => {
     const { instance } = await createTestDO(OpenSchemaProbeDO);
 

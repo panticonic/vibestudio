@@ -9,7 +9,7 @@
  *   - distinct object keys get isolated facet storage.
  */
 import { createServer, type Server } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -111,13 +111,19 @@ export class SchemaProbeDO extends DurableObject {
     this.ctx.storage.sql.exec("CREATE INDEX cards_title ON cards(title)");
   }
   async fetch() {
-    if (this.env.VIBESTUDIO_SCHEMA_PROBE !== true) return new Response("missing probe env", { status: 500 });
     const shape = JSON.stringify([...this.ctx.storage.sql.exec(
       "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_title') ORDER BY type, name"
     )]);
-    return Response.json({
+    const descriptor = {
       className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape,
-    });
+    };
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) return Response.json(descriptor);
+    const trusted = this.env.VIBESTUDIO_SCHEMA_DESCRIPTOR;
+    if (!trusted || trusted.className !== descriptor.className || trusted.version !== descriptor.version ||
+      trusted.freshSchemaFingerprint !== descriptor.freshSchemaFingerprint) {
+      return new Response("missing trusted schema descriptor", { status: 500 });
+    }
+    return Response.json({ result: descriptor });
   }
 }
 export default { fetch() { return new Response("probe host"); } };`;
@@ -141,7 +147,7 @@ function doBuild(
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [], provides: [] },
+      authority: { requests: [], provides: [], serviceRequests: [] },
       executableModules: [
         {
           moduleId: source + "/index.ts",
@@ -168,6 +174,7 @@ function doBuild(
 }
 
 interface Harness {
+  ownedPaths: string[];
   manager: WorkerdManager;
   gateway: Server;
   codeFetches: Map<string, number>;
@@ -215,12 +222,22 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       const b = builds[source];
       if (!b) throw new Error(`no build for ${source}`);
       const artifact = runtimeArtifact(source, ref ?? "main");
-      boundBuilds.set(artifact.buildKey, b);
+      boundBuilds.set(artifact.buildKey, {
+        ...b,
+        buildKey: artifact.buildKey,
+        metadata: {
+          ...b.metadata,
+          buildKey: artifact.buildKey,
+          execution: artifact,
+          ev: artifact.sourceState.effectiveVersion,
+          sourceState: artifact.sourceState.state,
+        },
+      });
       return {
         source,
         unitName: source,
         artifact,
-        authority: { requests: [], provides: [] },
+        authority: { requests: [], provides: [], serviceRequests: [] },
       };
     },
     getBuildByKey: (key: string) => boundBuilds.get(key) ?? null,
@@ -300,19 +317,65 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     return ((await res.json()) as { result: unknown }).result;
   };
 
-  return { manager, gateway, codeFetches, dispatch };
+  return {
+    manager,
+    gateway,
+    codeFetches,
+    dispatch,
+    ownedPaths: [deps.workspacePath, deps.statePath],
+  };
 }
 
 let active: Harness | null = null;
 afterEach(async () => {
   if (active) {
-    await active.manager.shutdown();
-    await new Promise<void>((r) => active!.gateway.close(() => r()));
+    const owned = active;
     active = null;
+    try {
+      await owned.manager.shutdown();
+    } finally {
+      await new Promise<void>((r) => owned.gateway.close(() => r()));
+      for (const ownedPath of owned.ownedPaths) rmSync(ownedPath, { recursive: true, force: true });
+    }
   }
 });
 
 describe("UniversalDO facet host (real workerd)", () => {
+  it("admits a fresh entity's exact schema before activation without a publication", async () => {
+    const source = "workers/schema-admission";
+    active = await createHarness({ [source]: doBuild(source, "fresh", SCHEMA_PROBE_DO) });
+    const { manager, codeFetches, dispatch } = active;
+    const prepared = await manager.ensureDurableObjectEntity({
+      source,
+      className: "SchemaProbeDO",
+      key: "fresh",
+      contextId: "fresh-context",
+    });
+    await manager.restoreDurableObjectEntity({
+      id: prepared.targetId,
+      kind: "do",
+      className: "SchemaProbeDO",
+      key: "fresh",
+      source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+      activeBuildKey: prepared.buildKey,
+      activeExecutionDigest: prepared.executionDigest,
+      activeAuthority: prepared.authority,
+      contextId: "fresh-context",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: false,
+    });
+    expect(
+      await dispatch({ source, className: "SchemaProbeDO", objectKey: "fresh" }, "get")
+    ).toMatchObject({
+      className: "SchemaProbeDO",
+      version: 1,
+      freshSchemaFingerprint: expect.stringContaining("cards_title"),
+    });
+    expect(
+      [...codeFetches.keys()].filter((key) => key.startsWith("__vibestudio_schema_probe:"))
+    ).toHaveLength(1);
+  });
   it("probes a candidate schema in workerd and destroys its reserved scratch storage", async () => {
     const source = "workers/schema-probe";
     const build = doBuild(source, "ev-probe", SCHEMA_PROBE_DO);

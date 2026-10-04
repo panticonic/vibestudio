@@ -463,6 +463,8 @@ describe("service schema contracts", () => {
           file !== "browserPrivacy.ts" &&
           file !== "problemReportBundle.ts" &&
           file !== "usageAnalytics.ts" &&
+          file !== "nativeInvocation.ts" &&
+          file !== "rpcCausality.ts" &&
           !file.startsWith("progressSemantics")
       )
       .sort();

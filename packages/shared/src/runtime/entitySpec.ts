@@ -292,6 +292,13 @@ export interface EntityRecord {
   ownerUserId?: string;
   createdAt: number;
 
+  /**
+   * WorkspaceDO-owned authority lifetime, stable across activation replacement
+   * and renewed only after completed retirement. Independent of retained DO
+   * storage. Cache-only/bootstrap principals have no durable lifetime here.
+   */
+  authoritySessionId?: string;
+
   // ── Lifecycle (mutable) ──
   status: EntityStatus;
   retiredAt?: number;

@@ -29,6 +29,7 @@ import {
   rpcErrorKindOf,
   type AuthenticatedCaller,
   type RpcCausalParent,
+  type NativeInvocationIdentity,
 } from "@vibestudio/rpc";
 import { isAccountUserId } from "@vibestudio/identity/types";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
@@ -243,6 +244,10 @@ export interface VerifiedCodeIdentity {
  * active runtime entity when installed worker/DO code relays that agent's work.
  */
 export interface VerifiedCaller {
+  /** Exact invocation authenticated by the transport against its published owner. */
+  causalParent?: RpcCausalParent;
+  /** Canonical original task source authenticated by the host. */
+  nativeInvocation?: NativeInvocationIdentity;
   /** Scope of a host-verified live causal tool invocation. Sealed service
    * implementation calls do not acquire this merely through attribution. */
   executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
@@ -795,7 +800,7 @@ export class ServiceDispatcher {
       capability: string;
       resource: ResourceScope;
     }): number;
-    invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+    invalidate(inputs: readonly AuthorityAcquisitionRequest[]): void;
   };
   /**
    * Is a review covering this exact unit version still open?
@@ -1402,13 +1407,7 @@ export class ServiceDispatcher {
             "EAUTHORITYCOMPOSITION"
           );
         } else {
-          for (const { input, context } of collected) {
-            this.authorityAcquirer.invalidate(
-              input.snapshotDigest,
-              input.caller.runtime.id,
-              context.authorizingOrigin.principal
-            );
-          }
+          this.authorityAcquirer.invalidate(acquisitionInputs);
           const operation = collected[0]!;
           this.observeAuthority(operation.context, "authority-requested", {
             capability: operation.input.snapshot.capability,
@@ -1962,6 +1961,8 @@ export class ServiceDispatcher {
       }
 
       const snapshot = createInvocationSnapshot({
+        ...(ctx.caller.causalParent ? { causalParent: ctx.caller.causalParent } : {}),
+        ...(ctx.caller.nativeInvocation ? { nativeInvocation: ctx.caller.nativeInvocation } : {}),
         workspaceId: resolved.context.workspace?.workspaceId,
         sourceWorkspaceId: resolved.context.sourceWorkspaceId,
         service,
@@ -2175,11 +2176,6 @@ export class ServiceDispatcher {
         if (decision.consumable && decision.grantId) {
           if (ctx.authorityPreauthorization) return;
           if (!this.authorityAcquirer?.consume(decision.grantId)) {
-            this.authorityAcquirer?.invalidate(
-              snapshotDigest,
-              caller.runtime.id,
-              resolved.context.authorizingOrigin.principal
-            );
             continue;
           }
         }
@@ -2327,11 +2323,7 @@ export class ServiceDispatcher {
             tier,
             snapshotDigest,
           });
-          this.authorityAcquirer.invalidate(
-            snapshotDigest,
-            caller.runtime.id,
-            resolved.context.authorizingOrigin.principal
-          );
+          this.authorityAcquirer.invalidate([acquisitionInput]);
           const outcome = await this.authorityAcquirer.acquire(acquisitionInput, ctx.signal);
           this.observeAuthority(resolved.context, "authority-decided", {
             capability,
@@ -2364,15 +2356,11 @@ export class ServiceDispatcher {
           }
         } else if (this.authorityAcquirer) {
           // A later exact invocation may legitimately need a fresh decision
-          // after consuming an earlier once grant. Clear the bounded
-          // awaitDecision race observation before publishing this new ask;
+          // after consuming an earlier once grant. Supersede its terminal
+          // acquisition cycle before publishing this new ask;
           // otherwise request() returns the old completed acquisition and an
           // RPC wait-mode client retries the denied invocation forever.
-          this.authorityAcquirer.invalidate(
-            snapshotDigest,
-            caller.runtime.id,
-            resolved.context.authorizingOrigin.principal
-          );
+          this.authorityAcquirer.invalidate([acquisitionInput]);
           presented = this.authorityAcquirer.request(acquisitionInput);
           this.observeAuthority(resolved.context, "authority-requested", {
             capability,

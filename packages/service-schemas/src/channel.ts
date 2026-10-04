@@ -115,7 +115,7 @@ export async function* readChannelSubscriptionRecords<TResult = unknown, TMessag
 export const channelSummarySchema = z
   .object({
     channelId: z.string(),
-    /** gad log id backing the channel (`branch:channel:<channelId>`). */
+    /** Canonical gad log id backing the channel (the channel ID, at head `main`). */
     logId: z.string(),
     /** Epoch ms of the channel's first durable envelope, when known. */
     createdAt: z.number().nullable(),

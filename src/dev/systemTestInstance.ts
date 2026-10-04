@@ -35,7 +35,6 @@ const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
 // on the same finite budget as the child supervisor; a shorter competing
 // deadline can kill a generation before npm's own bounded operation settles.
 const STARTUP_TIMEOUT_MS = 12 * 60_000;
-const STOP_TIMEOUT_MS = 30_000;
 
 type LauncherArgs = {
   instanceId: string;
@@ -480,12 +479,20 @@ export async function ensureSystemTestInstance(
   };
 }
 
-async function waitForStopped(instance: DevInstanceRecord, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForStopped(instance: DevInstanceRecord): Promise<void> {
   for (;;) {
-    if (!resolveRunning(instance.repoRoot, instance.id)) return;
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out stopping system-test instance ${JSON.stringify(instance.id)}`);
+    const current = resolveRunning(instance.repoRoot, instance.id);
+    if (!current) return;
+    if (
+      current.generationId !== instance.generationId ||
+      current.supervisorPid !== instance.supervisorPid
+    ) {
+      throw Object.assign(
+        new Error(
+          `System-test instance ${JSON.stringify(instance.id)} changed generation during retirement`
+        ),
+        { code: "EOWNERSHIP" }
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -493,8 +500,7 @@ async function waitForStopped(instance: DevInstanceRecord, timeoutMs: number): P
 
 export async function stopManagedSystemTestInstance(
   repoRootInput: string,
-  instanceId: string,
-  timeoutMs = STOP_TIMEOUT_MS
+  instanceId: string
 ): Promise<boolean> {
   const repoRoot = canonicalRepoRoot(repoRootInput);
   const instance = resolveRunning(repoRoot, instanceId);
@@ -505,7 +511,18 @@ export async function stopManagedSystemTestInstance(
     );
   }
   process.kill(instance.supervisorPid, "SIGTERM");
-  await waitForStopped(instance, timeoutMs);
+  await waitForStopped(instance);
+  // The name may have been reused while the old generation exited. Never
+  // remove the new generation's marker or source mirrors.
+  const replacement = resolveRunning(repoRoot, instanceId);
+  if (replacement && replacement.generationId !== instance.generationId) {
+    throw Object.assign(
+      new Error(
+        `System-test instance ${JSON.stringify(instanceId)} was replaced during retirement`
+      ),
+      { code: "EOWNERSHIP" }
+    );
+  }
   removeSelfDevelopmentMirrors(repoRoot, instanceId);
   fs.rmSync(managedMarkerPath(instance), { force: true });
   return true;

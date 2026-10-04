@@ -574,10 +574,7 @@ export class UnitHost<
 > {
   private reconciling: Promise<void> | null = null;
   private backgroundFlow: Promise<void> | null = null;
-  private declarationsStaged: (() => void) | null = null;
-  private readonly declarationsStagedPromise = new Promise<void>((resolve) => {
-    this.declarationsStaged = resolve;
-  });
+  private currentDeclarationsStaged: Promise<void> | null = null;
   private lastReconciliationError: string | null = null;
   private preapprovedTrust = new Set<string>();
   private preapprovedTrustRevision = 0;
@@ -649,7 +646,6 @@ export class UnitHost<
     const markStaged = (): void => {
       if (didStage) return;
       didStage = true;
-      this.declarationsStaged?.();
       resolveStaged();
     };
     this.lastReconciliationError = null;
@@ -663,15 +659,21 @@ export class UnitHost<
         onStaged: markStaged,
       })
     );
-    // A pass that throws before reaching its staging point must still release
-    // whenDeclarationsStaged() waiters, or launch gates would hang forever.
+    // Classification belongs to this pass, including its original failure.
+    // Register it synchronously so callers arriving before its scheduled body
+    // cannot observe the previous pass's readiness.
+    const classification = Promise.race([staged, run]);
+    this.currentDeclarationsStaged = classification;
+    void classification.catch(() => {});
+    // Retain health diagnostics independently of the original classification
+    // rejection exposed to its waiting callers.
     this.reconciling = run
       .catch((error) => {
         this.lastReconciliationError = unitErrorMessage(error);
       })
       .finally(markStaged);
     if (opts.waitFor === "staged") {
-      await Promise.race([staged, run]);
+      await classification;
     } else {
       await run;
     }
@@ -696,7 +698,7 @@ export class UnitHost<
   }
 
   /**
-   * Resolves once the first reconcile pass has classified every declared unit:
+   * Resolves once the current reconcile pass has classified every declared unit:
    * pending registry entries exist and any approval requests have been staged
    * with the coordinator. Unlike whenReconciled(), this does NOT wait for
    * trusted units to finish building — launch paths use it so one slow unit
@@ -704,8 +706,7 @@ export class UnitHost<
    * requested yet this resolves immediately, matching whenReconciled().
    */
   async whenDeclarationsStaged(): Promise<void> {
-    if (!this.reconciling) return;
-    await this.declarationsStagedPromise;
+    await this.currentDeclarationsStaged;
   }
 
   /**
@@ -944,6 +945,14 @@ export class UnitHost<
         this.opts.validateBeforeApproval?.(node, decl);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // A rejected candidate is still a declared unit. Keep its failure in
+        // the same registry readiness probes and invocation callers observe.
+        // An already admitted image remains usable while its update is invalid.
+        if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+        this.opts.registry.patch(node.name, {
+          ...(!entry?.activeBundleKey ? { status: "error" } : {}),
+          lastError: message,
+        } as Partial<Entry>);
         this.opts.onApprovalCandidateError?.(node, decl, message);
         continue;
       }

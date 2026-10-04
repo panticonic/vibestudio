@@ -58,6 +58,8 @@ import {
   dispatchWithDurableObjectSchemaGuard,
   durableObjectSchemaDescriptor,
   installDurableObjectSchema,
+  type DurableObjectSchemaDescriptor,
+  type DurableObjectSchemaUpgrade,
   validateDurableObjectSchemaIndexes,
 } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
@@ -85,6 +87,7 @@ export interface DurableObjectContext {
     getAlarm(): Promise<number | null>;
     deleteAlarm(): void;
     transactionSync<T>(callback: () => T): T;
+    transaction<T>(callback: () => Promise<T>): Promise<T>;
   };
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WebSocket[];
@@ -175,7 +178,7 @@ export abstract class DurableObjectBase {
   protected env: Record<string, unknown>;
 
   private schemaReady = false;
-  private schemaPreparationError: unknown = null;
+  private schemaInitialization: Promise<void> | null = null;
   private connectionless: ConnectionlessRpcClient | null = null;
   private currentObjectKey: string | null = null;
   private readonly invocationContext = new InvocationContext<RpcInvocationContext>();
@@ -203,10 +206,10 @@ export abstract class DurableObjectBase {
     );
   }
 
-  protected abstract createTables(): void;
+  protected abstract createTables(): void | Promise<void>;
 
   /** Activation-local initialization that requires the committed schema. */
-  protected afterSchemaReady(): void {}
+  protected afterSchemaReady(): void | Promise<void> {}
 
   /**
    * Optional receiver binding for schema-declared code principals. Product
@@ -305,6 +308,11 @@ export abstract class DurableObjectBase {
     return [];
   }
 
+  /** Component stores name their owned tables; a complete composition owns the whole store. */
+  protected schemaTables(): readonly string[] | undefined {
+    return this.requiredTables();
+  }
+
   protected schemaIndexDefinitions(): readonly string[] | undefined {
     return undefined;
   }
@@ -325,44 +333,74 @@ export abstract class DurableObjectBase {
     if (indexes) validateDurableObjectSchemaIndexes(this.sql, this.requiredTables(), indexes);
   }
 
+  /** Synchronous helpers require admission through the asynchronous ready gate. */
   protected ensureReady(): void {
-    if (this.schemaPreparationError !== null) {
-      const error = this.schemaPreparationError;
-      this.schemaPreparationError = null;
-      throw error;
-    }
-    if (this.schemaReady) return;
-    this.ensureSchema();
-    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.afterSchemaReady();
-    this.schemaReady = true;
+    if (!this.schemaReady)
+      throw new Error("Schema initialization must finish before accessing durable state");
   }
 
-  private ensureSchema(): void {
-    installDurableObjectSchema({
-      className: this.constructor.name,
-      version: (this.constructor as typeof DurableObjectBase).schemaVersion,
+  /** One shared initialization promise per activation; failed attempts can retry. */
+  protected initializeSchema(): Promise<void> {
+    if (this.schemaReady) return Promise.resolve();
+    if (this.schemaInitialization) return this.schemaInitialization;
+    const initialization = (async () => {
+      await this.ensureSchema();
+      if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) await this.afterSchemaReady();
+      this.schemaReady = true;
+    })();
+    this.schemaInitialization = initialization;
+    void initialization
+      .finally(() => {
+        if (this.schemaInitialization === initialization) this.schemaInitialization = null;
+      })
+      .catch(() => {});
+    return initialization;
+  }
+
+  protected schemaUpgrades(): readonly DurableObjectSchemaUpgrade[] {
+    return [];
+  }
+
+  /** The loaded export is identity; bundlers may rename its JS constructor. */
+  private get runtimeClassName(): string {
+    const className = this.env["WORKER_CLASS_NAME"];
+    if (typeof className !== "string" || className.length === 0) {
+      throw new Error("Durable Object requires its exact host-loaded class binding");
+    }
+    return className;
+  }
+
+  private async ensureSchema(): Promise<void> {
+    const descriptor = this.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] as
+      | DurableObjectSchemaDescriptor
+      | undefined;
+    const version = (this.constructor as typeof DurableObjectBase).schemaVersion;
+    if (
+      descriptor &&
+      (descriptor.className !== this.runtimeClassName ||
+        descriptor.version !== version ||
+        typeof descriptor.freshSchemaFingerprint !== "string")
+    ) {
+      throw new Error("Schema descriptor does not match the admitted runtime image");
+    }
+    await installDurableObjectSchema({
+      className: this.runtimeClassName,
+      version,
       storage: this.ctx.storage,
-      schemaTables: this.requiredTables(),
+      schemaTables: this.schemaTables(),
+      expectedFingerprint: descriptor?.freshSchemaFingerprint,
+      upgrades: this.schemaUpgrades(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
   }
 
-  /** Constructor-time schema preparation whose failure remains fetch-guarded. */
-  protected prepareSchemaForActivation(): void {
-    try {
-      this.ensureReady();
-    } catch (error) {
-      this.schemaPreparationError = error;
-    }
-  }
-
   private schemaDescriptorResponse(): Response {
     const definition = {
-      className: this.constructor.name,
+      className: this.runtimeClassName,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
-      schemaTables: this.requiredTables(),
+      schemaTables: this.schemaTables(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     };
@@ -614,13 +652,13 @@ export abstract class DurableObjectBase {
   private lifecycleKey(): { source: string; className: string; objectKey: string } {
     return {
       source: String(this.env["WORKER_SOURCE"] ?? ""),
-      className: String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name),
+      className: this.runtimeClassName,
       objectKey: this.objectKey,
     };
   }
 
   async alarm(): Promise<AlarmSchedule | null> {
-    this.ensureReady();
+    await this.initializeSchema();
     return null;
   }
 
@@ -660,10 +698,10 @@ export abstract class DurableObjectBase {
       request,
       identity: {
         source: String(this.env["WORKER_SOURCE"] ?? ""),
-        className: String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name),
+        className: this.runtimeClassName,
         objectKey,
       },
-      ensureReady: () => this.ensureReady(),
+      ensureReady: () => this.initializeSchema(),
       dispatch: () => this.dispatchFetch(request),
     });
   }
@@ -722,7 +760,7 @@ export abstract class DurableObjectBase {
       }
 
       if (method === "__lifecycle/prepare" || method === "__lifecycle/resume") {
-        return this.withCaller(verifiedCallerFromBody, async () => {
+        return await this.withCaller(verifiedCallerFromBody, async () => {
           const denial = this.hostControlDenial(method, authorityAcceptedAt);
           if (denial) {
             return jsonResponse(
@@ -738,7 +776,7 @@ export abstract class DurableObjectBase {
           // Live module replacement may update the class schema while this
           // activation retains its previous schemaReady cache. Lifecycle is the
           // generation boundary, so revalidate the one current schema here.
-          this.ensureSchema();
+          await this.ensureSchema();
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {
@@ -751,7 +789,7 @@ export abstract class DurableObjectBase {
       }
 
       if (method === "__alarm") {
-        return this.withCaller(verifiedCallerFromBody, async () => {
+        return await this.withCaller(verifiedCallerFromBody, async () => {
           const denial = this.hostControlDenial(method, authorityAcceptedAt);
           if (denial) {
             return jsonResponse(
@@ -1129,7 +1167,7 @@ export abstract class DurableObjectBase {
   }
 
   async webSocketMessage(_ws: WebSocket, _msg: string | ArrayBuffer): Promise<void> {
-    this.ensureReady();
+    await this.initializeSchema();
   }
 
   async webSocketClose(
@@ -1138,11 +1176,11 @@ export abstract class DurableObjectBase {
     _reason: string,
     _wasClean: boolean
   ): Promise<void> {
-    this.ensureReady();
+    await this.initializeSchema();
   }
 
   async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
-    this.ensureReady();
+    await this.initializeSchema();
   }
 
   /**
@@ -1277,8 +1315,12 @@ export abstract class DurableObjectBase {
     _nextWorkerId: string
   ): void {}
 
-  /** Optional domain alarm schedule recomputed after a successful RPC. */
-  protected nextAlarmAfterRequest(): AlarmSchedule | null | undefined {
+  /** Join domain wake publication inside the original RPC's authority lifetime. */
+  protected nextAlarmAfterRequest():
+    | AlarmSchedule
+    | null
+    | undefined
+    | Promise<AlarmSchedule | null | undefined> {
     return undefined;
   }
 
@@ -1359,17 +1401,17 @@ export abstract class DurableObjectBase {
     };
     try {
       const result = await this.invocationContext.run(context, async () => {
-        const value = await (async () => {
-          try {
-            return await callback();
-          } finally {
-            await this.causalRpcOperations.drain(context);
-          }
-        })();
-        const nextAlarm = this.nextAlarmAfterRequest();
-        if (nextAlarm === null) this.deleteAlarm();
-        else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
-        return value;
+        try {
+          const value = await callback();
+          const nextAlarm = await this.nextAlarmAfterRequest();
+          if (nextAlarm === null) this.deleteAlarm();
+          else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
+          return value;
+        } finally {
+          // Wake publication can itself start causal RPCs; join them before
+          // retiring the original caller's authority, including on failure.
+          await this.causalRpcOperations.drain(context);
+        }
       });
       return { result, readyQueues: [...context.readyQueues] };
     } finally {
@@ -1378,9 +1420,21 @@ export abstract class DurableObjectBase {
   }
 }
 
-function jsonResponse(value: unknown, status = 200, headers?: HeadersInit): Response {
+function jsonResponse(
+  value: unknown,
+  status = 200,
+  headers?: ConstructorParameters<typeof Headers>[0]
+): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: headers ?? { "Content-Type": "application/json" },
   });
 }
+
+export {
+  WakePublicationStore,
+  type WakePublication,
+  type WakeRequest,
+  type WakeOwnerKey,
+  type StorageIncarnation,
+} from "./wake-publication.js";

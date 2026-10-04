@@ -11,6 +11,6 @@ export function registerOwnedProcessGroup(
 export function createOwnedProcessGroupReceiver(
   child: ChildProcess,
   childIdentity: OwnedProcessIdentity,
-  adopt: (identity: OwnedProcessIdentity) => { retire(): Promise<void> },
+  adopt: (identity: OwnedProcessIdentity) => { retire(signal?: NodeJS.Signals): Promise<void> },
   options?: { forwardToParent?: boolean }
 ): { close(): Promise<void> };

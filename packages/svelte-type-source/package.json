@@ -7,7 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "scripts": { "build": "tsc --build tsconfig.build.json" },
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "check:type-environment": "node scripts/generate-type-environment.mjs --check",
+    "generate:type-environment": "node scripts/generate-type-environment.mjs"
+  },
   "dependencies": {
     "svelte": "^5.56.9",
     "svelte2tsx": "^0.7.61",

@@ -1,4 +1,6 @@
 import { PRINCIPAL_KINDS } from "@vibestudio/rpc";
+import { nativeInvocationIdentitySchema } from "./nativeInvocation.js";
+import { rpcCausalParentSchema } from "./rpcCausality.js";
 /**
  * shellApproval service schema — trusted shell/mobile approval resolution and
  * approval queue rehydration.
@@ -620,6 +622,8 @@ const authoritySubjectBindingSchema = z
 export const invocationSnapshotSchema = z
   .object({
     v: z.literal(2),
+    nativeInvocation: nativeInvocationIdentitySchema.optional(),
+    causalParent: rpcCausalParentSchema.optional(),
     subjectBinding: authoritySubjectBindingSchema.optional(),
     initiatingWebsite: z
       .object({

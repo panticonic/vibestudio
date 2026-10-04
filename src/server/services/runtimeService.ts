@@ -16,6 +16,7 @@ import {
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
   PreparedAuthoritySelection,
   ServiceDefinition,
@@ -90,7 +91,7 @@ export interface RuntimeEntityHooks {
    * to its creator, so durable-work capability registration precedes work. */
   onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
 
-  /** Cleanup hooks invoked on retire — closed at bootstrap. */
+  /** Owns all resources, credential revocation and exact lifetime completion. */
   onRetire: (record: EntityRecord) => Promise<void>;
 
   /** Reattach only the immutable execution already sealed into this row. */
@@ -320,13 +321,6 @@ export interface RuntimeServiceDeps {
   ) => void | Promise<void>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
-   * Revoke every entity-scoped agent credential + the live agent TokenManager
-   * token for a retired entity. Called
-   * at the end of `retireEntity` so agent credentials never outlive their
-   * entity. Wired in src/server/index.ts to deviceAuthStore + tokenManager.
-   */
-  revokeAgentCredentials?: (entityId: string) => void | Promise<void>;
-  /**
    * Hidden system-test fault seam. The host callback must authenticate the
    * attested system-test harness before aborting this exact active DO facet.
    */
@@ -360,17 +354,6 @@ function aggregateFailureMessage(summary: string, failures: unknown[]): string {
 }
 
 /**
- * Deterministic context id from an idempotency `targetKey` (§A3 crash-test): a
- * pure function of the key so a re-invoked (crashed) clone/subagent-create
- * resolves to the SAME child context. Formatted as a valid context slug
- * (lowercase alphanumeric + hyphen, ≤63 chars — see ContextFolderManager).
- */
-function deriveContextId(targetKey: string): string {
-  const h = createHash("sha256").update(targetKey).digest("hex").slice(0, 32);
-  return `ctx-${h}`;
-}
-
-/**
  * Deterministic entity clone key: a pure function of the idempotency key AND the
  * source entity id (so distinct source entities never collide across a recursive
  * clone tree). `entityActivate` upserts by canonical id, so re-running with the
@@ -383,10 +366,11 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 
 export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
-  const creationChains = new Map<string, Promise<unknown>>();
+  // Physical creation/recovery and terminal release own the same canonical
+  // entity transition. Receipt inspection and domain settlement remain outside
+  // this queue so an owner can finish teardown without awaiting itself.
+  const entityTransitions = new Map<string, Promise<unknown>>();
   const activationChains = new Map<string, Promise<RuntimeEntityHandle>>();
-  const retirementChains = new Map<string, Promise<unknown>>();
-  const recoveryChains = new Map<string, Promise<RuntimeExecutionRecoveryResult>>();
   let recoveryAttemptCount = 0;
 
   function inheritTaskAuthority(
@@ -611,16 +595,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
-    const spec = applyTestAgentPolicy(caller, rawSpec);
+    const spec = { ...applyTestAgentPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
     assertCreateEntityAllowed(caller, spec);
-    const canonicalId = spec.key
-      ? canonicalEntityId({
-          kind: spec.kind,
-          source: runtimeEntitySource(spec),
-          className: spec.kind === "do" ? spec.className : undefined,
-          key: spec.key,
-        })
-      : null;
+    const canonicalId = canonicalEntityId({
+      kind: spec.kind,
+      source: runtimeEntitySource(spec),
+      className: spec.kind === "do" ? spec.className : undefined,
+      key: spec.key,
+    });
     const create = async (): Promise<RuntimeEntityHandle> => {
       const preparedResourceBindings = spec.resourceBindings?.length
         ? await deps.prepareResourceBindings?.({
@@ -657,7 +639,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       const contextId =
         preparedResourceBindings?.contextId ??
         (await resolveTargetContext(caller, spec.contextId, agentBinding));
-      const handle = await activateEntity(
+      const handle = await activateEntityOnce(
         actors,
         spec,
         contextId,
@@ -672,13 +654,23 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         try {
           await preparedResourceBindings.bind(record);
         } catch (error) {
-          await retireEntity(record.id, false).catch(() => undefined);
+          // Already admitted on this entity's transition line. Re-entering
+          // retireEntity would wait behind the creation that owns this cleanup.
+          try {
+            await retireRecordOnce(record.id);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Runtime resource binding and retirement failed",
+              { cause: error }
+            );
+          }
           throw error;
         }
       }
       return handle;
     };
-    return canonicalId ? serializeByKey(creationChains, canonicalId, create) : create();
+    return serializeByKey(entityTransitions, canonicalId, create);
   }
 
   async function releaseResourceBindings(caller: VerifiedCaller, id: string): Promise<void> {
@@ -767,7 +759,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     });
     // Reservations with a stable key are idempotent-by-identity; serialize them
     // so the created-vs-existing report below cannot race a concurrent retry.
-    return serializeByKey(creationChains, canonicalId, () =>
+    return serializeByKey(entityTransitions, canonicalId, () =>
       reserveEntityOnce(actors, spec, key, canonicalId)
     ) as Promise<RuntimeEntityHandle>;
   }
@@ -831,7 +823,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const contextId =
       externalAgentBinding?.contextId ??
       requestedContextId ??
-      deriveContextId(`entity-reservation:${canonicalId}`);
+      contextIdForTargetKey(`entity-reservation:${canonicalId}`);
     const hasExplicitContext = explicitContextId != null && explicitContextId !== "";
     const contextOwner = actors.initiatingCaller;
     const ownerContextId = hasExplicitContext
@@ -1030,7 +1022,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const existing = activationChains.get(canonicalId);
     if (existing) return existing;
-    const activation = activateReservedEntityOnce(caller, spec).finally(() => {
+    const activation = serializeByKey(entityTransitions, canonicalId, () =>
+      activateReservedEntityOnce(caller, spec)
+    ).finally(() => {
       if (activationChains.get(canonicalId) === activation) activationChains.delete(canonicalId);
     });
     activationChains.set(canonicalId, activation);
@@ -1044,6 +1038,25 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * caller, so a cloneContext caller owns (and may freely destroy) the clones.
    */
   async function activateEntity(
+    actors: RuntimeCreationActors,
+    spec: RuntimeEntityCreateSpec,
+    initialContextId: string,
+    externalAgentBinding?: RuntimeAgentBinding,
+    selfAgentChannelId?: string
+  ): Promise<RuntimeEntityHandle> {
+    const keyed = { ...spec, key: spec.key ?? randomUUID() };
+    const id = canonicalEntityId({
+      kind: keyed.kind,
+      source: runtimeEntitySource(keyed),
+      className: keyed.kind === "do" ? keyed.className : undefined,
+      key: keyed.key,
+    });
+    return serializeByKey(entityTransitions, id, () =>
+      activateEntityOnce(actors, keyed, initialContextId, externalAgentBinding, selfAgentChannelId)
+    );
+  }
+
+  async function activateEntityOnce(
     actors: RuntimeCreationActors,
     spec: RuntimeEntityCreateSpec,
     initialContextId: string,
@@ -1273,35 +1286,37 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * `cloneContext` rollback and `destroyContext` call it directly after their whole-context leaf.
    */
   async function retireRecord(id: string): Promise<EntityRecord | null> {
-    return serializeByKey(retirementChains, id, async () => {
-      const current = await store.resolveRecord(id);
-      if (!current || current.status === "retired") return null;
-      await prepareRecordForRetirement(current);
+    return serializeByKey(entityTransitions, id, () => retireRecordOnce(id));
+  }
 
-      let record: EntityRecord | null;
-      try {
-        await deps.hooks.sealAndDrainEntityRelays?.(id);
-        record = await store.retire(id);
-      } finally {
-        // On success, the cache is already inactive before the seal is
-        // released. On failure, the durable row remains active and relays must
-        // be admitted again so retirement can be retried.
-        deps.hooks.releaseEntityRelaySeal?.(id);
-      }
-      if (!record) return null;
-      try {
-        await deps.hooks.onRetire(record);
-        await store.cleanupComplete(id);
-      } catch (cause) {
-        // The durable row intentionally remains cleanup_complete=0 so the
-        // cleanup reaper can retry, but the initiating operation must retain
-        // the failure instead of reporting a false success.
-        throw new Error(`Runtime entity cleanup failed for ${id}: ${describeFailure(cause)}`, {
-          cause,
-        });
-      }
-      return record;
-    });
+  /** Body shared by ordinary retirement and rollback already owning this entity transition. */
+  async function retireRecordOnce(id: string): Promise<EntityRecord | null> {
+    const current = await store.resolveRecord(id);
+    if (!current || current.status === "retired") return null;
+    await prepareRecordForRetirement(current);
+
+    let record: EntityRecord | null;
+    try {
+      await deps.hooks.sealAndDrainEntityRelays?.(id);
+      record = await store.retire(id);
+    } finally {
+      // On success, the cache is already inactive before the seal is
+      // released. On failure, the durable row remains active and relays must
+      // be admitted again so retirement can be retried.
+      deps.hooks.releaseEntityRelaySeal?.(id);
+    }
+    if (!record) return null;
+    try {
+      await deps.hooks.onRetire(record);
+    } catch (cause) {
+      // The durable row intentionally remains cleanup_complete=0 so the
+      // cleanup reaper can retry, but the initiating operation must retain
+      // the failure instead of reporting a false success.
+      throw new Error(`Runtime entity cleanup failed for ${id}: ${describeFailure(cause)}`, {
+        cause,
+      });
+    }
+    return record;
   }
 
   async function prepareRecordForRetirement(record: EntityRecord): Promise<void> {
@@ -1313,7 +1328,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       deadlineMs: 0,
     });
     if (released.status === "failed") {
-      throw new Error(`Entity ${record.id} refused terminal lifecycle release`);
+      throw new Error(
+        `Entity ${record.id} refused terminal lifecycle release: ${JSON.stringify(released.detail)}`,
+        { cause: released.detail }
+      );
     }
   }
 
@@ -1322,7 +1340,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const acquire = (index: number): Promise<T> =>
       index >= ordered.length
         ? operation()
-        : serializeByKey(retirementChains, ordered[index]!, () => acquire(index + 1));
+        : serializeByKey(entityTransitions, ordered[index]!, () => acquire(index + 1));
     return acquire(0);
   }
 
@@ -1365,8 +1383,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         for (const record of retired) {
           try {
             await deps.hooks.onRetire(record);
-            await store.cleanupComplete(record.id);
-            await deps.revokeAgentCredentials?.(record.id);
           } catch (cause) {
             cleanupFailures.push(
               new Error(
@@ -1384,10 +1400,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
     const record = await retireRecord(id);
     if (!record) return;
-    // Agent credentials follow the entity: revoke outstanding credentials + the
-    // live agent token so a retired entity's bound agent sessions can't
-    // re-authenticate (§3.2).
-    await deps.revokeAgentCredentials?.(id);
     if (removeContext) {
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
@@ -1404,7 +1416,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!isInteractiveChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
       throw new Error("runtime.recoverExecution is restricted to interactive trusted chrome");
     }
-    const previous = recoveryChains.get(input.entityId);
     const run = () => {
       const attemptCount = ++recoveryAttemptCount;
       deps.onExecutionRecovery?.({
@@ -1441,11 +1452,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // Recovery requests for one entity are ordered, not coalesced. Each request
     // must re-read the active identity after its predecessor settles so its own
     // expected digest and strategy retain their meaning.
-    const recovery = (previous ? previous.catch(() => undefined).then(run) : run()).finally(() => {
-      if (recoveryChains.get(input.entityId) === recovery) recoveryChains.delete(input.entityId);
-    });
-    recoveryChains.set(input.entityId, recovery);
-    return recovery;
+    return serializeByKey(entityTransitions, input.entityId, run);
   }
 
   async function recoverExecutionOnce(
@@ -1583,7 +1590,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   /**
    * Clone a whole context's durable substrate into a fresh, isolated context:
-   * every worker/DO's storage (server-internal cloneDO) + a VCS snapshot of the
+   * generic DO storage (server-internal cloneDO) + a VCS snapshot of the
    * source's working files. Returns the new contextId + source→clone map. Does NOT
    * invoke the cloned DOs — server→DO calls are out of band; a caller that needs to
    * "activate" clones (re-root logs, rebind the channel) drives that via the clones'
@@ -1652,8 +1659,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         srcCtx,
         targetKey
           ? isRoot
-            ? deriveContextId(targetKey)
-            : deriveContextId(`${targetKey} ${srcCtx}`)
+            ? contextIdForTargetKey(targetKey)
+            : contextIdForTargetKey(`${targetKey} ${srcCtx}`)
           : randomUUID()
       );
     }
@@ -1694,7 +1701,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           const newKey = targetKey
             ? deriveEntityKey(src.key, targetKey, src.id)
             : `${src.key}~clone~${randomUUID().slice(0, 8)}`;
-          if (src.kind === "do") {
+          // Agent storage belongs to its authenticated execution lifetime. A
+          // cloned agent starts fresh; its caller transfers transcript knowledge
+          // through the native history boundary, never runnable state or authority.
+          if (src.kind === "do" && !src.agentBinding) {
             const className = src.className;
             if (className == null) {
               throw new Error(`cloneContext: DO entity ${src.id} has no className`);
@@ -2009,7 +2019,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   ): Promise<{ contextId: string }> {
     await assertSubagentOwnerAllowed(caller, args);
 
-    const contextId = deriveContextId(args.targetKey);
+    const contextId = contextIdForTargetKey(args.targetKey);
     // Order mirrors cloneContext: fork semantic state, then materialize its projection.
     await deps.semanticContexts.forkContext(args.parentContextId, contextId);
     await deps.contextFolders.ensureContextFolder(contextId);

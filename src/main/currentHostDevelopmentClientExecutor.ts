@@ -145,7 +145,7 @@ export class CurrentHostDevelopmentClientExecutor {
       preparedRoot = root;
       if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closing");
       const child = await this.launch(root, claim);
-      const group = OwnedProcessGroup.create(child, { termTimeoutMs: 10_000 });
+      const group = OwnedProcessGroup.create(child);
       const registered = group.identity
         ? createOwnedProcessGroupReceiver(
             child,

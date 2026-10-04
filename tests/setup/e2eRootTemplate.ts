@@ -23,7 +23,10 @@ import {
   canonicalTemplateYaml,
   parseTemplateManifestContent,
 } from "@vibestudio/workspace/templateManifest";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import {
+  sameWorkspaceTemplatePin,
+  type WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
 import {
   developmentTemplateSetSources,
   resolveDevelopmentTemplateSet,
@@ -42,7 +45,6 @@ export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMP
 export const DEV_TEMPLATE_SOURCES_ENV = "VIBESTUDIO_WORKSPACE_SOURCES";
 
 export const WORKSPACE_CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
-export const WORKSPACE_MATERIALIZATION_RECEIPT_PATH = "workspace-creation/materialization-v1.json";
 
 /** The run-scoped root the suite creates every workspace from. */
 export interface E2eRootTemplate {
@@ -137,7 +139,6 @@ async function materializeRootTemplateSource(input: {
         throw new Error(`No E2E checkout supplies ${requested.url} at ${requested.commit}`);
       }
       return seedRootTemplateSnapshotFromCheckout({
-        statePath,
         checkout: source.checkout,
         pin: requested,
         git: input.gitClient,
@@ -201,11 +202,8 @@ export async function deriveE2eRootTemplate(input: {
   const selectedPin = input.template
     ? input.base.defaultTemplates[input.template]
     : input.base.defaultTemplates.base;
-  const selectedSource = input.base.sources.find(
-    (source) =>
-      source.pin.url === selectedPin.url &&
-      source.pin.commit === selectedPin.commit &&
-      source.pin.snapshot === selectedPin.snapshot
+  const selectedSource = input.base.sources.find((source) =>
+    sameWorkspaceTemplatePin(source.pin, selectedPin)
   );
   if (!selectedSource) throw new Error("Selected E2E template has no exact source checkout");
   const checkout = path.join(input.workRoot, "checkout");
@@ -305,25 +303,6 @@ export function writeWorkspaceCreationDescriptor(
   fs.writeFileSync(
     descriptorPath,
     `${JSON.stringify({ version: 1, workspaceId, rootTemplate: pin }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 }
-  );
-}
-
-/**
- * Record that this workspace's source already holds the pinned tree.
- *
- * Without the receipt the runtime would re-materialize, discarding the
- * per-case source customization the fixture just applied.
- */
-export function writeWorkspaceMaterializationReceipt(
-  statePath: string,
-  pin: WorkspaceTemplatePin
-): void {
-  const receiptPath = path.join(statePath, WORKSPACE_MATERIALIZATION_RECEIPT_PATH);
-  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-  fs.writeFileSync(
-    receiptPath,
-    `${JSON.stringify({ version: 1, commit: pin.commit, snapshot: pin.snapshot }, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 }
   );
 }

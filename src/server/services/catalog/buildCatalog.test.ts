@@ -8,6 +8,46 @@ import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtim
 import { callableEntry } from "@vibestudio/shared/runtimeSurface";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
+import { permissionsMethods } from "@vibestudio/service-schemas/permissions";
+
+it("projects the actual permissions capability rather than its catalog identifier", () => {
+  const entries = buildCatalog({
+    definitions: [
+      {
+        name: "permissions",
+        authority: { principals: ["host", "user", "code"] },
+        methods: permissionsMethods,
+        handler: async () => undefined,
+      },
+    ],
+  });
+  expect(entries.find((entry) => entry.id === "service:permissions.list")?.access).toMatchObject({
+    capability: "permissions.read",
+  });
+});
+
+it("retains extension-backed Git method contracts without a host Git service", () => {
+  const entries = buildCatalog({
+    definitions: [],
+    runtimeSurfaces: {
+      workerRuntime: {
+        target: "workerRuntime",
+        description: "Extension-backed Git namespace",
+        exports: { git: workerRuntimeSurface.exports["git"]! },
+      },
+    },
+  });
+  const method = entries.find((entry) => entry.id === "runtime:workerRuntime.git.upstreamStatus");
+  expect(method?.argsSchema).toMatchObject({
+    anyOf: [
+      { type: "array", maxItems: 0 },
+      { type: "array", minItems: 1, maxItems: 1 },
+      { type: "array", minItems: 2, maxItems: 2 },
+    ],
+  });
+  expect(method?.examples).toEqual([{ args: [] }, { args: [["projects/bgkit"]] }]);
+  expect(entries.some((entry) => entry.id.startsWith("service:gitInterop"))).toBe(false);
+});
 
 const TEST_OPEN_TIER = {
   tier: "open" as const,
@@ -186,6 +226,54 @@ describe("buildCatalog", () => {
       binding: "declared-for",
       declaredFor: ["panels/flowboard"],
       declarationCapability: "workspace-service:flowboard-store",
+    });
+  });
+
+  it("preserves reviewed workspace argument contracts and exact provider identity in live docs", () => {
+    const argsSchema = {
+      type: "array",
+      items: [
+        {
+          type: "object",
+          properties: {
+            limit: { type: "integer", minimum: 1, maximum: 50 },
+          },
+        },
+      ],
+    };
+    const entries = buildCatalog({
+      definitions: [],
+      workspaceCapabilities: [
+        {
+          name: "missions",
+          source: "workers/missions",
+          protocols: ["vibestudio.missions.v1"],
+          principals: ["code"],
+          providerEffectiveVersion: "exact-provider-version",
+          target: {
+            kind: "durable-object",
+            className: "MissionsDO",
+            defaultObjectKey: "workspace-missions",
+          },
+          methods: [
+            {
+              name: "overview",
+              signature: "overview(options: { limit?: number })",
+              website: { kind: "closed", reason: "Workspace-private inventory." },
+              argsSchema,
+              returnsSchema: { type: "object" },
+              argumentNames: ["options"],
+            },
+          ],
+        },
+      ],
+    });
+    expect(byId(entries, "workspace:missions.overview")).toMatchObject({
+      parent: "workspace:missions",
+      argsSchema,
+      returnsSchema: { type: "object" },
+      argumentNames: ["options"],
+      access: { providerEffectiveVersion: "exact-provider-version" },
     });
   });
 

@@ -97,6 +97,7 @@ const entityReservationSchema = entityActivationSchema.extend({
 });
 const entityRecordSchema = entityActivationSchema.extend({
   id: z.string().min(1),
+  authoritySessionId: z.string().min(1),
   createdAt: z.number().int().nonnegative(),
   status: z.enum(["preparing", "active", "retired"]),
   retiredAt: z.number().int().nonnegative().optional(),
@@ -202,6 +203,9 @@ const testPolicySchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+const wakeRequestSchema = z
+  .object({ incarnation: z.string().min(1), generation: z.number().int().positive() })
+  .strict();
 const alarmSetInputSchema = LifecycleKeySchema.extend({
   wakeAt: z.number().int().nonnegative(),
   testPolicy: testPolicySchema.optional(),
@@ -215,6 +219,7 @@ const alarmClearInputSchema = LifecycleKeySchema.extend({
 const alarmClaimSchema = LifecycleKeySchema.extend({
   wakeAt: z.number().int().nonnegative(),
   dispatchGeneration: z.number().int().positive(),
+  wakeRequest: wakeRequestSchema.optional(),
   testPolicy: testPolicySchema.optional(),
 });
 
@@ -309,7 +314,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
       reason: "Storage and lifecycle engine entry points are internal implementation authority.",
     } as const,
     ...internal("write"),
-    args: z.tuple([z.string().min(1)]),
+    args: z.tuple([z.string().min(1), z.string().min(1)]),
     returns: z.void(),
   },
   runtimeResourceBindingsReplace: {
@@ -441,6 +446,38 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(durableWorkReadyHintSchema),
   },
+  alarmSourceRegister: {
+    ...workspaceStateMethods.alarmSourceRegister,
+    ...internal("write"),
+    args: z.tuple([
+      LifecycleKeySchema.extend({
+        incarnation: z.string().min(1),
+        generation: z.number().int().positive(),
+      }),
+    ]),
+  },
+  alarmSourcePublish: { ...workspaceStateMethods.alarmSourcePublish },
+  alarmSourceRequest: {
+    ...internal("write"),
+    website: {
+      kind: "closed",
+      reason: "Only the host requests receipt/readiness reconciliation.",
+    } as const,
+    description:
+      "Retain an incarnation-bound host wake until a matching successful owner pass acknowledges it.",
+    args: z.tuple([LifecycleKeySchema.extend({ incarnation: z.string().min(1) })]),
+    returns: z.enum(["accepted", "stale"]),
+  },
+  alarmSourceList: {
+    website: {
+      kind: "closed",
+      reason:
+        "Durable scheduling metadata belongs to the authenticated execution owner and host lifecycle.",
+    } as const,
+    ...internal("read"),
+    args: z.tuple([]),
+    returns: z.array(LifecycleKeySchema),
+  },
   alarmSet: {
     website: {
       kind: "closed",
@@ -458,6 +495,38 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...internal("write"),
     args: z.tuple([alarmClearInputSchema]),
     returns: z.enum(["accepted", "stale"]),
+  },
+  alarmComplete: {
+    ...internal("write"),
+    website: {
+      kind: "closed",
+      reason: "Only the host alarm driver acknowledges successful owner passes.",
+    } as const,
+    description:
+      "Acknowledge a successful, generation-fenced owner pass without losing host events that arrived during it.",
+    args: z.tuple([
+      LifecycleKeySchema.extend({
+        dispatchOwner: z.string().min(1),
+        dispatchGeneration: z.number().int().positive(),
+        wakeRequest: wakeRequestSchema.optional(),
+        nextAlarm: z
+          .object({
+            wakeAt: z.number().int().nonnegative(),
+            testPolicy: testPolicySchema.optional(),
+          })
+          .strict()
+          .nullable(),
+      }),
+    ]),
+    returns: z.discriminatedUnion("status", [
+      z
+        .object({
+          status: z.literal("accepted"),
+          wakeAt: z.number().int().nonnegative().nullable(),
+        })
+        .strict(),
+      z.object({ status: z.literal("stale") }).strict(),
+    ]),
   },
   alarmNextWakeAt: {
     website: {

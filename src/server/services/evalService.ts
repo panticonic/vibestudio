@@ -51,7 +51,7 @@ interface EvalSandboxRecoveryInput {
   evalDoRef: { source: string; className: string; objectKey: string };
 }
 
-export type EvalShutdown = (deadlineMs?: number) => Promise<void>;
+export type EvalShutdown = () => Promise<void>;
 
 export const evalServiceDocumentation = {
   name: "eval",
@@ -333,14 +333,14 @@ export function createEvalService(deps: {
   const activeRunKey = (evalRuntimeId: string, runId: string): string =>
     `${evalRuntimeId}\0${runId}`;
 
-  const shutdown = (deadlineMs = 4_000): Promise<void> => {
+  const shutdown = (): Promise<void> => {
     if (shutdownPromise) return shutdownPromise;
     shutdownRequested = true;
     shutdownPromise = (async () => {
       const entries = [...activeRuns.values()];
       if (entries.length === 0) return;
 
-      const cancellations = Promise.allSettled(
+      const cancellations = await Promise.allSettled(
         entries.map(async (entry) => {
           try {
             await deps.doDispatch.dispatch(entry.evalDoRef, "cancel", entry.runId);
@@ -352,17 +352,13 @@ export function createEvalService(deps: {
           }
         })
       );
-      const result = await settlePromiseWithin(cancellations, deadlineMs);
-      if (!result.settled) {
-        throw new Error(
-          `eval shutdown cancellation exceeded its ${Math.max(0, deadlineMs)}ms drain budget`
-        );
-      }
-      const failures = result.value
+      const failures = cancellations
         .filter((item): item is PromiseRejectedResult => item.status === "rejected")
         .map((item) => item.reason);
       if (failures.length > 0) {
-        throw new AggregateError(failures, "eval shutdown cancellation failed");
+        throw new AggregateError(failures, "eval shutdown cancellation failed", {
+          cause: failures[0],
+        });
       }
     })();
     return shutdownPromise;
@@ -475,18 +471,26 @@ export function createEvalService(deps: {
     subKey: string,
     ownerUserId: string | undefined,
     agentBinding: RuntimeAgentBinding | undefined,
-    requestedLifecycle: "finite" | "persistent" | undefined
+    requestedLifecycle: "finite" | "persistent"
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
-    // Fast path: the EvalDO entity is sticky (idle-eviction aborts the instance
-    // but never retires the entity), so once it's active in the cache for the
-    // right context there's nothing to do — re-activating every run is a wasted
-    // WorkspaceDO round-trip. Gating on the cache (not a private "seen" set)
-    // keeps us self-consistent: a retired entity (cache miss) or a fresh server
-    // process (empty cache) re-activates; the cache IS the source of truth the
-    // server's principal resolution reads.
-    const active = store.cache.resolveActive(evalDoEntityId(objectKey));
+    // Eviction preserves a scope; retirement closes it. A cache miss must read
+    // durable ownership before deciding that these coordinates are unused.
+    const current =
+      store.cache.resolveActive(evalDoEntityId(objectKey)) ??
+      (await store.resolveRecord(evalDoEntityId(objectKey)));
+    if (current?.status === "retired") {
+      throw new ServiceError(
+        "eval",
+        "start",
+        `Eval scope ${subKey} is retired; use a new scope for new work`,
+        "ECLOSED",
+        undefined,
+        "application"
+      );
+    }
+    const active = current;
     const activeStateArgs =
       active?.stateArgs && typeof active.stateArgs === "object" && !Array.isArray(active.stateArgs)
         ? (active.stateArgs as Record<string, unknown>)
@@ -506,10 +510,9 @@ export function createEvalService(deps: {
         "application"
       );
     }
-    // Lookup/control methods do not declare lifecycle intent. Preserve an
-    // existing entity's immutable class; only a missing scope defaults to the
-    // ordinary persistent notebook class.
-    const effectiveLifecycle = requestedLifecycle ?? activeLifecycle ?? "persistent";
+    // Only execution admission creates or refreshes a scope. Controls resolve
+    // existing durable ownership without changing lifecycle or code identity.
+    const effectiveLifecycle = requestedLifecycle;
     if (
       active &&
       active.contextId === contextId &&
@@ -597,20 +600,51 @@ export function createEvalService(deps: {
     return store.cache.resolveActive(ctx.caller.runtime.id)?.agentBinding;
   }
 
-  async function evalDoRefFor(
+  async function findEvalDoRefFor(
     ctx: ServiceContext,
-    route: EvalRoute
-  ): Promise<{ source: string; className: string; objectKey: string }> {
+    route: EvalRoute,
+    method: string
+  ): Promise<{ source: string; className: string; objectKey: string } | null> {
     const owner = await resolveOwnerForCaller(ctx, route);
-    const agentBinding = trustedAgentRelay(ctx);
-    const { objectKey } = await ensureEvalDO(
-      owner,
-      route.scopeKey ?? "default",
-      ctx.caller.subject?.userId,
-      agentBinding,
-      undefined
-    );
+    const scopeKey = route.scopeKey ?? "default";
+    const objectKey = evalDoKey(owner.ownerId, scopeKey);
+    const entityId = evalDoEntityId(objectKey);
+    const existing = store.cache.resolveActive(entityId) ?? (await store.resolveRecord(entityId));
+    if (!existing) return null;
+    if (existing.status !== "active") {
+      throw new ServiceError(
+        "eval",
+        method,
+        `Eval scope ${scopeKey} is retired; use a new scope for new work`,
+        "ECLOSED",
+        undefined,
+        "application"
+      );
+    }
+    if (existing.contextId !== owner.contextId) {
+      throw new ServiceError(
+        "eval",
+        method,
+        "Eval control cannot change the admitted scope's context",
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
     return { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+  }
+
+  async function evalDoRefFor(ctx: ServiceContext, route: EvalRoute, method: string) {
+    const ref = await findEvalDoRefFor(ctx, route, method);
+    if (ref) return ref;
+    throw new ServiceError(
+      "eval",
+      method,
+      `Eval scope ${route.scopeKey ?? "default"} has not been admitted`,
+      "ENOTFOUND",
+      undefined,
+      "application"
+    );
   }
 
   async function prepareRun(
@@ -915,6 +949,7 @@ export function createEvalService(deps: {
         }
         const principalDigest = executionSession.executionImage.executionDigest;
         const prospectiveCtx: ServiceContext = {
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
           caller: {
             runtime: { id: evalRuntimeId, kind: "do" },
             code: {
@@ -1120,10 +1155,23 @@ export function createEvalService(deps: {
         };
       },
       get: async (ctx, [getArgs]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "getRun", getArgs.runId),
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs, "get"), "getRun", getArgs.runId),
+      receipt: async (ctx, [receiptArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, receiptArgs, "receipt"),
+          "getRunReceipt",
+          receiptArgs.runId
+        ),
+      acknowledge: async (ctx, [acknowledgeArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, acknowledgeArgs, "acknowledge"),
+          "acknowledgeRunResult",
+          acknowledgeArgs.runId,
+          acknowledgeArgs.receipt
+        ),
       events: async (ctx, [eventArgs]) =>
         deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, eventArgs),
+          await evalDoRefFor(ctx, eventArgs, "events"),
           "getRunEvents",
           eventArgs.runId,
           eventArgs.after ?? 0,
@@ -1131,7 +1179,7 @@ export function createEvalService(deps: {
         ),
       readScopeTextPage: async (ctx, [pageArgs]) =>
         deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, pageArgs),
+          await evalDoRefFor(ctx, pageArgs, "readScopeTextPage"),
           "readScopeTextPage",
           pageArgs.key,
           pageArgs.offset,
@@ -1139,12 +1187,15 @@ export function createEvalService(deps: {
         ),
       deleteScopeValue: async (ctx, [deleteArgs]) =>
         deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, deleteArgs),
+          await evalDoRefFor(ctx, deleteArgs, "deleteScopeValue"),
           "deleteScopeValue",
           deleteArgs.key
         ),
-      reset: async (ctx, [resetArgs = {}]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, resetArgs), "reset"),
+      reset: async (ctx, [resetArgs = {}]) => {
+        const ref = await findEvalDoRefFor(ctx, resetArgs, "reset");
+        // An absent notebook is already empty; clearing it admits no execution.
+        return ref ? deps.doDispatch.dispatch(ref, "reset") : { ok: true };
+      },
       dispose: async (ctx, [disposeArgs = {}]) => {
         const owner = await resolveOwnerForCaller(ctx, disposeArgs);
         const objectKey = evalDoKey(owner.ownerId, disposeArgs.scopeKey ?? "default");
@@ -1167,15 +1218,11 @@ export function createEvalService(deps: {
             "access"
           );
         }
-        await deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          "dispose"
-        );
         await deps.retireEntity(entityId);
         return { ok: true };
       },
       cancel: async (ctx, [cancelArgs]) => {
-        const ref = await evalDoRefFor(ctx, cancelArgs);
+        const ref = await evalDoRefFor(ctx, cancelArgs, "cancel");
         const result = await deps.doDispatch.dispatch(ref, "cancel", cancelArgs.runId);
         activeRuns
           .get(activeRunKey(evalDoEntityId(ref.objectKey), cancelArgs.runId))
@@ -1207,24 +1254,4 @@ function admissionRetryDelay(): Promise<void> {
     const timer = setTimeout(resolve, 250);
     timer.unref?.();
   });
-}
-
-async function settlePromiseWithin<T>(
-  promise: Promise<T>,
-  timeoutMs: number
-): Promise<{ settled: true; value: T } | { settled: false }> {
-  if (timeoutMs <= 0) return { settled: false };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ settled: false }>((resolve) => {
-    timer = setTimeout(() => resolve({ settled: false }), timeoutMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ settled: true as const, value })),
-      timeout,
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
 }

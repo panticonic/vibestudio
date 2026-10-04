@@ -4515,7 +4515,7 @@
     }
   },
   "inspectChannelEnvelopes": {
-    "description": "Read one bounded page of compact channel-envelope diagnostics.",
+    "description": "Read a bounded page of a conversation channel’s message and invocation history as compact envelope diagnostics. A nonexistent channel returns an empty page; no channel runtime is created.",
     "access": {
       "sensitivity": "read"
     },

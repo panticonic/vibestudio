@@ -132,7 +132,6 @@ async function runElectron(args) {
     });
     if (currentChild.pid) {
       const owner = OwnedProcessGroup.create(currentChild, {
-        termTimeoutMs: 5 * 60_000,
         requestGracefulStop: (signal) => {
           if (currentChild.connected)
             currentChild.send({ type: "vibestudio:dev-shutdown", signal });

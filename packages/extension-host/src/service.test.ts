@@ -89,6 +89,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 
 function makeHost(
   overrides: {
+    initialDeclarationsStaged?: Promise<void>;
     approvalDecision?: "accepted" | "deny";
     openUnitReviewFor?: ExtensionHostDeps["openUnitReviewFor"];
     activeEv?: string | null;
@@ -299,7 +300,8 @@ function makeHost(
       unitName: extensionNode.name,
       stateHash: "state:current",
       manifest: { authority: { requests: [], provides: [] } },
-      serviceBindings: [], serviceReviews: [],
+      serviceBindings: [],
+      serviceReviews: [],
       effectiveVersion: overrides.activeEv ?? "ev-current",
       dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
@@ -313,6 +315,7 @@ function makeHost(
     onPushBuild: vi.fn(),
   };
   const host = new ExtensionHost({
+    initialDeclarationsStaged: overrides.initialDeclarationsStaged,
     launchNativeExtension: vi.fn(() => {
       throw new Error("This service fixture has no native process launcher");
     }),
@@ -390,19 +393,46 @@ describe("ExtensionHost invocation attribution", () => {
   it("reviews the resolved service authority of the exact source used for execution", async () => {
     const { host, buildSystem, extensionNode } = makeHost({ installed: false });
     const candidate = await buildSystem.resolveBuildUnitIdentity();
-    const serviceBindings = [{ protocol: "vibestudio.missions.v1", availability: "required" as const, serviceName: "missions", providerUnit: "workers/missions", catalogDigest: "b".repeat(64) }];
-    const serviceReviews = [{ capability: "workspace-service:missions", providerUnit: "workers/missions", catalogDigest: "b".repeat(64), presentation: null }];
-    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({ ...candidate, serviceBindings, serviceReviews } as never);
+    const serviceBindings = [
+      {
+        protocol: "vibestudio.missions.v1",
+        availability: "required" as const,
+        serviceName: "missions",
+        providerUnit: "workers/missions",
+        catalogDigest: "b".repeat(64),
+      },
+    ];
+    const serviceReviews = [
+      {
+        capability: "workspace-service:missions",
+        providerUnit: "workers/missions",
+        catalogDigest: "b".repeat(64),
+        presentation: null,
+      },
+    ];
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...candidate,
+      serviceBindings,
+      serviceReviews,
+    } as never);
     const review = await host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }]);
     expect(review.units[0]?.authority).toMatchObject({ serviceBindings, serviceReviews });
-    expect(buildSystem.resolveBuildUnitIdentity).toHaveBeenLastCalledWith(extensionNode.relativePath, "main");
+    expect(buildSystem.resolveBuildUnitIdentity).toHaveBeenLastCalledWith(
+      extensionNode.relativePath,
+      "main"
+    );
   });
 
   it("rejects review facts whose source version no longer matches the candidate", async () => {
     const { host, buildSystem, extensionNode } = makeHost({ installed: false });
     const candidate = await buildSystem.resolveBuildUnitIdentity();
-    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({ ...candidate, effectiveVersion: "ev-replaced" });
-    await expect(host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }])).rejects.toThrow("Exact review source changed");
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...candidate,
+      effectiveVersion: "ev-replaced",
+    });
+    await expect(
+      host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }])
+    ).rejects.toThrow("Exact review source changed");
   });
   it("attributes an extension to its exact active sealed build authority", () => {
     const { host, extensionNode } = makeHost();
@@ -838,7 +868,255 @@ const declare = (name: string, opts: { ref?: string } = {}) => [
   { source: name, ref: opts.ref ?? "main" },
 ];
 
+function declarationCompletion() {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("ExtensionHost reconcileDeclared", () => {
+  it.each(["new", "inactive"] as const)(
+    "retains a %s invalid declaration and propagates its failure through provider invocation",
+    async (state) => {
+      const transport = { call: vi.fn() };
+      const { host, extensionNode, approvalQueue, buildSystem, eventService } = makeHost({
+        installed: state !== "new",
+        activeBundleKey: null,
+        status: "stopped",
+        sourceProviderContracts: { gitInterop: { methods: ["upstreamStatus"] } },
+        providerSlots: ["gitInterop"],
+        resolveProviderExtensionName: () => "@workspace-extensions/git-tools",
+        providerContracts: { gitInterop: ["upstreamStatus"] },
+        extensionTransport: transport,
+      });
+      const manifestPath = path.join(extensionNode.path, "package.json");
+      const original = fs.readFileSync(manifestPath, "utf8");
+      const invalid = JSON.parse(original);
+      delete invalid.vibestudio.extension.methodAuthority.confirm.website;
+      fs.writeFileSync(manifestPath, JSON.stringify(invalid));
+
+      await host.reconcileDeclared(declare(extensionNode.name));
+      await host.whenSettled();
+      const failure = host.registry.get(extensionNode.name)!;
+      expect(failure).toMatchObject({ status: "error", activeBundleKey: null });
+      expect(failure.lastError).toMatch(/website/);
+      expect(host.listWorkspaceUnits()).toContainEqual(
+        expect.objectContaining({
+          name: extensionNode.name,
+          status: "error",
+          lastError: failure.lastError,
+        })
+      );
+      expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
+        name: extensionNode.name,
+        status: "error",
+        error: failure.lastError,
+      });
+      await expect(
+        host.invoke(panelCtx(), extensionNode.name, "confirm", [])
+      ).rejects.toMatchObject({
+        code: "ENOTREADY",
+        message: `[extensions.invoke] ${failure.lastError}`,
+      });
+      await expect(
+        host.invokeProvider(panelCtx(), "gitInterop", "upstreamStatus", [[]])
+      ).rejects.toMatchObject({
+        code: "ENOTREADY",
+        message: `[extensions.invokeProvider] ${failure.lastError}`,
+      });
+      expect(approvalQueue.request).not.toHaveBeenCalled();
+      expect(buildSystem.getBuild).not.toHaveBeenCalled();
+      expect(transport.call).not.toHaveBeenCalled();
+
+      fs.writeFileSync(manifestPath, original);
+      vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+      await host.reconcileDeclared(declare(extensionNode.name));
+      await host.whenSettled();
+      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(host.registry.get(extensionNode.name)).toMatchObject({
+        activeBundleKey: "candidate-key",
+        lastError: null,
+      });
+    }
+  );
+
+  it("keeps the approved running image usable when an update manifest is invalid", async () => {
+    const transport = { call: vi.fn(async () => "approved image result") };
+    const { host, extensionNode, approvalQueue, buildSystem, eventService } = makeHost({
+      extensionTransport: transport,
+    });
+    const approved = host.registry.get(extensionNode.name)!;
+    const manifestPath = path.join(extensionNode.path, "package.json");
+    const invalid = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    delete invalid.vibestudio.extension.methodAuthority.confirm.website;
+    fs.writeFileSync(manifestPath, JSON.stringify(invalid));
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await host.reconcileDeclared(declare(extensionNode.name, { ref: "next" }));
+    await host.whenSettled();
+    const current = host.registry.get(extensionNode.name)!;
+    expect(current).toEqual({ ...approved, lastError: expect.stringMatching(/website/) });
+    expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
+      name: extensionNode.name,
+      status: "running",
+      error: current.lastError,
+    });
+    await expect(host.invoke(panelCtx(), extensionNode.name, "confirm", [])).resolves.toBe(
+      "approved image result"
+    );
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(transport.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins initial declaration classification requested after an invocation arrives", async () => {
+    const initial = declarationCompletion();
+    const transport = { call: vi.fn(async () => "original target result") };
+    const { host, extensionNode } = makeHost({
+      installed: false,
+      activationEvents: ["onInvoke"],
+      initialDeclarationsStaged: initial.promise,
+      extensionTransport: transport,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    let settled = false;
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    void invoke.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(transport.call).not.toHaveBeenCalled();
+    expect(host.registry.get(extensionNode.name)).toBeNull();
+
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    initial.resolve();
+    await expect(invoke).resolves.toBe("original target result");
+    expect(transport.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the original initial declaration classification failure", async () => {
+    const initial = declarationCompletion();
+    const { host, extensionNode } = makeHost({
+      installed: false,
+      initialDeclarationsStaged: initial.promise,
+    });
+    const original = new Error("canonical declaration classification failed");
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    const rejection = expect(invoke).rejects.toBe(original);
+    initial.reject(original);
+    await rejection;
+    expect(host.registry.get(extensionNode.name)).toBeNull();
+  });
+
+  it("releases an initial classification waiter on original caller cancellation", async () => {
+    const initial = declarationCompletion();
+    const { host, extensionNode } = makeHost({
+      installed: false,
+      initialDeclarationsStaged: initial.promise,
+    });
+    const caller = new AbortController();
+    const original = new Error("original caller cancelled");
+    const invoke = host.invoke(
+      { ...panelCtx(), signal: caller.signal },
+      extensionNode.name,
+      "confirm",
+      []
+    );
+    const rejection = expect(invoke).rejects.toBe(original);
+    caller.abort(original);
+    await rejection;
+    initial.resolve();
+  });
+
+  it("releases initial classification waiters when their extension host is destroyed", async () => {
+    const initial = declarationCompletion();
+    const { host, extensionNode } = makeHost({
+      installed: false,
+      initialDeclarationsStaged: initial.promise,
+    });
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    const rejection = expect(invoke).rejects.toThrow(
+      "Extension host shut down before declaration readiness"
+    );
+    await host.shutdown();
+    await rejection;
+    initial.resolve();
+  });
+
+  it("fences an active target behind the current declaration classification after startup", async () => {
+    const initial = declarationCompletion();
+    initial.resolve();
+    const removing = declarationCompletion();
+    const removalStarted = declarationCompletion();
+    const transport = { call: vi.fn(async () => "stale target") };
+    const { host, extensionNode } = makeHost({
+      initialDeclarationsStaged: initial.promise,
+      extensionTransport: transport,
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    vi.spyOn(host.processes, "stop").mockImplementation(async () => {
+      removalStarted.resolve();
+      await removing.promise;
+    });
+    await host.whenDeclarationsStaged();
+    const reconcile = host.reconcileDeclared([], { trigger: "meta-change" });
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    const rejection = expect(invoke).rejects.toMatchObject({ code: "ENOEXT" });
+    await removalStarted.promise;
+    expect(transport.call).not.toHaveBeenCalled();
+    removing.resolve();
+    await reconcile;
+    await rejection;
+    expect(transport.call).not.toHaveBeenCalled();
+  });
+
+  it("preserves current classification failure instead of invoking the previous active target", async () => {
+    const initial = declarationCompletion();
+    initial.resolve();
+    const original = new Error("canonical removal failed");
+    const transport = { call: vi.fn(async () => "stale target") };
+    const { host, extensionNode } = makeHost({
+      initialDeclarationsStaged: initial.promise,
+      extensionTransport: transport,
+    });
+    vi.spyOn(host.processes, "stop").mockRejectedValue(original);
+    const reconcile = host.reconcileDeclared([], { trigger: "meta-change" });
+    const reconcileFailure = expect(reconcile).rejects.toBe(original);
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    await expect(invoke).rejects.toBe(original);
+    await reconcileFailure;
+    expect(transport.call).not.toHaveBeenCalled();
+  });
+
+  it("keeps an already active target callable before unrelated startup planning classifies", async () => {
+    const initial = declarationCompletion();
+    const transport = { call: vi.fn(async () => "approved original target") };
+    const { host, extensionNode } = makeHost({
+      initialDeclarationsStaged: initial.promise,
+      extensionTransport: transport,
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    try {
+      await expect(host.invoke(panelCtx(), extensionNode.name, "confirm", [])).resolves.toBe(
+        "approved original target"
+      );
+      expect(transport.call).toHaveBeenCalledTimes(1);
+    } finally {
+      initial.resolve();
+    }
+  });
+
   it("computes meta-change approvals from committed workspace config", async () => {
     const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
       filePath === "meta/vibestudio.yml"
@@ -1089,6 +1367,17 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared([]);
 
     expect(stop).toHaveBeenCalledWith(extensionNode.name);
+    expect(host.registry.get(extensionNode.name)).toBeNull();
+  });
+
+  it("retains an undeclared extension until its original cleanup failure is resolved", async () => {
+    const { host, extensionNode } = makeHost();
+    const original = new Error("Original child cleanup refused");
+    const stop = vi.spyOn(host.processes, "stop").mockRejectedValue(original);
+    await expect(host.reconcileDeclared([])).rejects.toBe(original);
+    expect(host.registry.get(extensionNode.name)).not.toBeNull();
+    stop.mockResolvedValue(undefined);
+    await host.reconcileDeclared([]);
     expect(host.registry.get(extensionNode.name)).toBeNull();
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   templateInspectionSchema,
   templateLocatorSchema,
@@ -7,6 +8,17 @@ import {
 } from "./templates.js";
 
 describe("templates contract", () => {
+  it("decodes the current official registry through the public service contract", () => {
+    const registry = templatesMethods.registry.returns.parse(
+      JSON.parse(readFileSync(new URL("../../../templates/registry.json", import.meta.url), "utf8"))
+    );
+    expect(registry.templates.find((entry) => entry.id === "system-testing")?.consumers).toEqual([
+      "personal",
+      "system",
+      "examples",
+    ]);
+    expect(registry.templates.find((entry) => entry.id === "examples")?.role).toBe("catalog");
+  });
   it("contains discovery, inspection, and publication operations", () => {
     expect(Object.keys(templatesMethods)).toEqual([
       "updateAssistant",
@@ -66,6 +78,39 @@ describe("templates contract", () => {
         ],
       }).templates
     ).toHaveLength(1);
+  });
+  it("composes development support into a declared catalog template", () => {
+    const registry = templateRegistrySchema.parse({
+      version: 1,
+      templates: [
+        {
+          id: "examples",
+          role: "catalog",
+          name: "Examples",
+          description: "Actual examples",
+          url: "git+https://example.test/examples.git",
+        },
+        {
+          id: "system-testing",
+          role: "development",
+          name: "Testing",
+          description: "Acceptance",
+          url: "git+https://example.test/testing.git",
+          consumers: ["examples"],
+        },
+      ],
+    });
+    expect(registry.templates[1]?.consumers).toEqual(["examples"]);
+    for (const consumer of ["missing", "system-testing"]) {
+      expect(
+        templateRegistrySchema.safeParse({
+          ...registry,
+          templates: registry.templates.map((entry) =>
+            entry.role === "development" ? { ...entry, consumers: [consumer] } : entry
+          ),
+        }).success
+      ).toBe(false);
+    }
   });
   it("rejects removed catalog selectors", () => {
     expect(templateLocatorSchema.safeParse({ catalogId: "base" }).success).toBe(false);

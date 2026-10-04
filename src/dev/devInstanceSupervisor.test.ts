@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import {
   captureOwnedProcessIdentity,
@@ -182,7 +182,6 @@ describe("DevInstanceSupervisor", () => {
         args: [entry, readyFile],
         env: process.env,
         stdio: "ignore",
-        stopTimeoutMs: 100,
         readiness: {
           file: readyFile,
           async onReady(value) {
@@ -419,6 +418,21 @@ describe("DevInstanceSupervisor", () => {
     );
   });
 
+  it("preserves the original failed-spawn error without manufacturing a cleanup refusal", async () => {
+    const supervisor = new DevInstanceSupervisor({
+      sourceRoot: temporaryRoot(),
+      command: path.join(temporaryRoot(), "missing-owned-executable"),
+      args: [],
+      env: process.env,
+      stdio: "ignore",
+    });
+    const original = await supervisor.start().catch((error: unknown) => error);
+    expect(original).toMatchObject({ code: "ENOENT" });
+    expect(original).not.toBeInstanceOf(AggregateError);
+    await expect(supervisor.wait()).rejects.toBe(original);
+    await expect(supervisor.close()).rejects.toBe(original);
+  });
+
   it.runIf(process.platform !== "win32")(
     "drains descendants when the process-group leader exits first",
     async () => {
@@ -443,7 +457,6 @@ describe("DevInstanceSupervisor", () => {
         ],
         env: process.env,
         stdio: "ignore",
-        stopTimeoutMs: 50,
         readiness: {
           file: readyFile,
           async onReady(value) {
@@ -459,7 +472,7 @@ describe("DevInstanceSupervisor", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "terminates the complete exact process group and escalates after the grace period",
+    "keeps repeated graceful stops owned until an explicit force retires the exact process group",
     async () => {
       const root = temporaryRoot();
       const readyFile = path.join(root, "ready.json");
@@ -475,7 +488,7 @@ describe("DevInstanceSupervisor", () => {
             "const child=spawn(process.execPath,['-e',",
             "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
             "],{stdio:'ignore'});",
-            "process.on('SIGTERM',()=>{});",
+            "process.on('SIGTERM',()=>fs.writeFileSync(process.argv[1]+'.stopping','owned'));",
             "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
             "setInterval(()=>{},1000);",
           ].join(""),
@@ -483,7 +496,6 @@ describe("DevInstanceSupervisor", () => {
         ],
         env: process.env,
         stdio: "ignore",
-        stopTimeoutMs: 50,
         readiness: {
           file: readyFile,
           async onReady(value) {
@@ -492,11 +504,33 @@ describe("DevInstanceSupervisor", () => {
         },
       });
 
-      await supervisor.start();
-      expect(grandchildPid).toBeGreaterThan(0);
-      await supervisor.stop();
-
-      await expectProcessToDisappear(grandchildPid);
+      let graceful: Promise<number> | undefined;
+      let repeated: Promise<number> | undefined;
+      try {
+        await supervisor.start();
+        expect(grandchildPid).toBeGreaterThan(0);
+        let settled = false;
+        graceful = supervisor.stop().then((code) => {
+          settled = true;
+          return code;
+        });
+        await expect.poll(() => fs.existsSync(readyFile + ".stopping")).toBe(true);
+        repeated = supervisor.stop("SIGTERM");
+        vi.useFakeTimers();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+        expect(supervisor.process!.exitCode).toBeNull();
+        expect(supervisor.process!.signalCode).toBeNull();
+        vi.useRealTimers();
+        await expect(supervisor.stop("SIGKILL")).resolves.toBe(137);
+        await expect(graceful).resolves.toBe(137);
+        await expect(repeated).resolves.toBe(137);
+        await expectProcessToDisappear(grandchildPid);
+      } finally {
+        vi.useRealTimers();
+        await supervisor.stop("SIGKILL");
+        await Promise.allSettled([graceful, repeated]);
+      }
     }
   );
 });

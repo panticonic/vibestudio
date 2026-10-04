@@ -12,6 +12,7 @@ function makeRecord(id: string): EntityRecord {
     contextId: "ctx-1",
     key: id,
     createdAt: 1,
+    authoritySessionId: "lifetime-one",
     status: "retired",
     retiredAt: 2,
     cleanupComplete: false,
@@ -33,7 +34,7 @@ describe("cleanupReaper.sweep", () => {
     dispatchCalls = [];
   });
 
-  it("re-runs onRetire and calls entityCleanupComplete for each row", async () => {
+  it("delegates each row to the shared completion owner without a second completion write", async () => {
     const incomplete = [makeRecord("panel:a"), makeRecord("panel:b")];
     const doDispatch = {
       dispatch: vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
@@ -54,7 +55,7 @@ describe("cleanupReaper.sweep", () => {
     expect(processed).toBe(2);
     expect(cleanupCalls).toEqual(["panel:a", "panel:b"]);
     const completes = dispatchCalls.filter((c) => c.method === "entityCleanupComplete");
-    expect(completes.map((c) => c.args)).toEqual([["panel:a"], ["panel:b"]]);
+    expect(completes).toEqual([]);
   });
 
   it("leaves cleanup_complete=0 and logs warn when the hook fails", async () => {
@@ -106,5 +107,49 @@ describe("cleanupReaper.sweep", () => {
     expect(second).toBe(0);
     resolveHook();
     await first;
+  });
+  it("stops scheduling and joins the exact admitted cleanup sweep", async () => {
+    const pending = makeRecord("panel:joining");
+    let release!: () => void;
+    const onRetire = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    const reaper = createCleanupReaper({
+      doDispatch: { dispatch: vi.fn(async () => [pending]) } as unknown as DODispatch,
+      workspaceDORef,
+      onRetire,
+    });
+    const sweep = reaper.sweep();
+    await vi.waitFor(() => expect(onRetire).toHaveBeenCalledOnce());
+    let joined = false;
+    const stop = reaper.stop().then(() => {
+      joined = true;
+    });
+    expect(joined).toBe(false);
+    release();
+    await Promise.all([sweep, stop]);
+    expect(joined).toBe(true);
+  });
+
+  it("joins a failed query and propagates its original failure to the shutdown owner", async () => {
+    let reject!: (error: Error) => void;
+    const query = new Promise<never>((_resolve, fail) => {
+      reject = fail;
+    });
+    const reaper = createCleanupReaper({
+      doDispatch: { dispatch: vi.fn(() => query) } as unknown as DODispatch,
+      workspaceDORef,
+      onRetire: vi.fn(),
+    });
+    const sweepResult = reaper.sweep().catch((error) => error);
+    const stopResult = reaper.stop().catch((error) => error);
+    const failure = new Error("WorkspaceDO disconnected");
+    reject(failure);
+    expect(await sweepResult).toBe(failure);
+    expect(await stopResult).toBe(failure);
+    await reaper.stop();
   });
 });

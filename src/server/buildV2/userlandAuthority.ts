@@ -17,9 +17,13 @@ import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import { collectTransitiveInternalDeps } from "./buildSource.js";
 import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
-import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import {
+  unknownWorkspaceRpcSchemaError,
+  workspaceRpcSchema,
+  workspaceRpcSchemaMetadata,
+} from "./workspaceRpcSchemas.js";
 
-export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v4";
+export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v5";
 
 export interface ExactWorkspaceServiceBinding {
   name: string;
@@ -343,7 +347,9 @@ export async function resolveProviderRpcCatalog(
       await collectWorkspaceRpcCatalog(sourcePath, {
         provider: input.provider.relativePath,
         authority: packageAuthority,
-        ...(schema ? { rpcSchemas: { [input.className]: schema } } : {}),
+        ...(schema
+          ? { rpcSchemas: { [input.className]: workspaceRpcSchemaMetadata(schema) } }
+          : {}),
       })
     ).filter((entry) => entry.className === input.className);
     const catalog: ExactProviderRpcCatalog = {

@@ -55,6 +55,7 @@ function makeService(opts: {
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
+    storageIncarnation: () => ({ incarnation: "incarnation", generation: 1 }),
     presentationDispatch: async (method, args) => {
       presentationCalls.push({ method, args });
       return (
@@ -359,6 +360,40 @@ describe("workspaceStateService — topology authority", () => {
       { method: "lifecycleLeaseUpsert", args: [{ ...key, detail: "turn" }] },
       { method: "lifecycleLeaseClear", args: [key] },
     ]);
+  });
+
+  it("binds wake registration and publication to the authenticated Durable Object identity", async () => {
+    const own = { source: "workers/agent", className: "Agent", objectKey: "own" };
+    const foreign = { ...own, objectKey: "foreign" };
+    const { svc, calls } = makeService({
+      dispatchReturns: { alarmSourceRegister: "incarnation", alarmSourcePublish: "accepted" },
+    });
+    await expect(svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [own])).resolves.toBe(
+      "incarnation"
+    );
+    const publication = { ...own, incarnation: "incarnation", revision: 1, wakeAt: null };
+    await expect(
+      svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [publication])
+    ).resolves.toBe("accepted");
+    await expect(
+      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [foreign])
+    ).rejects.toThrow(/cannot register/);
+    await expect(
+      svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [{ ...publication, ...foreign }])
+    ).rejects.toThrow(/cannot publish/);
+    expect(calls).toEqual([
+      {
+        method: "alarmSourceRegister",
+        args: [{ ...own, incarnation: "incarnation", generation: 1 }],
+      },
+      { method: "alarmSourcePublish", args: [publication] },
+    ]);
+    await expect(
+      svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [
+        { ...publication, incarnation: "retired-incarnation" },
+      ])
+    ).resolves.toBe("stale");
+    expect(calls).toHaveLength(2);
   });
 
   it("allows a Durable Object to manage only its own alarm key", async () => {

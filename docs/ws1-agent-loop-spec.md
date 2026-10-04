@@ -60,17 +60,17 @@ From Stage 0 (`docs/stage0-unified-log-spec.md`):
   agent-loop scenario suite is green — new kinds introduced here are listed in
   §1.9).
 
-**Log identity for an agent's per-channel trajectory** (preserves today's
-convention from `gadBranchIdForChannel`, trajectory-vessel-base.ts:199):
+**Log identity for an agent's per-channel trajectory**:
 
 ```
-logId = `branch:channel:${channelId}`   head = `branch:channel:${channelId}`
-logKind = "trajectory"
+logId = channelId   head = "main"
+logKind = "channel"
 ```
 
-(Today trajectoryId == branchId == `branch:channel:{channelId}`; keep both
-coordinates equal so existing GAD projections and panel reads stay stable. A
-fork to a new channel gets `toLogId = toHead = branch:channel:{newChannelId}`.)
+The trajectory is the channel's canonical durable log. Its log ID and head
+are distinct coordinates: `trajectoryId = channelId`, `branchId = "main"`.
+A fork gets `toLogId = newChannelId`, `toHead = "main"`; it does not create
+a separate trajectory namespace or duplicate the channel events.
 
 Use only the unified-log write and fork RPCs described in Stage B.
 
@@ -891,11 +891,11 @@ wiped), then:
 ```ts
 override async postClone(parentObjectKey: string, newChannelId: string,
                          oldChannelId: string, forkPointPubsubId: string) {
-  const from = gadBranchIdForChannel(oldChannelId);   // `branch:channel:{old}`
-  const to   = gadBranchIdForChannel(newChannelId);
+  const from = logIdForChannel(oldChannelId);
+  const to   = logIdForChannel(newChannelId);
   const atSeq = await this.resolveTrajectorySeqForChannelSeq(from, forkPointPubsubId);
-  await this.gad.call("forkLog", { fromLogId: from, fromHead: from,
-                                   toLogId: to, toHead: to, atSeq });   // no-copy, idempotent
+  await this.gad.call("forkLog", { fromLogId: from, fromHead: "main",
+                                   toLogId: to, toHead: "main", atSeq });   // no-copy, idempotent
   this.sql.exec("DELETE FROM effect_outbox");          // caches: wiped, reconverge (P3)
   this.sql.exec("DELETE FROM fold_cache");
   this.identity.adoptObjectKey(this.objectKey);        // fix identity as today

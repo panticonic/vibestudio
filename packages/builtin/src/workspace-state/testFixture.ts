@@ -62,6 +62,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         agent_channel_id TEXT,
         parent_id TEXT,
         owner_user_id TEXT,
+        authority_session_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,

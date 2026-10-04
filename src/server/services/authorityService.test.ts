@@ -1,7 +1,344 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createInvocationSnapshot,
+  invocationSnapshotDigest,
+} from "@vibestudio/shared/authority/invocationSnapshot";
 import { createAuthorityService } from "./authorityService.js";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import { taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
+import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
+import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { createApprovalQueue } from "./approvalQueue.js";
+
+function executionInput(
+  kind: "agent-turn" | "method" | "eval" = "agent-turn"
+): Parameters<AgentExecutionSessionRegistry["admitExecution"]>[0] {
+  const runtimeId = "do:workers/agent:Agent:one";
+  return {
+    admissionKey: "execution:one",
+    controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
+    mode: "mission",
+    ownerUser: "user:alice",
+    workspaceId: "workspace:one",
+    contextId: "context:one",
+    agentBinding: null,
+    taskRef: "run:one",
+    taskAuthority: "task:one",
+    executionImage: {
+      principal: "code:workers/agent@one",
+      repoPath: "workers/agent",
+      ref: "state:one",
+      effectiveVersion: "one",
+      executionDigest: "a".repeat(64),
+    },
+    executor:
+      kind === "agent-turn"
+        ? { kind, runtimeId, entityId: runtimeId, channelId: "channel:one", turnId: "turn:one" }
+        : kind === "method"
+          ? {
+              kind,
+              runtimeId,
+              invocationId: "invocation:one",
+              service: "workers/agent",
+              method: "run",
+            }
+          : {
+              kind,
+              runtimeId,
+              evalRunId: "run:one",
+              authorityManifest: {
+                mode: "adaptive",
+                effects: "read-write",
+                approvals: "prompt",
+                requests: [],
+                digest: "0".repeat(64),
+              },
+            },
+    mission: {
+      subject: `mission:one@${"c".repeat(64)}`,
+      missionId: "one",
+      revision: 1,
+      revisionDigest: "c".repeat(64),
+    },
+    authorityPlanDigest: "b".repeat(64),
+    parent: null,
+    causalParent: null,
+  };
+}
+
+const executionFixtures: Array<{
+  statePath: string;
+  grants: CapabilityGrantStore;
+  acquisitions: AcquisitionCoordinator;
+}> = [];
+
+function executionFixture(kind: "agent-turn" | "method" | "eval" = "agent-turn") {
+  const statePath = mkdtempSync(join(tmpdir(), "authority-finish-execution-"));
+  const grants = new CapabilityGrantStore({ statePath });
+  const queue = createApprovalQueue({
+    eventService: { emitProjected: () => {} } as never,
+    scopeAccess: { isMember: () => true, isAdmin: () => true },
+  });
+  const acquisitions = new AcquisitionCoordinator({ grantStore: grants, approvalQueue: queue });
+  executionFixtures.push({ statePath, grants, acquisitions });
+  const registry = new AgentExecutionSessionRegistry();
+  const fact = registry.admitExecution(executionInput(kind));
+  const service = createAuthorityService({
+    dispatcher: {} as never,
+    acquisitions,
+    executionAdmissions: registry,
+  });
+  const finish = (controllerRuntimeId = fact.controllerRuntimeId) =>
+    service.handler(
+      { caller: createVerifiedCaller(controllerRuntimeId, "do") },
+      "finishExecution",
+      [{ authoritySessionId: fact.authoritySessionId }]
+    );
+  const snapshot = createInvocationSnapshot({
+    service: "gateway",
+    method: "fetch",
+    capability: "workspace.gateway.access",
+    capabilityDefinitionDigest: "-",
+    resourceType: "network",
+    provider: "-",
+    providerExecutionDigest: "-",
+    resourceKey: "https://example.com",
+    args: ["https://example.com"],
+    preparedStateDigest: "-",
+    callerPrincipal: `session:${fact.authoritySessionId}`,
+    sessionId: fact.authoritySessionId,
+    taskAuthority: "task:one",
+    missionSubject: "-",
+    snippetDigest: "a".repeat(64),
+    codeLineage: { class: "internal", chain: [] },
+    initiatorChain: ["user:alice"],
+  });
+  const info = acquisitions.request({
+    snapshot,
+    snapshotDigest: invocationSnapshotDigest(snapshot),
+    tier: "gated",
+    caller: createVerifiedCaller(fact.executor.runtimeId, "do"),
+    renderedAction: "read example.com",
+    resource: { kind: "exact", key: snapshot.resourceKey },
+  });
+  const owner = { ownerRuntimeId: fact.executor.runtimeId, sessionId: fact.authoritySessionId };
+  return {
+    statePath,
+    grants,
+    queue,
+    acquisitions,
+    registry,
+    fact,
+    info,
+    owner,
+    finish,
+    service,
+    snapshot,
+  };
+}
+
+afterEach(async () => {
+  for (const f of executionFixtures.splice(0)) {
+    try {
+      await f.acquisitions.closeAll();
+      await Promise.resolve();
+    } finally {
+      f.grants.close();
+      rmSync(f.statePath, { recursive: true });
+    }
+  }
+});
+
+describe("authorityService execution completion", () => {
+  it("withdraws only the authenticated original acquisition and preserves sibling work", async () => {
+    const f = executionFixture();
+    const snapshot = createInvocationSnapshot({ ...f.snapshot, args: ["another operation"] });
+    const sibling = f.acquisitions.request({
+      snapshot,
+      snapshotDigest: invocationSnapshotDigest(snapshot),
+      tier: "gated",
+      caller: createVerifiedCaller(f.owner.ownerRuntimeId, "do"),
+      renderedAction: "read example.com again",
+      resource: { kind: "exact", key: snapshot.resourceKey },
+    });
+    const record = f.grants.acquisitions.get(f.info.acquisitionId, f.owner)!;
+    const context = {
+      caller: createVerifiedCaller(f.owner.ownerRuntimeId, "do"),
+      authorization: { session: { id: f.owner.sessionId } },
+    } as never;
+    const input = { acquisitionId: record.acquisitionId, bindingDigest: record.bindingDigest };
+    for (const foreign of [
+      {
+        caller: createVerifiedCaller("do:foreign", "do"),
+        authorization: { session: { id: f.owner.sessionId } },
+      },
+      {
+        caller: createVerifiedCaller(f.owner.ownerRuntimeId, "do"),
+        authorization: { session: { id: "foreign-session" } },
+      },
+      { caller: createVerifiedCaller(f.owner.ownerRuntimeId, "do") },
+    ])
+      await expect(
+        f.service.handler(foreign as never, "withdrawAcquisition", [input])
+      ).rejects.toMatchObject({ code: "EACCES" });
+    expect(f.queue.listPending()).toHaveLength(2);
+    const withdrawn = await f.service.handler(context, "withdrawAcquisition", [input]);
+    expect(withdrawn).toMatchObject({
+      state: "closed",
+      resolution: { state: "closed", reason: "operation-ended" },
+    });
+    expect(f.queue.listPending()).toHaveLength(1);
+    expect(f.grants.acquisitions.get(sibling.acquisitionId, f.owner)?.state).toBe("pending");
+    await expect(f.service.handler(context, "withdrawAcquisition", [input])).resolves.toEqual(
+      withdrawn
+    );
+    expect(
+      f.grants.acquisitions.admit({ ...f.owner, requestKey: "still-active", facts: {} }).state
+    ).toBe("pending");
+  });
+
+  it("retains the pending prompt and original write failure until exact withdrawal can commit", async () => {
+    const f = executionFixture();
+    const record = f.grants.acquisitions.get(f.info.acquisitionId, f.owner)!;
+    const context = {
+      caller: createVerifiedCaller(f.owner.ownerRuntimeId, "do"),
+      authorization: { session: { id: f.owner.sessionId } },
+    } as never;
+    const input = { acquisitionId: record.acquisitionId, bindingDigest: record.bindingDigest };
+    const sql = new DatabaseSync(f.grants.databasePath);
+    try {
+      sql.exec(
+        "CREATE TRIGGER reject_exact_withdrawal BEFORE UPDATE ON authority_acquisitions WHEN NEW.state = 'closed' BEGIN SELECT RAISE(ABORT, 'exact withdrawal rejected'); END"
+      );
+      await expect(f.service.handler(context, "withdrawAcquisition", [input])).rejects.toThrow(
+        "exact withdrawal rejected"
+      );
+      expect(f.queue.listPending()).toHaveLength(1);
+      expect(f.grants.acquisitions.get(record.acquisitionId, f.owner)).toEqual(record);
+      sql.exec("DROP TRIGGER reject_exact_withdrawal");
+      await expect(
+        f.service.handler(context, "withdrawAcquisition", [input])
+      ).resolves.toMatchObject({ state: "closed" });
+      expect(f.queue.listPending()).toEqual([]);
+    } finally {
+      sql.exec("DROP TRIGGER IF EXISTS reject_exact_withdrawal");
+      sql.close();
+    }
+  });
+
+  it.each(["agent-turn", "method"] as const)(
+    "closes %s approval receipts and prompts before releasing execution admission, once",
+    async (kind) => {
+      const f = executionFixture(kind);
+      expect(f.queue.listPending()).toHaveLength(1);
+      const unrelatedOwner = { ...f.owner, sessionId: "unrelated-session" };
+      const unrelated = f.grants.acquisitions.admit({
+        ...unrelatedOwner,
+        requestKey: "unrelated-session/request",
+        facts: {},
+      });
+      const wait = f.acquisitions.awaitDecision({
+        acquisitionId: f.info.acquisitionId,
+        ...f.owner,
+      });
+      const closeSession = vi.spyOn(f.acquisitions, "closeSession");
+      await expect(f.finish()).resolves.toBeUndefined();
+      await expect(wait).resolves.toMatchObject({ state: "closed" });
+      expect(f.queue.listPending()).toEqual([]);
+      expect(f.acquisitions.pending()).toEqual([]);
+      expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)).toMatchObject({
+        state: "closed",
+        resolution: { state: "closed", value: { reason: "owner-retired" } },
+      });
+      expect(f.grants.acquisitions.outstanding(f.owner)).toEqual([]);
+      expect(f.grants.acquisitions.get(unrelated.acquisitionId, unrelatedOwner)?.state).toBe(
+        "pending"
+      );
+      expect(f.registry.resolveInvocation(f.fact.executor.runtimeId, f.fact.nonce)).toBeNull();
+      await expect(f.finish()).resolves.toBeUndefined();
+      expect(closeSession).toHaveBeenCalledExactlyOnceWith(f.fact.authoritySessionId);
+      expect(() =>
+        f.grants.acquisitions.admit({ ...f.owner, requestKey: "later", facts: {} })
+      ).toThrow(/retired/);
+    }
+  );
+
+  it("refuses a foreign controller before closing any canonical receipt or prompt", async () => {
+    const f = executionFixture();
+    const closeSession = vi.spyOn(f.acquisitions, "closeSession");
+    await expect(f.finish("do:workers/other:Controller:one")).rejects.toThrow(
+      /admission controller/
+    );
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)?.state).toBe("pending");
+    expect(f.queue.listPending()).toHaveLength(1);
+    expect(f.registry.resolveInvocation(f.fact.executor.runtimeId, f.fact.nonce)).toBe(f.fact);
+  });
+
+  it("propagates canonical closure failure and retains authenticated authority for an exact retry", async () => {
+    const f = executionFixture();
+    const sql = new DatabaseSync(f.grants.databasePath);
+    const originalClose = f.acquisitions.closeSession.bind(f.acquisitions);
+    let closureFailure: unknown;
+    vi.spyOn(f.acquisitions, "closeSession").mockImplementation(async (sessionId) => {
+      try {
+        await originalClose(sessionId);
+      } catch (error) {
+        closureFailure = error;
+        throw error;
+      }
+    });
+    try {
+      sql.exec(
+        "CREATE TRIGGER reject_execution_closure BEFORE UPDATE ON authority_acquisitions WHEN NEW.state = 'closed' BEGIN SELECT RAISE(ABORT, 'canonical execution closure rejected'); END"
+      );
+      const observed = await f.finish().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(observed).toBe(closureFailure);
+      expect(observed).toBeInstanceOf(Error);
+      expect(observed).toMatchObject({ message: "canonical execution closure rejected" });
+      expect(f.registry.resolveInvocation(f.fact.executor.runtimeId, f.fact.nonce)).toBe(f.fact);
+      expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)?.state).toBe("pending");
+      expect(f.grants.acquisitions.outstanding(f.owner)).toHaveLength(1);
+      expect(f.queue.listPending()).toHaveLength(1);
+      sql.exec("DROP TRIGGER reject_execution_closure");
+      await expect(f.finish()).resolves.toBeUndefined();
+      expect(f.registry.resolveInvocation(f.fact.executor.runtimeId, f.fact.nonce)).toBeNull();
+      expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)?.state).toBe("closed");
+      expect(f.queue.listPending()).toEqual([]);
+    } finally {
+      sql.exec("DROP TRIGGER IF EXISTS reject_execution_closure");
+      sql.close();
+    }
+  });
+
+  it("finishes an eval cell without retiring its retained notebook-history authority", async () => {
+    const f = executionFixture("eval");
+    const closeSession = vi.spyOn(f.acquisitions, "closeSession");
+    await expect(f.finish()).resolves.toBeUndefined();
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(f.registry.resolve(f.fact.executor.runtimeId)).toBe(f.fact);
+    expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)?.state).toBe("pending");
+    expect(f.queue.listPending()).toHaveLength(1);
+    const secondInput = executionInput("eval");
+    if (secondInput.executor.kind !== "eval") throw new Error("Expected eval input");
+    const second = f.registry.admitExecution({
+      ...secondInput,
+      admissionKey: "execution:two",
+      executor: { ...secondInput.executor, evalRunId: "run:two" },
+    });
+    expect(second.authoritySessionId).toBe(f.fact.authoritySessionId);
+    expect(f.registry.resolveInvocation(second.executor.runtimeId, second.nonce)).toBe(second);
+  });
+});
 
 describe("authorityService", () => {
   it("lists and resets rules by the workspace-qualified chat binding", async () => {
@@ -131,16 +468,24 @@ describe("authorityService", () => {
       acquisitions: { awaitDecision } as never,
     });
 
+    const caller = createVerifiedCaller("agent:1", "agent");
+    const authorization = authorizeVerifiedCaller(caller, {
+      workspaceId: "workspace:one",
+      workspaceMember: true,
+      sessionId: "authority:session-one",
+      audience: "service:authority",
+      capability: "authority.awaitDecision",
+      resourceKey: "-",
+    }).context;
     await expect(
-      service.handler(
-        { caller: createVerifiedCaller("agent:1", "agent"), signal },
-        "awaitDecision",
-        [{ acquisitionId: "acq:1" }]
-      )
+      service.handler({ caller, signal, authorization }, "awaitDecision", [
+        { acquisitionId: "acq:1" },
+      ])
     ).resolves.toEqual({ state: "decided", decision: "once" });
     expect(awaitDecision).toHaveBeenCalledWith({
       acquisitionId: "acq:1",
       ownerRuntimeId: "agent:1",
+      sessionId: "authority:session-one",
       signal,
     });
   });

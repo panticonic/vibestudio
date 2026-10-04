@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { materializeImmutableTree, materializePrivateTree } from "./immutableTreeMaterializer.js";
 
 const roots: string[] = [];
@@ -13,6 +13,79 @@ afterEach(async () => {
 });
 
 describe("materializeImmutableTree", () => {
+  it.skipIf(process.platform === "win32")(
+    "joins an admitted copy before publishing a storage failure and permitting cleanup",
+    async () => {
+      const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "immutable-tree-failure-"));
+      roots.push(root);
+      const source = path.join(root, "source");
+      const target = path.join(root, "target");
+      await fs.promises.mkdir(source);
+      await fs.promises.writeFile(path.join(source, "f000"), "first");
+      await fs.promises.writeFile(path.join(source, "f001"), "second");
+      const original = Object.assign(new Error("storage is full"), { code: "ENOSPC" });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let failed!: () => void;
+      const failureSeen = new Promise<void>((resolve) => {
+        failed = resolve;
+      });
+      let copied!: () => void;
+      const admittedCopyDone = new Promise<void>((resolve) => {
+        copied = resolve;
+      });
+      const mkdir = fs.promises.mkdir;
+      const link = fs.promises.link;
+      let directories = 0;
+      vi.spyOn(fs.promises, "mkdir").mockImplementation(async (...args) => {
+        // Discovery creates the root first; defer the second admitted file.
+        if (args[0] === target && ++directories === 3) await gate;
+        return mkdir(...args);
+      });
+      vi.spyOn(fs.promises, "link").mockImplementation(async (input, output) => {
+        if (input === path.join(source, "f000")) {
+          failed();
+          throw original;
+        }
+        try {
+          await link(input, output);
+        } finally {
+          copied();
+        }
+      });
+      let cleanupFinished = false;
+      const operation = materializeImmutableTree(source, target).then(
+        () => {
+          throw new Error("Expected the original storage failure");
+        },
+        async (error: unknown) => {
+          expect(error).toBe(original);
+          await fs.promises.rm(target, { recursive: true, force: true });
+          cleanupFinished = true;
+        }
+      );
+      try {
+        await failureSeen;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(cleanupFinished).toBe(false);
+        release();
+        await operation;
+        expect(cleanupFinished).toBe(true);
+        expect(fs.existsSync(target)).toBe(false);
+      } finally {
+        release();
+        await admittedCopyDone;
+        await operation;
+        vi.restoreAllMocks();
+      }
+      // A subsequent admission owns a clean target, with no older writers.
+      await materializeImmutableTree(source, target);
+      expect(await fs.promises.readFile(path.join(target, "f001"), "utf8")).toBe("second");
+    }
+  );
+
   it("projects files as hardlinks and preserves dependency symlinks", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "immutable-tree-"));
     roots.push(root);

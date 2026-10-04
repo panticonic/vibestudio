@@ -680,6 +680,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.acknowledgeAcquisition": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Acknowledges only an exact canonical terminal digest owned by the authenticated runtime/session; grants no authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.acquireForCurrentTask": {
     tier: {
       tier: "open",
@@ -700,6 +712,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "authority.acquire",
       rationale:
         "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.acquisitionReceipt": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Reads only a retained acquisition owned by the authenticated runtime and session; grants no authority.",
     },
     capability: null,
     presentation: null,
@@ -763,6 +787,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.outstandingAcquisitions": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Traverses only unacknowledged acquisitions in the authenticated runtime/session; does not settle or execute them.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.preflight": {
     tier: {
       tier: "open",
@@ -794,6 +830,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "authority.execution",
       rationale:
         "Installed workflow code retires an owner-attributed target only after its admitted executions have closed.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.withdrawAcquisition": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Closes only an exact pending acquisition owned by the authenticated runtime/session; grants no authority and leaves other work active.",
     },
     capability: null,
     presentation: null,
@@ -2180,6 +2228,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.prepareTypecheck": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "build.native-resources",
+      rationale:
+        "Resolves an exact compiler program's declared runtime/development dependencies and installed SDK declarations, then admits those resources read-only to its native workspace with installer scripts disabled.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.readBuildArtifact": {
     tier: {
       tier: "open",
@@ -3149,6 +3209,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "eval.acknowledge": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale: "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "eval.cancel": {
     tier: {
       tier: "open",
@@ -3212,6 +3283,17 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "untrusted-execution",
       family: "eval.read",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "eval.receipt": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.read",
+      rationale: "Owner-scoped read of an immutable result; no new execution or authority.",
     },
     capability: null,
     presentation: null,
@@ -8209,6 +8291,48 @@ export const HOST_AUTHORITY_METHODS = {
     },
   },
   "workspace-state.alarmSet": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.alarmSourcePublish": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.alarmSourceRegister": {
     tier: {
       tier: "open",
       session: "family",

@@ -205,18 +205,19 @@ const overviewOptionsSchema = z
 const runPageSchema = z
   .object({ items: z.array(missionRunRecordSchema), nextCursor: runCursorSchema.optional() })
   .strict();
+/** Aggregate counts cover the complete visible ledger, independently of item pagination. */
+export const missionOverviewStatsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  active: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  issueRunsLast24Hours: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+}).strict();
+
 const overviewSchema = z
   .object({
     generatedAt: z.number().int().nonnegative(),
-    stats: z
-      .object({
-        total: z.number().int().nonnegative(),
-        active: z.number().int().nonnegative(),
-        running: z.number().int().nonnegative(),
-        issueRunsLast24Hours: z.number().int().nonnegative(),
-        completed: z.number().int().nonnegative(),
-      })
-      .strict(),
+    stats: missionOverviewStatsSchema,
     items: z.array(
       z
         .object({

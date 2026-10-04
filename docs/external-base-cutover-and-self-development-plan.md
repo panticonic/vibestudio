@@ -251,9 +251,12 @@ digest records what was tested. It does not create a compatibility range.
 16. **Safety remains code.** Approval, credentials, integrity, path safety,
     no-overwrite/CAS, epoch equality, and process ownership are mechanically
     enforced.
-17. **Persistence is current-only.** An empty store initializes at its current
-    canonical schema; an exact current store opens; every other shape fails.
-    There is no production baseline or ordered migration chain.
+17. **Persistence has an explicit support contract.** Current native helpers
+    initialize empty stores and otherwise require the exact current schema.
+    That implementation is not a ban on sound dependency-owned migrations or
+    necessary supported-data upgrades. Follow
+    `docs/agentic-upgrade-migrations-plan.md`; unsupported/corrupt state fails
+    closed and the chosen owner validates the resulting current schema.
 
 ## Canonical artifacts
 
@@ -828,10 +831,11 @@ not part of the edit/test loop.
 
 - current Base pointer parsing and strict rejection of old fields;
 - exact epoch admission and rejection of old/missing epochs;
-- empty-or-exact-current Durable Object/SQLite admission and hard rejection of
-  every other shape;
-- absence of migration ledgers, definitions, retained source digests, and
-  migration fixtures;
+- exact current shape validation, supported declared Durable Object upgrade
+  rollback/retry, and unchanged refusal of unsupported DO/host SQLite shapes;
+  owner-provided migrations are governed by `docs/agentic-upgrade-migrations-plan.md`;
+- absence of obsolete bespoke migration machinery, rather than a prohibition
+  on sound dependency migrations or necessary release-upgrade tests;
 - self-contained installed state and absence of per-node fragment reads;
 - remote/local snapshot adapters, atomicity, corruption, and unpushed commits;
 - atomic root derivation and crash points around the main CAS;

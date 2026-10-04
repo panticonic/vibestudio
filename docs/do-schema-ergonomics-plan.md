@@ -1,6 +1,14 @@
 # Durable Object schema ergonomics: current-only simplification plan
 
-Status: revised 2026-08-12; supersedes the migration-engine plan
+Status: historical simplification plan from 2026-08-12; policy scope clarified 2026-10-01
+
+The phases below record the earlier removal of bespoke pre-release migration
+machinery. They are not a current prohibition on schema migrations. Sound
+dependency-provided migrations and necessary supported-data upgrades may be
+adopted; do not delete them or their tests to satisfy this historical plan.
+The authoritative policy is
+[upgrade and migration policy](agentic-upgrade-migrations-plan.md). The current
+native base still implements exact-current validation until that code changes.
 
 The original plan correctly diagnosed opaque schema failures and an unsafe
 reset/clone path, then proposed a production-baseline, ordered-migration,
@@ -73,10 +81,11 @@ storage, createSchema, validateSchema, owned objects }`.
 5. Reject all other shapes without mutation.
 6. Update every Durable Object subclass to delete migration hooks and declare
    only its current schema.
-7. Delete migration tests and add old/malformed/current-shape rejection tests.
+7. Replace tests of the removed bespoke machinery with unsupported/malformed/
+   current-shape rejection tests. Retain tests for any adopted supported migration.
 
-Exit: source search finds no migration hook, callback, ledger, baseline, or
-fixture API.
+Historical exit: the removed bespoke migration APIs have no callers. This is
+not an instruction to remove a dependency's migration API or supported fixtures.
 
 ## Phase 3: exact reset and snapshot recovery
 
@@ -117,9 +126,10 @@ Update storage docs and worker/sandbox skills to say:
 
 - create the final current schema;
 - bump the class version when it changes;
-- old storage is unsupported pre-release;
+- unsupported storage is rejected; supported upgrade paths are explicit;
 - reset only exact disposable storage after approval/backup; and
-- never add a migration, conversion shim, or fallback reader.
+- avoid speculative migration frameworks and fallback readers; reuse sound
+  owner-provided migrations or implement necessary supported upgrades coherently.
 
 Add doc probes for the error code, current worker API, and absence of obsolete
 migration hooks.

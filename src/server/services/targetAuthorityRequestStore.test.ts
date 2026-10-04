@@ -1,11 +1,29 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { TargetAuthorityRequestStore } from "./targetAuthorityRequestStore.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
+const owners = new Set<CapabilityGrantStore>();
+const roots: string[] = [];
+afterEach(() => {
+  for (const owner of owners) owner.close();
+  owners.clear();
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 function statePath(): string {
-  return mkdtempSync(join(tmpdir(), "target-authority-store-"));
+  const root = mkdtempSync(join(tmpdir(), "target-authority-owner-"));
+  roots.push(root);
+  return root;
+}
+function open(root: string) {
+  const owner = new CapabilityGrantStore({ statePath: root });
+  owners.add(owner);
+  return owner;
+}
+function close(owner: CapabilityGrantStore) {
+  owner.close();
+  owners.delete(owner);
 }
 
 describe("TargetAuthorityRequestStore", () => {
@@ -28,7 +46,8 @@ describe("TargetAuthorityRequestStore", () => {
         declaredBy: "host:notification.showToUser",
       },
     };
-    const firstStore = new TargetAuthorityRequestStore({ statePath: root });
+    const firstOwner = open(root);
+    const firstStore = firstOwner.targetRequests;
     firstStore.registerSubject(
       subject,
       input.authorityPlanDigest,
@@ -40,9 +59,10 @@ describe("TargetAuthorityRequestStore", () => {
       firstStore.registerSubject(subject, "d".repeat(64), input.sourceUser, "do:missions", 11)
     ).toThrow(/different ownership, controller, or policy/);
     const first = firstStore.ensure(input, 20);
-    firstStore.close();
+    close(firstOwner);
 
-    const reopened = new TargetAuthorityRequestStore({ statePath: root });
+    const reopenedOwner = open(root);
+    const reopened = reopenedOwner.targetRequests;
     expect(reopened.subject(subject)).toEqual({
       authorityPlanDigest: input.authorityPlanDigest,
       ownerUser: input.sourceUser,
@@ -51,16 +71,17 @@ describe("TargetAuthorityRequestStore", () => {
     });
     expect(reopened.ensure(input, 30)).toEqual(first);
     expect(reopened.pending()).toEqual([first]);
-    reopened.settle(first.requestId, "granted", "grant:one", 40);
+    reopened.settle(first.requestId, "granted", () => "grant:one", 40);
     expect(reopened.pending()).toEqual([]);
     expect(reopened.forPlan(subject, input.authorityPlanDigest)).toEqual([
       { ...first, state: "granted", settledAt: 40, grantId: "grant:one" },
     ]);
-    reopened.close();
+    close(reopenedOwner);
   });
 
   it("fences a retired subject and durably cancels its pending requests", () => {
-    const store = new TargetAuthorityRequestStore({ statePath: statePath() });
+    const owner = open(statePath());
+    const store = owner.targetRequests;
     const subject = `mission:timer@${"a".repeat(64)}` as const;
     const policy = "b".repeat(64);
     store.registerSubject(subject, policy, "user:alice", "do:missions", 10);
@@ -87,11 +108,12 @@ describe("TargetAuthorityRequestStore", () => {
     expect(store.subject(subject)?.state).toBe("retired");
     expect(store.pending()).toEqual([]);
     expect(store.retireSubject(subject, 40)).toEqual({ cancelledRequests: 0 });
-    store.close();
+    close(owner);
   });
 
   it("associates one semantic request with every plan that references it", () => {
-    const store = new TargetAuthorityRequestStore({ statePath: statePath() });
+    const owner = open(statePath());
+    const store = owner.targetRequests;
     const subject = `task:${"a".repeat(64)}` as const;
     const firstPlan = "b".repeat(64);
     const secondPlan = "d".repeat(64);
@@ -122,6 +144,6 @@ describe("TargetAuthorityRequestStore", () => {
     expect(store.forPlan(subject, secondPlan)).toEqual([
       expect.objectContaining({ requestId: first.requestId, authorityPlanDigest: secondPlan }),
     ]);
-    store.close();
+    close(owner);
   });
 });

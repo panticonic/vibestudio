@@ -31,6 +31,7 @@ describe("CredentialStore", () => {
   let originalUserDataPath: string;
 
   beforeEach(async () => {
+    tempDir = "";
     originalUserDataPath = getUserDataPath();
     tempDir = await mkdtemp(path.join(tmpdir(), "vibestudio-credentials-store-"));
     store = new CredentialStore({ basePath: tempDir });
@@ -39,7 +40,7 @@ describe("CredentialStore", () => {
   afterEach(async () => {
     __setSafeStorageForTests(null);
     setUserDataPath(originalUserDataPath);
-    await rm(tempDir, { recursive: true, force: true });
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
   });
 

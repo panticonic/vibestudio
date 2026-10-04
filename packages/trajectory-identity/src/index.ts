@@ -9,8 +9,6 @@
 
 import { stableSha256Hex } from "@vibestudio/content-addressing";
 
-export const CHANNEL_TRAJECTORY_LOG_PREFIX = "branch:channel:";
-
 export interface ChannelTrajectoryCoordinates {
   readonly channelId: string;
   readonly logId: string;
@@ -40,29 +38,19 @@ function requireCoordinate(name: keyof TrajectoryInvocationCoordinates, value: s
 /** Canonical trajectory log capability derived from a trusted channel id. */
 export function logIdForChannel(channelId: string): string {
   requireChannelId(channelId);
-  return `${CHANNEL_TRAJECTORY_LOG_PREFIX}${channelId}`;
+  return channelId;
 }
 
-/** Reverse only the canonical channel-log namespace; arbitrary log IDs are not channels. */
-export function channelIdFromTrajectoryLog(logId: string): string | null {
-  if (!logId.startsWith(CHANNEL_TRAJECTORY_LOG_PREFIX)) return null;
-  const channelId = logId.slice(CHANNEL_TRAJECTORY_LOG_PREFIX.length);
-  return channelId.length > 0 ? channelId : null;
-}
-
-/**
- * Channel trajectories use their log capability as the named head. Keeping
- * this convention here prevents host and userland code from independently
- * inventing a head name for the same trajectory.
- */
+/** The channel's canonical durable log always uses its main head. */
 export function headForChannel(channelId: string): string {
-  return logIdForChannel(channelId);
+  requireChannelId(channelId);
+  return "main";
 }
 
 /** The complete, walkable coordinates for one canonical channel trajectory. */
 export function channelTrajectoryFor(channelId: string): ChannelTrajectoryCoordinates {
   const logId = logIdForChannel(channelId);
-  return { channelId, logId, head: logId };
+  return { channelId, logId, head: headForChannel(channelId) };
 }
 
 /**

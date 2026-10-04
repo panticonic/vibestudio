@@ -1,3 +1,6 @@
+import { portableExports } from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
+import { jsonSchemaNumericType } from "@vibestudio/shared/jsonSchemaNumericType";
+
 /**
  * Eval-engine `help('<name>')` surface description — the pure core, so it can be unit-tested under Node
  * (evalDO.ts pulls worker-only imports). `EvalDO.describeInjectedSurface` gathers the live binding's
@@ -11,8 +14,20 @@
 export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> = {
   "agent.describe": {
     description:
-      "describe() → Promise<{ identity, config, channels, tools, turn, effects }>. Await it. " +
-      "This is observational and is available in read-only agent evals.",
+      "describe() → Promise<{ identity, config, channels, tools, execution }>. Await it. " +
+      "This is the owning agent’s self-inspection/debug snapshot and is available in read-only agent evals.",
+  },
+  "chat.callMethod": {
+    description:
+      "callMethod(participantId: string, method: string, args: JSON value) → delivered result content. " +
+      "Resolve the exact participant and its advertised method first; this calls a participant method, not channel history. " +
+      "For channel history, use the bounded gad.inspectChannelEnvelopes inspector.",
+  },
+  "chat.callMethodResult": {
+    description:
+      "callMethodResult(participantId: string, method: string, args: JSON value) → { content }. " +
+      "All three arguments are required. Resolve the exact participant and its advertised method first; " +
+      "for channel history, use the bounded gad.inspectChannelEnvelopes inspector.",
   },
   "ctx.reportProgress": {
     description:
@@ -109,6 +124,25 @@ export function evalRuntimeServiceName(bindingName: string): string {
   return EVAL_RUNTIME_SERVICE_NAMES[bindingName] ?? bindingName;
 }
 
+/** Generated service clients group dotted methods into enumerable namespaces. */
+export function evalBindingMethodNames(binding: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  const ancestors = new Set<object>();
+  function visit(value: Record<string, unknown>, prefix: string): void {
+    if (ancestors.has(value)) return;
+    ancestors.add(value);
+    for (const [key, member] of Object.entries(value)) {
+      const name = prefix ? `${prefix}.${key}` : key;
+      if (typeof member === "function") names.push(name);
+      else if (member && typeof member === "object" && !Array.isArray(member))
+        visit(member as Record<string, unknown>, name);
+    }
+    ancestors.delete(value);
+  }
+  visit(binding, "");
+  return names.sort();
+}
+
 export interface InjectedSurfaceDescription {
   name: string;
   surface: "injected-runtime";
@@ -130,10 +164,12 @@ export interface InjectedSurfaceMethodDescription {
   description?: string;
   signature?: string;
   call?: string;
+  overloads?: string[];
   parameters?: Array<{ name: string; type: string }>;
   returns?: string;
   examples?: Array<{ call: string; returns?: unknown; note?: string }>;
   access?: unknown;
+  authority?: unknown;
   errors?: unknown;
   seeAlso?: unknown;
   note: string;
@@ -163,8 +199,7 @@ function schemaType(schema: unknown, depth = 0): string {
   const type = value["type"];
   if (Array.isArray(type)) return type.map(String).join(" | ");
   if (type === "string") return "string";
-  if (type === "integer") return "integer";
-  if (type === "number") return "number";
+  if (type === "integer" || type === "number") return jsonSchemaNumericType(type, value);
   if (type === "boolean") return "boolean";
   if (type === "null") return "null";
   if (type === "array") {
@@ -192,14 +227,16 @@ function schemaType(schema: unknown, depth = 0): string {
   return typeof type === "string" ? type : "unknown";
 }
 
-function methodArgumentTypes(argsSchema: unknown): string[] {
-  if (!argsSchema || typeof argsSchema !== "object") return [];
+function methodArgumentLists(argsSchema: unknown): string[][] {
+  if (!argsSchema || typeof argsSchema !== "object") return [[]];
   const schema = argsSchema as JsonSchema;
+  const union = schema["anyOf"] ?? schema["oneOf"];
+  if (Array.isArray(union)) return union.flatMap(methodArgumentLists);
   const tuple = schema["prefixItems"] ?? schema["items"];
   if (schema["type"] === "array" && Array.isArray(tuple)) {
-    return (tuple as unknown[]).map((item) => schemaType(item));
+    return [(tuple as unknown[]).map((item) => schemaType(item))];
   }
-  return [schemaType(schema)];
+  return [[schemaType(schema)]];
 }
 
 /** Bounded projection of MethodSchema.examples into exact executable calls. */
@@ -250,7 +287,8 @@ export function describeEvalMethod(
   method: unknown
 ): InjectedSurfaceMethodDescription {
   const source = method && typeof method === "object" ? (method as Record<string, unknown>) : {};
-  const args = methodArgumentTypes(source["argsSchema"]);
+  const argumentLists = methodArgumentLists(source["argsSchema"]);
+  const args = argumentLists[0] ?? [];
   // Preserve positions. Filtering malformed metadata would shift every later
   // name onto the wrong argument, which is worse than falling back to argN.
   const declaredNames = Array.isArray(source["argumentNames"])
@@ -278,9 +316,13 @@ export function describeEvalMethod(
           parameters: args.map((type, index) => ({ name: parameterNames[index]!, type })),
         }
       : {}),
+    ...(argumentLists.length > 1
+      ? { overloads: argumentLists.map((types) => `${qualifiedName}(${types.join(", ")})`) }
+      : {}),
     ...(source["returnsSchema"] ? { returns: schemaType(source["returnsSchema"]) } : {}),
     ...(examples.length > 0 ? { examples } : {}),
     ...("access" in source ? { access: source["access"] } : {}),
+    ...("authority" in source ? { authority: source["authority"] } : {}),
     ...("errors" in source ? { errors: source["errors"] } : {}),
     ...("seeAlso" in source ? { seeAlso: source["seeAlso"] } : {}),
     note: source["argsSchema"]
@@ -325,7 +367,9 @@ export function invalidHelpArgumentResponse(value: unknown): Record<string, unkn
 
 /**
  * Describe an injected runtime binding as eval ACTUALLY sees it: its live method names, each enriched
- * from the RPC-service schema where names match — but a known ergonomic note wins (e.g. fs.open
+ * from the canonical injected-runtime catalog first, then the RPC-service schema where names match.
+ * Supplementary usage notes enrich canonical contracts; where no canonical catalog exists an
+ * ergonomic note takes precedence over a differing raw schema (e.g. fs.open
  * returns a FileHandle, NOT the service's `{handleId}`), and methods absent from `liveMethodNames`
  * (the hidden wire methods like fs.handleClose) are dropped. Returns null when there are no live
  * methods, so the caller can fall back to the raw service schema.
@@ -340,11 +384,21 @@ export function describeEvalBindingSurface(
   if (liveMethodNames.length === 0) return null;
   const methods: Record<string, unknown> = {};
   for (const m of [...liveMethodNames].sort()) {
-    methods[m] = notes[`${name}.${m}`] ??
-      serviceMethods[m] ?? {
-        description:
-          "Runtime method — no RPC-service schema; introspect the return value or see skills/sandbox/EVAL.md.",
-      };
+    const surface = portableExports[name];
+    const canonical = surface?.kind === "namespace" ? surface.methodCatalog?.[m] : undefined;
+    const guidance = notes[`${name}.${m}`];
+    methods[m] = canonical
+      ? guidance
+        ? {
+            ...canonical,
+            description: [canonical.description, guidance.description].filter(Boolean).join(" "),
+          }
+        : canonical
+      : (guidance ??
+        serviceMethods[m] ?? {
+          description:
+            "Runtime method — no RPC-service schema; introspect the return value or see skills/sandbox/EVAL.md.",
+        });
   }
   return {
     name,
@@ -383,4 +437,96 @@ export function describeEvalBindingIndex(
     })),
     next: `Call help("${description.name}.<method>") for that method's exact arguments, return schema, and typed errors.`,
   };
+}
+
+/** Resolve one named help request without confusing a qualified service method with a service name. */
+export async function describeEvalHelpName(serviceName: string, deps: {
+  bindings: Record<string, unknown>;
+  runtimeModuleName: string;
+  describeBinding: (name: string, binding: Record<string, unknown>) => Promise<unknown | null>;
+  docs: {
+    describe: (id: string) => Promise<unknown | null>;
+    describeService: (name: string) => Promise<unknown | null>;
+  };
+}): Promise<unknown> {
+  const dot = serviceName.indexOf(".");
+  if (dot > 0) {
+    const bindingName = serviceName.slice(0, dot);
+    const methodName = serviceName.slice(dot + 1);
+    const binding = deps.bindings[bindingName];
+    if (binding && typeof binding === "object") {
+      const described = await deps.describeBinding(
+        bindingName,
+        binding as Record<string, unknown>
+      );
+      if (described && typeof described === "object") {
+        const surface = described as { methods?: Record<string, unknown> };
+        if (surface.methods?.[methodName]) {
+          return describeEvalMethod(serviceName, surface.methods[methodName]);
+        }
+        const prefix = `${methodName}.`;
+        const nestedMethods = Object.fromEntries(
+          Object.entries(surface.methods ?? {})
+            .filter(([name]) => name.startsWith(prefix))
+            .map(([name, method]) => [name.slice(prefix.length), method])
+        );
+        if (Object.keys(nestedMethods).length > 0) {
+          return describeEvalBindingIndex({
+            name: serviceName,
+            surface: "injected-runtime",
+            note: "Live methods in this injected runtime namespace.",
+            methods: nestedMethods,
+          });
+        }
+        return {
+          name: serviceName,
+          surface: "injected-runtime-method",
+          error: `Unknown method ${methodName} on ${bindingName}`,
+          knownMethods: Object.keys(surface.methods ?? {}).sort(),
+        };
+      }
+    }
+    // A plain service has no injected namespace. Resolve its exact
+    // method from the same canonical catalog used by docs_open.
+    const method = await deps.docs.describe(`service:${serviceName}`);
+    return method
+      ? describeEvalMethod(`services.${serviceName}`, method)
+      : unknownHelpNameResponse(serviceName);
+  }
+  // Prefer the INJECTED binding's surface (what eval actually calls) over the raw RPC
+  // service — they can diverge (fs's low-level handle* wire methods are hidden behind
+  // open()→FileHandle).
+  const injected = deps.bindings[serviceName];
+  if (injected !== undefined) {
+    if (injected && typeof injected === "object") {
+      const described = await deps.describeBinding(
+        serviceName,
+        injected as Record<string, unknown>
+      );
+      if (described && typeof described === "object") {
+        return describeEvalBindingIndex(
+          described as InjectedSurfaceDescription
+        );
+      }
+    }
+    // A function/value runtime export (openPanel, getPanelHandle, callMain, …) —
+    // NOT an RPC service. Point to the docs instead of throwing "Unknown service".
+    return {
+      name: serviceName,
+      surface: "injected-runtime",
+      kind: typeof injected,
+      note:
+        `\`${serviceName}\` is a top-level runtime export from \`${deps.runtimeModuleName}\` (a ` +
+        `${typeof injected}) — call it directly, it is not an RPC service. See its signature ` +
+        `in skills/sandbox/RUNTIME_API.md (panel APIs: skills/workspace-dev/PANEL_API.md). ` +
+        `Use \`help('<name>')\` with a name from the \`services\` list for RPC services.`,
+    };
+  }
+  // Not a rich runtime binding — a plain RPC service. It is reachable as
+  // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
+  // `rpc.call("main", "${serviceName}.<method>", [...])`.
+  return (
+    (await deps.docs.describeService(serviceName)) ??
+    unknownHelpNameResponse(serviceName)
+  );
 }

@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { DatabaseSync } from "node:sqlite";
+import { once } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProblemReportingStore } from "./store";
 import { reportFixture } from "./testFixture";
 import { ReportCapture } from "./capture";
@@ -48,6 +51,109 @@ function queued(store: ProblemReportingStore, automatic = false) {
   return report;
 }
 describe("installation-owned reporting", () => {
+  it("opens shared reporting state while another connection finishes its database work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "report-open-contention-"));
+    new ProblemReportingStore(directory).close();
+    const worker = new Worker(
+      `const { DatabaseSync } = require('node:sqlite');
+       const { parentPort, workerData } = require('node:worker_threads');
+       const db = new DatabaseSync(workerData);
+       db.exec('PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;');
+       parentPort.postMessage('locked');
+       // Hold a real SQLite lock briefly so the opening connection must wait.
+       // This delay belongs only to the contention fixture, not store recovery.
+       setTimeout(() => { db.exec('COMMIT'); db.close(); }, 250);`,
+      { eval: true, workerData: join(directory, "reports.db") }
+    );
+    const exited = once(worker, "exit");
+    try {
+      await once(worker, "message");
+      const reopened = new ProblemReportingStore(directory);
+      try {
+        expect(reopened.installationId).toBeTruthy();
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      await exited;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it("opens the shared reporting store while another workspace commits a write", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "report-shared-startup-"));
+    const first = new ProblemReportingStore(directory);
+    cleanup.push(
+      () => rmSync(directory, { recursive: true, force: true }),
+      () => first.close()
+    );
+    first.decide("alice", 0, "on", "shell");
+    const writer = new Worker(
+      `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(workerData);
+      db.exec('BEGIN IMMEDIATE');
+      parentPort.postMessage('writing');
+      // A finite fixture transaction models a sibling process completing its
+      // actual write. This is not a production retry or recovery deadline.
+      setTimeout(() => { db.exec('COMMIT'); db.close(); }, 200);
+    `,
+      { eval: true, workerData: join(directory, "reports.db") }
+    );
+    const joined = new Promise<void>((resolve, reject) => {
+      writer.once("error", reject);
+      writer.once("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error(`Reporting writer exited ${code}`))
+      );
+    });
+    const outcomes = await Promise.allSettled([
+      (async () => {
+        await new Promise<void>((resolve, reject) => {
+          writer.once("message", (message) =>
+            message === "writing"
+              ? resolve()
+              : reject(new Error("Writer did not own the transaction"))
+          );
+          writer.once("error", reject);
+        });
+        const second = new ProblemReportingStore(directory);
+        cleanup.push(() => second.close());
+        expect(second.installationId).toBe(first.installationId);
+        expect(second.consent("alice")).toEqual(first.consent("alice"));
+      })(),
+      joined,
+    ]);
+    const failures = outcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Shared reporting admission and writer join failed");
+  });
+  it("closes a refused schema owner and preserves its original admission failure", () => {
+    const directory = mkdtempSync(join(tmpdir(), "report-refused-startup-"));
+    cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
+    const file = join(directory, "reports.db");
+    const original = new DatabaseSync(file);
+    original.exec(
+      "CREATE TABLE future_report(id INTEGER PRIMARY KEY); INSERT INTO future_report VALUES (1); PRAGMA user_version=2;"
+    );
+    original.close();
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    try {
+      expect(() => new ProblemReportingStore(directory)).toThrow("schema version is 2, expected 1");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
+    const observed = new DatabaseSync(file, { readOnly: true });
+    try {
+      expect(observed.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+      expect(observed.prepare("SELECT id FROM future_report").get()?.["id"]).toBe(1);
+    } finally {
+      observed.close();
+    }
+  });
   it("persists independent choices and cancels only automatic claims transactionally", () => {
     const s = store();
     expect(s.consent("alice").state).toBe("undecided");

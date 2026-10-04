@@ -28,7 +28,7 @@
       "name": "System testing",
       "description": "The agentic acceptance harness for development workspaces.",
       "url": "git+https://github.com/panticonic/vibestudio-system-testing.git",
-      "consumers": ["personal", "system"]
+      "consumers": ["personal", "system", "examples"]
     },
     {
       "id": "examples",

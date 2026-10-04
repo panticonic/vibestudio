@@ -90,6 +90,20 @@ export function createRemoteServeArgs(repoRoot, readyFile, port) {
   ];
 }
 
+/** Provider credentials stay in the normal profile; this run owns only hub state. */
+export function createRemoteSmokeServerEnvironment(base, instanceRoot, sharedDerivedCacheDir) {
+  const env = {
+    ...base,
+    NODE_ENV: base.NODE_ENV ?? "development",
+    VIBESTUDIO_TEST_MODE: "1",
+    VIBESTUDIO_SERVER_ENTRY: "live",
+    VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: sharedDerivedCacheDir,
+    VIBESTUDIO_INSTANCE_ROOT: instanceRoot,
+  };
+  delete env.VIBESTUDIO_WORKSPACE;
+  return env;
+}
+
 export function waitForRootInvite({ readyFile, timeoutMs = 180_000 }) {
   return new Promise((resolve, reject) => {
     let settled = false;

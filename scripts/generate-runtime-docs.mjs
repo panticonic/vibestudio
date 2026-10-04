@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import * as esbuild from "esbuild";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { runtimeClientCatalog } from "./lib/runtime-client-catalog.mjs";
@@ -13,36 +10,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(repoRoot, "base");
 
-/**
- * Load a runtime-surface manifest by bundling it with esbuild (which resolves
- * the cross-file imports — panel → core → portable — and strips TS types), then
- * evaluating the resulting CJS. The manifests are no longer self-contained, so a
- * regex/`vm` strip can't evaluate them.
- */
-function loadRuntimeSurface(relativePath, exportName) {
+/** Load manifests in the same Node runtime as the other schema catalogs. */
+async function loadRuntimeSurface(relativePath, exportName) {
   const filePath = path.join(repoRoot, relativePath);
-  const result = esbuild.buildSync({
-    entryPoints: [filePath],
-    bundle: true,
-    format: "cjs",
-    platform: "node",
-    write: false,
-    logLevel: "silent",
-  });
-  const code = result.outputFiles[0].text;
-  const module = { exports: {} };
-  vm.runInNewContext(
-    code,
-    {
-      module,
-      exports: module.exports,
-      require: createRequire(import.meta.url),
-      TextEncoder,
-      TextDecoder,
-    },
-    { filename: filePath }
-  );
-  const runtimeSurface = module.exports[exportName];
+  const module = await tsImport(filePath, import.meta.url);
+  const runtimeSurface = module[exportName];
   if (!runtimeSurface || typeof runtimeSurface !== "object") {
     throw new Error(`Failed to load runtime surface from ${relativePath}`);
   }
@@ -122,7 +94,14 @@ async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOn
       name,
       {
         ...(method.description ? { description: method.description } : {}),
-        ...(method.access ? { access: method.access } : {}),
+        ...(method.access || method.capability
+          ? {
+              access: {
+                ...(method.access ?? {}),
+                ...(method.capability ? { capability: method.capability } : {}),
+              },
+            }
+          : {}),
         argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }),
         ...(method.returns
           ? {
@@ -159,6 +138,12 @@ function writeRuntimeCatalog(catalogPath, catalogFile, catalog, checkOnly) {
 const checkOnly = process.argv.includes("--check");
 
 await updateRuntimeCatalog("workspaceSource.ts", "gadMethods", "gadRuntimeCatalog.json", checkOnly);
+await updateRuntimeCatalog(
+  "gitInterop.ts",
+  "gitInteropMethods",
+  "gitRuntimeCatalog.json",
+  checkOnly
+);
 await updateRuntimeCatalog(
   "templates.ts",
   "templatesMethods",
@@ -201,12 +186,42 @@ writeRuntimeCatalog(
   checkOnly
 );
 
+const webhookCatalog = runtimeClientCatalog({
+  root: repoRoot,
+  files: [
+    path.relative(repoRoot, path.join(userlandRoot, "packages/runtime/src/shared/webhooks.ts")),
+    "packages/shared/src/webhooks/ingress.ts",
+  ],
+  interfaceName: "WebhookIngressClient",
+  namespace: "webhooks",
+  moduleName: "@workspace/runtime",
+});
+const { webhookIngressMethods } = await tsImport(
+  path.join(repoRoot, "packages/service-schemas/src/webhookIngress.ts"),
+  import.meta.url
+);
+for (const [name, contract] of Object.entries(webhookCatalog)) {
+  const receiver = webhookIngressMethods[name];
+  if (!receiver) throw new Error(`Public webhook method lacks receiver metadata: ${name}`);
+  contract.description = [receiver.description, contract.description].filter(Boolean).join("\n\n");
+  contract.access = {
+    ...receiver.access,
+    capability: receiver.capability,
+  };
+}
+writeRuntimeCatalog(
+  path.join(repoRoot, "packages/service-schemas/src/runtime/generated/webhooksRuntimeCatalog.json"),
+  "webhooksRuntimeCatalog.json",
+  webhookCatalog,
+  checkOnly
+);
+
 // The authoritative schema-derived surfaces live in @vibestudio/service-schemas.
-const panelSurface = loadRuntimeSurface(
+const panelSurface = await loadRuntimeSurface(
   "packages/service-schemas/src/runtime/runtimeSurface.panel.ts",
   "panelRuntimeSurface"
 );
-const workerSurface = loadRuntimeSurface(
+const workerSurface = await loadRuntimeSurface(
   "packages/service-schemas/src/runtime/runtimeSurface.worker.ts",
   "workerRuntimeSurface"
 );

@@ -158,8 +158,7 @@ async function dispatchCdp(
     acquire: (input) => acquisition.requestAndWait(input),
     acquireMany: (inputs) => acquisition.requestManyAndWait(inputs),
     consume: (grantId) => acquisition.consume(grantId),
-    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-      acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+    invalidate: (inputs) => acquisition.invalidate(inputs),
   });
   dispatcher.registerService(service);
   dispatcher.markInitialized();

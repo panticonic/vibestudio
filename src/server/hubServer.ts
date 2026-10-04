@@ -240,6 +240,7 @@ interface HubControlTransport {
   rpcServer: import("./rpcServer.js").RpcServer;
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   eventService: EventService;
+  quiesceAuthority: () => Promise<void>;
   inviteExpiryTimers: Map<string, NodeJS.Timeout>;
 }
 
@@ -2062,6 +2063,7 @@ async function startHubControlTransport(
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
   const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
+  acquisitions.resumePending();
   dispatcher.setAuthorityAcquirer({
     request: (input) => acquisitions.request(input),
     requestMany: (inputs) => acquisitions.requestMany(inputs),
@@ -2070,8 +2072,7 @@ async function startHubControlTransport(
     consume: (grantId) => acquisitions.consume(grantId),
     touch: (grantId) => acquisitions.touch(grantId),
     priorInteractiveApprovalCount: (input) => grantStore.priorInteractiveApprovalCount(input),
-    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-      acquisitions.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+    invalidate: (inputs) => acquisitions.invalidate(inputs),
   });
   dispatcher.registerService(createDirectHubControlService(state));
   const { createAuthorityService } = await import("./services/authorityService.js");
@@ -2188,6 +2189,10 @@ async function startHubControlTransport(
     rpcServer,
     grantStore,
     eventService,
+    quiesceAuthority: async () => {
+      await acquisitions.quiesceOwnerDelivery();
+      await acquisitions.quiescePresentations();
+    },
     inviteExpiryTimers: new Map(),
   };
   state.controlTransport = transport;
@@ -3280,6 +3285,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
       state.controlTransport.inviteExpiryTimers.clear();
       await state.controlTransport.ingress.stop();
       await state.controlTransport.rpcServer.stop();
+      await state.controlTransport.quiesceAuthority();
       state.controlTransport.grantStore.close();
     }
     const childProcesses = workspaceChildren();

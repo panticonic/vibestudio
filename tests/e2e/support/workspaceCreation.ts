@@ -28,6 +28,15 @@ export async function findWorkspaceShellPage(app: TestApp): Promise<Page> {
   return shell!;
 }
 
+/** Make the real first-start choice before testing another foreground interaction. */
+export async function declineFirstRunReporting(app: TestApp): Promise<void> {
+  const shell = await findWorkspaceShellPage(app);
+  const consent = shell.getByRole("dialog", { name: "Help Vibestudio improve", exact: true });
+  await expect(consent).toBeVisible({ timeout: 30_000 });
+  await consent.getByRole("button", { name: "Keep automatic reports off", exact: true }).click();
+  await expect(consent).toBeHidden({ timeout: 30_000 });
+}
+
 /** Settle every install review already published for the launch workspaces. */
 export async function settleWorkspaceInstallReviews(
   app: TestApp,

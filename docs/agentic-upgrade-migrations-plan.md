@@ -1,131 +1,126 @@
-# Pre-release upgrades: clean cuts, not migration infrastructure
+# Upgrade and migration policy
 
-Status: superseded implementation direction, revised 2026-08-12
+Status: policy clarified 2026-10-01; supersedes the blanket pre-release prohibition
 
-The earlier version of this document proposed template-carried migration notes,
-maintenance admission, skipped-release repair, external rescue, and a bounded
-storage-owner transfer path. Vibestudio is pre-release, controls every official
-component and deployed development/test instance, and has no supported legacy
-format contract. Building those mechanisms now would create a permanent second
-architecture for speculative compatibility.
+The current pre-release cut is the final exception: previous EvalDO and authority
+grant-store schemas are unsupported, and no conversion of those databases ships
+with this cut. Current-schema reopen and crash recovery still preserve state.
+Going forward, supported persistent state requires an explicit, tested upgrade
+contract; this exception is not the release policy for subsequent changes.
 
-They are not part of the pre-release system.
+Earlier plans removed bespoke migration infrastructure while internal formats
+were changing rapidly and development state was disposable. That was a practical
+pre-release preference, not a permanent architectural ban on migrations.
 
-The active cutover plan is
-`docs/external-base-cutover-and-self-development-plan.md`. This document records
-the upgrade policy so later work does not accidentally reintroduce compatibility
-infrastructure under the name of recovery or agentic repair.
+Sound migrations supplied by an adopted dependency are welcome. Necessary
+upgrades for valuable or supported user data are welcome too. Do not strip an
+upstream migration runner or build a replacement merely to enforce the old
+preference. Judge a migration by ownership, correctness and maintenance cost.
 
-## Current policy
+The current implementations may still reject every non-current schema. This
+policy does not claim they already support upgrades: introducing a supported
+path requires a coherent implementation and tests. Historical cutover plans
+describe particular development cuts; their absolute “no migrations” language
+does not override this policy.
 
-For every pre-release format, host/workspace ABI, official template, and storage
-ownership cut:
+## Choosing the transition
 
-1. Define one target schema and one writer.
-2. Delete the previous parser and writer in the same reviewed change.
-3. Bump the exact `systemEpoch` when the host/workspace ABI changes.
-4. Republish Base and every official optional template at that epoch.
-5. Promote only that complete set in the verified registry.
-6. Delete and recreate controlled workspaces from the exact promoted Base.
-7. Reinstall desired templates and re-import only deliberately exported
-   user-level data.
-8. Test representative old state for hard rejection, never successful repair.
+Choose the simplest correct transition for the actual data and owners:
 
-Historical commits and tags may remain in Git. The current host and registry do
-not select them.
+- For explicitly disposable development state, a coordinated clean cut remains
+  an option. Inventory the exact state and preserve valuable facts before any
+  authorized reset. Pre-release status alone does not make a workspace disposable.
+- For a dependency-owned schema, prefer its tested migration mechanism when it
+  meets our storage, lifecycle and transaction requirements. Integrate it with
+  native initialization and validation instead of letting two schema owners
+  independently mutate the same tables.
+- For supported or valuable persistent data, define and test the necessary
+  source-to-target upgrade. Do not require users to lose that data on update.
+- Keep one active execution implementation and authoritative writer. A one-time
+  data migration does not require a permanent legacy engine, dual-write path or
+  compatibility transport.
 
-## Agentic intelligence still has a large role
+The existing coordinated release procedure still applies: define the target
+owner, coordinate host/workspace ABI changes through the exact `systemEpoch`,
+publish the complete official template set, and promote verified exact pins.
+Data migration is a separate contract from the running release composition.
+Historical commits and tags in Git do not imply that the current host supports
+running mixed old/new template releases.
 
-Agents own semantic work inside the current generation:
+## Current implementation and historical scope
 
-- deciding whether a new unit belongs in Base;
-- reconciling concurrent current-format edits;
-- repairing a candidate until Build V2 passes;
-- explaining validation failures;
-- choosing and running ordinary user-data exports/imports;
-- editing host and Base together through exact development pairs; and
-- reviewing publication and registry diffs.
+The current native SQLite and Durable Object helpers initialize empty storage,
+validate the exact current schema, and reject other shapes unchanged. Their
+implementation contracts are documented in
+[host SQLite](host-sqlite-migrations.md) and
+[Durable Object storage](durable-object-schema-migrations.md).
 
-Agents do not make obsolete internal state admissible. There is no prompt,
-skill, migration note, or rescue session whose purpose is to translate a prior
-system generation.
+Earlier clean-cut work deliberately removed or declined migration-note
+conventions, agentic rescue sessions, old-epoch maintenance startup, generic
+storage importers, production-baseline/ledger/fixture machinery, skipped-release
+and downgrade paths, dual readers/writers and fallback template routing. Do not
+revive that speculative architecture just because migration is permitted.
+Neither its historical removal nor today's helper API prohibits a focused,
+tested owner-provided upgrade that a real dependency or supported release needs.
 
-## Deliberately absent infrastructure
+Normal operation recovery remains required. CAS retries, snapshot reacquisition,
+process cleanup and resuming an idempotent external operation recover interrupted
+work. They are distinct from converting a persisted format. Removing historical
+format compatibility does not permit losing compatible active work on restart.
 
-The pre-release system has no:
+## Disposable development cuts
 
-- migration-note convention or `migrations/system/` release payload;
-- applied-note ledger or from/to migration graph;
-- structural old-schema reader;
-- old-epoch maintenance startup;
-- skipped-release or downgrade path;
-- compatibility range or additive host API revision;
-- external rescue harness for obsolete workspaces;
-- generic or cutover-scoped internal-storage importer;
-- Durable Object production baselines, ordered migrations, migration ledgers,
-  retained migration fixtures, or Build V2 migration-chain admission;
-- owner-cutover declaration or route receipt;
-- dual reader, writer, route, transport, or shadow table; or
-- fallback that silently substitutes old/new template releases.
+When a clean cut is selected for explicitly disposable state:
 
-Normal current-generation operation recovery remains. CAS retries, exact
-snapshot reacquisition, process cleanup, and resuming an idempotent external
-effect recover an interrupted operation; they do not interpret a superseded
-format and therefore are not compatibility machinery.
+1. Inventory exact affected instances/stores and preserve valuable user facts.
+2. Define and validate one target schema and writer.
+3. Coordinate the complete release set and any ABI epoch change.
+4. Remove displaced execution routes and obsolete format code.
+5. Reset only the authorized disposable state through its lifecycle owner.
+6. Recreate fresh workspaces and import deliberately preserved user facts.
+7. Test unsupported-format rejection and current-format operation recovery.
 
-Persistent stores use one rule: a truly empty store may initialize at the
-canonical current schema; an existing store must match the current version and
-shape exactly; every other shape is rejected unchanged. The canonical host
-SQLite lifecycle already embodies this rule. Durable Object storage is changed
-to match it instead of maintaining a separate migration framework.
+A reset is visible and destructive. It must never broaden a deletion target,
+silently reuse another developer's instance, or discard valuable state merely
+because it predates launch. If no usable export exists, settle preservation before
+cutover rather than treating the absence of an export as permission to delete.
 
-## Handling pre-release data
+## Release readiness and supported migrations
 
-Internal workspace state is disposable for the coordinated cut. Before
-deletion, an operator may explicitly export user-level facts worth preserving
-through an ordinary product export surface. The fresh workspace may then import
-that product data through its current API.
+Vibestudio is approaching release. Before the first supported release, establish
+which durable user facts and versions are supported and how the next update will
+preserve them. Avoid accidental support promises and speculative frameworks, but
+do not defer necessary upgrade design until users already depend on it.
 
-Vibestudio does not provide a converter for obsolete Composer state, semantic
-metadata, builtin databases, route records, approval internals, or runtime
-bookkeeping. If a controlled instance has no honest product-level export, its
-state is discarded.
+For each supported migration, record:
 
-This is intentionally visible and destructive. It must use exact instance
-inventory and normal lifecycle ownership; it must never broaden a deletion
-target or silently reuse another developer's instance.
+- exact source and target formats and their authoritative owner;
+- protected user facts, derived/rebuildable state and disposable runtime residue;
+- ordering relative to code publication, schema validation and work admission;
+- transaction atomicity or durable progress if conversion spans transactions;
+- interruption/restart and duplicate invocation behavior;
+- failure reporting, unchanged-source or recoverable-progress guarantees;
+- representative stored-data and forced-loss test evidence; and
+- downgrade and code-rollback limits, including required backup/restore behavior.
 
-## Future post-launch migrations
+A dependency's migration runner is assessed by these same requirements. Reuse it
+where sound; adapt its native transaction boundary where needed. Do not assume
+that successful schema conversion also makes old task checkpoints, provider
+handles, template compositions or host/workspace ABIs compatible.
 
-After Vibestudio makes a supported release and accepts durable user data, the
-constraints change. A future incompatible transition must be designed from the
-actual source and target owners, actual protected data, and actual availability
-requirements. That design may require deterministic migration machinery.
+Unknown, corrupt or unsupported storage still fails closed without guessed
+conversion or silent restamping. Validate the resulting current schema before
+ordinary execution is admitted. Code rollback does not automatically reverse a
+data migration.
 
-Do not implement that machinery speculatively now. In particular, do not keep
-pre-release readers “for later”; doing so would make their accidental behavior
-the de facto compatibility contract the future design must preserve.
+## Agentic work and acceptance
 
-The future decision starts from these questions:
+Agents may design, review and run explicitly supported upgrades and ordinary
+exports/imports. They must not improvise a repair that makes unsupported state
+look current. Ownership, upgrade logic and failure handling belong in code and
+documented operations, not a recovery prompt.
 
-- What exact durable user facts must survive?
-- Which owner can authoritatively read and write each fact?
-- Can the product remain on the old complete release during conversion?
-- Is offline export/import sufficient?
-- What atomicity and rollback guarantees do real users require?
-
-Until those questions have concrete answers, the clean cut is the whole policy.
-
-## Acceptance checks
-
-- Source search finds no obsolete schema parser or converter.
-- Source search finds no Durable Object schema migration callback, ledger,
-  production baseline, retained fixture, or Build V2 migration-chain gate.
-- The Base release artifact contains only the current exact pin.
-- The current registry exposes one epoch across all official entries.
-- An old manifest/state fixture fails with a precise unsupported-generation
-  error before userland starts.
-- A current-format interrupted operation resumes without consulting old state.
-- Fleet cutover evidence shows affected instances were recreated, not migrated.
-- Documentation never instructs an agent to repair a pre-release internal
-  format.
+Acceptance requires one authoritative owner and running execution path, a
+reproducible release composition, tested supported-data preservation, honest
+unsupported-state rejection, recoverable interrupted operations, and cutover
+evidence matching the chosen migration or disposable-reset contract.

@@ -8,7 +8,7 @@ import {
   type RpcResponse,
 } from "@vibestudio/rpc";
 import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
-import { Agent, type Dispatcher } from "undici";
+import { Pool, type Dispatcher } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
 import {
@@ -19,49 +19,32 @@ import {
 
 export type DORef = DORefParam;
 
-/**
- * Dispatcher for the process-local Node→workerd transport. A DO method owns
- * its semantic lifetime; Undici's response-header/body defaults must not turn
- * into an undocumented method deadline. Callers retain cancellation through
- * AbortSignal, while the dispatch owners report slow-call liveness.
- */
-let workerdConnectionDispatcher: Agent | null = null;
+/** Each workerd endpoint owns its transport pool and its generation retirement. */
+const workerdConnectionDispatchers = new Map<string, Pool>();
 
-/**
- * Return the transport pool for the current workerd process generation.
- *
- * The pool is deliberately lazy: WorkerdManager destroys it before terminating
- * a generation, which closes idle keep-alive sockets and rejects every request
- * still physically attached to that process. The next generation receives a
- * fresh pool rather than inheriting connections or terminal state.
- */
-export function getWorkerdConnectionDispatcher(): Dispatcher {
-  workerdConnectionDispatcher ??= new Agent({
-    headersTimeout: 0,
-    bodyTimeout: 0,
-    // DODispatch POSTs are semantic invocations, and several intentionally
-    // have no replay-safe command identity. Workerd may close an idle HTTP/1
-    // connection before Undici observes the FIN; reusing that pooled socket
-    // produces an ambiguous UND_ERR_SOCKET after the request was written.
-    // `pipelining: 0` gives each loopback invocation its own connection, so we
-    // preserve exactly-once dispatch without a transport retry or stale socket.
-    pipelining: 0,
-  });
-  return workerdConnectionDispatcher;
+export function getWorkerdConnectionDispatcher(endpoint: string): Dispatcher {
+  const origin = new URL(endpoint).origin;
+  let dispatcher = workerdConnectionDispatchers.get(origin);
+  if (!dispatcher) {
+    dispatcher = new Pool(origin, {
+      // Semantic invocation lifetime is controlled by its owner and signal.
+      headersTimeout: 0,
+      bodyTimeout: 0,
+      // POSTs have no universal replay identity. Give each invocation its own
+      // connection rather than retrying an ambiguous stale keep-alive socket.
+      pipelining: 0,
+    });
+    workerdConnectionDispatchers.set(origin, dispatcher);
+  }
+  return dispatcher;
 }
 
-/**
- * Sever every Node→workerd connection owned by the current process generation.
- *
- * This is an abrupt transport terminal by design. A workerd restart or shutdown
- * cannot preserve an in-flight invocation, and leaving the pool alive makes
- * workerd wait indefinitely for a peer that the host has already abandoned.
- */
-export async function destroyWorkerdConnections(reason: string): Promise<void> {
-  const dispatcher = workerdConnectionDispatcher;
-  workerdConnectionDispatcher = null;
-  if (!dispatcher) return;
-  await dispatcher.destroy(new Error(reason));
+/** Retiring one process must never sever another workspace's active requests. */
+export async function destroyWorkerdConnections(endpoint: string, reason: string): Promise<void> {
+  const origin = new URL(endpoint).origin;
+  const dispatcher = workerdConnectionDispatchers.get(origin);
+  workerdConnectionDispatchers.delete(origin);
+  if (dispatcher) await dispatcher.destroy(new Error(reason));
 }
 
 type RelayLane = {
@@ -274,7 +257,7 @@ async function fetchEnvelopeFromDO(
       },
       body: JSON.stringify(envelope),
       ...(signal ? { signal } : {}),
-      dispatcher: getWorkerdConnectionDispatcher(),
+      dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
   } catch (error) {
     const wrapped = new Error(

@@ -19,6 +19,7 @@ const FAILURE_RETRY_MAX_MS = 30_000;
 type AlarmClaim = LifecycleKey & {
   wakeAt: number;
   dispatchGeneration: number;
+  wakeRequest?: { incarnation: string; generation: number };
   testPolicy?: AgentExecutionTestPolicy;
 };
 
@@ -312,15 +313,18 @@ export class AlarmDriver {
       } finally {
         this.activeDispatches.delete(controller);
       }
-      if (result.nextAlarm) {
-        await this.dispatchWorkspace("alarmSet", {
-          ...ref,
-          ...claim,
-          ...result.nextAlarm,
-        });
-        this.deps.onStateChange?.({ ref, state: "pending", wakeAt: result.nextAlarm.wakeAt });
+      const completed = await this.dispatchWorkspace<
+        { status: "accepted"; wakeAt: number | null } | { status: "stale" }
+      >("alarmComplete", {
+        ...ref,
+        ...claim,
+        nextAlarm: result.nextAlarm,
+        ...(target.wakeRequest ? { wakeRequest: target.wakeRequest } : {}),
+      });
+      if (completed.status === "stale") return;
+      if (completed.wakeAt !== null) {
+        this.deps.onStateChange?.({ ref, state: "pending", wakeAt: completed.wakeAt });
       } else {
-        await this.dispatchWorkspace("alarmClear", { ...ref, ...claim });
         this.deps.onStateChange?.({ ref, state: "cleared" });
       }
     } catch (err) {

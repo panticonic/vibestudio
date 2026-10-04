@@ -9,7 +9,7 @@ export interface SchemaSqlStorage {
 
 export interface DurableObjectSchemaStorage {
   readonly sql: SchemaSqlStorage;
-  transactionSync<T>(callback: () => T): T;
+  transaction<T>(callback: () => Promise<T>): Promise<T>;
 }
 
 export interface DurableObjectSchemaDescriptor {
@@ -40,11 +40,7 @@ export class DurableObjectSchemaError extends Error {
   readonly code = "DO_SCHEMA_INCOMPATIBLE" as const;
   readonly errorData: DurableObjectSchemaErrorData;
 
-  constructor(input: {
-    message: string;
-    data: DurableObjectSchemaErrorData;
-    cause?: unknown;
-  }) {
+  constructor(input: { message: string; data: DurableObjectSchemaErrorData; cause?: unknown }) {
     super(input.message, input.cause === undefined ? undefined : { cause: input.cause });
     this.name = "DurableObjectSchemaError";
     this.errorData = input.data;
@@ -65,8 +61,18 @@ export interface DurableObjectSchemaDefinition {
   readonly storage: DurableObjectSchemaStorage;
   /** Names of schema objects owned by the durable-object implementation. */
   readonly schemaTables?: readonly string[];
-  createSchema(): void;
-  validateSchema(): void;
+  /** Trusted fingerprint from the current build's isolated schema probe. */
+  readonly expectedFingerprint?: string;
+  /** Each entry admits exactly one trusted old shape and upgrades it by one version. */
+  readonly upgrades?: readonly DurableObjectSchemaUpgrade[];
+  createSchema(): void | Promise<void>;
+  validateSchema(): void | Promise<void>;
+}
+
+export interface DurableObjectSchemaUpgrade {
+  readonly fromVersion: number;
+  readonly fromFingerprint: string;
+  upgrade(): void | Promise<void>;
 }
 
 const SCHEMA_TABLE = "_vibestudio_schema";
@@ -150,6 +156,20 @@ export function validateDurableObjectSchemaDefinition(
 ): void {
   if (!Number.isSafeInteger(definition.version) || definition.version < 1) {
     throw new Error(`${definition.className} has invalid schema version ${definition.version}`);
+  }
+  const versions = new Set<number>();
+  for (const upgrade of definition.upgrades ?? []) {
+    if (
+      !Number.isSafeInteger(upgrade.fromVersion) ||
+      upgrade.fromVersion < 1 ||
+      upgrade.fromVersion >= definition.version ||
+      versions.has(upgrade.fromVersion) ||
+      typeof upgrade.fromFingerprint !== "string" ||
+      !upgrade.fromFingerprint
+    ) {
+      throw new Error(`${definition.className} has an invalid schema upgrade declaration`);
+    }
+    versions.add(upgrade.fromVersion);
   }
 }
 
@@ -263,32 +283,55 @@ function readMetadata(
 }
 
 /**
- * Initialize a truly empty object or validate the one exact current schema.
- * Every other shape is rejected unchanged; there is no migration path.
+ * One asynchronous lifecycle owns platform, dependency and domain schema work.
+ * Unsupported state is refused before mutation. Every admitted upgrade and its
+ * target validation share one outer native transaction.
  */
-export function installDurableObjectSchema(definition: DurableObjectSchemaDefinition): void {
+export async function installDurableObjectSchema(
+  definition: DurableObjectSchemaDefinition
+): Promise<void> {
   validateDurableObjectSchemaDefinition(definition);
-  definition.storage.transactionSync(() => {
+  await definition.storage.transaction(async () => {
     const objects = schemaObjects(definition.storage.sql);
     if (objects.length === 0) {
       definition.storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-      definition.createSchema();
-      definition.validateSchema();
+      await definition.createSchema();
+      await definition.validateSchema();
+      validateTargetFingerprint(definition);
       createMetadata(definition);
       return;
     }
 
     const persisted = readMetadata(definition, objects);
-    if (persisted.version !== definition.version) {
+    const path: DurableObjectSchemaUpgrade[] = [];
+    for (let version = persisted.version; version < definition.version; version++) {
+      const upgrade = definition.upgrades?.find((candidate) => candidate.fromVersion === version);
+      if (!upgrade) break;
+      path.push(upgrade);
+    }
+    if (
+      persisted.version > definition.version ||
+      path.length !== definition.version - persisted.version
+    ) {
       throw incompatible(
         definition,
         "version-mismatch",
         persisted.version,
-        `only exact current schema v${definition.version} is supported`
+        `no supported upgrade from v${persisted.version} to v${definition.version}`
       );
     }
     const actualShape = normalizedShape(definition.storage.sql, definition.schemaTables);
-    if (actualShape !== persisted.shape) {
+    // An isolated fresh probe generates the target fingerprint. Requiring it
+    // while merely declaring upgrades makes that probe impossible. Persisted
+    // upgrades still require the trusted target before invoking any upgrader.
+    if (path.length > 0 && !definition.expectedFingerprint) {
+      throw new Error(
+        `${definition.className} schema upgrades require the trusted target fingerprint`
+      );
+    }
+    const trustedSource =
+      path[0]?.fromFingerprint ?? definition.expectedFingerprint ?? persisted.shape;
+    if (actualShape !== persisted.shape || actualShape !== trustedSource) {
       throw incompatible(
         definition,
         "shape-drift",
@@ -296,8 +339,54 @@ export function installDurableObjectSchema(definition: DurableObjectSchemaDefini
         "the complete current schema fingerprint has drifted"
       );
     }
-    definition.validateSchema();
+    for (let index = 0; index < path.length; index++) {
+      const upgrade = path[index]!;
+      if (
+        normalizedShape(definition.storage.sql, definition.schemaTables) !== upgrade.fromFingerprint
+      ) {
+        throw incompatible(
+          definition,
+          "shape-drift",
+          upgrade.fromVersion,
+          "the supported source fingerprint differs"
+        );
+      }
+      await upgrade.upgrade();
+      const expected = path[index + 1]?.fromFingerprint ?? definition.expectedFingerprint;
+      if (normalizedShape(definition.storage.sql, definition.schemaTables) !== expected) {
+        throw incompatible(
+          definition,
+          "shape-drift",
+          upgrade.fromVersion,
+          "the upgraded schema differs from its trusted target"
+        );
+      }
+    }
+    await definition.validateSchema();
+    validateTargetFingerprint(definition);
+    if (path.length > 0) {
+      definition.storage.sql.exec(
+        `UPDATE ${SCHEMA_TABLE} SET version = ?, shape_json = ? WHERE singleton = 1`,
+        definition.version,
+        normalizedShape(definition.storage.sql, definition.schemaTables)
+      );
+    }
   });
+}
+
+function validateTargetFingerprint(definition: DurableObjectSchemaDefinition): void {
+  if (
+    definition.expectedFingerprint !== undefined &&
+    normalizedShape(definition.storage.sql, definition.schemaTables) !==
+      definition.expectedFingerprint
+  ) {
+    throw incompatible(
+      definition,
+      "shape-drift",
+      definition.version,
+      "the schema differs from the current build's trusted fingerprint"
+    );
+  }
 }
 
 interface RpcLikeEnvelope {
@@ -322,14 +411,14 @@ function json(value: unknown, status = 200): Response {
 export async function dispatchWithDurableObjectSchemaGuard(input: {
   request: Request;
   identity: { source: string; className: string; objectKey: string };
-  ensureReady(): void;
+  ensureReady(): void | Promise<void>;
   dispatch(): Promise<Response>;
 }): Promise<Response> {
   const segments = new URL(input.request.url).pathname.split("/").filter(Boolean);
   const isRpcPost = segments.slice(1).join("/") === "__rpc" && input.request.method === "POST";
   const requestCopy = isRpcPost ? input.request.clone() : null;
   try {
-    input.ensureReady();
+    await input.ensureReady();
     return await input.dispatch();
   } catch (cause) {
     if (!(cause instanceof DurableObjectSchemaError)) throw cause;

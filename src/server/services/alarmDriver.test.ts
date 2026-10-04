@@ -17,11 +17,15 @@ type AlarmRow = {
   dispatchOwner: string | null;
   dispatchExpiresAt: number | null;
   testPolicy?: AgentExecutionTestPolicy;
+  wakeRequest?: { incarnation: string; generation: number };
 };
 
 type AlarmInput = Pick<AlarmRow, "source" | "className" | "objectKey" | "wakeAt"> &
   Partial<
-    Pick<AlarmRow, "dispatchGeneration" | "dispatchOwner" | "dispatchExpiresAt" | "testPolicy">
+    Pick<
+      AlarmRow,
+      "dispatchGeneration" | "dispatchOwner" | "dispatchExpiresAt" | "testPolicy" | "wakeRequest"
+    >
   >;
 
 function keyOf(key: Pick<AlarmRow, "source" | "className" | "objectKey">): string {
@@ -40,104 +44,122 @@ function makeHarness(
   }));
   const workspaceCalls: string[] = [];
   let activeWorkerId: string | null = null;
-  const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
-    workspaceCalls.push(method);
-    if (method === "alarmAdoptWorker") {
-      const previousWorkerId = activeWorkerId;
-      activeWorkerId = args[0] as string;
-      for (const row of alarms) {
-        row.dispatchOwner = null;
-        row.dispatchExpiresAt = null;
-      }
-      return { previousWorkerId };
-    }
-    if (method === "alarmNextWakeAt") {
-      const excluded = new Set(
-        ((args[1] as Array<Pick<AlarmRow, "source" | "className" | "objectKey">>) ?? []).map(keyOf)
-      );
-      const eligible = alarms.filter(
-        (row) => row.dispatchOwner === null && !excluded.has(keyOf(row))
-      );
-      if (eligible.length === 0) return null;
-      return Math.min(...eligible.map((row) => row.wakeAt));
-    }
-    if (method === "alarmClaimDue") {
-      const input = args[0] as {
-        now: number;
-        workerId: string;
-        limit: number;
-        exclude?: Array<Pick<AlarmRow, "source" | "className" | "objectKey">>;
-      };
-      if (input.workerId !== activeWorkerId) throw new Error("inactive alarm worker generation");
-      const excluded = new Set((input.exclude ?? []).map(keyOf));
-      const selected = alarms
-        .filter((row) => row.wakeAt <= input.now && !row.dispatchOwner && !excluded.has(keyOf(row)))
-        .sort((a, b) => a.wakeAt - b.wakeAt || keyOf(a).localeCompare(keyOf(b)))
-        .slice(0, input.limit);
-      return selected.map((row) => {
-        row.dispatchGeneration++;
-        row.dispatchOwner = input.workerId;
-        row.dispatchExpiresAt = null;
-        return {
-          source: row.source,
-          className: row.className,
-          objectKey: row.objectKey,
-          wakeAt: row.wakeAt,
-          dispatchGeneration: row.dispatchGeneration,
-          ...(row.testPolicy ? { testPolicy: row.testPolicy } : {}),
+  const dispatch = vi.fn(
+    async (_ref: DORef, method: string, ...args: unknown[]): Promise<unknown> => {
+      workspaceCalls.push(method);
+      if (method === "alarmComplete") {
+        const input = args[0] as Omit<AlarmInput, "wakeAt"> & {
+          nextAlarm: { wakeAt: number } | null;
         };
-      });
-    }
-    if (method === "alarmSet") {
-      const input = args[0] as AlarmInput;
-      const index = alarms.findIndex((row) => keyOf(row) === keyOf(input));
-      if (input.dispatchOwner !== undefined) {
-        const row = alarms[index];
-        if (
-          !row ||
-          row.dispatchOwner !== input.dispatchOwner ||
-          row.dispatchGeneration !== input.dispatchGeneration
-        ) {
-          return "stale";
+        const status = input.nextAlarm
+          ? await dispatch(_ref, "alarmSet", { ...input, ...input.nextAlarm })
+          : await dispatch(_ref, "alarmClear", input);
+        return status === "stale"
+          ? { status: "stale" }
+          : { status: "accepted", wakeAt: input.nextAlarm?.wakeAt ?? null };
+      }
+      if (method === "alarmAdoptWorker") {
+        const previousWorkerId = activeWorkerId;
+        activeWorkerId = args[0] as string;
+        for (const row of alarms) {
+          row.dispatchOwner = null;
+          row.dispatchExpiresAt = null;
         }
-        row.wakeAt = input.wakeAt;
-        row.dispatchOwner = null;
-        row.dispatchExpiresAt = null;
+        return { previousWorkerId };
+      }
+      if (method === "alarmNextWakeAt") {
+        const excluded = new Set(
+          ((args[1] as Array<Pick<AlarmRow, "source" | "className" | "objectKey">>) ?? []).map(
+            keyOf
+          )
+        );
+        const eligible = alarms.filter(
+          (row) => row.dispatchOwner === null && !excluded.has(keyOf(row))
+        );
+        if (eligible.length === 0) return null;
+        return Math.min(...eligible.map((row) => row.wakeAt));
+      }
+      if (method === "alarmClaimDue") {
+        const input = args[0] as {
+          now: number;
+          workerId: string;
+          limit: number;
+          exclude?: Array<Pick<AlarmRow, "source" | "className" | "objectKey">>;
+        };
+        if (input.workerId !== activeWorkerId) throw new Error("inactive alarm worker generation");
+        const excluded = new Set((input.exclude ?? []).map(keyOf));
+        const selected = alarms
+          .filter(
+            (row) => row.wakeAt <= input.now && !row.dispatchOwner && !excluded.has(keyOf(row))
+          )
+          .sort((a, b) => a.wakeAt - b.wakeAt || keyOf(a).localeCompare(keyOf(b)))
+          .slice(0, input.limit);
+        return selected.map((row) => {
+          row.dispatchGeneration++;
+          row.dispatchOwner = input.workerId;
+          row.dispatchExpiresAt = null;
+          return {
+            source: row.source,
+            className: row.className,
+            objectKey: row.objectKey,
+            wakeAt: row.wakeAt,
+            dispatchGeneration: row.dispatchGeneration,
+            ...(row.testPolicy ? { testPolicy: row.testPolicy } : {}),
+            ...(row.wakeRequest ? { wakeRequest: row.wakeRequest } : {}),
+          };
+        });
+      }
+      if (method === "alarmSet") {
+        const input = args[0] as AlarmInput;
+        const index = alarms.findIndex((row) => keyOf(row) === keyOf(input));
+        if (input.dispatchOwner !== undefined) {
+          const row = alarms[index];
+          if (
+            !row ||
+            row.dispatchOwner !== input.dispatchOwner ||
+            row.dispatchGeneration !== input.dispatchGeneration
+          ) {
+            return "stale";
+          }
+          row.wakeAt = input.wakeAt;
+          row.dispatchOwner = null;
+          row.dispatchExpiresAt = null;
+          return "accepted";
+        }
+        if (index === -1) {
+          alarms.push({
+            ...input,
+            dispatchGeneration: 0,
+            dispatchOwner: null,
+            dispatchExpiresAt: null,
+          });
+        } else {
+          const row = alarms[index]!;
+          row.wakeAt = input.wakeAt;
+          row.dispatchOwner = null;
+          row.dispatchExpiresAt = null;
+        }
         return "accepted";
       }
-      if (index === -1) {
-        alarms.push({
-          ...input,
-          dispatchGeneration: 0,
-          dispatchOwner: null,
-          dispatchExpiresAt: null,
-        });
-      } else {
-        const row = alarms[index]!;
-        row.wakeAt = input.wakeAt;
-        row.dispatchOwner = null;
-        row.dispatchExpiresAt = null;
-      }
-      return "accepted";
-    }
-    if (method === "alarmClear") {
-      const input = args[0] as Omit<AlarmInput, "wakeAt">;
-      const index = alarms.findIndex((row) => keyOf(row) === keyOf(input));
-      const row = alarms[index];
-      if (input.dispatchOwner !== undefined) {
-        if (
-          !row ||
-          row.dispatchOwner !== input.dispatchOwner ||
-          row.dispatchGeneration !== input.dispatchGeneration
-        ) {
-          return "stale";
+      if (method === "alarmClear") {
+        const input = args[0] as Omit<AlarmInput, "wakeAt">;
+        const index = alarms.findIndex((row) => keyOf(row) === keyOf(input));
+        const row = alarms[index];
+        if (input.dispatchOwner !== undefined) {
+          if (
+            !row ||
+            row.dispatchOwner !== input.dispatchOwner ||
+            row.dispatchGeneration !== input.dispatchGeneration
+          ) {
+            return "stale";
+          }
         }
+        if (index !== -1) alarms.splice(index, 1);
+        return "accepted";
       }
-      if (index !== -1) alarms.splice(index, 1);
-      return "accepted";
+      throw new Error(`Unexpected workspace method ${method}`);
     }
-    throw new Error(`Unexpected workspace method ${method}`);
-  });
+  );
   const doDispatch = { dispatch, dispatchAlarm } as unknown as DODispatch;
   return { alarms, dispatch, doDispatch, workspaceCalls };
 }
@@ -151,6 +173,44 @@ describe("AlarmDriver durable concurrent scheduling", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("passes the captured wake token only after successful dispatch, retaining it on failure", async () => {
+    const wakeRequest = { incarnation: "current-owner", generation: 7 };
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "one" };
+    const failure = new Error("owner reconciliation failed");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dispatchAlarm = vi
+      .fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ nextAlarm: { wakeAt: 20_000 } });
+    const harness = makeHarness([{ ...ref, wakeAt: 0, wakeRequest }], dispatchAlarm);
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: harness.doDispatch,
+      workerId: "driver-1",
+    });
+    try {
+      driver.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const failedAck = harness.dispatch.mock.calls.find(([, method]) => method === "alarmSet")!;
+      expect(failedAck[2]).not.toHaveProperty("wakeRequest");
+      expect(harness.workspaceCalls).not.toContain("alarmComplete");
+      await vi.advanceTimersByTimeAsync(5_000);
+      const successfulAck = harness.dispatch.mock.calls.find(
+        ([, method]) => method === "alarmComplete"
+      )!;
+      expect(successfulAck[2]).toEqual({
+        ...ref,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: 2,
+        wakeRequest,
+        nextAlarm: { wakeAt: 20_000 },
+      });
+    } finally {
+      await driver.quiesce();
+      vi.restoreAllMocks();
+    }
   });
 
   it("fires a due alarm and persists its next schedule under the claim generation", async () => {

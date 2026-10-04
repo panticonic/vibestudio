@@ -12,6 +12,12 @@ export type NotificationShowRequest = Omit<
   "id" | "sourcePanelId" | "iconDataUrl"
 >;
 
+/** Host acceptance and explicit dismissal; this does not attest visual rendering. */
+export const NativeNotificationLifecycleObservationSchema = z.discriminatedUnion("method", [
+  z.object({ protocol: z.literal("notification-lifecycle-observation.v1"), method: z.literal("notification.show"), notificationId: z.string().min(1), actionLabels: z.array(z.string()) }).strict(),
+  z.object({ protocol: z.literal("notification-lifecycle-observation.v1"), method: z.literal("notification.dismiss"), notificationId: z.string().min(1) }).strict(),
+]);
+
 // Access descriptors carry sensitivity metadata beside the compositional
 // principal requirements declared by the service or method.
 const WRITE_ACCESS: MethodAccessDescriptor = {

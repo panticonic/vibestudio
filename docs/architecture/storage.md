@@ -14,11 +14,19 @@ inside the DO class:
 - `schemaVersion` declares the target schema version.
 - `validateSchema()` proves the exact current owned shape.
 
-Fresh objects create only the current schema. Different-version, unversioned,
-malformed, or drifted persistence fails unchanged with
-`DO_SCHEMA_INCOMPATIBLE`. There is no migration callback, baseline, ledger, or
-retained fixture. The full contract is
-[Durable Object current-schema lifecycle](../durable-object-schema-migrations.md).
+Fresh objects create the current schema inside one asynchronous initialization
+transaction. Both Durable Object bases await it before ordinary admission.
+Owners may declare trusted source fingerprints and contiguous supported upgrades;
+the entire upgrade, target validation and metadata acceptance commit together.
+Unknown/newer, unversioned, malformed or drifted storage refuses unchanged.
+Classes without declared upgrades continue to require the exact current schema.
+
+Contained schema evidence is keyed to the immutable execution digest and class,
+not just source version. A full Pi composition attests the entire application
+store and must require its exact artifact descriptor on every activation route.
+Component classes retain their declared ownership scope. See the
+[implemented schema lifecycle](../durable-object-schema-migrations.md) and
+[upgrade and migration policy](../agentic-upgrade-migrations-plan.md).
 For explicitly disposable userland data, `workers.resetStorage()` makes a
 verified backup before resetting; it is a destructive recovery primitive, not
 a format upgrade.

@@ -48,6 +48,21 @@ export const savedPermissionGrantSchema = z
 
 export type SavedPermissionGrant = z.infer<typeof savedPermissionGrantSchema>;
 
+/** Bounded native evidence of an inventory read, without retaining grant identities or labels. */
+export const NativePermissionInventoryObservationSchema = z.object({
+  protocol: z.literal("permission-inventory-observation.v1"),
+  method: z.literal("permissions.list"),
+  total: z.number().int().nonnegative(),
+  counts: z.object({
+    capability: z.number().int().nonnegative(),
+    "credential-use": z.number().int().nonnegative(),
+    "browser-site": z.number().int().nonnegative(),
+  }).strict(),
+}).strict().refine((value) =>
+  Object.values(value.counts).reduce((total, count) => total + count, 0) === value.total,
+  "Permission kind counts must equal the observed inventory total",
+);
+
 const authorityDomainSchema = z.enum([
   "files",
   "sharing",

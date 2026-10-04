@@ -12,6 +12,9 @@ function makeRecord(overrides: Partial<EntityRecord> = {}): EntityRecord {
     createdAt: overrides.createdAt ?? Date.now(),
     status: overrides.status ?? "active",
     cleanupComplete: overrides.cleanupComplete ?? true,
+    ...(overrides.authoritySessionId !== undefined
+      ? { authoritySessionId: overrides.authoritySessionId }
+      : {}),
     ...(overrides.className !== undefined ? { className: overrides.className } : {}),
     ...(overrides.activeBuildKey !== undefined ? { activeBuildKey: overrides.activeBuildKey } : {}),
     ...(overrides.activeExecutionDigest !== undefined
@@ -155,15 +158,21 @@ describe("EntityCache", () => {
         className: "WorkspaceDO",
         key: "workspace",
       });
+      const bootstrapLifetime = cache.resolve(bootstrap.id)?.authoritySessionId;
+      expect(bootstrapLifetime).toBeTypeOf("string");
+      cache.hydrate([]);
+      expect(cache.resolve(bootstrap.id)?.authoritySessionId).toBe(bootstrapLifetime);
 
       const durable = makeRecord({
         id: bootstrap.id,
         activeBuildKey: "durable-build",
+        authoritySessionId: "durable-authority-lifetime",
       });
       cache._onActivate(durable);
       cache.hydrate([durable]);
 
       expect(cache.resolve(bootstrap.id)?.activeBuildKey).toBe("durable-build");
+      expect(cache.resolve(bootstrap.id)?.authoritySessionId).toBe("durable-authority-lifetime");
     });
 
     it("listActive returns only active records", () => {

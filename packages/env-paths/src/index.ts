@@ -15,18 +15,22 @@ export function setUserDataPath(p: string): void {
  * After app.setPath('userData', workspaceDir), this returns the workspace dir.
  * Resolution order:
  *   1. Explicitly set via setUserDataPath()
- *   2. Lazy require("electron").app.getPath("userData")
+ *   2. Native app.getPath("userData") inside an actual Electron process
  *   3. Platform-conventional fallback (XDG / Library / AppData)
  */
 export function getUserDataPath(): string {
   if (_userDataPath) return _userDataPath;
-  try {
-    // Lazy require — only succeeds inside Electron
-    const { app } = require("electron");
-    return app.getPath("userData");
-  } catch {
-    return platformDefault();
+  if (process.versions["electron"]) {
+    try {
+      // In Node, this package resolves the executable and may install it. Only
+      // an actual Electron process owns the native app API.
+      const { app } = require("electron");
+      return app.getPath("userData");
+    } catch {
+      return platformDefault();
+    }
   }
+  return platformDefault();
 }
 
 /**
