@@ -265,7 +265,7 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
   const available = new Map(ancestors);
   for (const [name, range] of Object.entries(declarations)) {
     if (range.startsWith("workspace:")) continue;
-    const rootRange = rootPkg.dependencies?.[name];
+    const rootRange = rootPkg.optionalDependencies?.[name] ?? rootPkg.dependencies?.[name];
     if (rootRange && semver.validRange(rootRange) && semver.validRange(range) &&
       semver.subset(rootRange, range)) continue;
     const ancestor = ancestors.get(name);
@@ -280,6 +280,13 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
       throw new Error(`Missing installed runtime dependency: ${pkg.name} -> ${name}`);
     }
     const directory = fs.realpathSync(found);
+    // Fixed-source declarations reproduce one exact installed package. Share
+    // it when this consumer already resolves those same bytes at the root;
+    // this also preserves the root's installed dependency overrides.
+    if (rootRange && !semver.validRange(rootRange)) {
+      const rootDirectory = installedPackageDirectory(name, repoRoot);
+      if (directory === rootDirectory) continue;
+    }
     if (ancestors.get(name) === directory) continue;
     const target = path.join(destination, "node_modules", name);
     copyTree(directory, target, defaultSkip);

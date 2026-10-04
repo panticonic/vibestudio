@@ -47,6 +47,12 @@ describe("npm CLI packaging", () => {
         "win32-x64": "@number0/iroh-win32-x64-msvc",
       };
       const name = names[`${process.platform}-${process.arch}`]!;
+      expect(fs.existsSync(path.join(root, "vendor/@number0/iroh/node_modules", name))).toBe(false);
+      // npm supplies the pinned optional binding at package root. The wrapper
+      // must resolve those repaired bytes rather than a private upstream copy.
+      const binding = path.join(root, "node_modules", name);
+      mkdirSync(path.dirname(binding), { recursive: true });
+      fs.symlinkSync(path.dirname(source.resolve(name)), binding, "junction");
       expect(
         fs.readFileSync(installed.resolve(name)).equals(fs.readFileSync(source.resolve(name)))
       ).toBe(true);
