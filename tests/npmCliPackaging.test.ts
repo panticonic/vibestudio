@@ -17,6 +17,23 @@ import { createRequire } from "node:module";
 import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
+  it("leaves mobile peers with their consumer while retaining owned dependencies", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-mobile-dependency-stage-"));
+    try {
+      stagePackageDependencies(path.resolve("packages/mobile-iroh"), root);
+      expect(fs.existsSync(path.join(root, "node_modules/react-native"))).toBe(false);
+      expect(fs.existsSync(path.join(root, "node_modules/@react-native-async-storage"))).toBe(
+        false
+      );
+      expect(fs.existsSync(path.join(root, "node_modules/react-native-keychain"))).toBe(true);
+      expect(fs.existsSync(path.join(root, "node_modules/@react-native-community/netinfo"))).toBe(
+        true
+      );
+      expect(fs.existsSync(path.join(root, "node_modules/web-streams-polyfill"))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("retains the repaired native binding instead of reinstalling upstream bytes", () => {
     const root = mkdtempSync(path.join(tmpdir(), "vibestudio-native-dependency-stage-"));
     try {

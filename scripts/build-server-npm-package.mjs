@@ -250,14 +250,14 @@ function vendorVibestudioPackages(pkgRoot) {
   }
 }
 
-/** Preserve the installed dependency graph using ordinary nested Node packages.
+/** Preserve owned runtime dependencies using ordinary nested Node packages.
+ * Peers belong to the consumer's environment, not this package's private graph.
  * A root dependency is shared only when its entire published range satisfies
  * the consumer. Incompatible versions stay with the package that owns them. */
 export function stagePackageDependencies(source, destination, ancestors = new Map()) {
   const pkg = readJson(path.join(source, "package.json"));
   const require = createRequire(path.join(source, "package.json"));
   const declarations = {
-    ...pkg.peerDependencies,
     ...pkg.dependencies,
     ...pkg.optionalDependencies,
   };
@@ -265,9 +265,6 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
   const available = new Map(ancestors);
   for (const [name, range] of Object.entries(declarations)) {
     if (range.startsWith("workspace:")) continue;
-    if (pkg.peerDependenciesMeta?.[name]?.optional &&
-      !(name in (pkg.dependencies ?? {})) && !(name in (pkg.optionalDependencies ?? {})) &&
-      !rootPkg.dependencies?.[name]) continue;
     const rootRange = rootPkg.dependencies?.[name];
     if (rootRange && semver.validRange(rootRange) && semver.validRange(range) &&
       semver.subset(rootRange, range)) continue;
@@ -278,7 +275,7 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
       .map((directory) => path.join(directory, name));
     const found = candidates.find((directory) => fs.existsSync(path.join(directory, "package.json")));
     if (!found) {
-      if (name in (pkg.optionalDependencies ?? {}) || pkg.peerDependenciesMeta?.[name]?.optional)
+      if (name in (pkg.optionalDependencies ?? {}))
         continue;
       throw new Error(`Missing installed runtime dependency: ${pkg.name} -> ${name}`);
     }
