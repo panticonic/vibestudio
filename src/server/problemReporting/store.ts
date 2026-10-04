@@ -63,6 +63,9 @@ export class ProblemReportingStore {
     const file = join(directory, "reports.db");
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
+    // Concurrent workspace starts can contend even on the first schema read.
+    // Install the store's existing SQLite lock policy before any database work.
+    this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     openCanonicalSqliteDatabase(
       this.db,
       {
@@ -74,7 +77,7 @@ export class ProblemReportingStore {
       },
       { description: "problem reporting store" }
     );
-    this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;");
+    this.db.exec("PRAGMA journal_mode=WAL;");
     this.transaction(() => {
       if (!this.db.prepare("SELECT id FROM installation LIMIT 1").get())
         this.db

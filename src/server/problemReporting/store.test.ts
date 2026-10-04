@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { Worker } from "node:worker_threads";
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProblemReportingStore } from "./store";
 import { reportFixture } from "./testFixture";
@@ -48,6 +50,34 @@ function queued(store: ProblemReportingStore, automatic = false) {
   return report;
 }
 describe("installation-owned reporting", () => {
+  it("opens shared reporting state while another connection finishes its database work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "report-open-contention-"));
+    new ProblemReportingStore(directory).close();
+    const worker = new Worker(
+      `const { DatabaseSync } = require('node:sqlite');
+       const { parentPort, workerData } = require('node:worker_threads');
+       const db = new DatabaseSync(workerData);
+       db.exec('PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;');
+       parentPort.postMessage('locked');
+       // Hold a real SQLite lock briefly so the opening connection must wait.
+       // This delay belongs only to the contention fixture, not store recovery.
+       setTimeout(() => { db.exec('COMMIT'); db.close(); }, 250);`,
+      { eval: true, workerData: join(directory, "reports.db") }
+    );
+    const exited = once(worker, "exit");
+    try {
+      await once(worker, "message");
+      const reopened = new ProblemReportingStore(directory);
+      try {
+        expect(reopened.installationId).toBeTruthy();
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      await exited;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it("persists independent choices and cancels only automatic claims transactionally", () => {
     const s = store();
     expect(s.consent("alice").state).toBe("undecided");
