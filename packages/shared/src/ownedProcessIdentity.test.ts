@@ -40,6 +40,18 @@ describe.skipIf(process.platform !== "linux")("native group execution liveness",
     processes({ 202: stat(202, "Z"), 303: stat(303, "S", 303), 100: stat(100, "I", 0) });
     expect(observeOwnedProcessGroup(receipt)).toBe("absent");
   });
+  it("checks group membership without demanding an unrelated process birth identity", () => {
+    processes({ 202: stat(202, "Z"), 303: "303 (unrelated exiting process) X 1 303" });
+    expect(observeOwnedProcessGroup(receipt)).toBe("absent");
+  });
+  it("retains a live group member even when its birth coordinate is unavailable", () => {
+    processes({ 101: stat(101, "Z"), 202: "202 (owned member) S 101 101" });
+    expect(observeOwnedProcessGroup(receipt)).toBe("retained");
+  });
+  it("refuses ownership when the exact leader has no birth coordinate", () => {
+    processes({ 101: "101 (leader) S 1 101" });
+    expect(observeOwnedProcessGroup(receipt)).toBe("unknown");
+  });
   it("does not grant ownership to a reused PID, even if it is a zombie", () => {
     processes({ 101: stat(101, "Z", 101, "2000") });
     expect(observeOwnedProcessGroup(receipt)).toBe("unknown");
