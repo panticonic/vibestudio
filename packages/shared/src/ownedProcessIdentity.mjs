@@ -28,6 +28,7 @@ function captureOwnedProcessIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Owned process PID is invalid");
   if (process.platform === "linux") {
     const stat = linuxStat(pid);
+    if (!stat.startCoordinate) throw new Error(`Process ${pid} has an incomplete /proc identity`);
     if (stat.processGroupId !== pid) {
       throw new Error(`Owned process ${pid} is not its detached process-group leader`);
     }
@@ -153,8 +154,11 @@ function linuxStat(pid) {
     .split(/\s+/u);
   const processGroupId = Number(fields[2]);
   const startCoordinate = fields[19];
-  if (!Number.isSafeInteger(processGroupId) || processGroupId < 0 || !startCoordinate) {
-    throw new Error(`Process ${pid} has an incomplete /proc identity`);
+  // Group membership requires only state and PGID. A /proc scan includes
+  // unrelated processes and must not require their birth coordinate. The
+  // leader capture and receipt comparison still require that exact coordinate.
+  if (!Number.isSafeInteger(processGroupId) || processGroupId < 0 || !fields[0]) {
+    throw new Error(`Process ${pid} has an incomplete /proc group record`);
   }
   return { processGroupId, startCoordinate, state: fields[0] };
 }

@@ -35,6 +35,9 @@ export function consumeSocketErrorsUntilClose(socket: Duplex): () => void {
 /**
  * Bidirectionally pipe two already-negotiated sockets and consume all socket
  * errors so a late TLS/TCP failure tears down only this bridge, not the process.
+ * Clean EOF ends the peer's writable side through pipe(), preserving its
+ * queued writes until finish. Abrupt destruction and errors destroy the peer;
+ * listeners remain owned until both sockets actually close.
  */
 export function bridgeDuplexSockets(
   clientSocket: Duplex,
@@ -65,6 +68,21 @@ export function bridgeDuplexSockets(
     if (!upstreamSocket.destroyed) upstreamSocket.destroy();
   };
 
+  const closePeer = (source: Duplex, peer: Duplex) => {
+    if (peer.destroyed) return;
+    if (source.readableEnded && source.writableFinished && !source.errored) {
+      // Source close can precede destination finish. end() drains queued writes
+      // before finish; the retained close listener still owns the socket.
+      // destroy() here would discard a buffered final frame or TCP close reply.
+      if (!peer.writableEnded) peer.end();
+      // The closed destination removes the reverse pipe's data listener. Keep
+      // consuming that remaining readable half so its real EOF can close it.
+      peer.resume();
+    } else {
+      peer.destroy();
+    }
+  };
+
   function onClientError(error: unknown): void {
     options.onError?.({ side: "client", error });
     destroyUpstream();
@@ -78,14 +96,14 @@ export function bridgeDuplexSockets(
   function onClientClose(): void {
     clientClosed = true;
     options.onClose?.({ side: "client" });
-    destroyUpstream();
+    closePeer(clientSocket, upstreamSocket);
     disposeIfClosed();
   }
 
   function onUpstreamClose(): void {
     upstreamClosed = true;
     options.onClose?.({ side: "upstream" });
-    destroyClient();
+    closePeer(upstreamSocket, clientSocket);
     disposeIfClosed();
   }
 
