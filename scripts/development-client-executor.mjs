@@ -144,6 +144,8 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         "-a",
         electron,
         "--no-sandbox",
+        // xvfb-run provides X11 even when the parent desktop uses Wayland.
+        "--ozone-platform=x11",
         ...secrets.electronArgs,
         `--user-data-dir=${userDataDir}`,
         repoRoot,
