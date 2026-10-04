@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { WorkspaceConfigSchema } from "./workspaceConfigSchema.js";
+import { WorkspaceConfigSchema, WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
 
 const BASE = { id: "test", systemEpoch: 56 } as const;
+
+describe("exact template source pins", () => {
+  const pin = {
+    url: "git+https://github.com/acme/base.git",
+    commit: "7a6f4c9d7d9d5d1b3b7a4cf97f046dd05f6b0d92",
+  };
+
+  it("rejects ambiguous refs at admission rather than after workspace creation", () => {
+    for (const ref of ["main", "v0.3.61", "HEAD", "refs/heads/main~1", "refs/tags/"]) {
+      expect(WorkspaceTemplatePinSchema.safeParse({ ...pin, ref }).success).toBe(false);
+    }
+    for (const ref of ["refs/heads/main", "refs/tags/v0.3.61"]) {
+      expect(WorkspaceTemplatePinSchema.parse({ ...pin, ref })).toEqual({ ...pin, ref });
+    }
+  });
+});
 
 function configWithUpstream(upstream: Record<string, unknown>) {
   return {

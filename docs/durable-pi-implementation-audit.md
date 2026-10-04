@@ -41,19 +41,35 @@ all previously open Personal-plus-Examples verdicts are cleared.
 Checkpoint 101 completes real rendered chat verification, with exact first and
 warm responses and owned CDP/panel/context cleanup. Warm submit-to-completion
 takes 3,233 ms; the first measurement includes credential approval and is not a
-cold latency baseline. Android checkpoint 102 passes the native source install but still fails public
-onboarding readiness, with no errors or unexpected tool faults. The attempted
-account-pipe exposure change was incorrect: the workspace host owns these calls,
-and the account server deliberately rejects workspace runtime relay. The original
-workspace placement is restored; the missing installed readiness declaration
-remains under investigation. Native process diagnostics now propagate bounded
-original output, rather than only an exit code.
+cold latency baseline. Checkpoint 102 passes the native Android source install.
+Fresh checkpoint 103 (`st_976b7e638a434a9d9c0b9f34e56f71c0`) also passes Android
+onboarding: one pass, zero failures, errors or unexpected tool faults, 254.715
+seconds. Correct workspace-owned endpoint exposure, upstream mobile lifecycle
+changes and cancellable readiness observation are verified together; this run
+does not isolate one change as the cause. Phone setup no longer declares failure
+merely because three minutes elapsed. It observes actual readiness, propagates
+original RPC failures and joins cancellation when its panel closes. Six focused
+helper/UI regressions and all 465 mobile tests pass. Native process diagnostics
+preserve bounded original output and join output streams.
 
-Remaining cutover work is evidence-led: finish Android acceptance, integrate and
-push the reviewed source, publish
-normal immutable template releases and adopt their exact pins. Self-development
+The reviewed source is committed and pushed: host `f1b4187c`, Base `7353fb64`,
+System `bd5bb9a4`, System-testing `ac4db305`, Personal `d7114210`, Examples
+`6f8c8259`, Google Workspace `0ee91451` and News `85f71c6e`. Complete host commit
+gates pass. Review worktrees and Android executors/emulators are retired.
+Remaining cutover work is normal immutable template publication, exact release-pin
+adoption and a focused fresh production-template checkpoint. Self-development
 and local-model acceptance remain explicitly lower priority and unverified.
 Expand tricky-case coverage after the current repairs are committed and pushed.
+Publication review caught and repaired a separate preservation defect: authored
+runtime configuration referencing inherited units was filtered out of the release.
+Personal's onboarding `initPanels` must remain declared even though Base supplies
+the chat panel. Projection now distinguishes owned files from available units;
+a regression verifies retained startup arguments without copying the inherited
+unit. Base tests and composition types pass; source `c2a14b6` is pushed. Base
+0.3.61 was published before this discovery and remains immutable; the corrected
+publisher will ship in the subsequent release. Exact template pins are not yet
+adopted. Exact Git pins now reject ambiguous refs at admission, before workspace
+registration, using the existing canonical-ref contract (77 focused host tests pass).
 The [installed acceptance inventory](durable-pi-installed-acceptance-remaining.md)
 records the exact remaining tests and evidence. Published fork packages and source
 checks alone do not establish a published product cutover.
@@ -2248,14 +2264,12 @@ its own named control. It does not require catalog retrieval or creation to prov
 this navigation goal. The owned root and display process were retired. Fresh
 onboarding acceptance follows in checkpoint 46.
 
-
 Checkpoint 46 passes actual desktop onboarding (one case, 1.0 minutes): shipped
 skill read, completed native turn, stable overview rendering, Add workspace
 navigation to the visible Create a workspace dialog, and explicit chooser close.
 Its temporary root and display process are absent. Both repaired desktop cases
 now have current-source passing evidence. Full installed catalog and immutable
 release gates still remain; no installed cases were added.
-
 
 Checkpoint 47 passes host/Workerd and Base composition typechecks and external
 checkout hygiene. Checkpoint 48's fresh managed doctor passed all seven gates;
@@ -2272,7 +2286,6 @@ prompt recipe was introduced. Full failure captures were retained privately and
 checkpoint 48's exact instance/root were stopped/removed. Fresh installed
 append/directory acceptance follows in checkpoint 49.
 
-
 Checkpoint 49 passes installed append-file and directory-ops (two cases, 25.365
 seconds, zero failed tool calls). Together with checkpoint 48's file-stats pass,
 this closes all three filesystem acceptance repairs. The fresh instance passed
@@ -2280,13 +2293,11 @@ all doctor gates and was stopped; its temporary root is absent. The catalog stay
 at 227 cases. These are repairs to existing validators and coverage, preceding
 the requested post-push suite expansion.
 
-
 Checkpoint 50 passes all 37 Base runtime checks with a stronger wake-continuation
 regression. A negative control restoring the old ordering fails that exact case:
 the RPC after the alarm write settles has no authority parent. The fixed source
 was restored in a finally block and Base composition typechecks pass. This is
 proof of the lifetime ordering, beyond merely holding the HTTP response open.
-
 
 Checkpoint 51 selected 130 cases: 127 previously untested cases plus three
 unidentified passing receipts from the cancelled broad checkpoint. It completed
@@ -2553,7 +2564,6 @@ projection is introduced. All 80 headless-session/runner checks and the
 System-testing typecheck pass; checkout hygiene is clean. Fresh installed UI
 acceptance and inspection of the retained native delivery diagnostics are pending.
 
-
 Checkpoint 67 freshly passes `inline-ui-transcript-event` and
 `load-action-bar-transcript-event` (`st_51835321f5e34c128cbb6237d7203065`):
 two passes, zero failures/errors/tool faults, 57.517 seconds. Both private full
@@ -2576,7 +2586,6 @@ JSON and durable export conditions are already adopted in `.10`. Newly missing
 changes are the later 1.0.1 provider/tool-definition/OAuth/catalog changes. A
 baseline three-dot diff alone would incorrectly label the already-adopted fixes
 as pending; compare current file contents and the adoption ledger.
-
 
 Checkpoint 68 blob verification rederives acceptance from native operations,
 using the existing bounded execution journal rather than named guest booleans.
@@ -2601,7 +2610,6 @@ seventeen distinct checkpoint-51 failures on the default route. The existing
 blob-tree case is being rechecked separately; it previously recovered from a
 genuine object-versus-hash argument mistake, not a product storage failure.
 
-
 Checkpoint 68's fresh blob-tree run (`st_20a8d40d8de84c4b8cea79e988535b7e`)
 completes with one validator failure and zero tool faults (92.301 seconds).
 Bounded inspection was followed by a private full capture: the agent created two
@@ -2624,7 +2632,6 @@ Host/Workerd and System-testing typechecks and checkout hygiene pass. A regressi
 initially called listTree without its required request object; the test invocation
 was corrected to the actual public contract, without changing production defaults.
 Fresh installed tree acceptance is pending at checkpoint 69.
-
 
 Checkpoint 69 (`st_792ec7dbb3a541a58a2356d1bd872290`) retains one tree-validator
 failure, zero tool faults, 56.484 seconds. Native listing/read/diff facts all
@@ -2649,7 +2656,6 @@ and Host/Workerd typechecks and hygiene pass. The panel journal test now asserts
 complete reload entries rather than assuming every operation type has a panel ID.
 Fresh installed verification is pending at checkpoint 70.
 
-
 Checkpoint 70 freshly passes `blob-tree-lifecycle`
 (`st_ef82857f5dc1479cbd117211e0a17403`): one pass, zero failures/errors/tool
 faults, 62.318 seconds. Private full capture includes canonical created trees,
@@ -2665,7 +2671,6 @@ listing/lifecycle: the old listing returned an actual zero count that its
 array-only validator rejected, and the lifecycle recovered from passing an
 object to the ergonomic string-ID rotation helper. Live help/catalog ownership
 and native redacted lifecycle facts require review before fresh acceptance.
-
 
 Checkpoint 71 preparation repairs webhook contract projection and grading.
 The ordinary docs generator now derives `WebhookIngressClient` signatures and
@@ -2694,7 +2699,6 @@ the journal. Missing operations, foreign rotation IDs, secret-bearing guest
 returns, invented counts and guest-only summaries fail validator regressions.
 Fresh installed webhook verification is pending on owned checkpoint 71.
 
-
 Checkpoint 71 freshly passes `webhook-list-bounded`
 (`st_cd7ab72e7b9c43e69fe01f6ad0d6b508`): one pass, zero failures/errors/tool
 faults, 27.077 seconds. Full evidence is retained privately. The instance is
@@ -2711,7 +2715,6 @@ an unrelated “no errors” statement as evidence of a zero count.
 Fresh lifecycle acceptance follows in checkpoint 72; no lifecycle pass is yet
 claimed by the list result.
 
-
 Checkpoint 72 (`st_3cb0b7e49b6b4e7e8a42466f5a1e4d8c`) fails the webhook
 lifecycle with one tool fault. Creation, active listing and rotation succeed;
 revocation takes effect and follow-up history verifies cleanup. The native
@@ -2726,7 +2729,6 @@ The exact dispatch regression uses the real decoded null value. All 77 journal
 and execution-lifecycle cases pass. Fresh installed verification is running on
 checkpoint 73. Checkpoint 72 is stopped and its root absent.
 
-
 Checkpoint 73 (`st_619ffe626fbd427fba3e5a1cdb3fb1d9`) fails before creation
 with a guest type error. Source and trajectory show a documentation defect,
 not missing identity: `agent.describe()` returns a Promise, but the webhook
@@ -2738,26 +2740,24 @@ receiver description and its regression checks the awaited form. No runtime
 compatibility, sync wrapper or prompt-specific recipe is added. Checkpoint 73
 is stopped and its root absent. Fresh acceptance follows on checkpoint 74.
 
-
 The upstream review recommends selective adoption into the next immutable
 four-library release, not a monorepo rebase. Exact newly missing candidates:
 
-| Upstream commit | Shipping behavior | Verification before publication |
-| --- | --- | --- |
-| `69f0be6f` | Drop stale Bedrock thinking bindings only for supported Claude models, excluding GovCloud | Bedrock thinking payload regressions |
-| `b271b0a5` | Inline Anthropic mid-conversation tool definitions, including same-name replacements; exact SDK 0.129.0 | Transcript/tool-change tests plus our retained explicit-auth transport tests |
-| `3874b3e9` | Recognize provider model-capacity errors in the existing retry classification | Retry/provider classification tests; no new retry policy |
-| `eeac84ca` | Fail an occupied ChatGPT OAuth callback port before opening the browser | OAuth callback ownership/error/cleanup regressions |
-| `c10bfb0d` | Correct dashed Claude IDs in Cloudflare AI Gateway model generation | Regenerate catalog, validate model metadata and archive inputs |
-| `28eaccb8` | Correct Together DeepSeek V4 Pro model identity | Together model generation checks |
-| `4665fafb` | Preserve Bedrock context pricing tiers | Bedrock catalog/usage cost checks |
+| Upstream commit | Shipping behavior                                                                                       | Verification before publication                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `69f0be6f`      | Drop stale Bedrock thinking bindings only for supported Claude models, excluding GovCloud               | Bedrock thinking payload regressions                                         |
+| `b271b0a5`      | Inline Anthropic mid-conversation tool definitions, including same-name replacements; exact SDK 0.129.0 | Transcript/tool-change tests plus our retained explicit-auth transport tests |
+| `3874b3e9`      | Recognize provider model-capacity errors in the existing retry classification                           | Retry/provider classification tests; no new retry policy                     |
+| `eeac84ca`      | Fail an occupied ChatGPT OAuth callback port before opening the browser                                 | OAuth callback ownership/error/cleanup regressions                           |
+| `c10bfb0d`      | Correct dashed Claude IDs in Cloudflare AI Gateway model generation                                     | Regenerate catalog, validate model metadata and archive inputs               |
+| `28eaccb8`      | Correct Together DeepSeek V4 Pro model identity                                                         | Together model generation checks                                             |
+| `4665fafb`      | Preserve Bedrock context pricing tiers                                                                  | Bedrock catalog/usage cost checks                                            |
 
 Cloudflare Clef classifier additions (`4812cb26`) require a separate check
 against our supported provider/model policy; they are not required to repair
 these current provider defects. CLI/TUI/Nix and unrelated applications remain
 outside the four-package closure. The fork worktree remains unchanged by this
 review; candidate listing is not adoption, publication or product acceptance.
-
 
 Checkpoint 74 (`st_9e7341cb6f7c443bb687cea476d150ef`) completes all requested
 webhook operations with zero tool faults, but the validator still rejects the
@@ -2771,7 +2771,6 @@ cleanup, even if another later listing was empty. Missing creation/listing/
 rotation/revocation and mismatched identities remain failures. This is a
 rederived lifecycle criterion, not acceptance of guest booleans. Fresh installed
 verification is pending at checkpoint 75. Checkpoint 74 is stopped/root absent.
-
 
 Checkpoint 75 (`st_8f6c1a22ea4b47ab9a73adf1506a9943`) freshly passes the
 webhook lifecycle on the default route: one pass, zero failures/errors/tool
@@ -2791,7 +2790,6 @@ coordinate, count and cleanup assertions are retained; no production fallback
 to obsolete guest shapes is introduced. All 47 affected semantic/discovery checks pass, along with the refreshed
 System-testing typecheck and external-checkout hygiene.
 
-
 The complete System-testing conventional suite initially passes 651/652 tests
 across 56 files. Its one remaining failure is the existing temporary-resource
 prompt policy: the SQL persistence prompt explicitly says to retire the DO,
@@ -2802,7 +2800,6 @@ conventional suite then passes all 652 cases in 56 files. Fresh installed SQL
 and webhook verification on these uncoached prompts follows in checkpoint 76;
 prior passing receipts remain historical evidence for their then-current prompts.
 
-
 Checkpoint 76 (`st_0617e113bf684e15839f8dd5f320a98f`) freshly passes both
 `worker-do-sql-persistence` and `webhook-subscription-lifecycle` with their
 uncoached natural prompts: two passes, zero failures/errors/tool faults,
@@ -2810,7 +2807,6 @@ uncoached natural prompts: two passes, zero failures/errors/tool faults,
 recipe. This closes the fresh verification gap introduced by restoring those
 prompts. The same owned instance next checks the remaining extension-list
 case; retirement is pending until that exact run is captured.
-
 
 Checkpoint 76 extension listing (`st_2efd4b5c18214585bab94cde2c463870`)
 remains unresolved: one validator failure, zero tool faults, 15.789 seconds.
@@ -2824,7 +2820,6 @@ partition and discovering extensions through `build.listUnits`; further repair
 needs an actual discovery contract improvement or model-quality diagnosis,
 not a test-specific prompt recipe. Checkpoint 76 is stopped and root absent.
 
-
 Checkpoint 77 (`st_acfe108eec2644ceb8bf0838f0978e2b`) runs against the
 published `.11` composition: `eval-exact-authority` passes; `extension-list`
 and `eval-pregranted-only` remain unresolved. Extension discovery now reads
@@ -2835,7 +2830,6 @@ registry availability. The denied permissions read correctly retains
 is not a lost denial code. The bounded conversation tail omits that earlier call, but the packet
 records it in `toolFailures`; the full private trajectory confirms it. Neither validator is relaxed. The
 latest unresolved count is nineteen plus the interrupted performance case.
-
 
 Checkpoint 77 documentation selection (`st_85369742b97449b1aa119f1eda90291a`)
 completes three cases with no tool faults, but no passing verdicts. The service
@@ -2849,7 +2843,6 @@ External checkout hygiene passes. Fresh installed verification follows. RPC mism
 and operating-policy guidance remain unresolved; neither receives a waiver.
 The owned checkpoint 77 instance is stopped and its temporary root is absent.
 
-
 Checkpoint 78 (`st_337d555a42ab43bcb1d78d9b3c15b74f`) completes the exact
 service-description retry without tool faults. The accurate answer now opens
 identity-joined `blobstore.putText` and `blobstore.getText` method documents.
@@ -2859,7 +2852,6 @@ Its evidence model now derives service/member observations from catalog
 identities rather than prescribing which page the agent opens. Foreign parents
 and unobserved methods remain rejected. This checkpoint remains a historical
 failure; fresh verification is required. Checkpoint 78 is stopped.
-
 
 Checkpoint 79 (`st_a5185078940143cebe9048b2e89010fa`) freshly passes
 `docs-describe-service` on the default route against `.11`: one pass, zero
@@ -2873,7 +2865,6 @@ All owned instances through checkpoint 79 are stopped and their temporary
 roots are absent. External checkout hygiene remains clean.
 The refreshed System-testing composition typecheck passes after the
 service/member evidence change.
-
 
 Checkpoint 80 (`st_092c4b9f17af45938743ac7e269a4d7a`) completes fifteen
 unresolved cases: two passes, thirteen failures, zero errors, one unexpected
@@ -2895,16 +2886,13 @@ through native cleanup without deleting shared caches. The next typecheck finds
 a compact-reference collection inference error, which is repaired. Fresh
 typecheck and installed verification continue. Checkpoint 80 is stopped.
 
-
 Checkpoint 81 (`st_74d2020a16c743a7b4e77b14d9a22c79`) completes five repaired cases on the default route: five passes, zero failures/errors/tool faults, 207.746 seconds. Pregranted-only authority, compact provenance orientation, automatic conversation title, fixture-backed worker fork preview and same-turn infrastructure-error recovery now pass. The exact owned instance is stopped. Qualified service help additionally uses the existing compact method renderer to expose the actual `services.authority.preflight` callable and canonical argument type; all 31 host help checks pass after that refinement. System-testing composition typecheck remains open after another dependency-preparation ENOSPC. Its type inference defect is repaired, but no completed fresh typecheck is claimed. The shared filesystem has about 1 GB free; the user has been asked to release space from other tasks' data. Owned failed dependency utilities have been retired without deleting inherited caches.
-
 
 Documentation probes now name the actual Vibestudio context and ask an answerable operating-policy question or an explicit diagnostic plan when no target session is supplied. RPC guidance accepts the documented candidate/publication distinction; app triage checks native source-authoring actions instead of demanding a disclaimer; extension trust planning recognizes scoped authorization without an exact prose token. Fifty-one focused validator checks pass, including absent-documentation and source-edit rejection. An older service-catalog fixture now uses actual fully qualified member identities. The obsolete GAD branch-file/SQL probe and its five synthetic guest-summary checks are retired: those APIs are absent from the public contract, and source history belongs to semantic VCS. This reduces the installed catalog by one; no passing receipt is claimed for that historical failure. Existing GAD integrity and VCS coverage is retained.
 
 The refreshed System-testing composition typecheck now completes successfully. The full conventional System-testing projection passes 813 tests across 67 files, with one native-CDP integration skipped; it includes host-owned workspace integration coverage. Host typecheck, Workerd-program typecheck, qualified-help checks and external-checkout hygiene pass. The task-owned fork dependency install is retired after published-package verification, retaining source, release artifacts and receipts. No inherited/shared cache was deleted. Android provisioning remains gated on sufficient free space.
 
 Private verification captures and disposable early proof artifacts under `experiments/durable-pi/` are excluded from version control and restricted to the owning user. Historical evidence references name those local captures without publishing raw trajectories or broken repository links. Shipping regression tests and the published-package receipt remain reviewable source artifacts.
-
 
 Checkpoint 82 (`st_1f04fdf1847f40e6a46418ec0d0aa82b`) completes seventeen cases: six passes, eleven failures, zero errors, three unexpected tool faults, 579.984 seconds. RPC mismatch, app triage, extension trust planning, operating-policy guidance, account identity and API-integration discovery pass. All failure packets and needed trajectories are captured privately before stopping the exact instance. Pregranted-only reopens after an invented authority method; its expected ERUNMANIFEST denial still passes. Source inventory and conversation addressees remain insufficient for live availability/presence. Version inspection did not discover the runtime catalog. Automation retries an invalid limit; its successful count report does not erase that fault. Membership exposes a natural singleton-count comparison defect; the repaired validator additionally checks observed member identities/roles, with wrong-role/count regressions.
 
@@ -2914,16 +2902,13 @@ Dynamic import exposes a genuine confined-global defect: lodash-es reflects on F
 
 The harness policy now uses already supplied guidance for policy/workflow explanations, while discovering exact method names, shapes and bounds before specialized operations. Two explanation-only probes apply that supplied policy rather than prescribing an unnecessary documentation read. Live workspace facts still need canonical observations; conversation participants do not establish workspace-wide presence. No live-state or authority requirement is relaxed.
 
-
 The Base agentic-core, agentic-do, agentic-chat, eval-engine and harness projection passes all 1,286 tests in 141 files. After the supplied-policy probe adjustment, 73 focused System-testing checks pass. The automation limit fault exposes an actual discovery defect: workspace docs carried only the method's TypeScript signature, omitting the manifest-bound receiver schema that enforces limit 1..50. Reviewed receiver metadata now uses the existing canonical service serializer before crossing the build-worker boundary; exact provider method catalogs and live workspace docs retain argument/return schemas and parameter names. Argument validation participates in the sealed input-contract digest, and the analyzer version advances to v5 for derived catalog identity. Numeric bounds use one portable formatter shared by docs_open and compact eval help, preserving both OpenAPI boolean exclusions and independent numeric JSON Schema bounds. No authored-method special case or compatibility reader is introduced.
-
 
 Checkpoint 83 (`st_71e13e6b25ce4d31ba01502ad85ec35b`) completes eleven affected cases: eight passes, three failures, zero errors or unexpected tool faults, 373.185 seconds. The eight passing receipts cover dynamic imports, native permission inventory, workspace membership/presence, unit versions, pregranted-only authority, interaction choice and headless diagnostic guidance. The installed CLI separately verifies actual lodash-es import/reflection with code generation blocked. Private captures precede retirement of the exact session and managed instance.
 
 Automation's remaining validator required an invented flat return shape and a removed `stats.failedLast24Hours` property. The canonical ledger instead aggregates `total`, `active`, `running`, `issueRunsLast24Hours` and `completed`, independently of item pagination. Its shared statistics schema now drives acceptance of numeric summaries and exact final counts, while raw records, mutation and page-derived substitute counts remain rejected. Workspace settings likewise accepts the actual config read surface and rejects arbitrary metadata. Extension availability asks explicitly for registered readiness and requires observed extension readiness, retaining rejection of a directory-only answer. These changes need fresh installed receipts; historical failures remain recorded.
 
 The latest catalog/help suite passes 79 checks. Base documentation rendering passes sixteen checks, and Base/System-testing composition typechecks pass before the latest count-validator refinement.
-
 
 ### Checkpoint 84 diagnosis and checkpoint 85 source boundary (4 October)
 
@@ -2937,7 +2922,6 @@ Permission reuse is measured from native child completion and host-owned before/
 
 The stale/idempotency scenarios previously required agents to submit low-level VCS commands through eval, contradicting focused authoring ownership. They now run controlled public-protocol probes in the exact task fixture: identical immutable request replay must return one terminal identity and one application; stale refusal must leave native head/counts unchanged, followed by a newly observed basis and exact final bytes. Six probe regressions reject duplication, state-changing refusal, missing evidence and unrelated failures. These are harness protocol verdicts, not simulated agent acceptance or waived faults. Installed receipts remain pending at freshly provisioned checkpoint 85.
 
-
 ### Checkpoint 85 installed result and follow-up investigation (4 October)
 
 Checkpoint 85 (`st_dc72f63b5fa742a1b80c40eaec959ce9`) completes 13 cases: six passes, five failures, two errors and two unexpected tool faults. Extension discovery, semantic stale-basis recovery, command replay, honest import boundaries, embedded workspace guidance and panel-tree navigation pass. Its exact managed instance and desktop executor are stopped; captured trajectories remain private.
@@ -2947,7 +2931,6 @@ The integration orchestrator placed fresh reader messages before the merge phase
 Browser `snapshot()` attempted workspace-only `_agent.snapshot` RPC against a browser target. The canonical snapshot operation now captures browser DOM through the native page and retains exact runtime-generation evidence. The panel-runtime regression suite passes all 48 checks; causal prose regressions pass 35 checks; native health journal checks pass 16; System-testing unit-health/integration validators pass 33. Latest host/Workerd, Base and System-testing typechecks pass at this boundary.
 
 The child permission-reuse case also exposed ambiguous closed-socket dispatch and inactive authority-parent errors during channel delivery/lifecycle retirement. The existing parent-retention and causal RPC tests pass, but the installed failure remains open; checkpoint 86 isolates this operation rather than adding a deadline or transport replay. Memory recall also has a source repair pending verification: all-term matching could return only the current question and suppress historical evidence because widening occurred only for empty pages. The proposed single ranked term-retrieval query removes that contingent fallback instead of filtering by a guessed current-message identity.
-
 
 ### Checkpoint 86 installed result and checkpoint 87 source boundary (4 October)
 
@@ -2959,13 +2942,11 @@ The next source boundary reuses the existing bounded DOM snapshot producer for n
 
 Desktop retirement encounters an incomplete unrelated /proc identity while scanning group membership. Group discovery now requires process state and group ID; owned-leader identity checks still require the birth coordinate. Twenty-eight ownership/journal regressions pass. All checkpoint-86 owned processes and retained scratch are verified retired; fresh desktop retirement is still needed to establish installed cleanup. Latest focused checks pass: Base 72, System-testing diagnostics/credentials 46, permission/capability 32, and provenance/diagnostics/permissions 55, with host/Workerd, Base and System-testing typechecks. These counts are overlapping focused checks, not a full-suite total.
 
-
 ### Checkpoint 87 installed result and retained provenance repair (4 October)
 
 Run `st_a7cf6bc4ad414dc99e709d79bea0fd77` completes eleven cases: eight passes, three failures and no errors or unexpected tool faults, 567.111 seconds. Credentials, roster, memory recall, sizable edited-file context, edited import, reusable templates, rejection review and bounded browser capture freshly pass. The exact instance and desktop executor retire cleanly, including both scratch roots.
 
 The remaining child verdict exposes a real lifecycle mismatch: task-scoped product context is retired by Pi before retained model evidence reads it. The provenance now shares the session lifetime of actual native task/submission records, keyed by the real task ID; it adds no scheduler, execution owner or compatibility reader. Thirty-five focused model-evidence, product policy, automation and invocation regressions pass. Canonical health/log descriptions now distinguish the separate error buffer from log-only output. Revert's actual counteraction and restored bytes were correctly captured, but opaque agent references were compared directly with canonical change IDs; acceptance now joins the exact native request/relationship instead. Sixteen focused validator checks pass with foreign-reference and unrelated-target rejection. Source repairs still need fresh installed acceptance.
-
 
 ### Checkpoint 88 workflow coverage and checkpoint 89 repair boundary (4 October)
 
@@ -2977,14 +2958,11 @@ The follow-up validator mistakes an extra post-merge inspection for the second p
 
 Focused runner/classifier/orchestration checks pass 52, followed by 41 runner/orchestration checks with malformed-failure rejection. Base VCS, verification and prompt checks pass 47. These are overlapping focused suites, not a full-suite total. All checkpoint-88 owned processes and scratch roots retire cleanly. Fresh acceptance is still required for four workflow repairs and default-route revert. Twenty-eight previously unstarted cases remain, alongside separate composition, mobile and performance coverage. No new installed scenarios have been introduced before current-work completion/commits/pushes.
 
-
 ### Checkpoint 89: remaining workflow identity ergonomics
 
 Four of five installed repairs pass, including default-route revert. Follow-up task outcome succeeds but four long-ID transcription faults remain. Exact compact references now derive from the native launch task retained on the existing supervisor row; both notify and inspection share exact identity semantics and parent scope. Canonical runtime IDs remain unchanged. No reference-cache expiry, fuzzy recovery, second owner or compatibility migration is introduced. Base focused checks pass 121 and Base/System-testing composition typechecks pass; fresh installed verification follows. Checkpoint 89 instance/executor and owned scratch retire cleanly.
 
-
 Checkpoint 90 installed child acceptance (`st_55acad1a6ef247b2848390b341ed4080`): four passes, zero failures/errors/tool faults, 450.427 seconds. Short exact native selectors work for two-commit follow-up, direct integration, deliberately unintegrated diff review, and settled task-grant reuse. Fifteen outstanding authoring/scaffold cases follow on the same isolated instance.
-
 
 Authoring checkpoint 90 source repairs now pass focused checks: 38 Base tests,
 108 System-testing tests across five files (the three initially failing fixture/
@@ -2992,7 +2970,6 @@ goal snapshots were repaired), Base and System-testing composition typechecks,
 and external-checkout hygiene. Installed acceptance remains open for ten cases;
 a fresh checkpoint 91 is being provisioned from these source inputs. Five
 already passing authoring cases are not repeated without affected behavior.
-
 
 ## Concurrent release reconciliation (4 October 2026)
 
@@ -3012,7 +2989,6 @@ shared checkout also passes its full build after dependency installation. The
 private reconciliation worktree is retired; bounded receipts and source backups
 remain private. Installed acceptance resumes on a fresh checkpoint 92 rather
 than assuming that source checks prove release behavior.
-
 
 ## Checkpoint 92 lifecycle repair
 
@@ -3038,7 +3014,6 @@ actual page methods. Console validation accepts empty-document observations
 without demanding one particular word, while still requiring executed evidence.
 These source repairs require fresh installed acceptance; the previous failed
 verdicts are retained.
-
 
 ## Checkpoint 93 ownership and evidence repair
 
@@ -3067,7 +3042,6 @@ failure and the provider investigation separately.
 ### Checkpoint 94 follow-up
 
 Native image save/read and task-management build/launch/debug pass on the installed default route. Six browser/performance verdicts remain open; the authoritative inventory is `durable-pi-installed-acceptance-remaining.md`. Source repairs address numeric native evaluation evidence, portable Base examples, bounded native click-profile receipts, atomic commit cleanliness proof, and awaited asynchronous Base alarm/lifecycle error propagation. The real Workerd retirement regression now loads the shipped Base and verifies a late closed-Harness alarm returns its original structured error. The original closed Gad read dispatch remains under investigation. Source checks do not close installed acceptance.
-
 
 ### Checkpoint 96 acceptance and source completion
 

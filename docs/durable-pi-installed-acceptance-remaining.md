@@ -1,20 +1,20 @@
 # Durable Pi: installed acceptance still open
 
-Status: 5 October 2026, through checkpoint 102 (published `.11`, native child and authoring acceptance). This inventory separates unresolved verdicts from tests with no completed acceptance run. It does not classify every failed verdict as a product defect. Private trajectories remain private.
+Status: 5 October 2026, through checkpoint 103 (published `.11`, native child and authoring acceptance). This inventory separates unresolved verdicts from tests with no completed acceptance run. It does not classify every failed verdict as a product defect. Private trajectories remain private.
 
-The original 39-case failure inventory, all thirteen subsequently exercised workflows, and all fifteen authoring cases have passing installed receipts. Checkpoint 94 clears native image generation and task-management build/launch/debug. Checkpoint 96 clears browser click/evaluation, click profiling and panel optimization; checkpoint 97 also passes strict rebuild/reacquisition. Checkpoint 95 also clears panel state and workspace reload profiling. Android and the explicitly lower-priority self-development/local-model cases remain open. Optional template composition acceptance is complete through checkpoint 100. Source-only repairs are not installed acceptance.
+The original 39-case failure inventory, all thirteen subsequently exercised workflows, and all fifteen authoring cases have passing installed receipts. Checkpoint 94 clears native image generation and task-management build/launch/debug. Checkpoint 96 clears browser click/evaluation, click profiling and panel optimization; checkpoint 97 also passes strict rebuild/reacquisition. Checkpoint 95 also clears panel state and workspace reload profiling. Android acceptance is complete. The explicitly lower-priority self-development/local-model cases remain unverified. Optional template composition acceptance is complete through checkpoint 100. Source-only repairs are not installed acceptance.
 
 The shared checkout incorporates the concurrent 0.1.54 release without discarding pending source edits. Reconciliation passes the full build, commit gates, 99 host integration checks, 90 focused Base checks, and System-testing composition types. Fresh installed checkpoint 92 completes fourteen cases: seven passes, four failures, three errors, eight unexpected tool faults, 1,025.470 seconds. Its instance and desktop executor are retired, including both temporary roots. Source checks are not counted as installed acceptance.
 
-## Android checkpoint 102 — one case remains open
+## Android checkpoints 102–103 — acceptance complete
 
 Fresh run `st_cc400c6f339b4d6caddb9364d34ec867` completes with one pass, one failure, zero errors and zero unexpected tool faults. `mobile-extension-install-android` passes, including the native source install. Onboarding installs and pairs the phone, but its public readiness remains `opening`; it is not accepted. The eval binding error from checkpoint 101 is absent after the cell-local binding contract was clarified.
 
-The attempted account-pipe exposure change did not repair readiness. Review establishes that `phoneNativeEndpoint` is dispatched by the workspace host, while the account control server deliberately rejects workspace runtime relay. Presentation methods therefore belong to the System workspace connection; their original placement is restored and its account/workspace distinction is retained in the regression fixture. The precise cause of the absent readiness declaration remains under investigation. Passing mocked transport tests does not prove the installed endpoint boundary.
+The attempted account-pipe exposure change did not repair readiness. Review establishes that `phoneNativeEndpoint` is dispatched by the workspace host, while the account control server deliberately rejects workspace runtime relay. Presentation methods therefore belong to the System workspace connection; their original placement is restored and its account/workspace distinction is retained in the regression fixture. Fresh checkpoint 103 (`st_976b7e638a434a9d9c0b9f34e56f71c0`) passes Android onboarding: one pass, zero failures, errors or unexpected tool faults, 254.715 seconds. It exercises restored workspace routing, upstream mobile lifecycle changes and cancellable readiness observation together; it does not isolate one change as the cause. Phone setup observes actual readiness without an elapsed-time cutoff, preserves original RPC failures and cancels owned observation when its panel closes. Six focused helper/UI tests and all 465 mobile tests pass.
 
 The earlier source APK packaging failure did not recur. Native command failures now join output streams, propagate bounded original diagnostics and request Gradle stack traces. Six focused native-service tests pass. The earlier opaque packaging exception has no established root cause; its successful subsequent install is evidence of current acceptance, not a proved explanation of that exception.
 
-Real rendered chat verification passes with exact first and warm responses. Warm submit-to-completion measures 3,233 ms; the first measures 75,774 ms including credential approval and is not a cold latency baseline. CDP session closure, panel archival and CLI context removal complete. Checkpoint 101's desktop executor, managed instance, emulator and temporary AVD directory are retired. Checkpoint 102 remains owned during readiness investigation and must be retired before reporting completion.
+Real rendered chat verification passes with exact first and warm responses. Warm submit-to-completion measures 3,233 ms; the first measures 75,774 ms including credential approval and is not a cold latency baseline. CDP session closure, panel archival and CLI context removal complete. Checkpoint 101's desktop executor, managed instance, emulator and temporary AVD directory are retired. Checkpoint 102 is retired. Checkpoint 103’s emulator, desktop executor and temporary AVD are retired; its managed instance is also retired. A fresh instance owns publication of the inherited-configuration preservation fix. Reviewed source is committed and pushed across host and templates. Immutable publication, exact pin adoption and fresh production-template verification remain outstanding.
 
 ## Current checkpoint and next verification
 
@@ -254,7 +254,7 @@ historical checkpoints below retain the investigation evidence.
 - `workspace-panel-reload-performance-profile`
 - `cdp-page-performance-profile`
 
-## Supported compositions: cleared through checkpoint 102
+## Supported compositions: cleared through checkpoint 103
 
 Checkpoint 97 passes `browser-import-panel-lifecycle`, `adventure-campaign-play`,
 `adventure-turn-profile`, `adventure-ui-review` and
@@ -288,14 +288,11 @@ Checkpoint 86 isolates child task-grant reuse (`st_acb1310a598b46ada94f37d617bff
 
 Checkpoint 86's instance is stopped. Executor retirement reported an unrelated incomplete process identity during a global process scan; group inspection now requires only membership facts, while exact leader identity remains strict. Native ownership regressions pass, and the retained executor scratch directory is removed only after verifying no process references it. No owned checkpoint-86 process or scratch root remains live.
 
-
 Checkpoint 87 (`st_a7cf6bc4ad414dc99e709d79bea0fd77`) completes eleven cases: eight passes, three failures, zero errors or unexpected tool faults, 567.111 seconds. Fresh passes cover canonical credential resolution, live roster, ranked memory recall, sizable edited-file context, edited-import boundaries, reusable template authoring, rejection-history review and native bounded browser capture. Its exact instance and desktop executor are stopped and their scratch roots retired without cleanup errors.
 
 The permission case exposes a retained-provenance lifetime defect: original-input context was in a task document, which Pi retires on settlement. It now uses a retained session family alongside native task/submission records; execution ownership stays native. Thirty-five focused model-evidence, policy, automation and invocation checks pass, including cold restored original-input evidence and actual tool handover. Diagnostics used logs alone and mistakenly inferred absence from a separate error buffer that logs does not return; canonical method descriptions now distinguish logs from the full health packet. Revert completes correctly with restored bytes and the exact recorded counteraction; its validator incorrectly compares opaque references with semantic identities. It now joins the recorded native revert request to its canonical relationship and rejects unrelated targets. Sixteen subagent-evidence/VCS validator checks pass. These three source repairs still need fresh installed acceptance. The earlier ambiguous inactive-parent/closed-socket failure has not recurred across either follow-up checkpoint; its underlying cause is not asserted solved.
 
-
 Checkpoint 88's exact repair run (`st_325dfe861d4b4d81a41bd4f51026196e`) passes native settled child task-grant reuse and bounded unit diagnostics, but the default-route revert case fails with one unexpected tool fault. The agent invents a change identity by replacing a commit-event prefix, then successfully recovers through provenance; it does not retain the final exact read needed by the verdict. This fault is not waived. An unchanged stronger-model diagnostic (`st_cb4113e9f7e64e30a4e9c2a7942c8889`, openai-codex:gpt-6-sol/high) passes with zero faults, confirming canonical operation and proof availability. The revert argument schema now states its actual subject contract explicitly: reuse an issued change selector verbatim; other subject identities are not change identities. Default-route acceptance remains open. Thirteen previously unrun build/authoring/subagent workflows are next; counts change only after completion. Checkpoint 88 remains owned and live during this work.
-
 
 ## Newly exercised workflows requiring repaired acceptance (4)
 
@@ -308,7 +305,6 @@ Checkpoint 88's thirteen-case workflow run (`st_849079dc7e144de486e3cfc1a16c6700
 
 Focused runner/classifier/orchestration checks pass 52 tests, with a final 41-check runner/orchestration pass including malformed-failure rejection. Base VCS, verification and prompt checks pass 47. Checkpoint 88 is fully retired, including its desktop executor and both owned scratch roots. Fresh source verification continues at checkpoint 89; these source repairs are not installed passes yet.
 
-
 ## Checkpoint 89 and exact collaborator references
 
 Checkpoint 89 (`st_7de54e59300249f9a81c98e327427be7`) completes five cases: four passes, one failure, zero errors, and four unexpected tool faults in 554.015 seconds. Default-route revert now passes, closing the older 39-case failure inventory. Direct reviewed merge, extension edit/test/build and bounded failed-build diagnostics also pass. The only remaining failure from the thirteen newly exercised workflows is `subagent-followup-after-report`: its task outcome succeeds, but the agent drops a character from the long native run ID and mixes commit hashes into that identity. Those faults remain failures; they are not waived as recovery.
@@ -317,9 +313,7 @@ The replacement addressing contract derives a compact exact `@s<base36 native la
 
 Focused Base checks pass 121 tests and the Base composition typecheck; System-testing composition typecheck passes. Cold retained-reference, unrelated-launch, identity-collision and foreign-conversation checks are included. Obsolete tests for the removed text artifact cache retire with that helper; native binary/base64 artifact coverage remains. Fresh installed reference acceptance is next. Checkpoint 89's exact instance and desktop executor are stopped and both owned scratch roots are absent.
 
-
 Checkpoint 90 (`st_55acad1a6ef247b2848390b341ed4080`) passes all four affected native child workflows: follow-up after report, reviewed merge, unintegrated diff inspection, and retained task-grant reuse. Zero errors or unexpected tool faults; 450.427 seconds. This closes the remaining newly exercised workflow failure. Fifteen outstanding authoring/scaffold cases are now running on the same healthy instance, with suite-managed concurrency two and no competing host builds. The exact instance and desktop executor remain owned during this run.
-
 
 Checkpoint 90 authoring investigation (`st_f8e8281e2cba47fdbebeeb4a9671ab79`)
 is still running. New failures remain open until a fresh installed checkpoint:
@@ -352,7 +346,6 @@ These source repairs have not yet run focused checks: competing host builds are
 excluded while the installed agentic batch runs. Fork dry-run authority and all
 new authoring failures remain subject to default-route acceptance.
 
-
 Authoring checkpoint 90 completes fifteen cases: five passes, four failures,
 six errors, eight unexpected tool faults, 3,387.399 seconds. Fresh passes are
 `commit-existing-project`, React panel, package, skill and content preflight.
@@ -364,7 +357,6 @@ The managed instance, desktop executor and both temporary roots are retired.
 Focused source tests pass (38 Base; 108 System-testing across five files, after
 repairing fixture mocks and goal snapshots). Template typechecks are in progress.
 
-
 Authoring checkpoint 90 source repairs now pass focused checks: 38 Base tests,
 108 System-testing tests across five files (the three initially failing fixture/
 goal snapshots were repaired), Base and System-testing composition typechecks,
@@ -372,13 +364,11 @@ and external-checkout hygiene. Installed acceptance remains open for ten cases;
 a fresh checkpoint 91 is being provisioned from these source inputs. Five
 already passing authoring cases are not repeated without affected behavior.
 
-
 Fresh checkpoint 91 (`st_45176964760e48038b3a4d7f107a4de0`) is running the ten
 outstanding authoring cases. Its doctor passes with 226 discovered tests, Base
 and System-testing typechecks pass, and checkout hygiene passes. The owned
 executor is attached. `panel-create-commit-open` freshly passes; nine authoring
 verdicts still await this run. No competing host builds run during acceptance.
-
 
 Checkpoint 91 freshly passes panel creation, curated-icon creation and worker
 creation/publication (including canonical runtime observation). Fork remains
@@ -389,7 +379,6 @@ request, and the goal explicitly requests publication. No alias or unexpected
 fault exemption was added. These latest fork edits await focused checks and a
 fresh installed instance after the current batch completes.
 
-
 Atomic panel/store install clearance freshly passes at checkpoint 91. Task
 management remains interrupted: this time an authored over-escaped validator
 rejects a valid date, displays its error, and the agent waits only for the absent
@@ -398,7 +387,6 @@ retained. Canonical authoring/debug guidance now covers literal-source escaping
 and terminal success-or-failure observation. No UI mutation, timer, production
 locator exception, or passing receipt was manufactured. Fresh task-management
 acceptance remains required after these documentation changes.
-
 
 Checkpoint 91 (`st_45176964760e48038b3a4d7f107a4de0`) completes ten cases:
 eight passes, one fork failure, one explicitly interrupted task-management error,

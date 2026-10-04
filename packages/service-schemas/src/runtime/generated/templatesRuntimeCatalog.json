@@ -641,8 +641,7 @@
                     "maxLength": 256
                   },
                   "ref": {
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                   },
                   "commit": {
                     "type": "string",
@@ -703,8 +702,7 @@
                     "maxLength": 256
                   },
                   "ref": {
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                   },
                   "commit": {
                     "type": "string",
@@ -793,8 +791,7 @@
                     "maxLength": 256
                   },
                   "ref": {
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                   },
                   "commit": {
                     "type": "string",
@@ -920,8 +917,7 @@
                 "$ref": "#/items/properties/dependencies/items/properties/credential"
               },
               "ref": {
-                "type": "string",
-                "minLength": 1
+                "type": "string"
               },
               "commit": {
                 "$ref": "#/items/properties/dependencies/items/properties/commit"
@@ -1001,8 +997,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -1073,8 +1068,7 @@
                       "maxLength": 256
                     },
                     "ref": {
-                      "type": "string",
-                      "minLength": 1
+                      "type": "string"
                     },
                     "commit": {
                       "type": "string",
@@ -1199,8 +1193,7 @@
                   "maxLength": 256
                 },
                 "ref": {
-                  "type": "string",
-                  "minLength": 1
+                  "type": "string"
                 },
                 "commit": {
                   "type": "string",
@@ -1248,8 +1241,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -1626,8 +1618,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -2094,8 +2085,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -2472,8 +2462,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -2941,8 +2930,7 @@
           "maxLength": 256
         },
         "ref": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "commit": {
           "type": "string",
@@ -2985,8 +2973,7 @@
                       "maxLength": 256
                     },
                     "ref": {
-                      "type": "string",
-                      "minLength": 1
+                      "type": "string"
                     },
                     "commit": {
                       "type": "string",
@@ -3087,8 +3074,7 @@
               "$ref": "#/properties/dependencies/items/properties/credential"
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "$ref": "#/properties/dependencies/items/properties/commit"
@@ -3336,8 +3322,7 @@
               "maxLength": 256
             },
             "ref": {
-              "type": "string",
-              "minLength": 1
+              "type": "string"
             },
             "commit": {
               "type": "string",
@@ -3490,8 +3475,7 @@
           "maxLength": 256
         },
         "ref": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "commit": {
           "type": "string",

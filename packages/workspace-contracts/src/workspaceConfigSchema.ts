@@ -125,7 +125,7 @@ export const WorkspaceTemplateDeclarationSchema: z.ZodType<WorkspaceTemplateDecl
 
 export const WorkspaceTemplatePinSchema: z.ZodType<WorkspaceTemplatePin> =
   WorkspaceTemplateDeclarationObjectSchema.extend({
-    ref: z.string().trim().min(1),
+    ref: WorkspaceGitRefSchema,
     commit: WorkspaceGitCommitSchema,
   }).strict();
 

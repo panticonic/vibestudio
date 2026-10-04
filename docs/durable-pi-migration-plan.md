@@ -36,19 +36,35 @@ all previously open Personal-plus-Examples verdicts are cleared.
 Checkpoint 101 completes real rendered chat verification, with exact first and
 warm responses and owned CDP/panel/context cleanup. Warm submit-to-completion
 takes 3,233 ms; the first measurement includes credential approval and is not a
-cold latency baseline. Android checkpoint 102 passes the native source install but still fails public
-onboarding readiness, with no errors or unexpected tool faults. The attempted
-account-pipe exposure change was incorrect: the workspace host owns these calls,
-and the account server deliberately rejects workspace runtime relay. The original
-workspace placement is restored; the missing installed readiness declaration
-remains under investigation. Native process diagnostics now propagate bounded
-original output, rather than only an exit code.
+cold latency baseline. Checkpoint 102 passes the native Android source install.
+Fresh checkpoint 103 (`st_976b7e638a434a9d9c0b9f34e56f71c0`) also passes Android
+onboarding: one pass, zero failures, errors or unexpected tool faults, 254.715
+seconds. Correct workspace-owned endpoint exposure, upstream mobile lifecycle
+changes and cancellable readiness observation are verified together; this run
+does not isolate one change as the cause. Phone setup no longer declares failure
+merely because three minutes elapsed. It observes actual readiness, propagates
+original RPC failures and joins cancellation when its panel closes. Six focused
+helper/UI regressions and all 465 mobile tests pass. Native process diagnostics
+preserve bounded original output and join output streams.
 
-Remaining cutover work is evidence-led: finish Android acceptance, integrate and
-push the reviewed source, publish
-normal immutable template releases and adopt their exact pins. Self-development
+The reviewed source is committed and pushed: host `f1b4187c`, Base `7353fb64`,
+System `bd5bb9a4`, System-testing `ac4db305`, Personal `d7114210`, Examples
+`6f8c8259`, Google Workspace `0ee91451` and News `85f71c6e`. Complete host commit
+gates pass. Review worktrees and Android executors/emulators are retired.
+Remaining cutover work is normal immutable template publication, exact release-pin
+adoption and a focused fresh production-template checkpoint. Self-development
 and local-model acceptance remain explicitly lower priority and unverified.
 Expand tricky-case coverage after the current repairs are committed and pushed.
+Publication review caught and repaired a separate preservation defect: authored
+runtime configuration referencing inherited units was filtered out of the release.
+Personal's onboarding `initPanels` must remain declared even though Base supplies
+the chat panel. Projection now distinguishes owned files from available units;
+a regression verifies retained startup arguments without copying the inherited
+unit. Base tests and composition types pass; source `c2a14b6` is pushed. Base
+0.3.61 was published before this discovery and remains immutable; the corrected
+publisher will ship in the subsequent release. Exact template pins are not yet
+adopted. Exact Git pins now reject ambiguous refs at admission, before workspace
+registration, using the existing canonical-ref contract (77 focused host tests pass).
 The [installed acceptance inventory](durable-pi-installed-acceptance-remaining.md)
 records the exact remaining tests and evidence. Published fork packages and source
 checks alone do not establish a published product cutover.
@@ -1917,15 +1933,11 @@ The obsolete `gad-branch-file-diff-probe` is retired, not counted as a passing r
 
 Checkpoint 82 passes four repaired documentation probes and two earlier account/skill-discovery cases. Pregranted-only reopens on an invented method before the expected denial; the historical pass does not erase this renewed quality failure. Native permission inventory evidence is being repaired for bounded summaries, and confined library globals now retain safe Function reflection while closing cross-realm constructor/error escapes. These need fresh installed verification. Explanation-only probes should assess supplied workspace policy without prescribing a redundant document read; exact APIs and live state still require canonical discovery/observations.
 
-
 Checkpoint 83 freshly passes eight affected cases with no unexpected tool faults, including actual dynamic imports, native permission inventory, membership/presence, live version inspection, pregranted-only authority and policy/GAD explanations. Canonical schema-backed aggregate counts replace an invented automation validator shape; settings checks recognize the actual resolved-config API. These validator repairs require a fresh installed checkpoint. Remaining extension discovery must demonstrate registry readiness rather than source presence. Ninety-two focused validator checks and the updated System-testing typecheck pass; 37 native Workerd/confinement/journal checks pass with two existing skips.
-
 
 Checkpoint 89 closes default-route revert and three newly exercised workflow repairs. Its remaining follow-up fault is long-ID transcription, despite successful final child delivery/integration. Supervision now issues compact exact references derived from native launch task identity, retained in the existing supervisor index. It removes fuzzy ID recovery and retains canonical execution IDs for runtime, authority and receipts. Focused source checks pass; installed acceptance is pending. This is a fresh-state schema change, with no backward compatibility or existing-state migration.
 
-
 Checkpoint 90 verifies compact native child references on the default route: four of four affected workflows pass with zero errors or unexpected tool faults. Older and newly exercised workflow failure inventories are cleared. The unstarted, mobile, composition and performance inventories still require acceptance; fifteen authoring/scaffold cases are now in progress.
-
 
 Authoring checkpoint 90 source repairs now pass focused checks: 38 Base tests,
 108 System-testing tests across five files (the three initially failing fixture/
@@ -1943,7 +1955,6 @@ The shipped Base alarm and lifecycle routes must await asynchronous work inside 
 ### Checkpoint 95 source boundary
 
 Panel state and workspace reload profiling have fresh passing installed receipts. Four verdicts remain open: rebuild, browser click/evaluation, browser click profiling and optimization. Native completed locator reads now join interaction evidence, independently of guest summaries or assertion style. Disposable-page examples in the actual browser and performance guides encode the complete document and inspect real outcomes. Host transport pools belong to individual workerd endpoints; process retirement is scoped to its own requests and preserves original failure causes. Focused regressions and source gates pass; these repairs still require fresh installed acceptance. Interrupted diagnostics and nonterminal provider requests remain unverified, never silently promoted to passes. Optional template acceptance uses an ordinary private Personal/Examples dependency composition, whose typecheck passes.
-
 
 ### Checkpoint 96 acceptance and source completion
 
