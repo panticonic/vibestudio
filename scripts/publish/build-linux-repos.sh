@@ -32,6 +32,7 @@ require() {
 require gpg
 require apt-ftparchive
 require dpkg-scanpackages
+SCRIPT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -55,17 +56,7 @@ log "staged $deb_count deb(s)"
 
 # dpkg-scanpackages emits paths relative to its working directory, and those
 # paths are what apt fetches, so it must run from the repository root.
-for arch in amd64 arm64; do
-  dist_dir="$APT_ROOT/dists/$SUITE/$COMPONENT/binary-$arch"
-  mkdir -p "$dist_dir"
-  (
-    cd "$APT_ROOT"
-    dpkg-scanpackages --arch "$arch" pool 2>/dev/null \
-      > "dists/$SUITE/$COMPONENT/binary-$arch/Packages"
-  )
-  gzip -9fkn "$dist_dir/Packages"
-  log "indexed $arch: $(grep -c '^Package:' "$dist_dir/Packages" || true) package(s)"
-done
+bash "$SCRIPT_ROOT/scripts/publish/build-apt-indices.sh" "$APT_ROOT" "$SUITE"
 
 apt-ftparchive \
   -o "APT::FTPArchive::Release::Origin=Vibestudio" \
@@ -121,7 +112,6 @@ if grep -q "PRIVATE KEY" "$OUTPUT_DIR/gpg.key"; then
   exit 1
 fi
 
-SCRIPT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cp "$SCRIPT_ROOT/build-resources/brand/vibestudio-symbol.svg" \
   "$OUTPUT_DIR/vibestudio-symbol.svg"
 

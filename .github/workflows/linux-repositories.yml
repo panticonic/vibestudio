@@ -1,0 +1,89 @@
+name: Publish Linux repositories
+
+# Repository metadata follows immutable, checksum-verified public installers.
+# The same publisher runs after a release and when its indexing code changes.
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        type: string
+        required: false
+    secrets:
+      LINUX_SIGNING_KEY:
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-repositories.yml
+      - scripts/publish/build-linux-repos.sh
+      - scripts/publish/build-apt-indices.sh
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish signed apt and dnf repositories
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout repository publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download published Linux installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          if [ -z "$tag" ]; then
+            tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --exclude-drafts --json tagName \
+              --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | first')
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir release
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release \
+            --pattern '*.deb' --pattern '*.rpm' --pattern '*.pkg.tar.zst' --pattern SHA256SUMS-linux
+          printf 'Publishing repositories for %s\n' "$tag"
+
+      - name: Verify published installer checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-linux
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y apt-utils dpkg-dev createrepo-c rpm
+
+      - name: Import the package signing key
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: |
+          test -n "$LINUX_SIGNING_KEY" || { echo "LINUX_SIGNING_KEY is not configured" >&2; exit 1; }
+          printf '%s' "$LINUX_SIGNING_KEY" | gpg --batch --import
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        id: pages
+
+      - name: Build signed apt and dnf repositories
+        env:
+          SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
+        run: bash scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}"
+
+      - name: Upload the repository site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
