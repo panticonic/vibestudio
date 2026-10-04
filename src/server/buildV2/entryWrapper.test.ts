@@ -303,9 +303,7 @@ describe("injectHtmlTransforms", () => {
     expect(html).toContain("<title>Agentic Chat</title>");
     expect(html).toContain('<link rel="stylesheet" href="./bundle.css" />');
     expect(html).toContain('<base href="./">');
-    expect(html).toContain(
-      `<link rel="preload" href="${panelRuntimeHelperHref("__transport.js")}" as="script" />`
-    );
+    expect(html).not.toContain('rel="preload"');
     expect(html).toContain('<link rel="modulepreload" href="./bundle.js" />');
     expect(html).toContain(
       `<script src="${panelRuntimeHelperHref("__loader.js")}" data-bundle-src="./bundle.js"></script>`

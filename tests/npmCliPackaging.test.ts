@@ -9,11 +9,60 @@ import {
   stageNativeIsolationArtifacts,
   stageNodeRuntimeInstaller,
   stageSpeechRuntime,
+  stagePackageDependencies,
+  stagePinnedRootDependencies,
 } from "../scripts/build-server-npm-package.mjs";
 import { assertPhononRuntimeArtifacts } from "../scripts/phonon-runtime-artifacts.mjs";
+import { createRequire } from "node:module";
 import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
+  it("retains the repaired native binding instead of reinstalling upstream bytes", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-native-dependency-stage-"));
+    try {
+      stagePinnedRootDependencies(root);
+      const source = createRequire(path.resolve("package.json"));
+      const installed = createRequire(path.join(root, "vendor/@number0/iroh/package.json"));
+      const names: Record<string, string> = {
+        "linux-x64": "@number0/iroh-linux-x64-gnu",
+        "linux-arm64": "@number0/iroh-linux-arm64-gnu",
+        "darwin-arm64": "@number0/iroh-darwin-arm64",
+        "win32-x64": "@number0/iroh-win32-x64-msvc",
+      };
+      const name = names[`${process.platform}-${process.arch}`]!;
+      expect(
+        fs.readFileSync(installed.resolve(name)).equals(fs.readFileSync(source.resolve(name)))
+      ).toBe(true);
+      expect(installed(name).Endpoint).toBeTypeOf("function");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("retains the Svelte checker's compiler version and transitive runtime dependencies", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-dependency-stage-"));
+    try {
+      stagePackageDependencies(path.resolve("packages/svelte-type-source"), root);
+      // The generated npm manifest installs the shared Svelte dependency at
+      // package root; only the checker's incompatible compiler stays nested.
+      fs.symlinkSync(
+        path.resolve("node_modules/svelte"),
+        path.join(root, "node_modules/svelte"),
+        "junction"
+      );
+      const require = createRequire(path.join(root, "package.json"));
+      const typescript = require("typescript");
+      expect(typescript.version).toBe("6.0.3");
+      expect(require("svelte2tsx").svelte2tsx).toBeTypeOf("function");
+      expect(fs.existsSync(path.join(root, "node_modules/svelte2tsx/node_modules/dedent-js"))).toBe(
+        true
+      );
+      expect(
+        fs.existsSync(path.join(root, "node_modules/svelte2tsx/node_modules/typescript"))
+      ).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("ships the verified offline speech runtime and rejects altered code", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "vibestudio-speech-stage-"));
     try {

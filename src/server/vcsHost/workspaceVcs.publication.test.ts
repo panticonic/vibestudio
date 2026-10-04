@@ -54,7 +54,14 @@ describe("WorkspaceVcs protected publication notification", () => {
     const listenerGate = new Promise<void>((resolve) => {
       releaseListener = resolve;
     });
-    const listener = vi.fn(async () => listenerGate);
+    let listenerEntered!: () => void;
+    const listenerReady = new Promise<void>((resolve) => {
+      listenerEntered = resolve;
+    });
+    const listener = vi.fn(async () => {
+      listenerEntered();
+      await listenerGate;
+    });
     vcs.onProtectedPublication(listener);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
 
@@ -68,14 +75,18 @@ describe("WorkspaceVcs protected publication notification", () => {
         hostRefsBasisDigest: hostRefBasisDigest([]),
       },
     });
-    void publication.then(() => {
+    const publicationCompletion = publication.then(() => {
       publicationSettled = true;
+      throw new Error("Publication completed without joining its listener");
     });
-
-    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
-    expect(publicationSettled).toBe(false);
-    releaseListener();
-    await publication;
+    try {
+      await Promise.race([listenerReady, publicationCompletion]);
+      expect(listener).toHaveBeenCalledOnce();
+      expect(publicationSettled).toBe(false);
+    } finally {
+      releaseListener();
+      await publication;
+    }
 
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({

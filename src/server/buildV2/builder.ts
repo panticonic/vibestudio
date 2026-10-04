@@ -1443,10 +1443,10 @@ function panelLoaderScript(bundleSrc: string): string {
 }
 
 function panelPreloadLinks(bundleSrc: string): string {
-  return [
-    `<link rel="preload" href="${panelRuntimeHelperHref("__transport.js")}" as="script" />`,
-    `<link rel="modulepreload" href="${escapeHtml(bundleSrc)}" />`,
-  ].join("\n  ");
+  // The loader consumes the classic transport only after panel configuration
+  // arrives. That external lifecycle can outlive Chromium's preload-use
+  // window; the loader owns requesting and executing this resource together.
+  return `<link rel="modulepreload" href="${escapeHtml(bundleSrc)}" />`;
 }
 
 function isPanelEntryJsOutput(outputPath: string): boolean {

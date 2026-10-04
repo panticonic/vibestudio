@@ -26,6 +26,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
+import semver from "semver";
 import { fileURLToPath } from "node:url";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
@@ -132,6 +134,7 @@ async function stageServer(nativeArtifacts) {
   // ships self-contained; @workspace/* are NOT host deps (workspace's own build).
   vendorVibestudioPackages(root);
   vendorExtensionHost(root);
+  stagePinnedRootDependencies(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
   stageNodeRuntimeInstaller(root);
 
@@ -151,6 +154,7 @@ async function stageServer(nativeArtifacts) {
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies(),
+    optionalDependencies: rootPkg.optionalDependencies,
     publishConfig: { access: "public" },
   });
 }
@@ -241,8 +245,85 @@ function vendorVibestudioPackages(pkgRoot) {
     const base = name.slice("@vibestudio/".length);
     const dest = path.join(pkgRoot, "vendor", "@vibestudio", base);
     copyTree(path.join(packagesDir, entry), dest, defaultSkip);
+    stagePackageDependencies(path.join(packagesDir, entry), dest);
     normalizeVendoredManifest(path.join(dest, "package.json"));
   }
+}
+
+/** Preserve the installed dependency graph using ordinary nested Node packages.
+ * A root dependency is shared only when its entire published range satisfies
+ * the consumer. Incompatible versions stay with the package that owns them. */
+export function stagePackageDependencies(source, destination, ancestors = new Map()) {
+  const pkg = readJson(path.join(source, "package.json"));
+  const require = createRequire(path.join(source, "package.json"));
+  const declarations = {
+    ...pkg.peerDependencies,
+    ...pkg.dependencies,
+    ...pkg.optionalDependencies,
+  };
+  const children = [];
+  const available = new Map(ancestors);
+  for (const [name, range] of Object.entries(declarations)) {
+    if (range.startsWith("workspace:")) continue;
+    if (pkg.peerDependenciesMeta?.[name]?.optional &&
+      !(name in (pkg.dependencies ?? {})) && !(name in (pkg.optionalDependencies ?? {})) &&
+      !rootPkg.dependencies?.[name]) continue;
+    const rootRange = rootPkg.dependencies?.[name];
+    if (rootRange && semver.validRange(rootRange) && semver.validRange(range) &&
+      semver.subset(rootRange, range)) continue;
+    const ancestor = ancestors.get(name);
+    if (ancestor && semver.validRange(range) &&
+      semver.satisfies(readJson(path.join(ancestor, "package.json")).version, range)) continue;
+    const candidates = (require.resolve.paths(`${name}/package.json`) ?? [])
+      .map((directory) => path.join(directory, name));
+    const found = candidates.find((directory) => fs.existsSync(path.join(directory, "package.json")));
+    if (!found) {
+      if (name in (pkg.optionalDependencies ?? {}) || pkg.peerDependenciesMeta?.[name]?.optional)
+        continue;
+      throw new Error(`Missing installed runtime dependency: ${pkg.name} -> ${name}`);
+    }
+    const directory = fs.realpathSync(found);
+    if (ancestors.get(name) === directory) continue;
+    const target = path.join(destination, "node_modules", name);
+    copyTree(directory, target, defaultSkip);
+    available.set(name, directory);
+    children.push({ directory, target });
+  }
+  for (const { directory, target } of children) {
+    stagePackageDependencies(directory, target, available);
+  }
+}
+
+/** Root optional pins override upstream native distributions. Their declaring
+ * package must ship with its installed graph, rather than let npm re-resolve
+ * the upstream declarations and hide a repaired binding in a sibling slot. */
+export function computePinnedRootDependencies() {
+  return Object.entries(rootPkg.dependencies ?? {}).filter(([name, range]) => {
+    if (range.startsWith("workspace:")) return false;
+    const pkg = readJson(path.join(installedPackageDirectory(name, repoRoot), "package.json"));
+    return Object.entries(pkg.optionalDependencies ?? {}).some(([dependency, specifier]) =>
+      rootPkg.optionalDependencies?.[dependency] && rootPkg.optionalDependencies[dependency] !== specifier
+    );
+  }).map(([name, version]) => ({ name, version }));
+}
+
+export function stagePinnedRootDependencies(root) {
+  for (const { name } of computePinnedRootDependencies()) {
+    const source = installedPackageDirectory(name, repoRoot);
+    const destination = path.join(root, "vendor", name);
+    copyTree(source, destination, defaultSkip);
+    stagePackageDependencies(source, destination);
+    normalizeVendoredManifest(path.join(destination, "package.json"));
+  }
+}
+
+function installedPackageDirectory(name, source) {
+  const require = createRequire(path.join(source, "package.json"));
+  const directory = (require.resolve.paths(`${name}/package.json`) ?? [])
+    .map((root) => path.join(root, name))
+    .find((root) => fs.existsSync(path.join(root, "package.json")));
+  if (!directory) throw new Error(`Missing installed package: ${name}`);
+  return fs.realpathSync(directory);
 }
 
 // Normalize a vendored @vibestudio manifest. Critically, KEEP its workspace:*
@@ -323,8 +404,10 @@ function copyFile(rel, dest) {
 // which ships as a native package rather than from this registry.
 export function computeHostDependencies() {
   const deps = {};
+  const pinned = new Set(computePinnedRootDependencies().map(({ name }) => name));
   for (const [name, range] of Object.entries(rootPkg.dependencies ?? {})) {
     if (typeof range === "string" && range.startsWith("workspace:")) continue;
+    if (pinned.has(name)) continue;
     deps[name] = range;
   }
   return deps;

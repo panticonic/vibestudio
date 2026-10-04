@@ -17,20 +17,23 @@ import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 
 const pkgRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 prepareWindowsWorkerdMetadata({ cwd: pkgRoot });
-const src = path.join(pkgRoot, "vendor", "@vibestudio");
+const src = path.join(pkgRoot, "vendor");
 if (!fs.existsSync(src)) process.exit(0); // dev checkout / nothing to vendor
 
 const runtime = await stageNodeRuntime(pkgRoot);
 console.log(`[vibestudio] installed verified Node runtime: ${runtime.executable}`);
 
-const dest = path.join(pkgRoot, "node_modules", "@vibestudio");
+const dest = path.join(pkgRoot, "node_modules");
 fs.mkdirSync(dest, { recursive: true });
 
 let count = 0;
-for (const entry of fs.readdirSync(src)) {
+const entries = fs.readdirSync(src).flatMap((entry) => entry.startsWith("@")
+  ? fs.readdirSync(path.join(src, entry)).map((name) => path.join(entry, name))
+  : [entry]);
+for (const entry of entries) {
   const target = path.join(dest, entry);
   fs.rmSync(target, { recursive: true, force: true });
   fs.cpSync(path.join(src, entry), target, { recursive: true });
   count++;
 }
-console.log(`[vibestudio] installed ${count} vendored @vibestudio package(s) into node_modules`);
+console.log(`[vibestudio] installed ${count} vendored runtime package(s) into node_modules`);
