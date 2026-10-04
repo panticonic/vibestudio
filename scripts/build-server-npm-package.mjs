@@ -32,6 +32,7 @@ import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs"
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
+import { assertPhononRuntimeArtifacts, PHONON_VENDOR_ID } from "./phonon-runtime-artifacts.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
@@ -56,7 +57,7 @@ async function main() {
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
-  stageServer(nativeArtifacts);
+  await stageServer(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
   console.log("    (cd dist-packages/server && npm publish --dry-run)");
@@ -82,7 +83,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-function stageServer(nativeArtifacts) {
+async function stageServer(nativeArtifacts) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -92,6 +93,7 @@ function stageServer(nativeArtifacts) {
     copyFile(artifact, path.join(root, artifact));
   }
   stageNativeIsolationArtifacts(root, nativeArtifacts);
+  await stageSpeechRuntime(root);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),
@@ -151,6 +153,18 @@ function stageServer(nativeArtifacts) {
     dependencies: computeHostDependencies(),
     publishConfig: { access: "public" },
   });
+}
+
+export async function stageSpeechRuntime(root) {
+  await assertPhononRuntimeArtifacts(repoRoot);
+  const destination = path.join(root, "dist/phonon");
+  mkdirp(destination);
+  fs.cpSync(path.join(repoRoot, "dist/phonon", PHONON_VENDOR_ID), path.join(destination, PHONON_VENDOR_ID), {
+    recursive: true,
+    mode: fs.constants.COPYFILE_FICLONE,
+  });
+  copyFile("dist/phonon/runtime.json", path.join(destination, "runtime.json"));
+  await assertPhononRuntimeArtifacts(root);
 }
 
 export function stageNodeRuntimeInstaller(root) {

@@ -21,6 +21,7 @@ import {
   nativeIsolationTarget,
 } from "../scripts/native-isolation-artifacts.mjs";
 import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
+import { copyPhononRuntime, preparePhononPackaging } from "./helpers/phononRuntimeArtifacts.js";
 import stageElectronNativeIsolation, {
   assertPackagedNativeIsolation,
 } from "../scripts/stage-electron-native-isolation.mjs";
@@ -71,6 +72,7 @@ describe("native isolation artifact matrix", () => {
 
   it("stages a requested ARM64 helper without using the host target", async () => {
     const { root, artifactRoot } = fixture();
+    const config = await preparePhononPackaging(root);
     const target = nativeIsolationTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(root, artifactRoot, [target]);
@@ -78,10 +80,17 @@ describe("native isolation artifact matrix", () => {
       await stageElectronNativeIsolation({
         electronPlatformName: "linux",
         arch: 3,
-        packager: { projectDir: root },
+        packager: { projectDir: root, config },
       } as never);
       const destination = path.join(root, target.artifact);
       expect(readFileSync(destination)).toEqual(binary(target));
+      // Repeated packaging must reuse a published immutable speech generation,
+      // including platforms that cannot rename a directory over an existing one.
+      await stageElectronNativeIsolation({
+        electronPlatformName: "linux",
+        arch: 3,
+        packager: { projectDir: root, config },
+      } as never);
       if (process.platform !== "win32") expect(statSync(destination).mode & 0o111).toBeTruthy();
       await expect(
         stageElectronNativeIsolation({
@@ -128,6 +137,7 @@ describe("native isolation artifact matrix", () => {
         { recursive: true }
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
+      await copyPhononRuntime(path.join(resources, "app.asar.unpacked"));
       await expect(
         assertPackagedNativeIsolation(resources, context as never)
       ).resolves.not.toThrow();
@@ -143,20 +153,23 @@ describe("native isolation artifact matrix", () => {
 
   it("stages Windows Node without requiring or shipping an MXC executor", async () => {
     const { root } = fixture();
+    const config = await preparePhononPackaging(root);
     writeNodeRuntimeFixture(root, "win32", "x64");
-    const workerdPackage = path.join(
-      root,
-      "node_modules/@cloudflare/workerd-windows-64"
-    );
+    const workerdPackage = path.join(root, "node_modules/@cloudflare/workerd-windows-64");
     mkdirSync(path.join(workerdPackage, "bin"), { recursive: true });
     writeFileSync(
       path.join(workerdPackage, "package.json"),
       JSON.stringify({ name: "@cloudflare/workerd-windows-64", version: "test" })
     );
     writeFileSync(path.join(workerdPackage, "bin/workerd.exe"), "vendor workerd");
-    const context = { electronPlatformName: "win32", arch: 1, packager: { projectDir: root } };
+    const context = {
+      electronPlatformName: "win32",
+      arch: 1,
+      packager: { projectDir: root, config },
+    };
     await stageElectronNativeIsolation(context as never);
     const resources = path.join(root, "resources");
+    await copyPhononRuntime(path.join(resources, "app.asar.unpacked"));
     cpSync(path.join(root, "dist/node"), path.join(resources, "app.asar.unpacked/dist/node"), {
       recursive: true,
     });

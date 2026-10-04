@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { writeNativeIsolationArtifacts } from "./helpers/nativeIsolationArtifacts.js";
 import { afterPack } from "../scripts/check-electron-package-boundary.mjs";
 import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
+import { copyPhononRuntime } from "./helpers/phononRuntimeArtifacts.js";
 import { nativeIsolationTarget } from "../scripts/native-isolation-artifacts.mjs";
 import {
   assertNoBundledUserlandPaths,
@@ -77,6 +78,7 @@ describe("packaged host/userland boundary", () => {
         process.platform,
         process.arch
       );
+      await copyPhononRuntime(path.join(resources, "app.asar.unpacked"));
       if (process.platform !== "win32") {
         const nativeTarget = nativeIsolationTarget(process.platform, process.arch);
         const artifactRoot = path.join(app, "native/isolation/artifacts");

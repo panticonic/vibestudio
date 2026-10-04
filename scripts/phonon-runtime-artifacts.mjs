@@ -83,6 +83,26 @@ async function verifyFiles(root, files) {
       throw new Error(`Invalid installed Phonon resource: ${name}`);
   }
 }
+async function publishImmutableDirectory(staging, destination, verify) {
+  try {
+    await verify(destination);
+    return;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  try {
+    await rename(staging, destination);
+  } catch (error) {
+    // Another publisher may have completed the same immutable generation.
+    // Verify its content, independently of the platform's rename error code.
+    try {
+      await verify(destination);
+    } catch {
+      throw error;
+    }
+  }
+  await verify(destination);
+}
 async function assertVendor(root, target = phononRuntimeTarget()) {
   const receipt = JSON.parse(await readFile(path.join(root, "receipt.json"), "utf8"));
   if (receipt.version !== 1 || receipt.vendor !== PHONON_VENDOR_ID)
@@ -218,12 +238,7 @@ async function stageVendor(appRoot, dependencyRoots) {
       path.join(staging, "receipt.json"),
       JSON.stringify({ version: 1, vendor: PHONON_VENDOR_ID, files: complete }, null, 2)
     );
-    try {
-      await rename(staging, root);
-    } catch (error) {
-      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
-    }
-    await assertVendor(root);
+    await publishImmutableDirectory(staging, root, assertVendor);
     return root;
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -243,12 +258,7 @@ export async function stagePhononRuntime(appRoot = repositoryRoot) {
       JSON.stringify({ version: 1, files }, null, 2)
     );
     await verifyFiles(staging, files);
-    try {
-      await rename(staging, code);
-    } catch (error) {
-      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
-    }
-    await verifyFiles(code, files);
+    await publishImmutableDirectory(staging, code, (root) => verifyFiles(root, files));
     // Readers see one complete immutable coordinate. Parallel publishers may
     // select the same generation, without replacing each other's resources.
     const pointer = path.join(staging, "runtime.json");

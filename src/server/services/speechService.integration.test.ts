@@ -38,12 +38,18 @@ it("dispatches bundled offline speech as a host Response and joins its native ow
       .split("\n")
       .map((line) => JSON.parse(line));
     expect(events.some((event) => event.type === "progress")).toBe(true);
-    expect(events.at(-1)).toEqual({
+    const result = events.at(-1);
+    expect(result).toEqual({
       type: "result",
-      text: "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      text: expect.any(String),
       model: "phonon-2",
       language: "en",
     });
+    // CPU kernels can differ in punctuation; the recognized words are the
+    // inference contract, as in the standalone native speech smoke test.
+    expect(result.text.replace(/[^a-z ]/gi, "").toLowerCase()).toBe(
+      "and so my fellow americans ask not what your country can do for you ask what you can do for your country"
+    );
     // A subsequent stream owns the resident model, then explicit transport
     // cancellation retires and joins that work through the same Response API.
     const second = (await dispatcher.dispatch(ctx, "speech", "transcribe", [

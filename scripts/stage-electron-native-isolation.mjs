@@ -32,6 +32,8 @@ function electronNativeArtifacts(context) {
 }
 
 export default async function stageElectronNativeIsolation(context) {
+  if (typeof Arch[context.arch] !== "string")
+    throw new Error("Unknown Electron packaging architecture");
   phononRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
   await stagePhononRuntime(context.packager.projectDir);
   const speechCopy = context.packager.config.extraResources?.find(
@@ -39,8 +41,6 @@ export default async function stageElectronNativeIsolation(context) {
   );
   if (!speechCopy) throw new Error("Electron packaging must copy installed speech resources");
   speechCopy.filter = ["runtime.json", `${PHONON_VENDOR_ID}/**/*`];
-  if (typeof Arch[context.arch] !== "string")
-    throw new Error("Unknown Electron packaging architecture");
   await stageNodeRuntime(
     context.packager.projectDir,
     nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
