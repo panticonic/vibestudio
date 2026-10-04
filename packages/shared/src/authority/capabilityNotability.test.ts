@@ -89,6 +89,12 @@ describe("capability notability", () => {
       "network.response.read",
       "push.send",
       "process.execute",
+      "camera",
+      "screen-capture",
+      "location",
+      "fs-read",
+      "fs-write",
+      "microphone",
       "permissions.revoke",
     ]) {
       expect(reviewedCapabilityNotability(capability)).toBe("headline");

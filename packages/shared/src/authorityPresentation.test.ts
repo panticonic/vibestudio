@@ -13,6 +13,7 @@ import {
 } from "./authority/hostAuthorityCatalog.generated.js";
 import { capabilityDomain } from "./authority/authorityDomains.js";
 import { HOST_SEMANTIC_CAPABILITY_COPY } from "./hostApprovalCopy.js";
+import { APP_CAPABILITIES_BY_NATIVE_HOST } from "./unitManifest.js";
 
 const HOST_CAPABILITY_PRESENTATIONS = Object.fromEntries(
   Object.entries(HOST_AUTHORITY_METHODS)
@@ -30,6 +31,21 @@ const HOST_CAPABILITY_PRESENTATIONS = Object.fromEntries(
 );
 
 describe("authority request presentation", () => {
+  it("reviews every capability implemented by a native app host", () => {
+    const capabilities = [...new Set(Object.values(APP_CAPABILITIES_BY_NATIVE_HOST).flat())];
+    for (const capability of capabilities) {
+      expect(() =>
+        assertReviewedNativeAppAuthorityRequests([
+          {
+            capability,
+            resource: { kind: "prefix", prefix: "" },
+            tier: "gated",
+            evidence: "intentional-broad",
+          },
+        ])
+      ).not.toThrow();
+    }
+  });
   it("has reviewed copy for every capability in the static authority census", () => {
     expect(
       Object.keys(HOST_CAPABILITY_CATEGORIES).filter(
@@ -148,6 +164,36 @@ describe("authority request presentation", () => {
         },
       ])
     ).toThrow("Capability tray has no reviewed authority presentation");
+  });
+
+  it.each([
+    ["microphone", "Use your microphone", "record audio from your microphone"],
+    ["camera", "Use your camera", "capture images and video from your camera"],
+    ["screen-capture", "Capture your screen", "capture images and video from your screen"],
+    ["location", "Access your location", "read your device's location"],
+  ])("reviews a gated %s request for device capture", (capability, title, action) => {
+    const request = {
+      capability,
+      resource: { kind: "prefix" as const, prefix: "" },
+      tier: "gated" as const,
+      evidence: "intentional-broad" as const,
+    };
+    expect(summarizeAuthorityRequests([request]).rows).toEqual([
+      expect.objectContaining({
+        capability,
+        domain: "computer",
+        verb: "see",
+        action,
+        resourceScope: request.resource,
+        tier: "gated",
+      }),
+    ]);
+    expect(describeCapability(capability, "panel")).toMatchObject({
+      title,
+      action,
+      group: "host",
+    });
+    expect(() => assertReviewedNativeAppAuthorityRequests([request])).not.toThrow();
   });
 
   it("presents a tier change distinctly without inventing added or removed authority", () => {
