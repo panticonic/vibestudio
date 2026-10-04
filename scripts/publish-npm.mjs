@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { tsImport } from "tsx/esm/api";
 
@@ -118,7 +119,7 @@ async function main() {
 
   console.log("\n[publish-npm] Registry verification");
   for (const entry of manifests) {
-    const published = verifyPublished(entry);
+    const published = await verifyPublished(entry);
     console.log(`  ${entry.pkg.name}@${published}`);
   }
 
@@ -239,30 +240,24 @@ function npmView(name, version) {
   if (/E404|404 Not Found|is not in this registry/.test(`${result.stdout}\n${result.stderr}`)) {
     return null;
   }
-  console.warn(`[publish-npm] Could not check npm registry for ${name}@${version}; continuing.`);
-  if (result.stderr.trim()) console.warn(result.stderr.trim());
-  return null;
+  throw result.error ?? new Error(
+    `Could not check npm registry for ${name}@${version}: ${result.stderr.trim() || result.stdout.trim()}`
+  );
 }
 
-function verifyPublished(entry) {
-  const attempts = 12;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+async function verifyPublished(entry) {
+  // npm acknowledges an accepted upload before its processing makes it public.
+  // A missing version is still pending; only registry readiness or an actual
+  // registry error can settle verification.
+  for (;;) {
     const published = npmView(entry.pkg.name, entry.version);
     if (published === entry.version) return published;
-
-    if (attempt < attempts) {
-      console.log(
-        `[publish-npm] Waiting for ${entry.pkg.name}@${entry.version} to appear on npm (${attempt}/${attempts})...`
-      );
-      sleep(5000);
+    if (published !== null) {
+      throw new Error(`Unexpected registry version for ${entry.pkg.name}@${entry.version}: ${published}`);
     }
+    console.log(`[publish-npm] Waiting for ${entry.pkg.name}@${entry.version} to appear on npm...`);
+    await delay(5000);
   }
-
-  throw new Error(`Could not verify ${entry.pkg.name}@${entry.version} on npm.`);
-}
-
-function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function ensureTokenAuth() {
