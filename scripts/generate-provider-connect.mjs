@@ -3,7 +3,7 @@ import { builtinProviders, getBuiltinModels } from "@panticonic/pi-ai/providers/
 
 // Endpoint configuration and subscription-only providers have explicit policy.
 const configured = new Set([
-  "azure-openai-responses",
+  "azure",
   "cloudflare-ai-gateway",
   "cloudflare-workers-ai",
   "google-vertex",

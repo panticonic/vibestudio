@@ -13,6 +13,7 @@ import {
   type GraphNode,
   type PackageGraph,
 } from "../../src/server/buildV2/packageGraph.js";
+import { installUserlandPackageRelease } from "./userland-package-release.js";
 
 export interface UserlandDependencyProjection {
   graph: PackageGraph;
@@ -33,6 +34,8 @@ export interface PrepareUserlandDependencyProjectionOptions {
   includeDevelopmentDependencies?: boolean;
   /** Units deliberately validated by a separate toolchain. */
   excludedUnitPaths?: ReadonlySet<string>;
+  /** Explicit packed release used only by host validation, never by a workspace runtime install. */
+  packageRelease?: string;
 }
 
 /** Native units and their consumers use the installed native host toolchain.
@@ -104,10 +107,21 @@ export async function prepareUserlandDependencyProjection(
   const patches = [...dependencyPatches.values()].sort((left, right) =>
     left.selector.localeCompare(right.selector)
   );
-  const borrowed = await acquireExternalDeps(dependencies, dependencyOverrides, {
-    appRoot,
-    patches,
-  });
+  if (options.packageRelease && patches.length > 0)
+    throw new Error(
+      "Validate a packed release after incorporating dependency source patches into it"
+    );
+  const borrowed = options.packageRelease
+    ? installUserlandPackageRelease({
+        appRoot,
+        releaseFile: options.packageRelease,
+        dependencies,
+        overrides: dependencyOverrides,
+      })
+    : await acquireExternalDeps(dependencies, dependencyOverrides, {
+        appRoot,
+        patches,
+      });
   return {
     graph,
     units,

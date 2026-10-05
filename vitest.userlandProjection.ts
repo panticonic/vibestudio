@@ -51,40 +51,26 @@ export function userlandDependencyAliases(projection: UserlandDependencyProjecti
           };
         });
         if (exported.length > 0) return exported;
-        const entry = manifest.module ?? manifest.main;
-        return entry
-          ? [
-              {
-                find: new RegExp(`^${escapeRegex(packageName)}/(.+)$`, "u"),
-                replacement: `${packageDir}/$1`,
-                customResolver: preserveNestedDependencyResolution(
-                  projection.nodeModulesDir,
-                  (updatedId) =>
-                    `${packageName}/${path.relative(packageDir, updatedId).split(path.sep).join("/")}`
-                ),
-              },
-              {
-                find: packageName,
-                replacement: path.resolve(packageDir, entry),
-                customResolver: preserveNestedDependencyResolution(
-                  projection.nodeModulesDir,
-                  () => packageName
-                ),
-              },
-            ]
-          : [
-              {
-                find: new RegExp(`^${escapeRegex(packageName)}($|/)`, "u"),
-                replacement: `${packageDir}$1`,
-                customResolver: preserveNestedDependencyResolution(
-                  projection.nodeModulesDir,
-                  (updatedId) => {
-                    const relative = path.relative(packageDir, updatedId).split(path.sep).join("/");
-                    return relative === "" ? packageName : `${packageName}/${relative}`;
-                  }
-                ),
-              },
-            ];
+        const entry = manifest.module ?? manifest.main ?? "index.js";
+        return [
+          {
+            find: new RegExp(`^${escapeRegex(packageName)}/(.+)$`, "u"),
+            replacement: `${packageDir}/$1`,
+            customResolver: preserveNestedDependencyResolution(
+              projection.nodeModulesDir,
+              (updatedId) =>
+                `${packageName}/${path.relative(packageDir, updatedId).split(path.sep).join("/")}`
+            ),
+          },
+          {
+            find: packageName,
+            replacement: path.resolve(packageDir, entry),
+            customResolver: preserveNestedDependencyResolution(
+              projection.nodeModulesDir,
+              () => packageName
+            ),
+          },
+        ];
       })
       .sort((left, right) => String(right.find).length - String(left.find).length)
   );

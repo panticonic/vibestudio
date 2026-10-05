@@ -17,6 +17,11 @@ import { assertTemplateCheckoutHygiene } from "./lib/template-checkout-hygiene.m
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
 const templateArgumentIndex = process.argv.indexOf("--template");
+const releaseArgumentIndex = process.argv.indexOf("--package-release");
+const packageRelease =
+  releaseArgumentIndex < 0 ? undefined : process.argv[releaseArgumentIndex + 1];
+if (releaseArgumentIndex >= 0 && (!packageRelease || packageRelease.startsWith("--")))
+  throw new Error("--package-release requires a release.json file");
 if (workspaceArgumentIndex < 0) {
   const selected = requireDevelopmentTemplateCheckouts(appRoot);
   assertTemplateCheckoutHygiene(selected);
@@ -56,6 +61,7 @@ if (workspaceArgumentIndex < 0) {
           "--workspace-root",
           composition.root,
           ...(name === "base" ? ["--host-integration"] : []),
+          ...(packageRelease ? ["--package-release", path.resolve(packageRelease)] : []),
         ],
         { cwd: appRoot, stdio: "inherit" }
       );
@@ -84,6 +90,7 @@ const projection = await prepareUserlandDependencyProjection({
   appRoot,
   workspaceRoot,
   includeDevelopmentDependencies: true,
+  packageRelease,
 });
 const temporaryParent = path.join(appRoot, ".cache");
 fs.mkdirSync(temporaryParent, { recursive: true });

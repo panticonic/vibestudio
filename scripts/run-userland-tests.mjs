@@ -15,12 +15,18 @@ assertTemplateCheckoutHygiene(selected);
 const args = process.argv.slice(2);
 let requestedTemplate;
 let testName;
+let packageRelease;
 const filters = [];
 for (let index = 0; index < args.length; index += 1) {
   const argument = args[index];
   const value = args[index + 1];
   if (argument === "--") continue;
-  if (argument === "--template" || argument === "--filter" || argument === "--test-name") {
+  if (
+    argument === "--template" ||
+    argument === "--filter" ||
+    argument === "--test-name" ||
+    argument === "--package-release"
+  ) {
     if (!value || value.startsWith("--")) {
       throw new Error(`${argument} requires a value`);
     }
@@ -30,6 +36,9 @@ for (let index = 0; index < args.length; index += 1) {
       requestedTemplate = value;
     } else if (argument === "--filter") {
       filters.push(value);
+    } else if (argument === "--package-release") {
+      if (packageRelease) throw new Error("--package-release may be passed only once");
+      packageRelease = path.resolve(value);
     } else {
       if (testName) throw new Error("--test-name may be passed only once");
       testName = value;
@@ -76,7 +85,11 @@ for (const template of templates) {
     ],
     {
       cwd: root,
-      env: { ...process.env, VIBESTUDIO_USERLAND_TEMPLATE: template },
+      env: {
+        ...process.env,
+        VIBESTUDIO_USERLAND_TEMPLATE: template,
+        ...(packageRelease ? { VIBESTUDIO_USERLAND_PACKAGE_RELEASE: packageRelease } : {}),
+      },
       stdio: "inherit",
     }
   );

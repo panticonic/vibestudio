@@ -67,6 +67,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
     appRoot: __dirname,
     workspaceRoot,
     includeDevelopmentDependencies: true,
+    packageRelease: process.env["VIBESTUDIO_USERLAND_PACKAGE_RELEASE"],
   });
   process.once("exit", dependencyProjection.release);
   const projectedDependencies = userlandDependencyAliases(dependencyProjection);
@@ -242,6 +243,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
             // cache. Inline that projection so Vite's React aliases/dedupe also
             // govern dependencies loaded from it.
             /\/derived-cache\/external-deps\//,
+            /\/\.cache\/userland-package-release-[^/]+\/node_modules\//,
             /node_modules\/fast-xml-parser/,
           ],
         },
