@@ -1,8 +1,8 @@
 # Durable Pi implementation and affected-caller audit
 
-Date: 2026-10-04. Scope: implementation toward the user-authorized product cutover.
-This records completed boundaries and their limits; full replacement preservation
-and product cutover remain incomplete. See the [plan](durable-pi-migration-plan.md#17-current-implementation-outcome-and-cutover-scope),
+Date: 2026-10-05. Scope: implementation toward the user-authorized product cutover.
+This records completed boundaries and their limits. Product cutover is published
+and verified on fresh production state; lower-priority acceptance remains unverified. See the [plan](durable-pi-migration-plan.md#17-current-implementation-outcome-and-cutover-scope),
 [design](durable-pi-design-decisions.md), [ledger](durable-pi-behavior-ledger.md) and
 native evidence (`evidence.json`, private verification evidence).
 
@@ -56,20 +56,35 @@ The reviewed source is committed and pushed: host `f1b4187c`, Base `7353fb64`,
 System `bd5bb9a4`, System-testing `ac4db305`, Personal `d7114210`, Examples
 `6f8c8259`, Google Workspace `0ee91451` and News `85f71c6e`. Complete host commit
 gates pass. Review worktrees and Android executors/emulators are retired.
-Remaining cutover work is normal immutable template publication, exact release-pin
-adoption and a focused fresh production-template checkpoint. Self-development
-and local-model acceptance remain explicitly lower priority and unverified.
-Expand tricky-case coverage after the current repairs are committed and pushed.
-Publication review caught and repaired a separate preservation defect: authored
-runtime configuration referencing inherited units was filtered out of the release.
-Personal's onboarding `initPanels` must remain declared even though Base supplies
-the chat panel. Projection now distinguishes owned files from available units;
-a regression verifies retained startup arguments without copying the inherited
-unit. Base tests and composition types pass; source `c2a14b6` is pushed. Base
-0.3.61 was published before this discovery and remains immutable; the corrected
-publisher will ship in the subsequent release. Exact template pins are not yet
-adopted. Exact Git pins now reject ambiguous refs at admission, before workspace
-registration, using the existing canonical-ref contract (77 focused host tests pass).
+Canonical template publication and release-pin adoption are complete:
+Base `v0.3.62` at `8d8e0377`, Personal `v0.3.57` at `9bfe0649` and System
+`v0.3.75` at `0cb3f836`. Each went through the ordinary inspected/reviewed
+publisher. Personal and System preserve all authored runtime configuration and
+exactly their own repository inventories; neither ships the development-only
+System-testing dependency. The host release artifact adopts the three verified
+publication receipts. Production checkpoint 105 boots these exact pins and
+passes real rendered first/follow-up chat responses without console errors.
+Warm submit-to-completion takes 3,494 ms; the 21,086 ms first turn includes
+credential approval and is not a cold latency baseline.
+The production Personal workspace installs its exact published pin and retains
+its onboarding startup configuration. Native panel/CDP cleanup, CLI session and
+context retirement, desktop executor shutdown and server shutdown complete;
+all owned publication/production temporary roots are absent. This completes the
+product cutover boundary for the exercised workflows. Lower-priority unverified
+cases remain separately recorded; they are not represented as passing tests.
+
+Publication inspection also caught and repaired a preservation defect: authored
+runtime configuration referencing inherited units was filtered out of releases.
+Personal's onboarding `initPanels` remains declared while Base supplies the chat
+panel. Projection distinguishes owned files from available units; regression
+coverage checks retained startup arguments without copying inherited code.
+Base tests and composition types pass. Base 0.3.61 remains immutable; 0.3.62
+includes the fix and regenerated agent-facing contract. Exact Git pins now
+reject ambiguous refs at admission, before workspace registration, using the
+existing canonical-ref contract (77 focused host tests pass). Follow-up host
+source `cc0e9b65` is committed and pushed with complete commit gates passing.
+Self-development and local-model acceptance remain explicitly lower priority
+and unverified. Expanded tricky-case coverage follows the release-pin commit.
 The [installed acceptance inventory](durable-pi-installed-acceptance-remaining.md)
 records the exact remaining tests and evidence. Published fork packages and source
 checks alone do not establish a published product cutover.
