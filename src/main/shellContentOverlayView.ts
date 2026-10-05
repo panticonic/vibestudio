@@ -436,14 +436,19 @@ export class ShellContentOverlayView {
     if (!this.view || !this.anchor || !this.window) return;
     // Don't fight an active drag (or the size-report it triggers).
     if (this.dragging) return;
-    const layout = this.quickfireLayout();
-    if (layout) {
-      this.view.setBounds(layout);
-      return;
-    }
     const { width, height } = this.currentSize();
     const { x, y } = this.cornerTarget(width, height);
-    this.view.setBounds({ x, y, width, height });
+    const bounds = this.quickfireLayout() ?? { x, y, width, height };
+    const current = this.view.getBounds();
+    // Props updates and ResizeObserver reports may repeat the same geometry.
+    // Only changed placement should reach native layout and compositing.
+    if (
+      current.x !== bounds.x ||
+      current.y !== bounds.y ||
+      current.width !== bounds.width ||
+      current.height !== bounds.height
+    )
+      this.view.setBounds(bounds);
   }
 
   private quickfireLayout(): ContentOverlayBounds | null {

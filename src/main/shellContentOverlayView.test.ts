@@ -57,6 +57,33 @@ describe("Quickfire overlay geometry", () => {
     send("size", { width: 720, height: 500 });
     return { overlay, view: mocks.views[0]!, size, options };
   }
+  it("leaves native geometry unchanged for repeated approval renders and size reports", () => {
+    const { overlay, view, options } = setup();
+    overlay.show({ ...options, surface: "approval-card" });
+    send("size", { width: 650, height: 300 });
+    const bounds = vi.spyOn(view, "setBounds");
+    const render = view.webContents.send;
+    render.mockClear();
+    overlay.update({ props: { approvalId: "next" } });
+    send("size", { width: 650, height: 300 });
+    send("size", { width: 650.1, height: 300.1 });
+    overlay.update({ bounds: { ...options.bounds } });
+    expect(bounds).not.toHaveBeenCalled();
+    // Content still reaches the renderer even when geometry does not change.
+    send("ready", {});
+    expect(render).toHaveBeenCalled();
+    send("size", { width: 650, height: 400 });
+    expect(bounds).toHaveBeenCalledTimes(1);
+    expect(view.bounds.height).toBe(400);
+    overlay.update({ bounds: { ...options.bounds, x: 50 } });
+    expect(bounds).toHaveBeenCalledTimes(2);
+    expect(view.bounds.x).toBe(62);
+    overlay.hide();
+    bounds.mockClear();
+    overlay.show({ ...options, surface: "approval-card" });
+    expect(bounds).toHaveBeenCalledTimes(1);
+    overlay.destroy();
+  });
   it("keeps a dragged position across content updates and reopening", () => {
     const { overlay, view, options } = setup();
     send("drag", { phase: "start", screenX: 100, screenY: 100 });
