@@ -13,10 +13,7 @@ const DERIVED_CACHE_MAX_BYTES_BY_ROOT: Readonly<Record<string, number>> = {
   "build-results": 1 * GIB,
   "root-templates": 512 * MIB,
 };
-const LEASE_TTL_MS = 5 * 60_000;
-const HEARTBEAT_MS = 60_000;
 const AUTOMATIC_PRUNE_INTERVAL_MS = 15 * 60_000;
-const AUTOMATIC_PRUNE_LEASE_MS = 60 * 60_000;
 
 export interface DerivedCacheEntry {
   key: string;
@@ -136,20 +133,44 @@ async function cacheDirectories(root: string): Promise<string[]> {
   }
 }
 
+function processIdentity(pid: number): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+    const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return `${boot}/${started}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function ownerIsAlive(owner: string): boolean {
+  const [pidText, , identity] = owner.split(":");
+  const pid = Number(pidText);
+  // Unknown identities remain protected: inability to inspect is not death.
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    return true;
+  }
+  const current = identity ? processIdentity(pid) : undefined;
+  return !current || !identity || current === identity;
+}
+
 /**
  * Cross-process ownership for deletable cache entries.
  *
  * Acquiring a key and committing its rename-to-trash are serialized through
- * one SQLite writer transaction. Expiry is only crash recovery: live owners
- * renew their leases until release.
+ * one SQLite writer transaction. Leases end on explicit release or confirmed
+ * owner-process death. A paused or overloaded live process retains ownership.
  */
 export class DerivedCacheCoordinator {
   private readonly db: DatabaseSync;
-  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}`;
-  private readonly leases = new Map<
-    string,
-    { root: string; key: string; timer: ReturnType<typeof setInterval> }
-  >();
+  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}:${processIdentity(process.pid) ?? ""}`;
+  private readonly leases = new Set<string>();
 
   constructor(filePath: string) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -169,18 +190,35 @@ export class DerivedCacheCoordinator {
           lease_id TEXT PRIMARY KEY,
           root TEXT NOT NULL,
           key TEXT NOT NULL,
-          owner_id TEXT NOT NULL,
-          expires_at INTEGER NOT NULL
+          owner_id TEXT NOT NULL
         ) STRICT;
         CREATE INDEX IF NOT EXISTS cache_leases_entry
-          ON cache_leases(root, key, expires_at);
+          ON cache_leases(root, key);
         CREATE TABLE IF NOT EXISTS cache_maintenance (
           root TEXT PRIMARY KEY,
           owner_id TEXT,
-          expires_at INTEGER NOT NULL DEFAULT 0,
           last_pruned_at INTEGER NOT NULL DEFAULT 0
         ) STRICT;
       `);
+      const tables = ["cache_leases", "cache_maintenance"];
+      if (
+        tables.some((table) =>
+          this.db
+            .prepare(`PRAGMA table_info(${table})`)
+            .all()
+            .some((column) => column["name"] === "expires_at")
+        )
+      )
+        this.transaction(() => {
+          for (const table of tables) {
+            const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+            if (columns.some((column) => column["name"] === "expires_at")) {
+              if (table === "cache_leases") this.db.exec("DROP INDEX cache_leases_entry");
+              this.db.exec(`ALTER TABLE ${table} DROP COLUMN expires_at`);
+            }
+          }
+          this.db.exec("CREATE INDEX IF NOT EXISTS cache_leases_entry ON cache_leases(root, key)");
+        });
     } catch (error) {
       this.db.close();
       throw error;
@@ -193,7 +231,7 @@ export class DerivedCacheCoordinator {
     const leaseId = crypto.randomBytes(20).toString("hex");
     const now = Date.now();
     this.transaction(() => {
-      this.deleteExpiredLeases(now);
+      this.releaseDeadOwners();
       this.db
         .prepare(
           `INSERT INTO cache_entries(root, key, bytes, last_access)
@@ -202,14 +240,10 @@ export class DerivedCacheCoordinator {
         )
         .run(root, key, now);
       this.db
-        .prepare(
-          "INSERT INTO cache_leases(lease_id, root, key, owner_id, expires_at) VALUES (?, ?, ?, ?, ?)"
-        )
-        .run(leaseId, root, key, this.ownerId, now + LEASE_TTL_MS);
+        .prepare("INSERT INTO cache_leases(lease_id, root, key, owner_id) VALUES (?, ?, ?, ?)")
+        .run(leaseId, root, key, this.ownerId);
     });
-    const timer = setInterval(() => this.heartbeat(leaseId), HEARTBEAT_MS);
-    timer.unref?.();
-    this.leases.set(leaseId, { root, key, timer });
+    this.leases.add(leaseId);
     let released = false;
     return {
       root,
@@ -217,9 +251,7 @@ export class DerivedCacheCoordinator {
       release: () => {
         if (released) return;
         released = true;
-        const owned = this.leases.get(leaseId);
-        if (owned) clearInterval(owned.timer);
-        this.leases.delete(leaseId);
+        if (!this.leases.delete(leaseId)) return;
         this.transaction(() => {
           this.db
             .prepare("DELETE FROM cache_leases WHERE lease_id = ? AND owner_id = ?")
@@ -282,13 +314,10 @@ export class DerivedCacheCoordinator {
       );
       let committed = false;
       this.transaction(() => {
-        const now = Date.now();
-        this.deleteExpiredLeases(now);
+        this.releaseDeadOwners();
         const leased = this.db
-          .prepare(
-            "SELECT 1 AS one FROM cache_leases WHERE root = ? AND key = ? AND expires_at > ? LIMIT 1"
-          )
-          .get(root, entry.key, now);
+          .prepare("SELECT 1 AS one FROM cache_leases WHERE root = ? AND key = ? LIMIT 1")
+          .get(root, entry.key);
         if (leased) return;
         const source = entryPath(root, entry.key);
         try {
@@ -329,33 +358,37 @@ export class DerivedCacheCoordinator {
     options: Parameters<DerivedCacheCoordinator["prune"]>[1] = {},
     intervalMs = AUTOMATIC_PRUNE_INTERVAL_MS
   ): Promise<DerivedCachePruneResult | null> {
+    return this.maintain(rootInput, () => this.prune(rootInput, options), intervalMs);
+  }
+
+  /** Serialize an owned maintenance operation without expiring a live owner. */
+  async maintain<T>(
+    rootInput: string,
+    operation: () => Promise<T>,
+    intervalMs = 0
+  ): Promise<T | null> {
     const root = canonicalRoot(rootInput);
     const now = Date.now();
     const claimed = this.transaction(() => {
       const current = this.db
-        .prepare(
-          "SELECT owner_id, expires_at, last_pruned_at FROM cache_maintenance WHERE root = ?"
-        )
-        .get(root) as
-        | { owner_id: string | null; expires_at: number; last_pruned_at: number }
-        | undefined;
-      if (current?.expires_at && current.expires_at > now) return false;
+        .prepare("SELECT owner_id, last_pruned_at FROM cache_maintenance WHERE root = ?")
+        .get(root) as { owner_id: string | null; last_pruned_at: number } | undefined;
+      if (current?.owner_id && ownerIsAlive(current.owner_id)) return false;
       if (current?.last_pruned_at && now - current.last_pruned_at < intervalMs) return false;
       this.db
         .prepare(
-          `INSERT INTO cache_maintenance(root, owner_id, expires_at, last_pruned_at)
-           VALUES (?, ?, ?, 0)
+          `INSERT INTO cache_maintenance(root, owner_id, last_pruned_at)
+           VALUES (?, ?, 0)
            ON CONFLICT(root) DO UPDATE SET
-             owner_id = excluded.owner_id,
-             expires_at = excluded.expires_at`
+             owner_id = excluded.owner_id`
         )
-        .run(root, this.ownerId, now + Math.max(AUTOMATIC_PRUNE_LEASE_MS, intervalMs * 2));
+        .run(root, this.ownerId);
       return true;
     });
     if (!claimed) return null;
 
     try {
-      const result = await this.prune(root, options);
+      const result = await operation();
       this.finishTuning(root, true);
       return result;
     } catch (error) {
@@ -365,14 +398,19 @@ export class DerivedCacheCoordinator {
   }
 
   close(): void {
-    for (const { timer } of this.leases.values()) clearInterval(timer);
+    if (this.db.prepare("SELECT 1 FROM cache_maintenance WHERE owner_id = ?").get(this.ownerId)) {
+      throw new Error("Cannot close derived cache coordinator during an owned pruning operation");
+    }
+    if (this.leases.size > 0)
+      this.transaction(() => {
+        this.db.prepare("DELETE FROM cache_leases WHERE owner_id = ?").run(this.ownerId);
+      });
     this.leases.clear();
     this.db.close();
   }
 
   private async scan(root: string): Promise<DerivedCacheEntry[]> {
-    const now = Date.now();
-    this.transaction(() => this.deleteExpiredLeases(now));
+    this.transaction(() => this.releaseDeadOwners());
     const stored = new Map(
       (
         this.db
@@ -382,9 +420,9 @@ export class DerivedCacheCoordinator {
     );
     const leased = new Set(
       (
-        this.db
-          .prepare("SELECT DISTINCT key FROM cache_leases WHERE root = ? AND expires_at > ?")
-          .all(root, now) as Array<{ key: string }>
+        this.db.prepare("SELECT DISTINCT key FROM cache_leases WHERE root = ?").all(root) as Array<{
+          key: string;
+        }>
       ).map((entry) => entry.key)
     );
     const entries = await Promise.all(
@@ -438,31 +476,6 @@ export class DerivedCacheCoordinator {
     };
   }
 
-  private heartbeat(leaseId: string): void {
-    const owned = this.leases.get(leaseId);
-    if (!owned) return;
-    try {
-      this.transaction(() => {
-        const renewed = this.db
-          .prepare("UPDATE cache_leases SET expires_at = ? WHERE lease_id = ? AND owner_id = ?")
-          .run(Date.now() + LEASE_TTL_MS, leaseId, this.ownerId);
-        if (renewed.changes > 0) return;
-        // A sweep can treat a live owner whose event loop stalled past the TTL
-        // as crashed. Re-fence while holding the same writer lock used by prune,
-        // but only if prune has not already committed the entry to trash.
-        if (!fs.existsSync(entryPath(owned.root, owned.key))) return;
-        this.db
-          .prepare(
-            "INSERT INTO cache_leases(lease_id, root, key, owner_id, expires_at) VALUES (?, ?, ?, ?, ?)"
-          )
-          .run(leaseId, owned.root, owned.key, this.ownerId, Date.now() + LEASE_TTL_MS);
-      });
-    } catch {
-      // A transient busy database is retried by the next heartbeat. The lease
-      // remains fenced for several heartbeat intervals.
-    }
-  }
-
   private enableWriteAheadLogging(): void {
     const current = this.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
@@ -485,8 +498,14 @@ export class DerivedCacheCoordinator {
     }
   }
 
-  private deleteExpiredLeases(now: number): void {
-    this.db.prepare("DELETE FROM cache_leases WHERE expires_at <= ?").run(now);
+  private releaseDeadOwners(): void {
+    const owners = this.db.prepare("SELECT DISTINCT owner_id FROM cache_leases").all();
+    for (const row of owners) {
+      const owner = row["owner_id"] as string;
+      if (!ownerIsAlive(owner)) {
+        this.db.prepare("DELETE FROM cache_leases WHERE owner_id = ?").run(owner);
+      }
+    }
   }
 
   private finishTuning(root: string, completed: boolean): void {
@@ -494,7 +513,7 @@ export class DerivedCacheCoordinator {
       this.db
         .prepare(
           `UPDATE cache_maintenance
-           SET owner_id = NULL, expires_at = 0,
+           SET owner_id = NULL,
                last_pruned_at = CASE WHEN ? THEN ? ELSE last_pruned_at END
            WHERE root = ? AND owner_id = ?`
         )
@@ -541,7 +560,7 @@ const tuningTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const tuningOptions = new Map<string, Parameters<DerivedCacheCoordinator["prune"]>[1]>();
 
 function armDerivedCacheTuning(root: string): void {
-  if (tuningTimers.has(root)) return;
+  if (tuningTimers.has(root) || !tuningOptions.has(root)) return;
   const timer = setTimeout(() => {
     tuningTimers.delete(root);
     void runScheduledDerivedCachePrune(root)
@@ -576,4 +595,16 @@ export function scheduleDerivedCachePrune(
   tuningOptions.set(canonical, options);
   armDerivedCacheTuning(canonical);
   return runScheduledDerivedCachePrune(canonical);
+}
+
+/** Called after application admission and producers have stopped. */
+export async function closeDerivedCacheCoordinators(): Promise<void> {
+  for (const timer of tuningTimers.values()) clearTimeout(timer);
+  tuningTimers.clear();
+  tuningOptions.clear();
+  const results = await Promise.allSettled(scheduledPrunes.values());
+  for (const coordinator of coordinators.values()) coordinator.close();
+  coordinators.clear();
+  const rejected = results.find((result) => result.status === "rejected");
+  if (rejected?.status === "rejected") throw rejected.reason;
 }

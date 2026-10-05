@@ -1,3 +1,4 @@
+import { writeHttpBytes } from "./httpStreamWrite.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
@@ -1299,9 +1300,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               createHash("sha256").update(encoded).digest("hex")
             )
           : encodeBlobRecord(digest, new Uint8Array(raw));
-        if (!res.write(record)) {
-          await new Promise<void>((resolve) => res.once("drain", resolve));
-        }
+        await writeHttpBytes(res, record);
       }
       res.end();
       return;

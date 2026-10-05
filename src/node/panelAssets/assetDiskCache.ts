@@ -11,7 +11,7 @@
  *   request cache key ──index──► content digest ──blob──► bytes on disk (zero pipe bytes)
  *
  * Storage layout under `dir`:
- *   index.json           { "<cache key>": { digest, metadataKey }, ... }
+ *   index.db             SQLite request index, blob sizes, and access ordering
  *   blobs/<digest>       raw body bytes (as received over the pipe)
  *   metadata/<key>.json  sidecar: { status, statusText, gzip, contentType, replayHeaders, size }
  *
@@ -25,7 +25,7 @@
  * Only responses the façade flags `cacheable` (immutable marker + 200) are
  * persisted; `no-store` HTML entry documents are never cached. Concurrent misses
  * for the same path are single-flighted so two webview requests trigger one pipe
- * fetch. The default retained-cache cap is 64 GiB; pruning is LRU by blob mtime
+ * fetch. The default retained-cache cap is 2 GiB; pruning is LRU by indexed access order
  * and runs on write. Live responses are not truncated to that retention budget.
  */
 
@@ -33,6 +33,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { AssetIndex, type AssetIndexEntry as IndexEntry } from "./assetIndex.js";
 
 /** Publish completed bytes without replacing an immutable inode held by readers. */
 async function publishAssetBlob(source: string, destination: string, size: number): Promise<void> {
@@ -54,7 +55,7 @@ async function publishAssetBlob(source: string, destination: string, size: numbe
 
 // Retained-cache budget, not a response-size limit. Live bodies stream to disk
 // and never occupy this many bytes in JavaScript memory.
-const DEFAULT_MAX_BYTES = 64 * 1024 * 1024 * 1024; // 64 GiB
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 64x the measured five-app working set
 
 class CachePopulationTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
@@ -90,7 +91,7 @@ export interface ServedAsset {
   gzip: boolean;
   contentType: string;
   replayHeaders: Record<string, string>;
-  bodyPath: string;
+  body: import("node:fs").ReadStream;
   size: number;
 }
 
@@ -122,11 +123,6 @@ interface Sidecar {
 }
 
 const CONTENT_DIGEST = /^[a-f0-9]{64}$/;
-
-interface IndexEntry {
-  digest: string;
-  metadataKey: string;
-}
 
 function waitForAsset<T>(
   work: Promise<T>,
@@ -233,7 +229,7 @@ class AssetPopulation {
       digest: string;
       blobPath: string;
       size: number;
-    }) => Promise<ServedAsset>
+    }) => Promise<void>
   ) {
     this.source = response.body.getReader();
     this.signal.addEventListener("abort", this.abort, { once: true });
@@ -286,7 +282,8 @@ class AssetPopulation {
     };
   }
 
-  serve(release: () => void, signal?: AbortSignal): ServeOutcome {
+  serve(release: () => void, callerSignal?: AbortSignal): ServeOutcome {
+    const signal = callerSignal ? AbortSignal.any([callerSignal, this.signal]) : this.signal;
     this.readers++;
     let offset = 0;
     let retired = false;
@@ -461,7 +458,12 @@ export class AssetDiskCache {
   private readonly indexPath: string;
   private readonly maxBytes: number;
   /** path → content digest + per-path metadata key */
-  private readonly index = new Map<string, IndexEntry>();
+  private index!: AssetIndex;
+  private closing: Promise<void> | undefined;
+  private readonly reads = new Set<Promise<ServedAsset | null>>();
+  private readonly streams = new Set<import("node:fs").ReadStream>();
+  private readonly pins = new Map<string, number>();
+  private cleanupFailure: unknown;
   /** One owned upstream fetch per immutable path, with independent consumers. */
   private readonly inflight = new Map<
     string,
@@ -473,7 +475,7 @@ export class AssetDiskCache {
     }
   >();
   private readonly populations = new Set<AssetPopulation>();
-  /** Serializes index writes + prune so concurrent persists don't clobber index.json. */
+  /** Serializes index publication and pruning. */
   private writeChain: Promise<void> = Promise.resolve();
   private ready = false;
 
@@ -487,7 +489,7 @@ export class AssetDiskCache {
   constructor(opts: { dir: string; maxBytes?: number }) {
     this.blobsDir = path.join(opts.dir, "blobs");
     this.metadataDir = path.join(opts.dir, "metadata");
-    this.indexPath = path.join(opts.dir, "index.json");
+    this.indexPath = path.join(opts.dir, "index.db");
     this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   }
 
@@ -496,17 +498,44 @@ export class AssetDiskCache {
       fsp.mkdir(this.blobsDir, { recursive: true }),
       fsp.mkdir(this.metadataDir, { recursive: true }),
     ]);
+    this.index = new AssetIndex(this.indexPath);
     try {
-      const raw = await fsp.readFile(this.indexPath, "utf-8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      for (const [k, v] of Object.entries(parsed)) {
-        const entry = parseIndexEntry(v);
-        if (entry) this.index.set(k, entry);
+      const legacy = path.join(path.dirname(this.indexPath), "index.json");
+      try {
+        const parsed = JSON.parse(await fsp.readFile(legacy, "utf-8")) as Record<string, unknown>;
+        this.index.transaction(() => {
+          for (const [key, value] of Object.entries(parsed)) {
+            const entry = parseIndexEntry(value);
+            if (entry) this.index.set(key, entry);
+          }
+        });
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT")
+          throw error;
       }
-    } catch {
-      // No index yet (or corrupt) → start empty; blobs are re-derivable from the pipe.
+      // Startup reconciliation preserves the persisted access order. Publication
+      // updates thereafter touch only the affected records.
+      const files = new Set<string>();
+      for (const name of await fsp.readdir(this.blobsDir)) {
+        if (!CONTENT_DIGEST.test(name)) continue;
+        const stat = await fsp.stat(path.join(this.blobsDir, name));
+        files.add(name);
+        this.index.reconcileBlob(name, stat.size, Math.floor(stat.mtimeMs));
+      }
+      for (const digest of this.index.digests()) {
+        if (!files.has(digest)) {
+          for (const key of this.index.forgetBlob(digest)) {
+            await fsp.rm(path.join(this.metadataDir, `${key}.json`), { force: true });
+          }
+        }
+      }
+      await fsp.rm(legacy, { force: true });
+      await this.prune();
+      this.ready = true;
+    } catch (error) {
+      this.index.close();
+      throw error;
     }
-    this.ready = true;
   }
 
   /**
@@ -524,7 +553,10 @@ export class AssetDiskCache {
     if (!this.ready) throw new Error("AssetDiskCache.init() not called");
     signal?.throwIfAborted();
     const hit = await this.readByPath(cacheKey);
-    signal?.throwIfAborted();
+    if (signal?.aborted) {
+      hit?.body.destroy();
+      signal.throwIfAborted();
+    }
     if (hit) return { kind: "asset", asset: hit };
 
     let flight = this.inflight.get(cacheKey);
@@ -662,13 +694,15 @@ export class AssetDiskCache {
           item.sidecar
         );
       }
-      for (const item of prepared) {
-        this.index.set(item.entry.cacheKey, {
-          digest: item.actual,
-          metadataKey: item.metadataKey,
-        });
-      }
-      await this.writeIndex();
+      this.index.transaction(() => {
+        for (const item of prepared) {
+          this.index.recordBlob(item.actual, item.body.byteLength);
+          this.index.set(item.entry.cacheKey, {
+            digest: item.actual,
+            metadataKey: item.metadataKey,
+          });
+        }
+      });
       await this.prune();
     });
   }
@@ -683,10 +717,35 @@ export class AssetDiskCache {
    * may be released. The HTTP server is closed first, so no new flights can be
    * admitted while this barrier is waiting.
    */
-  async close(): Promise<void> {
-    await Promise.allSettled([...this.inflight.values()].map((flight) => flight.ready));
-    await Promise.all([...this.populations].map((population) => population.done));
-    await this.writeChain;
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.ready = false;
+    for (const flight of this.inflight.values())
+      flight.controller.abort(new Error("Asset cache closed"));
+    return (this.closing = (async () => {
+      await Promise.allSettled([...this.reads]);
+      await Promise.all(
+        [...this.streams].map(
+          (stream) =>
+            new Promise<void>((resolve) => {
+              stream.once("close", resolve);
+              stream.destroy(new Error("Asset cache closed"));
+            })
+        )
+      );
+      await Promise.allSettled([...this.inflight.values()].map((flight) => flight.ready));
+      const results = await Promise.allSettled(
+        [...this.populations].map((population) => population.done)
+      );
+      try {
+        await this.writeChain;
+      } finally {
+        this.index.close();
+      }
+      const rejected = results.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") throw rejected.reason;
+      if (this.cleanupFailure !== undefined) throw this.cleanupFailure;
+    })());
   }
 
   /** Digest currently mapped for a path, if any (test helper). */
@@ -696,53 +755,71 @@ export class AssetDiskCache {
 
   // -------------------------------------------------------------------------
 
-  private async readByPath(cacheKey: string): Promise<ServedAsset | null> {
+  private readByPath(cacheKey: string): Promise<ServedAsset | null> {
+    const read = this.openAsset(cacheKey);
+    this.reads.add(read);
+    const retire = () => this.reads.delete(read);
+    void read.then(retire, retire);
+    return read;
+  }
+
+  private async openAsset(cacheKey: string): Promise<ServedAsset | null> {
     const entry = this.index.get(cacheKey);
     if (!entry) return null;
     if (!CONTENT_DIGEST.test(entry.digest) || !CONTENT_DIGEST.test(entry.metadataKey)) {
       this.index.delete(cacheKey);
-      console.warn(`[AssetDiskCache] dropping invalid index entry for ${cacheKey}`);
       return null;
     }
-    const blobPath = path.join(this.blobsDir, entry.digest);
-    const metadataPath = path.join(this.metadataDir, `${entry.metadataKey}.json`);
-    let sidecar: Sidecar;
-    try {
-      const [stat, loadedSidecar] = await Promise.all([
-        fsp.stat(blobPath),
-        fsp.readFile(metadataPath, "utf-8").then((raw) => JSON.parse(raw) as Sidecar),
-      ]);
-      sidecar = loadedSidecar;
-      if (stat.size !== sidecar.size) throw new Error("cached asset size mismatch");
-    } catch {
-      // Blob evicted or sidecar missing → treat as a miss; drop the dangling entry.
-      this.index.delete(cacheKey);
-      console.warn(
-        `[AssetDiskCache] dropping dangling index entry for ${cacheKey} ` +
-          `(digest=${entry.digest}, metadata=${entry.metadataKey})`
-      );
-      return null;
-    }
-    // LRU-by-access: bump the blob mtime so a hot asset survives prune (best effort).
-    const now = new Date();
-    void fsp.utimes(blobPath, now, now).catch(() => {});
-    return {
-      status: sidecar.status,
-      statusText: sidecar.statusText,
-      gzip: sidecar.gzip,
-      contentType: sidecar.contentType,
-      replayHeaders: sidecar.replayHeaders,
-      bodyPath: blobPath,
-      size: sidecar.size,
+    const digest = entry.digest;
+    this.pins.set(digest, (this.pins.get(digest) ?? 0) + 1);
+    const release = () => {
+      const references = (this.pins.get(digest) ?? 1) - 1;
+      if (references === 0) this.pins.delete(digest);
+      else this.pins.set(digest, references);
     };
+    let handle: fsp.FileHandle | undefined;
+    try {
+      handle = await fsp.open(path.join(this.blobsDir, digest), "r");
+      const sidecar = JSON.parse(
+        await fsp.readFile(path.join(this.metadataDir, `${entry.metadataKey}.json`), "utf-8")
+      ) as Sidecar;
+      const stat = await handle.stat();
+      if (stat.size !== sidecar.size) {
+        this.index.delete(cacheKey);
+        await handle.close();
+        release();
+        return null;
+      }
+      this.index.touch(digest);
+      const body = handle.createReadStream();
+      // Unclaimed responses still own a handle until shutdown; retain their
+      // failure on the stream without emitting an unhandled process error.
+      body.on("error", () => undefined);
+      this.streams.add(body);
+      body.once("close", () => {
+        this.streams.delete(body);
+        release();
+        void this.enqueueWrite(() => this.prune()).catch((error) => {
+          this.cleanupFailure ??= error;
+        });
+      });
+      return { ...sidecar, body };
+    } catch (error) {
+      await handle?.close();
+      release();
+      if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT")
+        throw error;
+      this.index.delete(cacheKey);
+      return null;
+    }
   }
 
   private async publish(
     cacheKey: string,
     response: FetchedResponse,
     streamed: { digest: string; blobPath: string; size: number }
-  ): Promise<ServedAsset> {
-    const { digest, blobPath, size } = streamed;
+  ): Promise<void> {
+    const { digest, size } = streamed;
     const metadataKey = createHash("sha256").update(cacheKey).digest("hex");
 
     const metadataPath = path.join(this.metadataDir, `${metadataKey}.json`);
@@ -757,21 +834,11 @@ export class AssetDiskCache {
 
     await this.writeJsonAtomic(metadataPath, sidecar);
 
-    this.index.set(cacheKey, { digest, metadataKey });
     await this.enqueueWrite(async () => {
-      await this.writeIndex();
+      this.index.recordBlob(digest, size);
+      this.index.set(cacheKey, { digest, metadataKey });
       await this.prune();
     });
-
-    return {
-      status: response.status,
-      statusText: response.statusText,
-      gzip: response.gzip,
-      contentType: response.contentType,
-      replayHeaders: response.replayHeaders,
-      bodyPath: blobPath,
-      size,
-    };
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {
@@ -781,19 +848,13 @@ export class AssetDiskCache {
     return next;
   }
 
-  private async writeIndex(): Promise<void> {
-    const obj: Record<string, IndexEntry> = {};
-    for (const [k, v] of this.index) obj[k] = v;
-    await this.writeJsonAtomic(this.indexPath, obj);
-  }
-
   private async writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
     const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fsp.writeFile(tmp, JSON.stringify(value));
       await fsp.rename(tmp, filePath);
     } finally {
-      await fsp.rm(tmp, { force: true }).catch(() => undefined);
+      await fsp.rm(tmp, { force: true });
     }
   }
 
@@ -803,57 +864,23 @@ export class AssetDiskCache {
       await fsp.writeFile(tmp, body, { flag: "wx" });
       await publishAssetBlob(tmp, blobPath, body.byteLength);
     } finally {
-      await fsp.rm(tmp, { force: true }).catch(() => undefined);
+      await fsp.rm(tmp, { force: true });
     }
   }
 
-  /** Evict oldest-by-mtime blobs until total blob bytes fit under the cap. */
+  /** Eviction walks the indexed oldest candidates, without rescanning every file. */
   private async prune(): Promise<void> {
-    let names: string[];
-    try {
-      names = await fsp.readdir(this.blobsDir);
-    } catch {
-      return;
-    }
-    const blobs: Array<{ digest: string; size: number; mtime: number }> = [];
-    let total = 0;
-    for (const name of names) {
-      if (!CONTENT_DIGEST.test(name)) continue;
-      try {
-        const st = await fsp.stat(path.join(this.blobsDir, name));
-        blobs.push({ digest: name, size: st.size, mtime: st.mtimeMs });
-        total += st.size;
-      } catch {
-        // Raced with another prune; ignore.
+    let total = this.index.bytes;
+    while (total > this.maxBytes) {
+      const blob = this.index.oldest(new Set(this.pins.keys()));
+      if (!blob) break;
+      await fsp.rm(path.join(this.blobsDir, blob.digest), { force: true });
+      const metadataKeys = this.index.forgetBlob(blob.digest);
+      for (const key of metadataKeys) {
+        await fsp.rm(path.join(this.metadataDir, `${key}.json`), { force: true });
       }
+      total -= blob.bytes;
     }
-    if (total <= this.maxBytes) return;
-
-    blobs.sort((a, b) => a.mtime - b.mtime); // oldest first
-    let evictedCount = 0;
-    let evictedBytes = 0;
-    for (const blob of blobs) {
-      if (total <= this.maxBytes) break;
-      const blobPath = path.join(this.blobsDir, blob.digest);
-      await fsp.rm(blobPath, { force: true });
-      total -= blob.size;
-      evictedCount += 1;
-      evictedBytes += blob.size;
-      // Drop every index path pointing at the evicted digest.
-      for (const [p, entry] of [...this.index]) {
-        if (entry.digest === blob.digest) {
-          this.index.delete(p);
-          await fsp.rm(path.join(this.metadataDir, `${entry.metadataKey}.json`), { force: true });
-        }
-      }
-    }
-    if (evictedCount > 0) {
-      console.warn(
-        `[AssetDiskCache] pruned ${evictedCount} blob(s), ${evictedBytes} bytes; ` +
-          `${total} bytes remain`
-      );
-    }
-    await this.writeIndex();
   }
 }
 

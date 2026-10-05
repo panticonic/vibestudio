@@ -8,6 +8,21 @@ export const DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS = 3 * 60_000;
 
 const pendingCacheDirs = new Set<string>();
 let maintenanceTimer: NodeJS.Timeout | null = null;
+const operations = new Set<Promise<void>>();
+let failure: Error | undefined;
+
+/** Admission is already quiescent at server shutdown. Cancel queued work and join owned children. */
+export async function drainDependencyContentMaintenance(): Promise<void> {
+  if (maintenanceTimer) clearTimeout(maintenanceTimer);
+  maintenanceTimer = null;
+  pendingCacheDirs.clear();
+  await Promise.all(operations);
+  if (failure) {
+    const error = failure;
+    failure = undefined;
+    throw error;
+  }
+}
 
 export function dependencyContentMaintenanceEntry(): string {
   return getPhysicalAppPath(
@@ -17,8 +32,8 @@ export function dependencyContentMaintenanceEntry(): string {
 }
 
 /**
- * Batch physical dependency sharing behind a grace period, then detach it from
- * the workspace server. Cache density must never compete with first-use work.
+ * Defer physical dependency sharing during startup. The server retains ownership
+ * of each admitted child and joins it before releasing shared cache coordinators.
  */
 export function scheduleDependencyContentMaintenance(cacheDir: string): void {
   pendingCacheDirs.add(path.resolve(cacheDir));
@@ -35,18 +50,27 @@ export function scheduleDependencyContentMaintenance(cacheDir: string): void {
       return;
     }
     const child = spawn(process.execPath, [entry, ...cacheDirs], {
-      detached: true,
-      stdio: "ignore",
+      detached: false,
+      stdio: "inherit",
       env: {
         ...process.env,
         ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
       },
     });
-    child.once("error", (error) => {
-      console.warn(
-        `[externalDeps] Failed to start dependency maintenance: ${error instanceof Error ? error.message : String(error)}`
+    const operation = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`Dependency maintenance exited with code ${code}, signal ${signal}`))
       );
-    });
+    })
+      .catch((error) => {
+        failure ??= error instanceof Error ? error : new Error(String(error));
+        console.warn(`[externalDeps] Dependency maintenance failed: ${String(error)}`);
+      })
+      .finally(() => operations.delete(operation));
+    operations.add(operation);
     child.unref();
   }, DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
   maintenanceTimer.unref();

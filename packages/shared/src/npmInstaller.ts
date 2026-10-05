@@ -1,3 +1,8 @@
+import {
+  DerivedCacheCoordinator,
+  derivedCacheDatabasePath,
+  type DerivedCacheLease,
+} from "./derivedCache.js";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -235,7 +240,31 @@ async function runNpmInstallInSlot(
       fs.mkdirSync(downloadCache, { recursive: true, mode: 0o700 });
       // npm ci consumes the reviewed graph. With registry sources and scripts
       // disabled, only npm's downloader writes this cache, never package code.
-      await invoke("ci", downloadCache);
+      if (downloadCache !== registryCache) {
+        await invoke("ci", downloadCache);
+        return;
+      }
+      const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(registryCache));
+      const leases: DerivedCacheLease[] = [];
+      const release = () => {
+        for (const lease of leases.splice(0)) lease.release();
+      };
+      try {
+        leases.push(owner.acquire(registryCache, "_cacache"));
+        leases.push(owner.acquire(registryCache, "_logs"));
+        try {
+          await invoke("ci", downloadCache);
+        } finally {
+          release();
+        }
+        await owner.prune(registryCache);
+      } finally {
+        try {
+          release();
+        } finally {
+          owner.close();
+        }
+      }
     };
 
     for (let attempt = 1; attempt <= 3; attempt++) {

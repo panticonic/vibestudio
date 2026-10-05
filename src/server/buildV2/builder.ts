@@ -157,6 +157,39 @@ let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
 let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
 
+let workerBatches = 0;
+let workerRetirement: Promise<void> | undefined;
+
+async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>): Promise<void> {
+  const outcomes = await Promise.allSettled(operations);
+  const failed = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+}
+
+/** A build closure owns compiler residency, including concurrent dependency builds. */
+export async function withBuilderWorkers<T>(operation: () => Promise<T>): Promise<T> {
+  workerBatches++;
+  try {
+    await workerRetirement;
+    return await operation();
+  } finally {
+    workerBatches--;
+    if (workerBatches === 0) {
+      const retirement = joinWorkerRetirement([
+        _libraryLoweringWorker?.close(),
+        _workspaceRpcCatalogWorker?.close(),
+        _immutableTreeWorker?.close(),
+      ]);
+      workerRetirement = retirement;
+      try {
+        await retirement;
+      } finally {
+        if (workerRetirement === retirement) workerRetirement = undefined;
+      }
+    }
+  }
+}
+
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
   return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
 }
@@ -186,17 +219,26 @@ export function initBuilder(
   runNativeJob: RunNativeWorkspaceJob,
   ensureBuildProvider?: (target: "react-native") => Promise<void>
 ): void {
+  const reuseWorkers = _appRoot === path.resolve(appRoot) && _libraryLoweringWorker !== null;
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
   _runNativeJob = runNativeJob;
   _ensureBuildProvider = ensureBuildProvider;
   _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
-  void _libraryLoweringWorker?.close();
-  _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
-  void _workspaceRpcCatalogWorker?.close();
-  _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(_appRoot);
-  void _immutableTreeWorker?.close();
-  _immutableTreeWorker = new ImmutableTreeWorkerClient(_appRoot);
+  if (!reuseWorkers) {
+    workerRetirement = joinWorkerRetirement([
+      workerRetirement,
+      _libraryLoweringWorker?.close(),
+      _workspaceRpcCatalogWorker?.close(),
+      _immutableTreeWorker?.close(),
+    ]);
+    // Initialization is synchronous; admitted builds and closeBuilder consume
+    // this same retirement promise and receive its original failure.
+    void workerRetirement.catch(() => undefined);
+    _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
+    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(_appRoot);
+    _immutableTreeWorker = new ImmutableTreeWorkerClient(_appRoot);
+  }
 }
 
 export async function closeBuilder(): Promise<void> {
@@ -206,7 +248,12 @@ export async function closeBuilder(): Promise<void> {
   _libraryLoweringWorker = null;
   _workspaceRpcCatalogWorker = null;
   _immutableTreeWorker = null;
-  await Promise.all([worker?.close(), catalogWorker?.close(), immutableTreeWorker?.close()]);
+  await joinWorkerRetirement([
+    workerRetirement,
+    worker?.close(),
+    catalogWorker?.close(),
+    immutableTreeWorker?.close(),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2137,16 +2184,8 @@ export async function buildUnit(
     return inFlight;
   }
 
-  const buildPromise = doBuild(
-    node,
-    ev,
-    buildKey,
-    graph,
-    workspaceRoot,
-    sourcemap,
-    stateRef,
-    provider,
-    options
+  const buildPromise = withBuilderWorkers(() =>
+    doBuild(node, ev, buildKey, graph, workspaceRoot, sourcemap, stateRef, provider, options)
   );
   inFlightBuilds.set(buildKey, buildPromise);
 
@@ -5108,7 +5147,9 @@ export async function buildNpmLibrary(
   const inFlight = inFlightBuilds.get(buildKey);
   if (inFlight) return inFlight;
 
-  const buildPromise = doNpmBuild(specifier, version, externals, buildKey);
+  const buildPromise = withBuilderWorkers(() =>
+    doNpmBuild(specifier, version, externals, buildKey)
+  );
   inFlightBuilds.set(buildKey, buildPromise);
 
   try {
@@ -5225,7 +5266,7 @@ export async function buildPlatformLibrary(
   const inFlight = inFlightLibraryBuilds.get(buildKey);
   if (inFlight) return inFlight;
 
-  const buildPromise = doPlatformBuild(specifier, externals, buildKey);
+  const buildPromise = withBuilderWorkers(() => doPlatformBuild(specifier, externals, buildKey));
   inFlightLibraryBuilds.set(buildKey, buildPromise);
 
   try {

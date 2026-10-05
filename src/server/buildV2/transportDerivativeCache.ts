@@ -2,7 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { createHash, randomUUID } from "node:crypto";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+
+import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 
 export type TransportEncoding = "br" | "gzip";
 
@@ -44,18 +46,43 @@ function compress(body: Buffer, encoding: TransportEncoding): Promise<Buffer> {
  * identity, and every workspace can reuse the same encoded representation.
  */
 export class TransportDerivativeCache {
-  private readonly pending: Array<() => Promise<void>> = [];
+  private coordinator: DerivedCacheCoordinator | undefined;
+  private readonly jobs = new Set<Promise<unknown>>();
   private readonly scheduled = new Set<string>();
   private active = 0;
+  private closed = false;
+  private closing: Promise<void> | undefined;
+  private failure: Error | undefined;
 
   constructor(
-    private readonly root = path.join(getCentralDataPath(), "transport-cache", POLICY),
+    private readonly root = path.join(getSharedDerivedDataPath(), "transport-derivatives"),
     private readonly concurrency = 2
-  ) {}
+  ) {
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+      throw new Error("Transport cache concurrency must be a positive integer");
+    }
+  }
 
-  async get(integrity: string, encoding: TransportEncoding): Promise<Buffer | null> {
+  private owner(): DerivedCacheCoordinator {
+    return (this.coordinator ??= new DerivedCacheCoordinator(derivedCacheDatabasePath(this.root)));
+  }
+
+  private entryKey(key: string): string {
+    return `${POLICY}-${key}`;
+  }
+
+  get(integrity: string, encoding: TransportEncoding): Promise<Buffer | null> {
+    if (this.closed) return Promise.reject(new Error("Transport derivative cache is closed"));
+    const job = this.read(integrity, encoding).finally(() => this.jobs.delete(job));
+    this.jobs.add(job);
+    return job;
+  }
+
+  private async read(integrity: string, encoding: TransportEncoding): Promise<Buffer | null> {
     const key = sourceDigest(integrity);
     if (!key) return null;
+    const owner = this.owner();
+    const lease = owner.acquire(this.root, this.entryKey(key));
     const { dataPath, metadataPath } = this.paths(key, encoding);
     try {
       const [body, rawMetadata] = await Promise.all([
@@ -74,8 +101,12 @@ export class TransportDerivativeCache {
         return null;
       }
       return body;
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT")
+        return null;
+      throw error;
+    } finally {
+      lease.release();
     }
   }
 
@@ -84,33 +115,69 @@ export class TransportDerivativeCache {
   }
 
   scheduleFile(integrity: string, sourcePath: string): void {
-    let source: Promise<Buffer> | undefined;
-    this.scheduleSource(integrity, () => {
-      source ??= fs.promises.readFile(sourcePath);
-      return source;
-    });
+    this.scheduleSource(integrity, () => fs.promises.readFile(sourcePath));
+  }
+
+  /** Stop admission and join every job owned by this cache. */
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.closed = true;
+    this.closing = (async () => {
+      const settled = await Promise.allSettled(this.jobs);
+      this.coordinator?.close();
+      this.coordinator = undefined;
+      if (this.failure) throw this.failure;
+      const rejected = settled.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") throw rejected.reason;
+    })();
+    return this.closing;
   }
 
   private scheduleSource(integrity: string, source: () => Promise<Buffer>): void {
-    if (!sourceDigest(integrity)) return;
-    for (const encoding of ["br", "gzip"] as const) {
-      const jobKey = `${integrity}:${encoding}`;
-      if (this.scheduled.has(jobKey)) continue;
-      this.scheduled.add(jobKey);
-      this.pending.push(async () => {
-        try {
-          if (await this.get(integrity, encoding)) return;
-          await this.publish(integrity, await source(), encoding);
-        } finally {
-          this.scheduled.delete(jobKey);
+    if (
+      this.closed ||
+      !sourceDigest(integrity) ||
+      this.scheduled.has(integrity) ||
+      this.active >= this.concurrency
+    )
+      return;
+    this.scheduled.add(integrity);
+    // Prewarming is opportunistic: admit only work that can start now. HTTP
+    // requests produce missing encodings on demand, so skipped work is not queued.
+    this.active++;
+    const job = (async () => {
+      const owner = this.owner();
+      const lease = owner.acquire(this.root, this.entryKey(sourceDigest(integrity)!));
+      try {
+        const missing: TransportEncoding[] = [];
+        for (const encoding of ["br", "gzip"] as const) {
+          if (!(await this.read(integrity, encoding))) missing.push(encoding);
         }
+        if (!missing.length) return;
+        const body = await source();
+        if (`sha256-${digest(body)}` !== integrity) {
+          throw new Error(`Transport source integrity mismatch: ${integrity}`);
+        }
+        for (const encoding of missing) await this.publish(integrity, body, encoding);
+      } finally {
+        lease.release();
+      }
+      await owner.prune(this.root);
+    })()
+      .catch((error) => {
+        this.failure ??= error instanceof Error ? error : new Error(String(error));
+        console.warn(`[TransportDerivativeCache] ${String(error)}`);
+      })
+      .finally(() => {
+        this.scheduled.delete(integrity);
+        this.active--;
+        this.jobs.delete(job);
       });
-    }
-    this.drain();
+    this.jobs.add(job);
   }
 
   private paths(key: string, encoding: TransportEncoding) {
-    const dir = path.join(this.root, key.slice(0, 2), key);
+    const dir = path.join(this.root, this.entryKey(key));
     return {
       dir,
       dataPath: path.join(dir, `${encoding}.bin`),
@@ -139,25 +206,16 @@ export class TransportDerivativeCache {
       byteLength: body.byteLength,
       digest: digest(body),
     };
-    await fs.promises.writeFile(dataTemp, body, { flag: "wx" });
-    await fs.promises.rename(dataTemp, paths.dataPath);
-    await fs.promises.writeFile(metadataTemp, `${JSON.stringify(metadata)}\n`, {
-      flag: "wx",
-    });
-    await fs.promises.rename(metadataTemp, paths.metadataPath);
-  }
-
-  private drain(): void {
-    while (this.active < this.concurrency) {
-      const job = this.pending.shift();
-      if (!job) return;
-      this.active++;
-      void job()
-        .catch(() => undefined)
-        .finally(() => {
-          this.active--;
-          this.drain();
-        });
+    try {
+      await fs.promises.writeFile(dataTemp, body, { flag: "wx" });
+      await fs.promises.rename(dataTemp, paths.dataPath);
+      await fs.promises.writeFile(metadataTemp, `${JSON.stringify(metadata)}\n`, { flag: "wx" });
+      await fs.promises.rename(metadataTemp, paths.metadataPath);
+    } finally {
+      await Promise.all([
+        fs.promises.rm(dataTemp, { force: true }),
+        fs.promises.rm(metadataTemp, { force: true }),
+      ]);
     }
   }
 }

@@ -52,6 +52,7 @@ import {
   buildPlatformLibrary,
   closeBuilder,
   initBuilder,
+  withBuilderWorkers,
   type BuildUnitOptions,
 } from "./builder.js";
 import {
@@ -446,6 +447,7 @@ export interface BuildSystemV2 {
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
+  findSharedStyleBuild(digest: string): BuildResult | null;
 
   /** Get one exact semantic execution retained for reusable artifact bytes. */
   getBuildByExecution(key: string, executionDigest: string): BuildResult | null;
@@ -1811,7 +1813,9 @@ export async function initBuildSystemV2(
                   },
                   ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
                   workspaceId: source.workspaceId,
-                  executableModules: built?.metadata.executableModules,
+                  executableModules: built
+                    ? buildStore.readExecutableModules(built.dir)
+                    : undefined,
                 },
               }),
         });
@@ -2154,7 +2158,12 @@ export async function initBuildSystemV2(
     return flight;
   };
 
-  const getBuild = async function getBuild(
+  const getBuild = ((unitPath: string, ref?: string, options?: BuildUnitOptions) =>
+    withBuilderWorkers(() =>
+      getBuildInternal(unitPath, ref, options)
+    )) as BuildSystemV2["getBuild"];
+
+  const getBuildInternal = async function getBuildInternal(
     unitPath: string,
     ref?: string,
     options?: BuildUnitOptions
@@ -2305,7 +2314,7 @@ export async function initBuildSystemV2(
     }
     console.log(`[BuildV2] head library ${unitPath}: build ready ${build.buildKey}`);
     return options?.library ? libraryBuildResult(build) : build;
-  } as BuildSystemV2["getBuild"];
+  };
 
   const resolveDeclaredTestSuite = async (
     unitPath: string,
@@ -2832,6 +2841,10 @@ export async function initBuildSystemV2(
       return libraryBuildResult(build);
     },
 
+    findSharedStyleBuild(digest: string): BuildResult | null {
+      return buildStore.findSharedStyleBuild(digest);
+    },
+
     getBuildByKey(key: string): BuildResult | null {
       return buildStore.get(key);
     },
@@ -3179,7 +3192,9 @@ export async function initBuildSystemV2(
         }
       };
 
-      const flight = buildUnitReport(node, view, viewStateHash, emitProgress, options?.priority)
+      const flight = withBuilderWorkers(() =>
+        buildUnitReport(node, view, viewStateHash, emitProgress, options?.priority)
+      )
         .then(({ report, reusable }) => (reusable ? cacheBuildReport(cacheKey, report) : report))
         .finally(() => {
           buildReportFlights.delete(cacheKey);

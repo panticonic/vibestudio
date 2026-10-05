@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { openReadonlySqlite } from "./sqlJsReader.js";
+import { openReadonlySqlite } from "./sqliteReader.js";
 import bplist from "bplist-parser";
 import type {
   BrowserDataReader,
@@ -319,7 +319,7 @@ export class SafariReader implements BrowserDataReader {
     let tempPath: string | undefined;
     try {
       tempPath = await copyDatabaseToTemp(dbPath);
-      const db = await openReadonlySqlite(fs.readFileSync(tempPath));
+      const db = await openReadonlySqlite(tempPath);
 
       try {
         const rows = db
@@ -333,7 +333,7 @@ export class SafariReader implements BrowserDataReader {
             JOIN history_visits hv ON hv.history_item = hi.id
             ORDER BY hv.visit_time DESC`
           )
-          .all() as Array<{
+          .iterate() as Iterable<{
           url: string;
           visit_count: number;
           title: string | null;
@@ -484,7 +484,7 @@ export class SafariReader implements BrowserDataReader {
     let tempPath: string | undefined;
     try {
       tempPath = await copyDatabaseToTemp(dbPath);
-      const db = await openReadonlySqlite(fs.readFileSync(tempPath));
+      const db = await openReadonlySqlite(tempPath);
 
       try {
         // PerSitePreferences.db has a `preference_values` table with
@@ -498,7 +498,9 @@ export class SafariReader implements BrowserDataReader {
           return [];
         }
 
-        const rows = db.prepare(`SELECT domain, key, value FROM preference_values`).all() as Array<{
+        const rows = db
+          .prepare(`SELECT domain, key, value FROM preference_values`)
+          .iterate() as Iterable<{
           domain: string;
           key: string;
           value: string | number;

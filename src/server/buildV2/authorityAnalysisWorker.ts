@@ -1,3 +1,4 @@
+import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 import { parentPort } from "node:worker_threads";
 import {
   createAuthorityCompilerSnapshot,
@@ -44,7 +45,10 @@ if (!port) throw new Error("Authority analysis worker requires a parent port");
 // per request would re-read the cache file every time and, worse, give two
 // overlapping requests independent in-memory copies to write back — a
 // read-modify-write race that silently drops facts and index entries.
-const caches = new Map<string, AuthorityAnalysisCache>();
+const caches = new ByteBudgetCache<string, AuthorityAnalysisCache>(
+  64 * 1024 * 1024,
+  (cache, workspaceId) => cache.residentBytes + 2 * workspaceId.length + 512
+);
 function cacheFor(workspaceId: string): AuthorityAnalysisCache {
   const existing = caches.get(workspaceId);
   if (existing) return existing;
@@ -64,17 +68,21 @@ port.on("message", (request: Request) => {
       return createAuthorityCompilerSnapshot(request.input);
     }
     const cache = cacheFor(request.workspaceId);
-    if (request.kind === "index-lookup") {
-      return cache.indexDetailed(request.identity, new Map(request.expectedConsumers));
+    try {
+      if (request.kind === "index-lookup") {
+        return cache.indexDetailed(request.identity, new Map(request.expectedConsumers));
+      }
+      if (request.kind === "fact-lookups") {
+        const validation = cache.validation();
+        return request.identities.map((identity) =>
+          cache.factForConsumerDetailed(identity, validation)
+        );
+      }
+      cache.commit(request.identity, request.index, request.facts);
+      return true;
+    } finally {
+      caches.set(request.workspaceId, cache);
     }
-    if (request.kind === "fact-lookups") {
-      const validation = cache.validation();
-      return request.identities.map((identity) =>
-        cache.factForConsumerDetailed(identity, validation)
-      );
-    }
-    cache.commit(request.identity, request.index, request.facts);
-    return true;
   };
   queue = queue.then(() =>
     operation().then(

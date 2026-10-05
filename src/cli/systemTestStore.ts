@@ -1,3 +1,7 @@
+import { gzipSync, gunzipSync, createGzip, createGunzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { Writable } from "node:stream";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProfileDataPath } from "@vibestudio/env-paths";
@@ -106,8 +110,11 @@ export function writeSystemTestArtifact(
   }
   const dir = artifactDir ? path.resolve(artifactDir) : systemTestRunDir(runId);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = path.join(dir, name.endsWith(".json") ? name : `${name}.json`);
-  writeFileAtomicSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  const rawFile = path.join(dir, name.endsWith(".json") ? name : `${name}.json`);
+  const compressed = /^trajectory-.+-full(?:\.json)?$/u.test(name);
+  const file = compressed ? `${rawFile}.gz` : rawFile;
+  const bytes = `${JSON.stringify(value, null, 2)}\n`;
+  writeFileAtomicSync(file, compressed ? gzipSync(bytes) : bytes, { mode: 0o600 });
   return file;
 }
 
@@ -127,9 +134,13 @@ export function loadSystemTestArtifact(
     artifactDir ? path.resolve(artifactDir) : systemTestRunDir(runId),
     name.endsWith(".json") ? name : `${name}.json`
   );
-  if (!fs.existsSync(file)) return null;
+  const compressed = /^trajectory-.+-full(?:\.json)?$/u.test(name) && fs.existsSync(`${file}.gz`);
+  if (!compressed && !fs.existsSync(file)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+    const bytes = compressed
+      ? gunzipSync(fs.readFileSync(`${file}.gz`)).toString("utf8")
+      : fs.readFileSync(file, "utf8");
+    return JSON.parse(bytes) as unknown;
   } catch (error) {
     throw new Error(
       `Could not read system-test artifact ${file}: ${error instanceof Error ? error.message : String(error)}`
@@ -139,4 +150,77 @@ export function loadSystemTestArtifact(
 
 function assertRunId(runId: string): void {
   if (!RUN_ID_PATTERN.test(runId)) throw new Error(`Invalid system-test run id: ${runId}`);
+}
+
+async function artifactDigest(file: string, compressed = false): Promise<string> {
+  const hash = createHash("sha256");
+  const sink = new Writable({
+    write(chunk, _encoding, done) {
+      hash.update(chunk);
+      done();
+    },
+  });
+  if (compressed) await pipeline(fs.createReadStream(file), createGunzip(), sink);
+  else await pipeline(fs.createReadStream(file), sink);
+  return hash.digest("hex");
+}
+
+/** Losslessly archive only completed CLI-owned default-root exports. Live and caller-supplied roots remain owned by their operations. */
+export async function compactCompletedSystemTestTrajectories(
+  options: { dryRun?: boolean } = {}
+): Promise<{ files: number; originalBytes: number; compressedBytes: number }> {
+  const result = { files: 0, originalBytes: 0, compressedBytes: 0 };
+  for (const run of listSystemTestRuns()) {
+    const dir = systemTestRunDir(run.runId);
+    if (
+      path.resolve(run.artifactDir) !== path.resolve(dir) ||
+      !fs.existsSync(path.join(dir, "summary.json"))
+    )
+      continue;
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^trajectory-.+-full\.json$/u.test(entry.name)) continue;
+      const source = path.join(dir, entry.name);
+      const before = await fs.promises.stat(source);
+      result.files++;
+      result.originalBytes += before.size;
+      if (options.dryRun) continue;
+      const target = `${source}.gz`;
+      const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await pipeline(
+          fs.createReadStream(source),
+          createGzip(),
+          fs.createWriteStream(temporary, { flags: "wx", mode: 0o600 })
+        );
+        const handle = await fs.promises.open(temporary, "r+");
+        try {
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        try {
+          await fs.promises.link(temporary, target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+        // Never retire evidence until the published compressed representation is verified.
+        if ((await artifactDigest(source)) !== (await artifactDigest(target, true))) {
+          throw new Error(`Compressed system-test evidence differs from its source: ${source}`);
+        }
+        const after = await fs.promises.stat(source);
+        if (
+          before.ino !== after.ino ||
+          before.size !== after.size ||
+          before.mtimeMs !== after.mtimeMs
+        ) {
+          throw new Error(`System-test evidence changed during archival: ${source}`);
+        }
+        result.compressedBytes += (await fs.promises.stat(target)).size;
+        await fs.promises.unlink(source);
+      } finally {
+        await fs.promises.rm(temporary, { force: true });
+      }
+    }
+  }
+  return result;
 }

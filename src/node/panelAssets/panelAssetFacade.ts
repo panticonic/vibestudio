@@ -37,7 +37,7 @@
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Readable } from "node:stream";
+import { addAbortSignal, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { isRpcConnectionLost } from "@vibestudio/rpc/errors";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -400,11 +400,15 @@ async function handleRequest(
       if (outcome.kind === "asset") {
         transfer.stage = "body";
         const { asset } = outcome;
-        res.writeHead(
-          asset.status,
-          buildResponseHeaders(asset.contentType, asset.gzip, asset.replayHeaders)
-        );
-        await pipeline(fs.createReadStream(asset.bodyPath), res, { signal: controller.signal });
+        try {
+          res.writeHead(
+            asset.status,
+            buildResponseHeaders(asset.contentType, asset.gzip, asset.replayHeaders)
+          );
+          await pipeline(asset.body, res, { signal: controller.signal });
+        } finally {
+          asset.body.destroy();
+        }
         return;
       }
       transfer.stage = "body";
@@ -497,11 +501,14 @@ async function prewarmInitialAssets(
   let manifestBytes: Uint8Array;
   if (manifestOutcome.kind === "asset") {
     if (manifestOutcome.asset.size > 64 * 1024 * 1024) {
+      manifestOutcome.asset.body.destroy();
       throw new Error(
         `panel prewarm manifest exceeded catastrophic ${64 * 1024 * 1024}-byte boundary`
       );
     }
-    manifestBytes = await fs.promises.readFile(manifestOutcome.asset.bodyPath);
+    manifestBytes = Buffer.concat(
+      await addAbortSignal(lifetime, manifestOutcome.asset.body).toArray()
+    );
   } else {
     manifestBytes = await readBody(manifestOutcome.response.body, manifestPath, 64 * 1024 * 1024);
   }

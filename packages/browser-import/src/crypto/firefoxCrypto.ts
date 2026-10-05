@@ -7,11 +7,10 @@
  * Reference: github.com/lclevy/firepwd
  */
 import crypto from "node:crypto";
-import * as fs from "node:fs";
 import { parseAsn1, oidToString } from "./asn1.js";
 import type { Asn1Node } from "./asn1.js";
 import { BrowserDataError } from "../errors.js";
-import { openReadonlySqlite } from "../readers/sqlJsReader.js";
+import { openReadonlySqlite } from "../readers/sqliteReader.js";
 
 // Well-known OIDs
 const OID_PBES2 = "1.2.840.113549.1.5.13";
@@ -291,7 +290,7 @@ export class FirefoxCrypto {
    * try the most capable key first.
    */
   private async extractKeys(key4DbPath: string, password: string): Promise<Buffer[]> {
-    const db = await openReadonlySqlite(fs.readFileSync(key4DbPath));
+    const db = await openReadonlySqlite(key4DbPath);
 
     try {
       // Step 1: Get global salt and verify master password

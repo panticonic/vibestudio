@@ -705,6 +705,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         getUnitIcon: (source, artifactPath, stateRef) =>
           buildSystem.getUnitIcon(source, artifactPath, stateRef),
         getBuildByKey: (buildKey) => buildSystem.getBuildByKey(buildKey),
+        findSharedStyleBuild: (digest) => buildSystem.findSharedStyleBuild(digest),
         onBuildComplete: (source, error) => {
           eventService.emit("build:complete", { source, ...(error ? { error } : {}) });
         },

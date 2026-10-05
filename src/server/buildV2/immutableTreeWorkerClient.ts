@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createMeasuredWorker } from "../workerPerformance.js";
 
 declare global {
   var __VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__: string | undefined;
@@ -46,13 +47,18 @@ export class ImmutableTreeWorkerClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ id, kind, source, target });
+      try {
+        worker.postMessage({ id, kind, source, target });
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("immutableTree", workerEntry(this.appRoot));
     worker.unref();
     worker.on(
       "message",

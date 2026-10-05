@@ -1,3 +1,4 @@
+import { writeHttpBytes } from "../httpStreamWrite.js";
 import {
   BRIDGE_STREAM_CHUNK_BYTES,
   rpcErrorDataOf,
@@ -672,7 +673,7 @@ export class StreamingRelay {
     } catch (error) {
       res.writeHead(200, STREAM_HEADERS);
       const codec = await import("@vibestudio/credential-client/streamFraming");
-      await this.writeHttpBytes(
+      await writeHttpBytes(
         res,
         codec.encodeErrorFrame({
           status: 502,
@@ -724,7 +725,7 @@ export class StreamingRelay {
     const codec = await import("@vibestudio/credential-client/streamFraming");
     return async (frame): Promise<void> => {
       if (frame.kind === "head") {
-        await this.writeHttpBytes(
+        await writeHttpBytes(
           res,
           codec.encodeHeadFrame({
             status: frame.status,
@@ -734,11 +735,11 @@ export class StreamingRelay {
           })
         );
       } else if (frame.kind === "chunk") {
-        await this.writeHttpBytes(res, codec.encodeDataFrame(frame.bytes));
+        await writeHttpBytes(res, codec.encodeDataFrame(frame.bytes));
       } else if (frame.kind === "end") {
-        await this.writeHttpBytes(res, codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
+        await writeHttpBytes(res, codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
       } else {
-        await this.writeHttpBytes(
+        await writeHttpBytes(
           res,
           codec.encodeErrorFrame({
             status: frame.status,
@@ -771,44 +772,6 @@ export class StreamingRelay {
         workspaceId: this.deps.workspaceId,
       });
     };
-  }
-
-  private writeHttpBytes(res: ServerResponse, bytes: Uint8Array): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const cleanup = (): void => {
-        res.off("drain", succeed);
-        res.off("close", closed);
-        res.off("error", fail);
-      };
-      const succeed = (): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-      const fail = (error: Error): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-      const closed = (): void => {
-        fail(
-          Object.assign(new Error("HTTP response closed during stream write"), {
-            code: "ECONNRESET",
-          })
-        );
-      };
-      res.once("close", closed);
-      res.once("error", fail);
-      try {
-        if (res.write(bytes)) succeed();
-        else res.once("drain", succeed);
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
   }
 
   private async pipeResponseToHttpFrames(

@@ -45,6 +45,17 @@ export const WorkerdPerformanceSnapshotSchema = z
   .strict();
 export type WorkerdPerformanceSnapshot = z.infer<typeof WorkerdPerformanceSnapshotSchema>;
 
+export const HostWorkerPerformanceSampleSchema = z
+  .object({
+    label: z.string(),
+    threadId: z.number().int().nonnegative(),
+    heapUsedBytes: byteCount,
+    heapTotalBytes: byteCount,
+    externalBytes: byteCount,
+  })
+  .strict();
+export type HostWorkerPerformanceSample = z.infer<typeof HostWorkerPerformanceSampleSchema>;
+
 export const HostPerformanceSnapshotSchema = z
   .object({
     version: z.literal(1),
@@ -65,13 +76,18 @@ export const HostPerformanceSnapshotSchema = z
       .strict(),
     eventLoop: z.object({ samples: z.array(HostEventLoopSampleSchema) }).strict(),
     workerd: WorkerdPerformanceSnapshotSchema.nullable(),
+    workers: z.array(HostWorkerPerformanceSampleSchema),
   })
   .strict();
 export type HostPerformanceSnapshot = z.infer<typeof HostPerformanceSnapshotSchema>;
 
 export const hostPerformanceMethods = defineServiceMethods({
   snapshot: {
-    website: {"kind":"closed","reason":"The hostPerformance receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The hostPerformance receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

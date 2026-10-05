@@ -1,3 +1,4 @@
+import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
  * Content-Addressed Build Store — immutable artifact storage.
  *
@@ -42,7 +43,7 @@ import {
   type ExecutionSourceStateRef,
   type ExecutionSourceContentRoot,
 } from "@vibestudio/shared/execution/retention";
-import { blobCasPath, putBlobBytes } from "../storage/blobCas.js";
+import { collectArtifactPool, writePooledArtifact } from "./buildArtifactPool.js";
 import { stateLayout } from "../stateLayout.js";
 import {
   derivedCacheCoordinator,
@@ -248,7 +249,8 @@ export interface BuildResult {
   metadata: BuildMetadata;
   /**
    * Target-agnostic artifact manifest. Persisted payloads are loaded and
-   * integrity-checked on first access to `content`, then retained in memory.
+   * integrity-checked when `content` is explicitly requested, without retaining
+   * the source string in the verified build cache.
    */
   artifacts: BuildArtifactWithContent[];
 }
@@ -291,29 +293,43 @@ function gzipJson(value: unknown): Promise<Buffer> {
   });
 }
 
-/** Read both current compact metadata and older inline-module records. */
+/** Hot metadata never owns executable source payloads. */
 export function readBuildMetadata(dir: string): BuildMetadata {
   const metadata = JSON.parse(
     fs.readFileSync(path.join(dir, "metadata.json"), "utf-8")
   ) as BuildMetadata;
-  if (metadata.executableModules !== undefined) return metadata;
+  const { executableModules: _modules, ...compact } = metadata;
+  return compact;
+}
+
+/** Read source evidence only at the compiler/diagnostic consumer that needs it. */
+export function readExecutableModules(dir: string): ExecutableModuleInput[] | undefined {
+  const metadata = JSON.parse(
+    fs.readFileSync(path.join(dir, "metadata.json"), "utf8")
+  ) as BuildMetadata;
+  if (metadata.executableModules !== undefined) return metadata.executableModules;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
-  if (!fs.existsSync(modulesPath)) return metadata;
-  const executableModules = JSON.parse(
+  if (!fs.existsSync(modulesPath)) return undefined;
+  return JSON.parse(
     gunzipSync(fs.readFileSync(modulesPath)).toString("utf-8")
   ) as ExecutableModuleInput[];
-  return { ...metadata, executableModules };
 }
 
 /** Keep the verbose source inventory compressed and separate from hot metadata. */
 export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): Promise<void> {
-  const { executableModules, ...compactMetadata } = metadata;
+  const { executableModules: suppliedModules, ...compactMetadata } = metadata;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
+  const metadataPath = path.join(dir, "metadata.json");
+  const executableModules =
+    suppliedModules ??
+    (!fs.existsSync(modulesPath) && fs.existsSync(metadataPath)
+      ? readExecutableModules(dir)
+      : undefined);
   if (executableModules !== undefined) {
     const modulesTmp = `${modulesPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
     try {
       const payload = await gzipJson(executableModules);
-      await fs.promises.writeFile(modulesTmp, payload);
+      await writePooledArtifact(getSharedArtifactPoolDir(), modulesTmp, payload);
       await fs.promises.rename(modulesTmp, modulesPath);
     } catch (error) {
       try {
@@ -323,11 +339,9 @@ export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): 
       }
       throw error;
     }
-  } else {
-    await fs.promises.rm(modulesPath, { force: true });
   }
+  // Compact metadata updates do not own or retire the source evidence file.
 
-  const metadataPath = path.join(dir, "metadata.json");
   const metadataTmp = `${metadataPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
   try {
     await fs.promises.writeFile(metadataTmp, JSON.stringify(compactMetadata));
@@ -389,6 +403,11 @@ export function getSharedBuildArtifactPoolDir(): string {
   return path.join(getSharedDerivedDataPath(), "build-artifacts");
 }
 
+export async function collectSharedArtifactPool(): Promise<void> {
+  const pool = getSharedArtifactPoolDir();
+  if (pool) await collectArtifactPool(pool);
+}
+
 export function getSharedBuildResultCacheDir(): string {
   return path.join(getSharedDerivedDataPath(), "build-results");
 }
@@ -442,6 +461,15 @@ async function materializeBuildTree(
   targetDir: string,
   metadata: BuildMetadata = source.metadata
 ): Promise<void> {
+  // Capture immutable compressed evidence without inflating its source strings.
+  let modules: Buffer | undefined;
+  try {
+    modules = await fs.promises.readFile(path.join(source.dir, EXECUTABLE_MODULES_FILE));
+  } catch (error) {
+    if (!isFileSystemErrorCode(error, ["ENOENT"])) throw error;
+    const inline = readExecutableModules(source.dir);
+    if (inline !== undefined) modules = await gzipJson(inline);
+  }
   await fs.promises.mkdir(targetDir, { recursive: true });
   const manifest = source.artifacts.map(manifestForEntry);
   await runBounded(manifest, 8, async (entry) => {
@@ -460,6 +488,12 @@ async function materializeBuildTree(
     }
   });
   await writeBuildRecords(targetDir, metadata, manifest);
+  if (modules)
+    await writePooledArtifact(
+      getSharedArtifactPoolDir(),
+      path.join(targetDir, EXECUTABLE_MODULES_FILE),
+      modules
+    );
 }
 
 async function writeBuildRecords(
@@ -505,11 +539,15 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     }
     throw error;
   } finally {
-    void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
-      console.warn(
-        `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    void scheduleDerivedCachePrune(cacheRoot)
+      .then(async (result) => {
+        if (result) await collectSharedArtifactPool();
+      })
+      .catch((error) => {
+        console.warn(
+          `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
   }
 }
 
@@ -612,20 +650,14 @@ function lazyArtifactContent(
   dir: string,
   entry: BuildArtifactManifestEntry
 ): BuildArtifactWithContent {
-  let loaded = false;
-  let content = "";
   const artifact = { ...entry } as BuildArtifactWithContent;
   Object.defineProperty(artifact, "content", {
     enumerable: true,
     configurable: false,
     get() {
-      if (!loaded) {
-        const next = readArtifactContent(dir, entry);
-        if (entry.integrity !== artifactIntegrity({ ...entry, content: next })) {
-          throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
-        }
-        content = next;
-        loaded = true;
+      const content = readArtifactContent(dir, entry);
+      if (entry.integrity !== artifactIntegrity({ ...entry, content })) {
+        throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
       }
       return content;
     },
@@ -636,11 +668,6 @@ function lazyArtifactContent(
 function integrityHex(integrity: string): string | null {
   const match = /^sha256-([a-f0-9]{64})$/.exec(integrity);
   return match?.[1] ?? null;
-}
-
-function artifactBlobPath(poolDir: string, integrity: string): string | null {
-  const hex = integrityHex(integrity);
-  return hex ? blobCasPath(poolDir, hex) : null;
 }
 
 function entryBytes(entry: BuildArtifactInput & { encoding: BuildArtifactEncoding }): Buffer {
@@ -654,29 +681,11 @@ async function writeArtifactFile(
   entry: BuildArtifactInput & { encoding: BuildArtifactEncoding; integrity: string },
   poolDir: string | null
 ): Promise<void> {
-  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
   const bytes = entryBytes(entry);
-  const blobPath = poolDir ? artifactBlobPath(poolDir, entry.integrity) : null;
-  if (poolDir && blobPath) {
-    const stored = await putBlobBytes(poolDir, bytes);
-    if (stored.digest !== integrityHex(entry.integrity)) {
-      throw new Error(`Artifact integrity mismatch for ${entry.path}`);
-    }
-    if (process.platform === "win32") {
-      await fs.promises.copyFile(blobPath, targetPath, fs.constants.COPYFILE_EXCL);
-      return;
-    }
-    try {
-      await fs.promises.link(blobPath, targetPath);
-      return;
-    } catch (error) {
-      // Custom workspace paths can place state and the central pool on
-      // different filesystems. Preserve correctness there, just without
-      // physical deduplication.
-      if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
-    }
+  if (crypto.createHash("sha256").update(bytes).digest("hex") !== integrityHex(entry.integrity)) {
+    throw new Error(`Artifact integrity mismatch for ${entry.path}`);
   }
-  await fs.promises.writeFile(targetPath, bytes);
+  await writePooledArtifact(poolDir, targetPath, bytes);
 }
 
 async function runBounded<T>(
@@ -901,8 +910,31 @@ function readBuildDir(
   }
 }
 
-const reportedSharedBuildHits = new Set<string>();
-const verifiedLocalBuilds = new Map<string, BuildResult>();
+const reportedSharedBuildHits = new ByteBudgetCache<string, true>(
+  1024 * 1024,
+  (_, key) => key.length * 2 + 128
+);
+export function buildDescriptorBytes(
+  build: Pick<BuildResult, "dir" | "metadata" | "artifacts">
+): number {
+  return (
+    build.dir.length * 2 +
+    JSON.stringify(build.metadata).length * 2 +
+    build.artifacts.reduce(
+      (bytes, artifact) =>
+        bytes +
+        256 +
+        2 *
+          (artifact.path.length + artifact.contentType.length + (artifact.integrity?.length ?? 0)),
+      0
+    )
+  );
+}
+
+const verifiedLocalBuilds = new ByteBudgetCache<string, BuildResult>(
+  32 * 1024 * 1024,
+  buildDescriptorBytes
+);
 
 function localBuildCacheId(dir: string): string {
   return path.resolve(dir);
@@ -910,6 +942,8 @@ function localBuildCacheId(dir: string): string {
 
 function rememberVerifiedLocalBuild(build: BuildResult): BuildResult {
   verifiedLocalBuilds.set(localBuildCacheId(build.dir), build);
+  for (const style of build.metadata.sharedStyles ?? [])
+    sharedStyleOwners.set(style.digest, build.buildKey);
   return build;
 }
 
@@ -921,9 +955,49 @@ function readVerifiedLocalBuild(key: string): BuildResult | null {
   const dir = getBuildDir(key);
   const cacheId = localBuildCacheId(dir);
   const cached = verifiedLocalBuilds.get(cacheId);
-  if (cached) return cached;
+  if (cached && fs.existsSync(path.join(dir, "metadata.json"))) return cached;
+  if (cached) forgetVerifiedLocalBuild(dir);
   const build = readBuildDir(dir, key);
   return build ? rememberVerifiedLocalBuild(build) : null;
+}
+
+const sharedStyleOwners = new ByteBudgetCache<string, string>(
+  1024 * 1024,
+  (key, digest) => 2 * (key.length + digest.length) + 128
+);
+
+export function findSharedStyleBuild(digest: string): BuildResult | null {
+  if (!/^[0-9a-f]{64}$/u.test(digest)) return null;
+  const known = sharedStyleOwners.get(digest);
+  if (known) {
+    const build = readVerifiedLocalBuild(known);
+    if (build?.metadata.sharedStyles?.some((style) => style.digest === digest)) return build;
+    sharedStyleOwners.delete(digest);
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(getBuildsDir(), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[0-9a-f]{64}$/u.test(entry.name)) continue;
+    let metadata: BuildMetadata;
+    try {
+      metadata = readBuildMetadata(getBuildDir(entry.name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!metadata.sharedStyles?.some((style) => style.digest === digest)) continue;
+    const build = readVerifiedLocalBuild(entry.name);
+    if (build) {
+      sharedStyleOwners.set(digest, entry.name);
+      return build;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1039,7 +1113,7 @@ export async function getOrHydrate(
     }
     const materialized = readVerifiedLocalBuild(key);
     if (materialized && !reportedSharedBuildHits.has(key)) {
-      reportedSharedBuildHits.add(key);
+      reportedSharedBuildHits.set(key, true);
       console.info(
         `[BuildCache] Reused shared build ${materialized.metadata.name} (${key.slice(0, 12)})`
       );
@@ -1047,11 +1121,15 @@ export async function getOrHydrate(
     return materialized;
   } finally {
     lease.release();
-    void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
-      console.warn(
-        `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    void scheduleDerivedCachePrune(cacheRoot)
+      .then(async (result) => {
+        if (result) await collectSharedArtifactPool();
+      })
+      .catch((error) => {
+        console.warn(
+          `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
   }
 }
 
@@ -1364,13 +1442,8 @@ export async function put(
     }
   }
 
-  const stored: BuildResult = {
-    dir,
-    buildKey: key,
-    sourceStateHash: storedMetadata.sourceStateHash,
-    metadata: storedMetadata,
-    artifacts: entries.map((entry) => ({ ...manifestForEntry(entry), content: entry.content })),
-  };
+  const stored = readBuildDir(dir, key);
+  if (!stored) throw new Error(`Published build ${key} failed verification`);
   clearRetiredBuildKey(key);
   scheduleSharedBuildPublication(key, dir);
   return stored;
@@ -1715,6 +1788,17 @@ export async function collectRetention(input: {
   // later complete epoch may remove the tombstone and withdraw those roots.
   saveBuildGcState({ version: 1, quarantined: [...byKey.values()] });
 
+  if (result.deleted > 0) {
+    try {
+      await collectSharedArtifactPool();
+    } catch (error) {
+      result.cleanupFailures.push({
+        buildKey: "shared-artifact-pool",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   result.retainedSourceRoots = retainedSourceRootsForEpoch(byKey.values(), input.epoch);
   return result;
 }
@@ -1755,4 +1839,11 @@ export async function scanRetention(): Promise<BuildStoreRetentionScan> {
   }
 
   return { builds, failures };
+}
+
+/** Join optional reconstruction publications after build admission has stopped. */
+export async function drainBuildStorePublications(): Promise<void> {
+  const results = await Promise.allSettled(sharedBuildPublicationTasks.values());
+  const rejected = results.find((result) => result.status === "rejected");
+  if (rejected?.status === "rejected") throw rejected.reason;
 }

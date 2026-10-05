@@ -1,3 +1,7 @@
+import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
+import { buildDescriptorBytes } from "./buildV2/buildStore.js";
+import { writeHttpBytes } from "./httpStreamWrite.js";
+import { ArtifactBodyCache } from "./artifactBodyCache.js";
 /**
  * PanelHttpServer — source/ref-keyed static panel asset server.
  *
@@ -78,6 +82,7 @@ export interface PanelHttpCallbacks {
 
   /** Resolve an already-built immutable artifact selected by runtime activation. */
   getBuildByKey(buildKey: string): BuildResult | null;
+  findSharedStyleBuild(digest: string): BuildResult | null;
 }
 
 /** Build output cached by source path (shared across panels) */
@@ -87,8 +92,6 @@ interface CachedBuild {
   htmlArtifact: BuildArtifactManifestEntry & { content: string };
   metadata: BuildMetadata;
   revision: number;
-  compressedArtifacts: Map<string, Promise<Buffer>>;
-  artifactBytes: Map<string, Promise<Buffer>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,23 +183,31 @@ function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise
 
 export class PanelHttpServer {
   private readonly runtimeHelperSet = getPanelRuntimeHelperSet();
-  private readonly compressedRuntimeHelpers = new Map<string, Promise<Buffer>>();
+  // The measured five-app artifact working set is about 32 MiB. Historical
+  // builds share this budget; disk remains the authority after eviction.
+  private readonly artifactBodies = new ArtifactBodyCache(32 * 1024 * 1024);
   constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
 
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
-  private servingCache = new Map<string, CachedBuild>();
+  private servingCache = new ByteBudgetCache<string, CachedBuild>(
+    32 * 1024 * 1024,
+    buildDescriptorBytes
+  );
 
   /** Immutable activated artifacts. Never invalidated by a later source build. */
-  private activatedBuildCache = new Map<string, CachedBuild>();
+  private activatedBuildCache = new ByteBudgetCache<string, CachedBuild>(
+    32 * 1024 * 1024,
+    buildDescriptorBytes
+  );
 
   /** Digest-addressed base styles shared by every panel URL. */
-  private sharedStyleAssets = new Map<
+  private sharedStyleAssets = new ByteBudgetCache<
     string,
     {
       build: CachedBuild;
       artifact: BuildArtifactManifestEntry & { content: string };
     }
-  >();
+  >(32 * 1024 * 1024, ({ build }) => buildDescriptorBytes(build));
 
   /** Builds currently in flight (dedup concurrent requests) */
   private buildInFlight = new Map<string, Promise<void>>();
@@ -308,8 +319,6 @@ export class PanelHttpServer {
       htmlArtifact,
       metadata: buildResult.metadata,
       revision,
-      compressedArtifacts: new Map<string, Promise<Buffer>>(),
-      artifactBytes: new Map<string, Promise<Buffer>>(),
     };
     this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
     this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
@@ -369,7 +378,11 @@ export class PanelHttpServer {
       this.wss = null;
     }
 
-    this.port = null;
+    try {
+      await this.transportDerivativeCache.close();
+    } finally {
+      this.port = null;
+    }
   }
 
   // =========================================================================
@@ -422,7 +435,21 @@ export class PanelHttpServer {
     const sharedStyleMatch = pathname.match(/^\/__vibestudio\/shared-style\/([0-9a-f]{64})\.css$/u);
     if (sharedStyleMatch) {
       const digest = assertPresent(sharedStyleMatch[1]);
-      const shared = this.sharedStyleAssets.get(digest);
+      let shared = this.sharedStyleAssets.get(digest);
+      if (!shared) {
+        const result = this.callbacks?.findSharedStyleBuild(digest);
+        if (result) {
+          const build = this.cachedBuild(result);
+          this.registerSharedStyles(build);
+          shared = this.sharedStyleAssets.get(digest);
+          if (!shared) {
+            const artifact = build.artifacts.find(
+              (entry) => entry.role === "shared-style" && entry.integrity === `sha256-${digest}`
+            );
+            if (artifact) shared = { build, artifact };
+          }
+        }
+      }
       if (!shared) {
         res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Shared style not found");
@@ -700,7 +727,6 @@ export class PanelHttpServer {
       helper.body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     const encoded = encoding
       ? await this.compressedContent(
-          this.compressedRuntimeHelpers,
           `sha256-${helper.integrity}`,
           helper.path,
           helper.body,
@@ -763,6 +789,20 @@ export class PanelHttpServer {
     await this.serveActivatedPanelResource(req, res, build, resource, buildKey);
   }
 
+  private cachedBuild(result: BuildResult): CachedBuild {
+    const htmlArtifact = result.artifacts.find((artifact) => artifact.role === "html");
+    const primaryArtifact = result.artifacts.find((artifact) => artifact.role === "primary");
+    if (!htmlArtifact || !primaryArtifact)
+      throw new Error(`Activated panel build ${result.buildKey} is incomplete`);
+    return {
+      dir: result.dir,
+      artifacts: result.artifacts,
+      htmlArtifact,
+      metadata: result.metadata,
+      revision: ++this.buildRevisionCounter,
+    };
+  }
+
   private resolveActivatedBuild(
     res: import("http").ServerResponse,
     buildKey: string
@@ -793,8 +833,6 @@ export class PanelHttpServer {
         htmlArtifact,
         metadata: result.metadata,
         revision: ++this.buildRevisionCounter,
-        compressedArtifacts: new Map<string, Promise<Buffer>>(),
-        artifactBytes: new Map<string, Promise<Buffer>>(),
       };
       this.activatedBuildCache.set(buildKey, build);
       this.registerSharedStyles(build);
@@ -1072,12 +1110,7 @@ export class PanelHttpServer {
       // and, unlike a whole-response encoding flag, cannot mislabel anything.
       const encoded =
         gzip && artifact.encoding !== "base64" && raw.length >= 1_024
-          ? await this.compressedContent(
-              build.compressedArtifacts,
-              artifact.integrity,
-              artifact.path,
-              raw
-            )
+          ? await this.compressedContent(artifact.integrity, artifact.path, raw)
           : null;
       const record = encoded
         ? encodeBlobRecord(
@@ -1086,20 +1119,13 @@ export class PanelHttpServer {
             createHash("sha256").update(encoded).digest("hex")
           )
         : encodeBlobRecord(digest, new Uint8Array(raw));
-      if (!res.write(record)) {
-        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
-      }
+      await writeHttpBytes(res, record);
     }
     for (const index of uniqueHelpers) {
       const helper = this.runtimeHelperSet.helpers[index]!;
       const encoded =
         gzip && helper.body.byteLength >= 1_024
-          ? await this.compressedContent(
-              this.compressedRuntimeHelpers,
-              `sha256-${helper.integrity}`,
-              helper.path,
-              helper.body
-            )
+          ? await this.compressedContent(`sha256-${helper.integrity}`, helper.path, helper.body)
           : null;
       const record = encoded
         ? encodeBlobRecord(
@@ -1108,42 +1134,35 @@ export class PanelHttpServer {
             createHash("sha256").update(encoded).digest("hex")
           )
         : encodeBlobRecord(helper.integrity, new Uint8Array(helper.body));
-      if (!res.write(record)) {
-        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
-      }
+      await writeHttpBytes(res, record);
     }
     res.end();
   }
 
   /**
    * The content's compressed form: the warm derivative if there is one, else
-   * compressed once and kept by its build or runtime helper owner.
+   * compressed once and kept within the shared HTTP byte budget.
    *
    * Shared by the per-asset route and the bundle so a device receives the same
    * bytes either way, and so one panel open cannot compress the same artifact
    * twice. Returns null when compression fails — the caller sends identity.
    */
   private async compressedContent(
-    cache: Map<string, Promise<Buffer>>,
     integrity: string | undefined,
     name: string,
     body: Buffer,
     encoding: PanelContentEncoding = "gzip"
   ): Promise<Buffer | null> {
-    if (integrity) {
-      const derivative = await this.transportDerivativeCache.get(integrity, encoding);
-      if (derivative) return derivative;
-    }
-    const cacheKey = `${encoding}:${integrity ?? name}`;
-    let compressed = cache.get(cacheKey);
-    if (!compressed) {
-      compressed = compressArtifact(body, encoding);
-      cache.set(cacheKey, compressed);
-    }
+    const cacheKey = `encoded:${encoding}:${integrity ?? createHash("sha256").update(body).digest("hex")}`;
     try {
-      return await compressed;
+      return await this.artifactBodies.get(cacheKey, async () => {
+        if (integrity) {
+          const derivative = await this.transportDerivativeCache.get(integrity, encoding);
+          if (derivative) return derivative;
+        }
+        return compressArtifact(body, encoding);
+      });
     } catch (error) {
-      cache.delete(cacheKey);
       log.warn(`Failed to ${encoding}-compress panel content ${name}: ${String(error)}`);
       return null;
     }
@@ -1222,8 +1241,7 @@ export class PanelHttpServer {
       body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     const compressedBody = encoding
       ? await this.compressedContent(
-          build.compressedArtifacts,
-          artifact.integrity,
+          contentOverride === undefined ? artifact.integrity : undefined,
           artifact.path,
           body,
           encoding
@@ -1245,13 +1263,8 @@ export class PanelHttpServer {
     build: CachedBuild,
     artifact: BuildArtifactManifestEntry
   ): Promise<Buffer> {
-    let pending = build.artifactBytes.get(artifact.path);
-    if (!pending) {
-      pending = readArtifactBytesAsync(build, artifact);
-      build.artifactBytes.set(artifact.path, pending);
-      void pending.catch(() => build.artifactBytes.delete(artifact.path));
-    }
-    return pending;
+    const key = `identity:${build.dir}:${artifact.path}:${artifact.integrity ?? ""}`;
+    return this.artifactBodies.get(key, () => readArtifactBytesAsync(build, artifact));
   }
 
   private async readArtifactText(

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TransportDerivativeCache } from "./transportDerivativeCache.js";
 
 const roots: string[] = [];
@@ -16,20 +16,8 @@ function fixture() {
   return { root, body, integrity };
 }
 
-async function waitFor(
-  cache: TransportDerivativeCache,
-  integrity: string,
-  encoding: "br" | "gzip"
-): Promise<Buffer> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const result = await cache.get(integrity, encoding);
-    if (result) return result;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`Timed out waiting for ${encoding} derivative`);
-}
-
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -41,8 +29,11 @@ describe("TransportDerivativeCache", () => {
     const cache = new TransportDerivativeCache(root);
     cache.schedule(integrity, body);
 
-    const gzip = await waitFor(new TransportDerivativeCache(root), integrity, "gzip");
-    const brotli = await waitFor(new TransportDerivativeCache(root), integrity, "br");
+    await cache.close();
+    const reader = new TransportDerivativeCache(root);
+    const gzip = (await reader.get(integrity, "gzip"))!;
+    const brotli = (await reader.get(integrity, "br"))!;
+    await reader.close();
 
     expect(gunzipSync(gzip)).toEqual(body);
     expect(brotli.byteLength).toBeLessThan(body.byteLength);
@@ -56,23 +47,58 @@ describe("TransportDerivativeCache", () => {
 
     cache.scheduleFile(integrity, sourcePath);
 
-    const gzip = await waitFor(cache, integrity, "gzip");
+    await cache.close();
+    const reader = new TransportDerivativeCache(path.join(root, "derivatives"));
+    const gzip = (await reader.get(integrity, "gzip"))!;
+    await reader.close();
     expect(gunzipSync(gzip)).toEqual(body);
+  });
+
+  it("skips excess optional prewarming and joins admitted work", async () => {
+    const { root, body, integrity } = fixture();
+    const cache = new TransportDerivativeCache(root, 1);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    cache.schedule(integrity, body);
+    const other = `sha256-${createHash("sha256").update("other").digest("hex")}`;
+    cache.scheduleFile(other, path.join(root, "missing.js"));
+    await cache.close();
+    const reader = new TransportDerivativeCache(root);
+    try {
+      expect(gunzipSync((await reader.get(integrity, "gzip"))!)).toEqual(body);
+      expect(await reader.get(other, "gzip")).toBeNull();
+      expect(warning).not.toHaveBeenCalled();
+      await expect(cache.get(integrity, "gzip")).rejects.toThrow(/closed/);
+    } finally {
+      await reader.close();
+    }
+  });
+
+  it("propagates an admitted source failure at close", async () => {
+    const { root, integrity } = fixture();
+    const cache = new TransportDerivativeCache(root, 1);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    cache.scheduleFile(integrity, path.join(root, "missing.js"));
+    await expect(cache.close()).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a derivative whose encoded bytes no longer match its metadata", async () => {
     const { root, body, integrity } = fixture();
     const cache = new TransportDerivativeCache(root);
     cache.schedule(integrity, body);
-    await waitFor(cache, integrity, "gzip");
+    await cache.close();
 
     const encodedPath = fs
-      .readdirSync(path.join(root, integrity.slice(7, 9), integrity.slice(7)))
-      .map((name) => path.join(root, integrity.slice(7, 9), integrity.slice(7), name))
+      .readdirSync(path.join(root, `p1-br6-gzip6-${integrity.slice(7)}`))
+      .map((name) => path.join(root, `p1-br6-gzip6-${integrity.slice(7)}`, name))
       .find((name) => name.endsWith("gzip.bin"));
     expect(encodedPath).toBeTruthy();
     fs.writeFileSync(encodedPath!, "corrupt");
 
-    expect(await cache.get(integrity, "gzip")).toBeNull();
+    const reader = new TransportDerivativeCache(root);
+    try {
+      expect(await reader.get(integrity, "gzip")).toBeNull();
+    } finally {
+      await reader.close();
+    }
   });
 });

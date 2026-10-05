@@ -699,9 +699,6 @@ importers:
       bplist-parser:
         specifier: ^0.3.2
         version: 0.3.2
-      sql.js:
-        specifier: ^1.14.1
-        version: 1.14.1
     devDependencies:
       '@types/node':
         specifier: ^24.10.1

@@ -47,17 +47,20 @@ function immutableResponse(body: string, over: Partial<FetchedResponse> = {}): F
 
 describe("AssetDiskCache", () => {
   let dir: string;
+  const caches: AssetDiskCache[] = [];
 
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), "asset-cache-test-"));
   });
   afterEach(async () => {
+    await Promise.all(caches.splice(0).map((cache) => cache.close()));
     await fsp.rm(dir, { recursive: true, force: true });
   });
 
   async function newCache(maxBytes?: number): Promise<AssetDiskCache> {
     const cache = new AssetDiskCache({ dir, maxBytes });
     await cache.init();
+    caches.push(cache);
     return cache;
   }
 
@@ -76,7 +79,7 @@ describe("AssetDiskCache", () => {
     const second = await cache.serve("/assets/app-abc.js", fetcher);
     expect(second.kind).toBe("asset");
     if (second.kind === "asset") {
-      expect((await fsp.readFile(second.asset.bodyPath)).toString()).toBe("console.log(1)");
+      expect(Buffer.concat(await second.asset.body.toArray()).toString()).toBe("console.log(1)");
       expect(second.asset.contentType).toBe("text/javascript; charset=utf-8");
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -117,7 +120,7 @@ describe("AssetDiskCache", () => {
       },
     ]);
     const stored = await cache.get("/good.js");
-    expect(stored && (await fsp.readFile(stored.bodyPath))).toEqual(good);
+    expect(stored && Buffer.concat(await stored.body.toArray())).toEqual(good);
   });
 
   it("streams the first immutable miss before cache population finishes", async () => {
@@ -152,7 +155,7 @@ describe("AssetDiskCache", () => {
     const hit = await cache.serve("/assets/streaming-abc.js", fetcher);
     expect(hit.kind).toBe("asset");
     if (hit.kind === "asset")
-      expect((await fsp.readFile(hit.asset.bodyPath)).toString()).toBe("first response");
+      expect(Buffer.concat(await hit.asset.body.toArray()).toString()).toBe("first response");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -230,7 +233,9 @@ describe("AssetDiskCache", () => {
       }
       expect(Buffer.concat(chunks).toString()).toBe("first---second--third---");
       const hit = await cache.get("/cursor.js");
-      expect(hit && (await fsp.readFile(hit.bodyPath)).toString()).toBe("first---second--third---");
+      expect(hit && Buffer.concat(await hit.body.toArray()).toString()).toBe(
+        "first---second--third---"
+      );
     } finally {
       releaseRead();
       await reader?.cancel().catch(() => undefined);
@@ -268,7 +273,7 @@ describe("AssetDiskCache", () => {
     expect(Buffer.from((await demandReader.read()).value!).toString()).toBe("tail");
     expect((await demandReader.read()).done).toBe(true);
     await cache.close();
-    expect(await cache.get("/shared.js")).not.toBeNull();
+    expect(await (await newCache()).get("/shared.js")).not.toBeNull();
   });
 
   it("publishes and completes demand without waiting for a slower joined reader", async () => {
@@ -309,7 +314,7 @@ describe("AssetDiskCache", () => {
     await result.response.body!.cancel();
     await cache.close();
     expect(cancelled).toHaveBeenCalledOnce();
-    expect(await cache.get("/cancelled.js")).toBeNull();
+    expect(await (await newCache()).get("/cancelled.js")).toBeNull();
     expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
   });
 
@@ -369,7 +374,7 @@ describe("AssetDiskCache", () => {
       { status: "rejected", reason: failure },
     ]);
     await cache.close();
-    expect(await cache.get("/broken.js")).toBeNull();
+    expect(await (await newCache()).get("/broken.js")).toBeNull();
     expect(await fsp.readdir(path.join(dir, "blobs"))).toEqual([]);
   });
 
@@ -722,10 +727,61 @@ describe("AssetDiskCache", () => {
 
     const second = await cache.serve("/assets/big-abc.js", fetcher);
     expect(second.kind).toBe("passthrough");
+    if (second.kind === "passthrough") await second.response.body!.cancel();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it("prunes oldest-by-mtime blobs when over the size cap", async () => {
+  it("pins an opened response through eviction and releases its bytes on completion", async () => {
+    const cache = await newCache(100);
+    const publish = async (key: string, content: string) =>
+      cache.putVerifiedBatch([
+        {
+          cacheKey: key,
+          bytes: Buffer.from(content),
+          payloadDigest: createHash("sha256").update(content).digest("hex"),
+          gzip: false,
+          contentType: "text/plain",
+        },
+      ]);
+    await publish("a", "a".repeat(80));
+    const held = await cache.get("a");
+    expect(held).not.toBeNull();
+    await publish("b", "b".repeat(80));
+    expect(cache.digestFor("a")).toBeDefined();
+    expect(Buffer.concat(await held!.body.toArray()).toString()).toBe("a".repeat(80));
+    await publish("c", "c".repeat(80));
+    expect(cache.digestFor("a")).toBeUndefined();
+  });
+
+  it("preserves indexed read recency when reopening the cache", async () => {
+    const cache = await newCache(200);
+    const publish = async (owner: AssetDiskCache, key: string) =>
+      owner.putVerifiedBatch([
+        {
+          cacheKey: key,
+          bytes: Buffer.from(key.repeat(80)),
+          payloadDigest: createHash("sha256").update(key.repeat(80)).digest("hex"),
+          gzip: false,
+          contentType: "text/plain",
+        },
+      ]);
+    await publish(cache, "a");
+    await publish(cache, "b");
+    const readA = await cache.get("a");
+    await readA!.body.toArray();
+    const digestA = cache.digestFor("a")!;
+    const digestB = cache.digestFor("b")!;
+    // File timestamps deliberately disagree with the authoritative access order.
+    await fsp.utimes(path.join(dir, "blobs", digestA), 1, 1);
+    await fsp.utimes(path.join(dir, "blobs", digestB), 2, 2);
+    await cache.close();
+    const reopened = await newCache(200);
+    await publish(reopened, "c");
+    expect(reopened.digestFor("a")).toBeDefined();
+    expect(reopened.digestFor("b")).toBeUndefined();
+  });
+
+  it("prunes oldest-by-access blobs when over the size cap", async () => {
     // Cap holds ~2 of the 100-byte blobs. Distinct content per path → distinct
     // digests → distinct blobs (identical content would content-address to one).
     const cache = await newCache(250);
@@ -735,30 +791,33 @@ describe("AssetDiskCache", () => {
       vi.fn(async () => immutableResponse("a".repeat(100)))
     );
     if (firstA.kind === "passthrough") await readStream(firstA.response.body!);
-    await cache.serve(
+    const retained = await cache.serve(
       "/assets/a-1.js",
       vi.fn(async () => immutableResponse("unexpected"))
     );
+    if (retained.kind === "asset") await retained.asset.body.toArray();
     await new Promise((r) => setTimeout(r, 15));
     const firstB = await cache.serve(
       "/assets/b-2.js",
       vi.fn(async () => immutableResponse("b".repeat(100)))
     );
     if (firstB.kind === "passthrough") await readStream(firstB.response.body!);
-    await cache.serve(
+    const retainedB = await cache.serve(
       "/assets/b-2.js",
       vi.fn(async () => immutableResponse("unexpected"))
     );
+    if (retainedB.kind === "asset") await retainedB.asset.body.toArray();
     await new Promise((r) => setTimeout(r, 15));
     const firstC = await cache.serve(
       "/assets/c-3.js",
       vi.fn(async () => immutableResponse("c".repeat(100)))
     );
     if (firstC.kind === "passthrough") await readStream(firstC.response.body!);
-    await cache.serve(
+    const retainedC = await cache.serve(
       "/assets/c-3.js",
       vi.fn(async () => immutableResponse("unexpected"))
     );
+    if (retainedC.kind === "asset") await retainedC.asset.body.toArray();
 
     // Total 300 > 250 → the oldest (a) is evicted; its index entry is dropped.
     const digestA = cache.digestFor("/assets/a-1.js");
@@ -773,7 +832,8 @@ describe("AssetDiskCache", () => {
     // a is a miss now → refetch.
     const refetchedA = await cache.serve("/assets/a-1.js", fetcher);
     if (refetchedA.kind === "passthrough") await readStream(refetchedA.response.body!);
-    await cache.serve("/assets/a-1.js", fetcher);
+    const finalA = await cache.serve("/assets/a-1.js", fetcher);
+    if (finalA.kind === "asset") await finalA.asset.body.toArray();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

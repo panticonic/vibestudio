@@ -6,7 +6,7 @@ import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs"
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
-import { readArtifactBytesAsync } from "../buildV2/buildStore.js";
+import { readArtifactBytesAsync, readExecutableModules } from "../buildV2/buildStore.js";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -132,7 +132,7 @@ export function createBuildService(deps: {
         if (!build) return null;
         const metadata =
           options?.includeExecutableModules === true
-            ? build.metadata
+            ? { ...build.metadata, executableModules: readExecutableModules(build.dir) }
             : (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata);
         const diagnostics =
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
@@ -159,7 +159,7 @@ export function createBuildService(deps: {
               return { path: artifact.path, role: artifact.role, bytes };
             })
             .sort((left, right) => right.bytes - left.bytes);
-          const executableModules = build.metadata.executableModules ?? [];
+          const executableModules = readExecutableModules(build.dir) ?? [];
           return [
             {
               target: target.target,

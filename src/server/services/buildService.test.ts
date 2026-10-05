@@ -9,6 +9,22 @@ import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { setBuildRootConfig } from "../buildV2/effectiveVersion.js";
 
+const inventory = vi.hoisted(() => ({
+  modules: [
+    {
+      moduleId: "extensions/example/index.ts",
+      contentDigest: "source-digest",
+      package: { kind: "first-party" as const },
+      format: "ts" as const,
+      source: "export const example = true;",
+    },
+  ],
+}));
+vi.mock("../buildV2/buildStore.js", async (original) => ({
+  ...(await original<typeof import("../buildV2/buildStore.js")>()),
+  readExecutableModules: vi.fn(() => inventory.modules),
+}));
+
 beforeEach(() => setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot: process.cwd() }));
 afterEach(() => setBuildRootConfig(null));
 
@@ -59,15 +75,6 @@ function makeBuildSystem(): BuildSystemV2 {
                 runtimeAbi: "4",
                 providerContracts: {},
               },
-              executableModules: [
-                {
-                  moduleId: "extensions/example/index.ts",
-                  contentDigest: "source-digest",
-                  package: { kind: "first-party" as const },
-                  format: "ts" as const,
-                  source: "export const example = true;",
-                },
-              ],
               builtAt: "2026-01-01T00:00:00.000Z",
             },
           }

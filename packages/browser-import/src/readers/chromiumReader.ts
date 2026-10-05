@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { detectFaviconMimeType } from "@vibestudio/browser-data";
-import type { Database } from "./sqlJsReader.js";
-import { openReadonlySqlite } from "./sqlJsReader.js";
+import type { Database } from "./sqliteReader.js";
+import { openReadonlySqlite } from "./sqliteReader.js";
 import type {
   BrowserDataReader,
   BrowserName,
@@ -89,12 +89,12 @@ function tableColumns(db: Database, tableName: string): Set<string> {
   );
 }
 
-async function withDatabase<T>(dbPath: string, fn: (db: Database) => T): Promise<T> {
+async function withDatabase<T>(dbPath: string, fn: (db: Database) => T | Promise<T>): Promise<T> {
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
-    const db = await openReadonlySqlite(fs.readFileSync(tempPath));
+    const db = await openReadonlySqlite(tempPath);
     try {
-      return fn(db);
+      return await fn(db);
     } finally {
       db.close();
     }
@@ -204,7 +204,7 @@ export class ChromiumReader implements BrowserDataReader {
            LEFT JOIN visits v ON v.url = u.id
            ORDER BY v.visit_time DESC`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         url: string;
         title: string;
         visit_count: number;
@@ -281,8 +281,7 @@ export class ChromiumReader implements BrowserDataReader {
     ]);
     if (!dbPath) return [];
 
-    // Collect rows synchronously from the database
-    const rawRows = await withDatabase(dbPath, (db) => {
+    return withDatabase(dbPath, async (db) => {
       if (!tableExists(db, "cookies")) return [];
       const columns = tableColumns(db, "cookies");
       const sourcePartitionColumn = columns.has("top_frame_site_key")
@@ -292,7 +291,7 @@ export class ChromiumReader implements BrowserDataReader {
         ? "has_cross_site_ancestor"
         : "1 AS has_cross_site_ancestor";
 
-      return db
+      const rawRows = db
         .prepare(
           `SELECT host_key, name, value, encrypted_value, path,
                   expires_utc, is_secure, is_httponly, samesite,
@@ -300,7 +299,7 @@ export class ChromiumReader implements BrowserDataReader {
                   ${crossSiteAncestorColumn}
            FROM cookies`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         host_key: string;
         name: string;
         value: string;
@@ -315,78 +314,76 @@ export class ChromiumReader implements BrowserDataReader {
         top_frame_site_key: string;
         has_cross_site_ancestor: number;
       }>;
-    });
 
-    // Decrypt encrypted values (async) after DB is closed
-    const localStatePath = path.join(path.dirname(profilePath), "Local State");
-    const cookies: ImportedCookie[] = [];
+      const localStatePath = path.join(path.dirname(profilePath), "Local State");
+      const cookies: ImportedCookie[] = [];
 
-    for (const row of rawRows) {
-      const hasEncrypted = row.encrypted_value && row.encrypted_value.length > 0;
-      let importedValue:
-        | { valueStatus: "available"; value: string }
-        | { valueStatus: "unavailable"; value: ""; unavailableReason: "decryption_failed" } =
-        hasEncrypted
-          ? {
-              valueStatus: "unavailable",
-              value: "",
-              unavailableReason: "decryption_failed",
-            }
-          : { valueStatus: "available", value: row.value || "" };
+      for (const row of rawRows) {
+        const hasEncrypted = row.encrypted_value && row.encrypted_value.length > 0;
+        let importedValue:
+          | { valueStatus: "available"; value: string }
+          | { valueStatus: "unavailable"; value: ""; unavailableReason: "decryption_failed" } =
+          hasEncrypted
+            ? {
+                valueStatus: "unavailable",
+                value: "",
+                unavailableReason: "decryption_failed",
+              }
+            : { valueStatus: "available", value: row.value || "" };
 
-      if (hasEncrypted && this.cryptoProvider && this.browser) {
-        try {
-          importedValue = {
-            valueStatus: "available",
-            value: await this.cryptoProvider.decryptChromiumValue(
-              row.encrypted_value!,
-              this.browser,
-              localStatePath
-            ),
-          };
-        } catch {
-          // Preserve the explicit unavailable state. Empty plaintext is valid.
+        if (hasEncrypted && this.cryptoProvider && this.browser) {
+          try {
+            importedValue = {
+              valueStatus: "available",
+              value: await this.cryptoProvider.decryptChromiumValue(
+                row.encrypted_value!,
+                this.browser,
+                localStatePath
+              ),
+            };
+          } catch {
+            // Preserve the explicit unavailable state. Empty plaintext is valid.
+          }
         }
+
+        const expiresUtc = Number(row.expires_utc);
+        const expirationDate =
+          expiresUtc > 0 ? chromeTimestampToMs(row.expires_utc) / 1000 : undefined;
+
+        cookies.push({
+          name: row.name,
+          ...importedValue,
+          domain: row.host_key,
+          hostOnly: isHostOnlyCookie(row.host_key),
+          path: row.path,
+          ...chromiumCookieIsolation(row.top_frame_site_key, row.has_cross_site_ancestor === 1),
+          expirationDate,
+          secure: row.is_secure === 1,
+          httpOnly: row.is_httponly === 1,
+          sameSite: chromiumSameSite(row.samesite),
+          sourceScheme: chromiumSourceScheme(row.source_scheme),
+          sourcePort: row.source_port || 0,
+        });
       }
 
-      const expiresUtc = Number(row.expires_utc);
-      const expirationDate =
-        expiresUtc > 0 ? chromeTimestampToMs(row.expires_utc) / 1000 : undefined;
-
-      cookies.push({
-        name: row.name,
-        ...importedValue,
-        domain: row.host_key,
-        hostOnly: isHostOnlyCookie(row.host_key),
-        path: row.path,
-        ...chromiumCookieIsolation(row.top_frame_site_key, row.has_cross_site_ancestor === 1),
-        expirationDate,
-        secure: row.is_secure === 1,
-        httpOnly: row.is_httponly === 1,
-        sameSite: chromiumSameSite(row.samesite),
-        sourceScheme: chromiumSourceScheme(row.source_scheme),
-        sourcePort: row.source_port || 0,
-      });
-    }
-
-    return cookies;
+      return cookies;
+    });
   }
 
   async readPasswords(profilePath: string): Promise<ImportedPassword[]> {
     const dbPath = path.join(profilePath, "Login Data");
     if (!fs.existsSync(dbPath)) return [];
 
-    // Collect rows synchronously from the database
-    const rawRows = await withDatabase(dbPath, (db) => {
+    return withDatabase(dbPath, async (db) => {
       if (!tableExists(db, "logins")) return [];
 
-      return db
+      const rawRows = db
         .prepare(
           `SELECT origin_url, action_url, username_value, password_value,
                   date_created, date_last_used, date_password_modified, times_used
            FROM logins`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         origin_url: string;
         action_url: string;
         username_value: string;
@@ -396,49 +393,48 @@ export class ChromiumReader implements BrowserDataReader {
         date_password_modified: number | bigint;
         times_used: number;
       }>;
-    });
 
-    // Decrypt password values (async) after DB is closed
-    const localStatePath = path.join(path.dirname(profilePath), "Local State");
-    const passwords: ImportedPassword[] = [];
+      const localStatePath = path.join(path.dirname(profilePath), "Local State");
+      const passwords: ImportedPassword[] = [];
 
-    for (const row of rawRows) {
-      const dateCreated = Number(row.date_created);
-      const dateLastUsed = Number(row.date_last_used);
-      const datePasswordChanged = Number(row.date_password_modified);
+      for (const row of rawRows) {
+        const dateCreated = Number(row.date_created);
+        const dateLastUsed = Number(row.date_last_used);
+        const datePasswordChanged = Number(row.date_password_modified);
 
-      let decryptedPassword = "";
-      if (
-        row.password_value &&
-        row.password_value.length > 0 &&
-        this.cryptoProvider &&
-        this.browser
-      ) {
-        try {
-          decryptedPassword = await this.cryptoProvider.decryptChromiumValue(
-            row.password_value,
-            this.browser,
-            localStatePath
-          );
-        } catch {
-          // Decryption failed — password stays empty
+        let decryptedPassword = "";
+        if (
+          row.password_value &&
+          row.password_value.length > 0 &&
+          this.cryptoProvider &&
+          this.browser
+        ) {
+          try {
+            decryptedPassword = await this.cryptoProvider.decryptChromiumValue(
+              row.password_value,
+              this.browser,
+              localStatePath
+            );
+          } catch {
+            // Decryption failed — password stays empty
+          }
         }
+
+        passwords.push({
+          url: row.origin_url,
+          actionUrl: row.action_url || undefined,
+          username: row.username_value || "",
+          password: decryptedPassword,
+          dateCreated: dateCreated > 0 ? chromeTimestampToMs(row.date_created) : undefined,
+          dateLastUsed: dateLastUsed > 0 ? chromeTimestampToMs(row.date_last_used) : undefined,
+          datePasswordChanged:
+            datePasswordChanged > 0 ? chromeTimestampToMs(row.date_password_modified) : undefined,
+          timesUsed: row.times_used || undefined,
+        });
       }
 
-      passwords.push({
-        url: row.origin_url,
-        actionUrl: row.action_url || undefined,
-        username: row.username_value || "",
-        password: decryptedPassword,
-        dateCreated: dateCreated > 0 ? chromeTimestampToMs(row.date_created) : undefined,
-        dateLastUsed: dateLastUsed > 0 ? chromeTimestampToMs(row.date_last_used) : undefined,
-        datePasswordChanged:
-          datePasswordChanged > 0 ? chromeTimestampToMs(row.date_password_modified) : undefined,
-        timesUsed: row.times_used || undefined,
-      });
-    }
-
-    return passwords;
+      return passwords;
+    });
   }
 
   async readAutofill(profilePath: string): Promise<ImportedAutofillEntry[]> {
@@ -453,7 +449,7 @@ export class ChromiumReader implements BrowserDataReader {
           `SELECT name, value, date_created, date_last_used, count
            FROM autofill`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         name: string;
         value: string;
         date_created: number | bigint;
@@ -461,7 +457,7 @@ export class ChromiumReader implements BrowserDataReader {
         count: number;
       }>;
 
-      return rows.map((row) => {
+      return Array.from(rows, (row) => {
         const dateCreated = Number(row.date_created);
         const dateLastUsed = Number(row.date_last_used);
 
@@ -488,7 +484,7 @@ export class ChromiumReader implements BrowserDataReader {
           `SELECT id, short_name, keyword, url, suggestions_url, favicon_url, is_active
            FROM keywords`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         id: number;
         short_name: string;
         keyword: string;
@@ -498,7 +494,7 @@ export class ChromiumReader implements BrowserDataReader {
         is_active: number;
       }>;
 
-      return rows.map((row) => ({
+      return Array.from(rows, (row) => ({
         name: row.short_name || "",
         keyword: row.keyword || undefined,
         searchUrl: normalizeSearchUrl(row.url || ""),
@@ -649,13 +645,13 @@ export class ChromiumReader implements BrowserDataReader {
            JOIN favicon_bitmaps fb ON fb.icon_id = f.id
            WHERE fb.image_data IS NOT NULL AND length(fb.image_data) > 0`
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         page_url: string;
         icon_url: string;
         image_data: Buffer;
       }>;
 
-      return rows.map((row) => {
+      return Array.from(rows, (row) => {
         const data = Buffer.from(row.image_data);
         return {
           url: row.page_url,

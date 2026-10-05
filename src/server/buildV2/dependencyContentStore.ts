@@ -178,7 +178,6 @@ export async function deduplicateDependencyContent(
 async function pruneShaTree(root: string): Promise<DependencyContentPrune> {
   const result = { files: 0, bytes: 0 };
   const pending = [root];
-  const directories: string[] = [];
   while (pending.length > 0) {
     const directory = pending.pop()!;
     let entries: fs.Dirent[];
@@ -188,7 +187,6 @@ async function pruneShaTree(root: string): Promise<DependencyContentPrune> {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    directories.push(directory);
     for (const entry of entries) {
       const storedPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
@@ -203,9 +201,7 @@ async function pruneShaTree(root: string): Promise<DependencyContentPrune> {
       result.bytes += (stat.blocks ?? 0) * 512 || stat.size;
     }
   }
-  for (const directory of directories.reverse()) {
-    if (directory !== root) await fs.promises.rmdir(directory).catch(() => undefined);
-  }
+  // Keep SHA fanout directories: a publisher can be about to link a new object.
   return result;
 }
 

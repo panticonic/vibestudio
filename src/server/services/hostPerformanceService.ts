@@ -6,6 +6,8 @@ import {
   type WorkerdPerformanceSnapshot,
 } from "@vibestudio/service-schemas/hostPerformance";
 
+import { workerPerformanceSnapshot } from "../workerPerformance.js";
+
 export function createHostPerformanceService(deps: {
   startedAt: number;
   eventLoopSamples: () => readonly HostEventLoopSample[];
@@ -17,7 +19,7 @@ export function createHostPerformanceService(deps: {
     authority: { principals: ["user", "code", "host"] },
     methods: hostPerformanceMethods,
     handler: defineServiceHandler("hostPerformance", hostPerformanceMethods, {
-      snapshot: (_ctx, [options]) => {
+      snapshot: async (_ctx, [options]) => {
         const sampledAt = Date.now();
         const memory = process.memoryUsage();
         const cpu = process.cpuUsage();
@@ -44,6 +46,7 @@ export function createHostPerformanceService(deps: {
           },
           eventLoop: { samples },
           workerd: deps.workerdSnapshot(),
+          workers: await workerPerformanceSnapshot(),
         };
       },
     }),

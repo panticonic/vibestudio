@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createMeasuredWorker } from "../workerPerformance.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { WorkspaceRpcMethodDoc, WorkspaceRpcSchemaMetadata } from "./workspaceRpcCatalog.js";
 import { BuildDiagnosticsError, type BuildDiagnostic } from "./diagnostics.js";
@@ -48,13 +49,18 @@ export class WorkspaceRpcCatalogWorkerClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ id, workerSourcePath, input });
+      try {
+        worker.postMessage({ id, workerSourcePath, input });
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("workspaceRpcCatalog", workerEntry(this.appRoot));
     worker.unref();
     worker.on(
       "message",

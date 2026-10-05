@@ -1,3 +1,4 @@
+import { writePooledArtifact } from "../server/buildV2/buildArtifactPool.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -64,6 +65,26 @@ function lastJson(log: ReturnType<typeof vi.spyOn>): { roots: ReportedRoot[] } {
 }
 
 describe("storage commands", () => {
+  it("collects pool-only links while keeping live build files and reports a dry run", async () => {
+    const { resolve, testRoot } = storageFixture();
+    const pool = resolve("derived-cache/build-artifacts");
+    const target = path.join(testRoot, "build", "bundle.js");
+    await writePooledArtifact(pool, target, Buffer.from("immutable payload"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await runCommand("prune", {})).toBe(0);
+    expect(fs.readFileSync(target, "utf8")).toBe("immutable payload");
+    fs.rmSync(path.dirname(target), { recursive: true });
+    expect(await runCommand("prune", { "dry-run": true })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).artifactPool).toMatchObject({
+      reclaimableFiles: process.platform === "win32" ? 0 : 1,
+      removedFiles: 0,
+    });
+    expect(await runCommand("prune", {})).toBe(0);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).artifactPool.removedFiles).toBe(
+      process.platform === "win32" ? 0 : 1
+    );
+  });
+
   it("reports and considers only the declared live-safe roots", async () => {
     // This case covers the size ceiling, independently of the machine's free-disk pressure.
     const disk = fs.statfsSync(os.tmpdir());
@@ -101,6 +122,8 @@ describe("storage commands", () => {
       "derived-cache/external-deps",
       "instance/build-cache",
       "derived-cache/npm-cache",
+      "derived-cache/npm-registry-downloads",
+      "instance/transport-cache",
       "derived-cache/build-artifacts",
       "instance/cas",
       "npm-cache"
@@ -120,6 +143,8 @@ describe("storage commands", () => {
     );
     for (const offline of [
       "derived-cache/npm-cache",
+      "derived-cache/npm-registry-downloads",
+      "instance/transport-cache",
       "derived-cache/build-artifacts",
       "instance/cas",
       "npm-cache",
@@ -129,14 +154,29 @@ describe("storage commands", () => {
   });
 
   it("still accounts for offline-only roots in status", async () => {
-    storageFixture("derived-cache/external-deps", "instance/cas");
+    storageFixture(
+      "derived-cache/external-deps",
+      "instance/cas",
+      "derived-cache/npm-registry-downloads",
+      "instance/transport-cache"
+    );
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
     expect(await runCommand("status", {})).toBe(0);
 
     const reported = lastJson(log).roots;
+    expect(reported.find((root) => root.name === "shared npm registry downloads")).toMatchObject({
+      kind: "live-safe",
+      leasedEntries: 0,
+    });
     const cas = reported.find((root) => root.name === "selected instance CAS");
     expect(cas).toMatchObject({ kind: "offline-only", leasedEntries: 0 });
+    for (const name of ["selected instance transport derivatives"]) {
+      expect(reported.find((root) => root.name === name)).toMatchObject({
+        kind: "offline-only",
+        leasedEntries: 0,
+      });
+    }
     expect(reported.find((root) => root.name === "shared external dependencies")).toMatchObject({
       kind: "live-safe",
     });

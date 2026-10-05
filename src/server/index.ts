@@ -1,3 +1,6 @@
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
+import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
 /**
  * vibestudio-server — the standalone Vibestudio server entry point.
@@ -7992,6 +7995,19 @@ async function main() {
         shutdownErrors.push(error);
         console.error("[Server] Service shutdown error:", error);
       });
+
+    // Derived-data operations retain ownership through their actual completion.
+    // Stop/join their producers before releasing the shared SQLite lease stores.
+    for (const drain of [
+      drainDependencyContentMaintenance,
+      drainBuildStorePublications,
+      closeDerivedCacheCoordinators,
+    ]) {
+      await drain().catch((error) => {
+        shutdownErrors.push(error);
+        console.error("[Server] Derived-data shutdown failed:", error);
+      });
+    }
 
     // Gateway is deliberately outside the service container because it is the
     // socket owner for several services. It still needs an explicit terminal

@@ -84,6 +84,7 @@ describe("extractSourcePath", () => {
 // ---------------------------------------------------------------------------
 
 import { vi } from "vitest";
+import { EventEmitter } from "node:events";
 
 vi.mock("fs", () => ({
   readFileSync: vi.fn().mockReturnValue("// stub"),
@@ -100,6 +101,17 @@ vi.mock("./buildV2/buildStore.js", async (importOriginal) => {
     ),
   };
 });
+
+vi.mock("./buildV2/transportDerivativeCache.js", () => ({
+  TransportDerivativeCache: class {
+    async get() {
+      return null;
+    }
+    schedule() {}
+    scheduleFile() {}
+    async close() {}
+  },
+}));
 
 vi.mock("ws", () => ({
   WebSocketServer: vi.fn().mockImplementation((options) => ({
@@ -121,10 +133,10 @@ function createMockResponse(): ServerResponse & {
   statusCodeWritten?: number;
   headersWritten?: OutgoingHttpHeaders;
 } {
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     headersSent: false,
     chunks: [] as Buffer[],
-  } as unknown as ServerResponse & {
+  }) as unknown as ServerResponse & {
     body?: unknown;
     chunks?: Buffer[];
     statusCodeWritten?: number;
@@ -284,6 +296,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete,
       getBuild: vi.fn(),
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -387,6 +400,7 @@ describe("PanelHttpServer build cache", () => {
         onBuildComplete: vi.fn(),
         getBuild: vi.fn(async () => prefetchBuild),
         getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(() => null),
         getBuildByKey: vi.fn(() => prefetchBuild),
       });
       return server;
@@ -500,6 +514,7 @@ describe("PanelHttpServer build cache", () => {
         onBuildComplete: vi.fn(),
         getBuild: vi.fn(async () => prefetchBuild),
         getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(() => null),
         getBuildByKey: vi.fn(
           () =>
             ({
@@ -604,6 +619,7 @@ describe("PanelHttpServer build cache", () => {
         onBuildComplete: vi.fn(),
         getBuild: vi.fn(async () => prefetchBuild),
         getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(() => null),
         getBuildByKey: vi.fn(() => null),
       });
 
@@ -656,6 +672,19 @@ describe("PanelHttpServer build cache", () => {
     expect(response.statusCodeWritten).toBe(200);
     expect(response.body).toBe(content);
     expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
+    // A fresh serving cache must recover retained styles from the owning build store.
+    const cold = new PanelHttpServer();
+    const findSharedStyleBuild = vi.fn(() => sharedBuild);
+    cold.setCallbacks({
+      getBuild: vi.fn(async () => sharedBuild),
+      getUnitIcon: vi.fn(async () => null),
+      getBuildByKey: vi.fn(() => sharedBuild),
+      findSharedStyleBuild,
+    });
+    const recovered = await handlePanelRequest(cold, `/__vibestudio/shared-style/${digest}.css`);
+    expect(recovered.statusCodeWritten).toBe(200);
+    expect(recovered.body).toBe(content);
+    expect(findSharedStyleBuild).toHaveBeenCalledWith(digest);
   });
 
   it("serves a declared unit icon without requesting a runtime build", async () => {
@@ -675,6 +704,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       getBuild,
       getUnitIcon,
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => null),
     });
 
@@ -754,6 +784,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete: vi.fn(),
       getBuild,
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -811,6 +842,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete: vi.fn(),
       getBuild,
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -831,6 +863,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete: vi.fn(),
       getBuild,
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -850,6 +883,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => buildResult),
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
     server.primeBuild("panels/my-app", undefined, getBuild);
@@ -872,6 +906,7 @@ describe("PanelHttpServer build cache", () => {
         throw new Error("broken build");
       }),
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => null),
     });
 
@@ -893,6 +928,7 @@ describe("PanelHttpServer build cache", () => {
       getBuild,
       getUnitIcon: vi.fn(async () => null),
       getBuildByKey,
+      findSharedStyleBuild: vi.fn(() => null),
     });
 
     const response = await handlePanelRequest(
@@ -915,6 +951,7 @@ describe("PanelHttpServer build cache", () => {
       getBuild: vi.fn(async () => buildResult),
       getUnitIcon: vi.fn(async () => null),
       getBuildByKey,
+      findSharedStyleBuild: vi.fn(() => null),
     });
 
     const missing = await handlePanelRequest(
@@ -942,6 +979,7 @@ describe("PanelHttpServer build cache", () => {
       getBuild: vi.fn(async () => buildResult),
       getUnitIcon: vi.fn(async () => null),
       getBuildByKey,
+      findSharedStyleBuild: vi.fn(() => null),
     });
 
     const response = await handlePanelRequest(server, "/panels/my-app/bundle.js", {
@@ -989,6 +1027,7 @@ describe("PanelHttpServer build cache", () => {
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => activated),
       getUnitIcon: vi.fn(async () => null),
+      findSharedStyleBuild: vi.fn(() => null),
       getBuildByKey: vi.fn(() => activated),
     });
 

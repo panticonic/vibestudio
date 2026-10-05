@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -512,7 +513,7 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 function createMockResponse() {
-  return {
+  return Object.assign(new EventEmitter(), {
     statusCode: 0,
     headers: {} as Record<string, string>,
     body: Buffer.alloc(0) as Buffer<ArrayBufferLike>,
@@ -529,7 +530,7 @@ function createMockResponse() {
         this.body = Buffer.concat([this.body, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
       }
     },
-  };
+  });
 }
 
 describe("AppHost", () => {

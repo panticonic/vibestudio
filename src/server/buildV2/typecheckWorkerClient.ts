@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createMeasuredWorker } from "../workerPerformance.js";
 import type { BuildDiagnostic } from "./diagnostics.js";
 import type { TypecheckAuthorityInput, TypecheckUnitDep } from "./typecheckFold.js";
 import type { TypecheckEnvironmentServiceWire, TypecheckWorkerRequest } from "./typecheckWorker.js";
@@ -29,6 +30,11 @@ interface Pending {
   reject(error: Error): void;
 }
 
+/**
+ * One lazy worker belongs to the build system until shutdown. Keep compiler
+ * modules warm across edited states; typecheckUnit disposes each request's
+ * program and native compiler API before replying.
+ */
 export class TypecheckWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
@@ -50,7 +56,12 @@ export class TypecheckWorkerClient {
     const request: TypecheckWorkerRequest = { id, ...input, authority };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage(request);
+      try {
+        worker.postMessage(request);
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -78,7 +89,7 @@ export class TypecheckWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("typecheck", workerEntry(this.appRoot));
     worker.unref();
     worker.on(
       "message",

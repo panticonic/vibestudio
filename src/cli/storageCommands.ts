@@ -1,3 +1,4 @@
+import { compactCompletedSystemTestTrajectories } from "./systemTestStore.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -13,9 +14,11 @@ import {
 } from "@vibestudio/env-paths";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { UsageError, jsonMode, printError, printResult } from "./output.js";
+import { collectArtifactPool } from "../server/buildV2/buildArtifactPool.js";
 
 type StorageRoot =
   | { kind: "live-safe"; name: string; path: string }
+  | { kind: "link-pool"; name: string; path: string }
   | { kind: "offline-only"; name: string; path: string };
 
 function cacheRoots(): StorageRoot[] {
@@ -32,6 +35,11 @@ function cacheRoots(): StorageRoot[] {
       name: "shared extension runtime installations",
       path: path.join(shared, "extension-runtime-deps"),
     },
+    {
+      kind: "live-safe",
+      name: "shared transport derivatives",
+      path: path.join(shared, "transport-derivatives"),
+    },
     { kind: "live-safe", name: "shared build results", path: path.join(shared, "build-results") },
     {
       kind: "live-safe",
@@ -39,7 +47,7 @@ function cacheRoots(): StorageRoot[] {
       path: path.join(shared, "root-templates"),
     },
     {
-      kind: "offline-only",
+      kind: "link-pool",
       name: "shared build artifacts",
       path: path.join(shared, "build-artifacts"),
     },
@@ -49,6 +57,16 @@ function cacheRoots(): StorageRoot[] {
       path: path.join(getCentralDataPath(), "build-cache"),
     },
     { kind: "offline-only", name: "shared npm cache", path: path.join(shared, "npm-cache") },
+    {
+      kind: "live-safe",
+      name: "shared npm registry downloads",
+      path: path.join(shared, "npm-registry-downloads"),
+    },
+    {
+      kind: "offline-only",
+      name: "selected instance transport derivatives",
+      path: path.join(getCentralDataPath(), "transport-cache"),
+    },
     {
       kind: "offline-only",
       name: "shared dependency file content",
@@ -134,6 +152,19 @@ async function status(inv: ParsedInvocation): Promise<number> {
     const roots = await Promise.all(
       cacheRoots().map(async (root) => {
         if (root.kind === "offline-only") return offlineStatus(root);
+        if (root.kind === "link-pool") {
+          const pool = await collectArtifactPool(root.path, { dryRun: true });
+          const disk = fs.statfsSync(root.path);
+          return {
+            ...root,
+            root: root.path,
+            bytes: storedBytes(root.path),
+            entries: pool.files,
+            leasedEntries: 0,
+            reclaimableBytes: pool.reclaimableBytes,
+            availableBytes: Number(disk.bavail) * Number(disk.bsize),
+          };
+        }
         const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));
         try {
           return {
@@ -190,8 +221,21 @@ async function prune(inv: ParsedInvocation): Promise<number> {
         coordinator.close();
       }
     }
+    // This pool is a content-sharing index, not workspace durable storage.
+    // Each build owns its own link or copy; collection removes pool-only names.
+    const artifactPool = await collectArtifactPool(
+      path.join(getSharedDerivedDataPath(), "build-artifacts"),
+      { dryRun }
+    );
+    const systemTestEvidence = await compactCompletedSystemTestTrajectories({ dryRun });
     printResult(
-      { dryRun, ...(maxBytes === undefined ? {} : { maxBytes }), roots: results },
+      {
+        dryRun,
+        ...(maxBytes === undefined ? {} : { maxBytes }),
+        roots: results,
+        artifactPool,
+        systemTestEvidence,
+      },
       {
         json,
         human: () => {
@@ -203,6 +247,17 @@ async function prune(inv: ParsedInvocation): Promise<number> {
                 `(limit ${humanBytes(result.targetBytes)})`
             );
           }
+          console.log(
+            `Shared artifact pool: ${dryRun ? "would remove" : "removed"} ` +
+              `${dryRun ? artifactPool.reclaimableFiles : artifactPool.removedFiles} files / ` +
+              humanBytes(dryRun ? artifactPool.reclaimableBytes : artifactPool.removedBytes)
+          );
+          console.log(
+            `Completed test trajectories: ${systemTestEvidence.files} files; ` +
+              (dryRun
+                ? `${humanBytes(systemTestEvidence.originalBytes)} available for lossless compression`
+                : `${humanBytes(systemTestEvidence.originalBytes)} compressed to ${humanBytes(systemTestEvidence.compressedBytes)}`)
+          );
         },
       }
     );

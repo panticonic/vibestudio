@@ -19,6 +19,8 @@ import {
   primaryTextArtifactContent,
   put,
   rebindSourceState,
+  readExecutableModules,
+  writeBuildMetadata,
   scanRetention,
   setBuildExecutionIdentityContext,
   type BuildResult,
@@ -271,6 +273,8 @@ describe("build artifact helpers", () => {
         }
       );
       const artifactPath = path.join(root, "builds", "lazy-build", "worker.js");
+      const cachedBefore = get("lazy-build");
+      expect(cachedBefore?.artifacts[0]?.content).toBe("export default {};");
       const bytes = fs.readFileSync(artifactPath, "utf8");
       fs.writeFileSync(artifactPath, "x".repeat(Buffer.byteLength(bytes)));
 
@@ -923,11 +927,17 @@ describe("build artifact helpers", () => {
         // deterministic published-cache boundary before introducing the race.
         setUserDataPath(path.join(root, "first-reader"));
         const first = await getOrHydrate(key);
-        expect(first?.metadata.executableModules).toEqual(modules);
+        expect(first?.metadata).not.toHaveProperty("executableModules");
+        expect(readExecutableModules(first!.dir)).toEqual(modules);
+        await writeBuildMetadata(first!.dir, first!.metadata);
+        expect(readExecutableModules(first!.dir)).toEqual(modules);
         const sharedDir = path.join(sharedCache, key);
         const metadataPath = path.join(sharedDir, "metadata.json");
         if (format === "inline") {
-          fs.writeFileSync(metadataPath, JSON.stringify(first!.metadata));
+          fs.writeFileSync(
+            metadataPath,
+            JSON.stringify({ ...first!.metadata, executableModules: modules })
+          );
           fs.unlinkSync(path.join(sharedDir, "executable-modules.json.gz"));
         }
         const metadataBefore = fs.readFileSync(metadataPath, "utf8");
@@ -941,7 +951,8 @@ describe("build artifact helpers", () => {
         });
         setUserDataPath(path.join(root, "second-reader"));
         const hydrated = await getOrHydrate(key);
-        expect(hydrated?.metadata.executableModules).toEqual(modules);
+        expect(hydrated?.metadata).not.toHaveProperty("executableModules");
+        expect(readExecutableModules(hydrated!.dir)).toEqual(modules);
         expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
         expect(fs.existsSync(path.join(hydrated!.dir, "metadata.json.tmp.other-writer"))).toBe(
           false
@@ -950,6 +961,10 @@ describe("build artifact helpers", () => {
           JSON.parse(fs.readFileSync(path.join(hydrated!.dir, "package.json"), "utf8"))
         ).toEqual({ type: "module" });
         expect(fs.readFileSync(metadataPath, "utf8")).toBe(metadataBefore);
+        if (format === "inline") {
+          await writeBuildMetadata(sharedDir, first!.metadata);
+          expect(readExecutableModules(sharedDir)).toEqual(modules);
+        }
       } finally {
         linkSpy?.mockRestore();
         if (previousSharedCache === undefined)

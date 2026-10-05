@@ -141,27 +141,73 @@ describe("DerivedCacheCoordinator", () => {
     }
   });
 
-  it("re-fences a live entry after its lease row is swept", async () => {
-    vi.useFakeTimers();
+  it("keeps a live owner's lease regardless of elapsed time", async () => {
     const root = cacheRoot();
     put(root, "active", 64 * 1024);
     const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     const collector = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     const lease = owner.acquire(root, "active");
-    const database = new DatabaseSync(derivedCacheDatabasePath(root));
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60_000);
     try {
-      database.exec("DELETE FROM cache_leases");
-      await vi.advanceTimersByTimeAsync(60_000);
-
       const result = await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 });
       expect(result.removedEntries).toBe(0);
       expect(fs.existsSync(path.join(root, "active"))).toBe(true);
     } finally {
+      clock.mockRestore();
       lease.release();
-      database.close();
       owner.close();
       collector.close();
-      vi.useRealTimers();
+    }
+  });
+
+  it("migrates expiring leases without taking a live owner's data", async () => {
+    const root = cacheRoot();
+    put(root, "active", 64 * 1024);
+    put(root, "dead", 64 * 1024);
+    const file = derivedCacheDatabasePath(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const database = new DatabaseSync(file);
+    database.exec(`
+      CREATE TABLE cache_leases (
+        lease_id TEXT PRIMARY KEY, root TEXT NOT NULL, key TEXT NOT NULL,
+        owner_id TEXT NOT NULL, expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX cache_leases_entry ON cache_leases(root, key, expires_at);
+      CREATE TABLE cache_maintenance (
+        root TEXT PRIMARY KEY, owner_id TEXT, expires_at INTEGER NOT NULL DEFAULT 0,
+        last_pruned_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+    `);
+    const insert = database.prepare("INSERT INTO cache_leases VALUES (?, ?, ?, ?, ?)");
+    insert.run("active-lease", root, "active", `${process.pid}:legacy`, 0);
+    // This PID exceeds the platform's PID range; ESRCH is authoritative death.
+    insert.run("dead-lease", root, "dead", "2147483647:legacy", Date.now() + 60_000);
+    database.close();
+    const collector = new DerivedCacheCoordinator(file);
+    try {
+      const result = await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 });
+      expect(result.removedEntries).toBe(1);
+      expect(fs.existsSync(path.join(root, "active"))).toBe(true);
+      expect(fs.existsSync(path.join(root, "dead"))).toBe(false);
+    } finally {
+      collector.close();
+    }
+  });
+
+  it("releases its own leases on close", async () => {
+    const root = cacheRoot();
+    put(root, "entry", 64 * 1024);
+    const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const lease = owner.acquire(root, "entry");
+    owner.close();
+    lease.release();
+    const collector = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    try {
+      expect(
+        (await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 })).removedEntries
+      ).toBe(1);
+    } finally {
+      collector.close();
     }
   });
 

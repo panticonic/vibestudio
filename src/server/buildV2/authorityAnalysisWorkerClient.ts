@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createMeasuredWorker } from "../workerPerformance.js";
 import type {
   AuthorityCompilerSnapshot,
   CreateAuthorityCompilerSnapshotInput,
@@ -56,7 +57,9 @@ export class AuthorityAnalysisWorkerClient {
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     const entry = workerEntry(this.appRoot);
-    const worker = new Worker(entry.filename, { execArgv: entry.execArgv });
+    const worker = createMeasuredWorker("authorityAnalysis", entry.filename, {
+      execArgv: entry.execArgv,
+    });
     worker.unref();
     worker.on(
       "message",

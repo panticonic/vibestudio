@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import { createMeasuredWorker } from "../workerPerformance.js";
 
 declare global {
   var __VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__: string | undefined;
@@ -40,13 +41,18 @@ export class LibraryLoweringWorkerClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ id, source });
+      try {
+        worker.postMessage({ id, source });
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("libraryLowering", workerEntry(this.appRoot));
     worker.unref();
     worker.on(
       "message",

@@ -12,6 +12,7 @@ vi.mock("node:fs", async (importOriginal) => ({
 import {
   DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS,
   dependencyContentMaintenanceEntry,
+  drainDependencyContentMaintenance,
   scheduleDependencyContentMaintenance,
 } from "./dependencyContentMaintenance.js";
 
@@ -21,12 +22,13 @@ describe("dependency content maintenance scheduling", () => {
     spawn.mockReset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await drainDependencyContentMaintenance();
     delete process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
     vi.useRealTimers();
   });
 
-  it("batches cache directories into a detached process after the startup grace period", async () => {
+  it("batches cache directories into an owned process after the startup grace period", async () => {
     const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
     spawn.mockReturnValue(child);
     const appRoot = process.cwd();
@@ -44,8 +46,9 @@ describe("dependency content maintenance scheduling", () => {
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
       [dependencyContentMaintenanceEntry(), path.resolve(first), path.resolve(second)],
-      expect.objectContaining({ detached: true, stdio: "ignore" })
+      expect.objectContaining({ detached: false, stdio: "inherit" })
     );
     expect(child.unref).toHaveBeenCalledOnce();
+    child.emit("close", 0, null);
   });
 });

@@ -19,6 +19,24 @@ const MAX_SHARED_FACTS = 4_096;
 const MAX_SHARED_INDEXES = 256;
 const MAX_SHARED_POINTERS = 4_096;
 const COMMITS_BETWEEN_PRUNES = 32;
+const MAX_LOCAL_FACT_BYTES = 16 * 1024 * 1024;
+const MAX_LOCAL_INDEX_BYTES = 16 * 1024 * 1024;
+const MAX_SHARED_RECORD_BYTES = 16 * 1024 * 1024;
+const MAX_SHARED_FACT_BYTES = 256 * 1024 * 1024;
+const MAX_SHARED_INDEX_BYTES = 64 * 1024 * 1024;
+const MAX_SHARED_POINTER_BYTES = 8 * 1024 * 1024;
+
+function readCacheJson(file: string, maximum = MAX_SHARED_RECORD_BYTES): unknown {
+  if (fs.statSync(file).size > maximum)
+    throw new Error("Derived authority record exceeds its byte budget");
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function writeSharedRecord(file: string, value: unknown): boolean {
+  if (Buffer.byteLength(JSON.stringify(value)) > MAX_SHARED_RECORD_BYTES) return false;
+  writeJsonFileAtomic(file, value);
+  return true;
+}
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -328,8 +346,18 @@ function sameIdentity(a: unknown, b: unknown): boolean {
   return sha256Canonical(a) === sha256Canonical(b);
 }
 
-function trimNewest<T>(values: T[], maximum: number): T[] {
-  return values.length <= maximum ? values : values.slice(values.length - maximum);
+function trimNewest<T>(values: T[], maximum: number, maxBytes: number): T[] {
+  const kept: T[] = [];
+  let bytes = 0;
+  for (let index = values.length - 1; index >= 0 && kept.length < maximum; index--) {
+    const value = values[index]!;
+    const size = Buffer.byteLength(JSON.stringify(value));
+    if (size > maxBytes) continue;
+    if (bytes + size > maxBytes) break;
+    kept.push(value);
+    bytes += size;
+  }
+  return kept.reverse();
 }
 
 function jsonFilesBelow(root: string): string[] {
@@ -352,24 +380,25 @@ function jsonFilesBelow(root: string): string[] {
   return files;
 }
 
-function pruneDerivedFiles(root: string, maximum: number): void {
-  const files = jsonFilesBelow(root);
-  if (files.length <= maximum) return;
+function pruneDerivedFiles(files: string[], maximum: number, maxBytes: number): void {
   const oldestFirst = files
-    .map((file) => {
+    .flatMap((file) => {
       try {
-        return { file, modified: fs.statSync(file).mtimeMs };
-      } catch {
-        return { file, modified: 0 };
+        const stat = fs.statSync(file);
+        return [{ file, modified: stat.mtimeMs, bytes: stat.size }];
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
       }
     })
     .sort((a, b) => a.modified - b.modified || a.file.localeCompare(b.file));
-  for (const { file } of oldestFirst.slice(0, files.length - maximum)) {
-    try {
-      fs.rmSync(file);
-    } catch {
-      // Raced derived data is already effectively pruned.
-    }
+  let count = oldestFirst.length;
+  let bytes = oldestFirst.reduce((sum, entry) => sum + entry.bytes, 0);
+  for (const entry of oldestFirst) {
+    if (count <= maximum && bytes <= maxBytes) break;
+    fs.rmSync(entry.file, { force: true });
+    count--;
+    bytes -= entry.bytes;
   }
 }
 
@@ -396,6 +425,10 @@ export class AuthorityAnalysisCache {
     private readonly filePath: string,
     private readonly sharedFactsDir?: string
   ) {}
+
+  get residentBytes(): number {
+    return 2 * (JSON.stringify(this.facts).length + JSON.stringify(this.indexes).length);
+  }
 
   static forWorkspace(workspaceId: string): AuthorityAnalysisCache {
     const workspaceKey = sha256Canonical({ workspaceId });
@@ -459,7 +492,8 @@ export class AuthorityAnalysisCache {
       previous
         .filter((entry) => !sameIdentity(entry.identity, identity))
         .concat({ identity, factKey: key }),
-      MAX_DIAGNOSTIC_IDENTITIES
+      MAX_DIAGNOSTIC_IDENTITIES,
+      MAX_SHARED_RECORD_BYTES
     );
     writeJsonFileAtomic(diagnosticPath, {
       unitName: identity.unitName,
@@ -491,27 +525,22 @@ export class AuthorityAnalysisCache {
         !file.startsWith(path.join(factsRoot, "candidates") + path.sep) &&
         !file.startsWith(path.join(factsRoot, "diagnostics") + path.sep)
     );
-    if (contentFacts.length > MAX_SHARED_FACTS) {
-      const oldest = contentFacts
-        .map((file) => {
-          try {
-            return { file, modified: fs.statSync(file).mtimeMs };
-          } catch {
-            return { file, modified: 0 };
-          }
-        })
-        .sort((a, b) => a.modified - b.modified || a.file.localeCompare(b.file));
-      for (const { file } of oldest.slice(0, contentFacts.length - MAX_SHARED_FACTS)) {
-        try {
-          fs.rmSync(file);
-        } catch {
-          // Derived cache eviction is best effort.
-        }
-      }
-    }
-    pruneDerivedFiles(path.join(factsRoot, "candidates"), MAX_SHARED_POINTERS);
-    pruneDerivedFiles(path.join(factsRoot, "diagnostics"), MAX_SHARED_POINTERS);
-    pruneDerivedFiles(path.join(path.dirname(factsRoot), "indexes"), MAX_SHARED_INDEXES);
+    pruneDerivedFiles(contentFacts, MAX_SHARED_FACTS, MAX_SHARED_FACT_BYTES);
+    pruneDerivedFiles(
+      jsonFilesBelow(path.join(factsRoot, "candidates")),
+      MAX_SHARED_POINTERS,
+      MAX_SHARED_POINTER_BYTES
+    );
+    pruneDerivedFiles(
+      jsonFilesBelow(path.join(factsRoot, "diagnostics")),
+      MAX_SHARED_POINTERS,
+      MAX_SHARED_POINTER_BYTES
+    );
+    pruneDerivedFiles(
+      jsonFilesBelow(path.join(path.dirname(factsRoot), "indexes")),
+      MAX_SHARED_INDEXES,
+      MAX_SHARED_INDEX_BYTES
+    );
   }
 
   private decodeFactEntry(
@@ -553,15 +582,26 @@ export class AuthorityAnalysisCache {
     this.loaded = true;
     try {
       if (!fs.existsSync(this.filePath)) return;
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as Partial<CacheFile>;
+      const parsed = readCacheJson(
+        this.filePath,
+        MAX_LOCAL_FACT_BYTES + MAX_LOCAL_INDEX_BYTES + 1024
+      ) as Partial<CacheFile>;
       if (
         parsed.version !== CACHE_VERSION ||
         !Array.isArray(parsed.facts) ||
         !Array.isArray(parsed.indexes)
       )
         return;
-      this.facts = parsed.facts.filter((entry) => entry && typeof entry === "object");
-      this.indexes = parsed.indexes.filter((entry) => entry && typeof entry === "object");
+      this.facts = trimNewest(
+        parsed.facts.filter((entry) => entry && typeof entry === "object"),
+        MAX_FACTS,
+        MAX_LOCAL_FACT_BYTES
+      );
+      this.indexes = trimNewest(
+        parsed.indexes.filter((entry) => entry && typeof entry === "object"),
+        MAX_INDEXES,
+        MAX_LOCAL_INDEX_BYTES
+      );
     } catch {
       this.facts = [];
       this.indexes = [];
@@ -592,7 +632,7 @@ export class AuthorityAnalysisCache {
     try {
       if (!fs.existsSync(sharedPath)) return null;
       const shared = this.decodeFactEntry(
-        JSON.parse(fs.readFileSync(sharedPath, "utf8")) as StoredFact,
+        readCacheJson(sharedPath) as StoredFact,
         key,
         identity,
         validation
@@ -639,7 +679,7 @@ export class AuthorityAnalysisCache {
     const candidatePath = this.sharedCandidatePath(factBaseKey(base));
     if (!candidatePath) return { facts: null, reason: "no-candidate-ever-stored" };
     try {
-      const candidate = JSON.parse(fs.readFileSync(candidatePath, "utf8")) as StoredFactCandidate;
+      const candidate = readCacheJson(candidatePath) as StoredFactCandidate;
       if (
         !candidate ||
         typeof candidate.factKey !== "string" ||
@@ -650,7 +690,7 @@ export class AuthorityAnalysisCache {
         return { facts: null, reason: "candidate-pointer-corrupt-or-missing" };
       const sharedPath = this.sharedFactPath(candidate.factKey);
       if (!sharedPath) return { facts: null, reason: "candidate-pointer-corrupt-or-missing" };
-      const entry = JSON.parse(fs.readFileSync(sharedPath, "utf8")) as StoredFact;
+      const entry = readCacheJson(sharedPath) as StoredFact;
       if (!validConsumerIdentity(entry.identity) || !sameConsumerBase(entry.identity, base))
         return { facts: null, reason: "fact-corrupt" };
       const decoded = this.decodeFactEntry(entry, candidate.factKey, entry.identity, validation);
@@ -686,7 +726,7 @@ export class AuthorityAnalysisCache {
       const sharedPath = this.sharedIndexPath(key);
       if (sharedPath) {
         try {
-          entry = JSON.parse(fs.readFileSync(sharedPath, "utf8")) as StoredIndex;
+          entry = readCacheJson(sharedPath) as StoredIndex;
         } catch {
           // Shared indexes are derived data; absence/corruption is a miss.
         }
@@ -794,7 +834,7 @@ export class AuthorityAnalysisCache {
       nextFacts.push(entry);
       const sharedPath = this.sharedFactPath(key);
       if (sharedPath) {
-        writeJsonFileAtomic(sharedPath, entry);
+        writeSharedRecord(sharedPath, entry);
         const baseIdentity: AuthorityConsumerBaseIdentity = {
           epoch: fact.identity.epoch,
           unitName: fact.identity.unitName,
@@ -818,13 +858,13 @@ export class AuthorityAnalysisCache {
       digest: sha256Canonical({ key, identity, index: encodedIndex }),
     };
     const sharedIndexPath = this.sharedIndexPath(key);
-    if (sharedIndexPath) writeJsonFileAtomic(sharedIndexPath, storedIndex);
+    if (sharedIndexPath) writeSharedRecord(sharedIndexPath, storedIndex);
     const nextIndexes = this.indexes.filter((entry) => entry.key !== key);
     nextIndexes.push(storedIndex);
     const next: CacheFile = {
       version: CACHE_VERSION,
-      facts: trimNewest(nextFacts, MAX_FACTS),
-      indexes: trimNewest(nextIndexes, MAX_INDEXES),
+      facts: trimNewest(nextFacts, MAX_FACTS, MAX_LOCAL_FACT_BYTES),
+      indexes: trimNewest(nextIndexes, MAX_INDEXES, MAX_LOCAL_INDEX_BYTES),
     };
     writeJsonFileAtomic(this.filePath, next);
     this.facts = next.facts;

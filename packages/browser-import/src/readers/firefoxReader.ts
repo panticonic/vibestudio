@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { detectFaviconMimeType } from "@vibestudio/browser-data";
-import type { Database } from "./sqlJsReader.js";
-import { openReadonlySqlite } from "./sqlJsReader.js";
+import type { Database } from "./sqliteReader.js";
+import { openReadonlySqlite } from "./sqliteReader.js";
 import type {
   BrowserDataReader,
   ImportedBookmark,
@@ -170,7 +170,7 @@ async function openProfileDb(profilePath: string, dbName: string): Promise<[Data
   const dbPath = path.join(profilePath, dbName);
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
-    const db = await openReadonlySqlite(fs.readFileSync(tempPath));
+    const db = await openReadonlySqlite(tempPath);
     return [db, tempPath];
   } catch (err: unknown) {
     cleanupTempCopy(tempPath);
@@ -218,7 +218,7 @@ export class FirefoxReader implements BrowserDataReader {
         WHERE b.type = 2
       `
         )
-        .all() as Array<{ id: number; title: string; parent: number }>;
+        .iterate() as Iterable<{ id: number; title: string; parent: number }>;
 
       const parentMap = new Map<number, { title: string; parentId: number }>();
       for (const row of folderRows) {
@@ -238,7 +238,7 @@ export class FirefoxReader implements BrowserDataReader {
           AND p.url NOT LIKE 'place:%'
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         id: number;
         title: string | null;
         parent: number;
@@ -251,7 +251,9 @@ export class FirefoxReader implements BrowserDataReader {
       // Try to get keywords
       let keywordMap = new Map<number, string>();
       try {
-        const keywordRows = db.prepare("SELECT id, keyword FROM moz_keywords").all() as Array<{
+        const keywordRows = db
+          .prepare("SELECT id, keyword FROM moz_keywords")
+          .iterate() as Iterable<{
           id: number;
           keyword: string;
         }>;
@@ -301,7 +303,7 @@ export class FirefoxReader implements BrowserDataReader {
         ORDER BY v.visit_date DESC
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         url: string;
         title: string | null;
         visit_count: number;
@@ -369,7 +371,7 @@ export class FirefoxReader implements BrowserDataReader {
         FROM moz_cookies
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         name: string;
         value: string;
         host: string;
@@ -381,7 +383,7 @@ export class FirefoxReader implements BrowserDataReader {
         originAttributes: string;
       }>;
 
-      return rows.map((row) => {
+      return Array.from(rows, (row) => {
         const domain = row.host;
         const secure = row.isSecure === 1;
         const isolation = firefoxCookieIsolation(row.originAttributes, domain);
@@ -468,7 +470,7 @@ export class FirefoxReader implements BrowserDataReader {
         FROM moz_formhistory
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         fieldname: string;
         value: string;
         timesUsed: number;
@@ -476,7 +478,7 @@ export class FirefoxReader implements BrowserDataReader {
         lastUsed: number;
       }>;
 
-      return rows.map((row) => ({
+      return Array.from(rows, (row) => ({
         fieldName: row.fieldname,
         value: row.value,
         dateCreated: row.firstUsed ? firefoxTimestampToMs(row.firstUsed) : undefined,
@@ -603,13 +605,13 @@ export class FirefoxReader implements BrowserDataReader {
         FROM moz_perms
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         origin: string;
         type: string;
         permission: number;
       }>;
 
-      return rows.map((row) => ({
+      return Array.from(rows, (row) => ({
         origin: row.origin,
         permission: mapFirefoxPermissionType(row.type),
         setting: firefoxPermissionToSetting(row.permission),
@@ -657,14 +659,14 @@ export class FirefoxReader implements BrowserDataReader {
           AND length(i.data) > 0
       `
         )
-        .all() as Array<{
+        .iterate() as Iterable<{
         icon_url: string;
         data: Buffer;
         width: number;
         page_url: string;
       }>;
 
-      return rows.map((row) => {
+      return Array.from(rows, (row) => {
         const data = Buffer.from(row.data);
         return {
           url: row.page_url,
