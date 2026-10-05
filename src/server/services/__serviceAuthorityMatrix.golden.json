@@ -5312,45 +5312,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.access"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.access",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -5362,11 +5348,11 @@
           "family": "fs.control",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
-        "capability": "filesystem.read",
+        "capability": "filesystem.list",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5444,45 +5430,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.appendFile"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.appendFile",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -5496,9 +5468,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5593,45 +5565,49 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.copyFile"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
+          "prepared": {
+            "resolver": "fs.files.copyFile",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -5645,9 +5621,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -5742,22 +5718,66 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.exists"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
+          "prepared": {
+            "resolver": "fs.files.exists",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "fs.control",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": "filesystem.list",
+        "presentation": {
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "see"
+          }
+        }
+      },
+      "glob": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
                 "kind": "all",
                 "requirements": [
                   {
                     "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
+                    "principal": "code",
+                    "capability": "$method"
                   },
                   {
                     "kind": "relationship",
@@ -5765,22 +5785,200 @@
                   }
                 ]
               },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
                 ]
               }
-            }
-          ]
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "fs.files.glob"
+          },
+          "prepared": {
+            "resolver": "fs.files.glob",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "fs.control",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": "filesystem.list",
+        "presentation": {
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "see"
+          }
+        }
+      },
+      "grep": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "fs.files.grep"
+          },
+          "prepared": {
+            "resolver": "fs.files.grep",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -5794,49 +5992,15 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "Read workspace files",
+          "action": "read file contents",
+          "description": "Read the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
             "verb": "see"
           }
         }
-      },
-      "glob": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "fs.control",
-          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "grep": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "fs.control",
-          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
       },
       "handleClose": {
         "authority": {
@@ -5908,45 +6072,8 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
-          },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
-              }
-            }
-          ]
+            "key": "fs.files.handleClose"
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -5960,9 +6087,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6040,45 +6167,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.handleRead"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.handleRead",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -6092,9 +6205,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "Read workspace files",
+          "action": "read file contents",
+          "description": "Read the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6172,45 +6285,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.handleStat"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.handleStat",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -6222,11 +6321,11 @@
           "family": "fs.control",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
-        "capability": "filesystem.read",
+        "capability": "filesystem.list",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6304,45 +6403,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.handleWrite"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.handleWrite",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -6356,9 +6441,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6436,45 +6521,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.lstat"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.lstat",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -6486,11 +6557,11 @@
           "family": "fs.control",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
-        "capability": "filesystem.read",
+        "capability": "filesystem.list",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6568,45 +6639,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.mkdir"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.mkdir",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -6620,9 +6677,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6734,45 +6791,49 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.open"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
+          "prepared": {
+            "resolver": "fs.files.open",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -6786,9 +6847,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6866,45 +6927,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.readBytes"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.readBytes",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -6918,9 +6965,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "Read workspace files",
+          "action": "read file contents",
+          "description": "Read the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -6998,45 +7045,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.readdir"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.readdir",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -7048,11 +7081,11 @@
           "family": "fs.read",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
-        "capability": "filesystem.read",
+        "capability": "filesystem.list",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7130,45 +7163,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.readFile"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.readFile",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -7182,9 +7201,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "Read workspace files",
+          "action": "read file contents",
+          "description": "Read the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7279,45 +7298,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.readText"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.readText",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -7331,9 +7336,9 @@
         },
         "capability": "filesystem.read",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "Read workspace files",
+          "action": "read file contents",
+          "description": "Read the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7428,45 +7433,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.rename"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.rename",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -7480,9 +7471,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7560,45 +7551,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.rm"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.rm",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -7612,9 +7589,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7692,45 +7669,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.rmdir"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.rmdir",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -7744,9 +7707,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7824,45 +7787,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.stat"
           },
-          "additional": [
-            {
-              "capability": "filesystem.read",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.read"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.stat",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -7874,11 +7823,11 @@
           "family": "fs.control",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
-        "capability": "filesystem.read",
+        "capability": "filesystem.list",
         "presentation": {
-          "title": "Share workspace files with this website",
-          "action": "read workspace files",
-          "description": "This website and agents it starts can read all files in this workspace.",
+          "title": "List workspace files and folders",
+          "action": "list files and folders",
+          "description": "Show file and folder names without sharing file contents.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -7973,45 +7922,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.truncate"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.truncate",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -8025,9 +7960,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -8105,45 +8040,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.unlink"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.unlink",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -8157,9 +8078,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -8254,45 +8175,31 @@
           },
           "resource": {
             "kind": "literal",
-            "key": "workspace-files",
-            "presentation": {
-              "type": "workspace-file",
-              "label": "Workspace file"
-            }
+            "key": "fs.files.writeFile"
           },
-          "additional": [
-            {
-              "capability": "filesystem.write",
-              "requirement": {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "website",
-                    "capability": "filesystem.write"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              "resource": {
-                "kind": "literal",
-                "key": "workspace-files",
-                "presentation": {
-                  "type": "workspace-file",
-                  "label": "All files in this workspace"
-                }
-              },
-              "tier": "gated",
-              "when": {
-                "origins": [
-                  "website"
-                ]
+          "prepared": {
+            "resolver": "fs.files.writeFile",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
-            }
-          ]
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -8306,9 +8213,9 @@
         },
         "capability": "filesystem.write",
         "presentation": {
-          "title": "Let this website change workspace files",
-          "action": "change workspace files",
-          "description": "This website and agents it starts can create, change, and delete files in this workspace.",
+          "title": "Change workspace files",
+          "action": "change files",
+          "description": "Create, change, or delete the selected workspace files or folders.",
           "group": "workspace",
           "authorityCategory": {
             "domain": "files",
@@ -16764,7 +16671,99 @@
     "methods": {
       "blame": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.blame"
+          },
+          "prepared": {
+            "resolver": "vcs.files.blame",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16781,7 +16780,76 @@
       },
       "commit": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.commit"
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -16798,7 +16866,99 @@
       },
       "compare": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.compare"
+          },
+          "prepared": {
+            "resolver": "vcs.files.compare",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16815,7 +16975,117 @@
       },
       "copy": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.copy"
+          },
+          "prepared": {
+            "resolver": "vcs.files.copy",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -16832,7 +17102,99 @@
       },
       "discard": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.discard"
+          },
+          "prepared": {
+            "resolver": "vcs.files.discard",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -16849,7 +17211,99 @@
       },
       "edit": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.edit"
+          },
+          "prepared": {
+            "resolver": "vcs.files.edit",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -16883,7 +17337,99 @@
       },
       "history": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.history"
+          },
+          "prepared": {
+            "resolver": "vcs.files.history",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16900,7 +17446,99 @@
       },
       "importSnapshot": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.importSnapshot"
+          },
+          "prepared": {
+            "resolver": "vcs.files.importSnapshot",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -16917,7 +17555,99 @@
       },
       "inspect": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.inspect"
+          },
+          "prepared": {
+            "resolver": "vcs.files.inspect",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16934,7 +17664,99 @@
       },
       "listDirectory": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.listDirectory"
+          },
+          "prepared": {
+            "resolver": "vcs.files.listDirectory",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16951,7 +17773,99 @@
       },
       "listFiles": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.listFiles"
+          },
+          "prepared": {
+            "resolver": "vcs.files.listFiles",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16968,7 +17882,99 @@
       },
       "mainState": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.mainState"
+          },
+          "prepared": {
+            "resolver": "vcs.files.mainState",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -16985,7 +17991,99 @@
       },
       "merge": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.merge"
+          },
+          "prepared": {
+            "resolver": "vcs.files.merge",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -17002,7 +18100,99 @@
       },
       "move": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.move"
+          },
+          "prepared": {
+            "resolver": "vcs.files.move",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -17019,7 +18209,99 @@
       },
       "neighbors": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.neighbors"
+          },
+          "prepared": {
+            "resolver": "vcs.files.neighbors",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17036,7 +18318,99 @@
       },
       "push": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.push"
+          },
+          "prepared": {
+            "resolver": "vcs.files.push",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -17053,7 +18427,99 @@
       },
       "query": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.query"
+          },
+          "prepared": {
+            "resolver": "vcs.files.query",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17070,7 +18536,117 @@
       },
       "readFile": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.readFile"
+          },
+          "prepared": {
+            "resolver": "vcs.files.readFile",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17087,7 +18663,99 @@
       },
       "readMemory": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.readMemory"
+          },
+          "prepared": {
+            "resolver": "vcs.files.readMemory",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17121,7 +18789,99 @@
       },
       "resolveRepository": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.resolveRepository"
+          },
+          "prepared": {
+            "resolver": "vcs.files.resolveRepository",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17138,7 +18898,99 @@
       },
       "revert": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.revert"
+          },
+          "prepared": {
+            "resolver": "vcs.files.revert",
+            "leaves": [
+              {
+                "capability": "filesystem.write",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.write"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -17155,7 +19007,99 @@
       },
       "search": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.search"
+          },
+          "prepared": {
+            "resolver": "vcs.files.search",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17172,7 +19116,99 @@
       },
       "status": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.status"
+          },
+          "prepared": {
+            "resolver": "vcs.files.status",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
@@ -17206,7 +19242,99 @@
       },
       "walk": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.walk"
+          },
+          "prepared": {
+            "resolver": "vcs.files.walk",
+            "leaves": [
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"

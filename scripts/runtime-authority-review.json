@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:8301e7da86fd0a612475712007b10ff9dcf4249f7b243a9e6814f0e7a4d85ef2",
+  "censusDigest": "sha256:f495294b6c8ad86ca25041f9dd652c2d3453dc3c09583c0b2d9cdfa3c109a5a9",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -590,184 +590,204 @@
       "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
     },
     "host:fs.access": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.access#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.access#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.appendFile": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.appendFile#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.appendFile#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.copyFile": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.copyFile#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.copyFile#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.copyFile#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.exists": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.exists#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.exists#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.glob": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.glob#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.grep": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.grep#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.handleClose": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
-    },
-    "host:fs.handleClose#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
     "host:fs.handleRead": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.handleRead#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.handleRead#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.handleStat": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.handleStat#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.handleStat#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.handleWrite": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.handleWrite#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.handleWrite#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.lstat": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.lstat#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.lstat#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.mkdir": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.mkdir#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.mkdir#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.nativeRoots": {
       "review": "scoped-native-context-root-disclosure",
       "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
     },
     "host:fs.open": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.open#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.open#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.open#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.readBytes": {
-      "review": "bounded-workspace-binary-range-read",
-      "change": "Adds the existing workspace-local fs.read authority to a bounded lossless byte-range transport. Managed files still resolve at the caller's exact semantic working head and scratch files remain context-contained; each response is capped at 1 MiB, carries canonical base64, exact byte continuation coordinates, total size, and a whole-file SHA-256, and grants no write or path-enumeration authority."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.readBytes#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
-    },
-    "host:fs.readFile": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
-    },
-    "host:fs.readFile#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
-    },
-    "host:fs.readText": {
-      "review": "bounded-workspace-text-range-read",
-      "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."
-    },
-    "host:fs.readText#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.readBytes#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.readdir": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.readdir#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.readdir#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.readFile": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.readFile#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.readText": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.readText#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.rename": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.rename#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.rename#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.rm": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.rm#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.rm#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.rmdir": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.rmdir#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.rmdir#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.stat": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.stat#filesystem.read": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.stat#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.truncate": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.truncate#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.truncate#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.unlink": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.unlink#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.unlink#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:fs.writeFile": {
-      "review": "connected-website-filesystem-acquisition",
-      "change": "Records explicit website membership and website-only path/handle resource acquisition on the existing workspace filesystem operations. Existing non-website method tiers remain unchanged. The runtime still authenticates handles and their owner; an opaque handle is not a transferable capability. This census review does not establish complete file-handle delivery or prompt UX acceptance."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
-    "host:fs.writeFile#filesystem.write": {
-      "review": "explicit-website-workspace-file-consent",
-      "change": "Website file consent now names all files in the connected workspace, with separate read and write decisions. Accepted agents retain that same subject and generation; task/document lifetimes and revocation still apply. This does not expose private workspace-state or credential administration."
+    "host:fs.writeFile#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:gateway.fetch": {
       "review": "connected-website-workspace-asset-gateway",
@@ -807,15 +827,15 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.registerLocalTemplateSource": {
       "review": "host-owned-exact-source-registration",
@@ -843,7 +863,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -1198,112 +1218,212 @@
       "change": "Adds a host-owned Phonon-2 inference primitive for caller-supplied mono PCM. The caller cannot select an executable, model, filesystem path, environment, or another caller's recording. Only supplied audio becomes the progress/transcript response; nothing is persisted. The open native-effect method grants no microphone access, credential use, workspace disclosure, or external egress. Browser capture remains separately permission-gated. Cancellation, connection loss, native failure, and service shutdown retire owned work without deadlines or automatic retries."
     },
     "host:vcs.blame": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.blame#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.commit": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
     "host:vcs.compare": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.compare#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.copy": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.copy#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:vcs.copy#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.discard": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.discard#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.edit": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.edit#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.finalizeExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.history": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.history#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.importSnapshot": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.importSnapshot#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.inspect": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.inspect#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.listDirectory": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.listDirectory#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.listFiles": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.listFiles#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.mainState": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.mainState#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.merge": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.merge#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.move": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.move#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.neighbors": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.neighbors#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.push": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.push#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.query": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.query#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.readFile": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.readFile#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:vcs.readFile#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.readMemory": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.readMemory#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.registerExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.resolveRepository": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.resolveRepository#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.revert": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.revert#capability:filesystem.write": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.search": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.search#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.status": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.status#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:vcs.supersedeExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.walk": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:vcs.walk#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
     "host:view.browserForceReload": {
       "review": "workspace-scoped-native-ui-adapter",

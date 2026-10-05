@@ -74,6 +74,58 @@ describe("website authority continuity", () => {
     expect(evaluate(ctx).code).toBe("connection-required");
     expect(evaluate(ctx, [], "open").allowed).toBe(false);
   });
+  it.each(["network.response.read", "credential.use", "workspace.publish", "filesystem.write"])(
+    "does not authorize %s through connection or file-read consent",
+    (requestedCapability) => {
+      const grants = ["workspace.connect", "filesystem.read"].map((approvedCapability) => ({
+        ...grant(),
+        capability: approvedCapability,
+        resource: { kind: "prefix" as const, prefix: "" },
+      }));
+      expect(
+        evaluateAuthority({
+          context: context(),
+          requirement: capability("website", requestedCapability),
+          resourceKey: RESOURCE,
+          grants,
+          tier: "gated",
+          now: 10,
+        })
+      ).toMatchObject({ allowed: false, code: "approval-required" });
+    }
+  );
+  it("requires the complete folder envelope and honors denied descendants", () => {
+    const resource = { kind: "prefix" as const, prefix: "workspace-path/projects/demo/" };
+    const request = (grants: AuthorityGrant[]) =>
+      evaluateAuthority({
+        context: context(),
+        requirement: capability("website", "fs.write"),
+        resourceKey: resource.prefix,
+        resource,
+        grants,
+        tier: "gated",
+        now: 10,
+      });
+    expect(
+      request([{ ...grant(), resource: { kind: "exact", key: resource.prefix } }]).allowed
+    ).toBe(false);
+    expect(request([{ ...grant(), resource }]).allowed).toBe(true);
+    expect(
+      request([
+        { ...grant(), resource: { kind: "prefix", prefix: "workspace-path/projects/demo-other/" } },
+      ]).allowed
+    ).toBe(false);
+    expect(
+      request([
+        { ...grant(), resource },
+        {
+          ...grant(),
+          effect: "deny",
+          resource: { kind: "exact", key: `${resource.prefix}secret.txt` },
+        },
+      ]).allowed
+    ).toBe(false);
+  });
   it("retains saved consent across documents without transferring document grants", () => {
     expect(evaluate(context("document-2")).allowed).toBe(true);
     expect(evaluate(context("document-2"), [grant("document-1")]).allowed).toBe(false);

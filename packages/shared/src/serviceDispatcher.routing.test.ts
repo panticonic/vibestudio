@@ -11,6 +11,91 @@ import {
 import { testAuthority } from "./serviceDispatcherTestUtils.js";
 
 describe("ServiceDispatcher ownership", () => {
+  it.each(["filesystem.read", "filesystem.write"])(
+    "presents the additional %s leaf's declared scope",
+    async (capability) => {
+      const dispatcher = new ServiceDispatcher();
+      const request = vi.fn(() => ({
+        acquisitionId: "acq:files",
+        ownerRuntimeId: "app:caller",
+        snapshotDigest: "d".repeat(64),
+        capability,
+        resourceKey: "workspace-files",
+        tier: "gated" as const,
+        cardType: "permission.gated" as const,
+        renderedAction: "access files",
+        pending: true,
+      }));
+      dispatcher.setAuthorityAcquirer({
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(),
+        invalidate: vi.fn(),
+      });
+      dispatcher.setAuthorityResolver(({ caller, resourceKey }) => ({
+        ...testAuthority(caller, capability, resourceKey),
+        grants: [],
+      }));
+      const requirement = { kind: "capability" as const, principal: "code" as const, capability };
+      dispatcher.registerService({
+        name: "files",
+        authority: { principals: ["code"] },
+        methods: {
+          access: {
+            args: z.tuple([z.string()]),
+            capability,
+            website: { kind: "eligible", rationale: "Reviewed file access" },
+            tier: { tier: "open", session: "family", rationale: "Context-local access" },
+            authority: {
+              requirement,
+              resource: {
+                kind: "literal",
+                key: "workspace-files",
+                presentation: { type: "workspace-file", label: "Workspace file" },
+              },
+              additional: [
+                {
+                  capability,
+                  requirement,
+                  tier: "gated",
+                  resource: {
+                    kind: "literal",
+                    key: "workspace-files",
+                    presentation: { type: "workspace-file", label: "All files in this workspace" },
+                  },
+                },
+              ],
+            },
+          },
+        },
+        handler: vi.fn(),
+      });
+      dispatcher.markInitialized();
+      const caller = createVerifiedCaller("app:caller", "app", {
+        callerId: "app:caller",
+        callerKind: "app",
+        repoPath: "apps/caller",
+        effectiveVersion: "v1",
+        requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
+      });
+      delete caller.codeApproved;
+      await expect(
+        dispatcher.dispatch({ caller }, "files", "access", ["notes.txt"])
+      ).rejects.toMatchObject({ code: "EACQUIRE" });
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          presentation: expect.objectContaining({
+            resource: {
+              type: "workspace-file",
+              label: "All files in this workspace",
+              value: "workspace-files",
+            },
+          }),
+        })
+      );
+    }
+  );
+
   it("keeps private host operations closed to accepted website execution", async () => {
     const dispatcher = new ServiceDispatcher();
     const handler = vi.fn();

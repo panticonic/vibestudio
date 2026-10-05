@@ -12,6 +12,8 @@ import type { MethodSchema } from "./typedServiceClient.js";
 interface PreparedAuthoritySelectionFields {
   capability: string;
   resourceKey: string;
+  /** Complete resource envelope selected by the receiver, including folder descendants. */
+  resource?: import("@vibestudio/rpc").ResourceScope;
   /** Sealed receiver facts for a manifest-provided userland capability. */
   receiverAuthority?: {
     capabilityDefinitionDigest: string;

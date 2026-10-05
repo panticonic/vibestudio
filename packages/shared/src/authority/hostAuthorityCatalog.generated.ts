@@ -3479,11 +3479,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3502,10 +3502,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3536,10 +3535,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3568,11 +3566,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3589,8 +3587,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.list",
+    presentation: {
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.grep": {
     tier: {
@@ -3601,8 +3608,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: null,
-    presentation: null,
+    capability: "filesystem.read",
+    presentation: {
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
   },
   "fs.handleClose": {
     tier: {
@@ -3615,10 +3631,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3637,9 +3652,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3656,11 +3671,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3679,10 +3694,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3699,11 +3713,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3722,10 +3736,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3768,10 +3781,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3790,9 +3802,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3809,11 +3821,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3832,9 +3844,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3865,9 +3877,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.read",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3898,10 +3910,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3920,10 +3931,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3942,10 +3952,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3962,11 +3971,11 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    capability: "filesystem.read",
+    capability: "filesystem.list",
     presentation: {
-      title: "Share workspace files with this website",
-      action: "read workspace files",
-      description: "This website and agents it starts can read all files in this workspace.",
+      title: "List workspace files and folders",
+      action: "list files and folders",
+      description: "Show file and folder names without sharing file contents.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -3997,10 +4006,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -4019,10 +4027,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -4053,10 +4060,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "filesystem.write",
     presentation: {
-      title: "Let this website change workspace files",
-      action: "change workspace files",
-      description:
-        "This website and agents it starts can create, change, and delete files in this workspace.",
+      title: "Change workspace files",
+      action: "change files",
+      description: "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -9392,6 +9398,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "sharing",
     verb: "act",
   },
+  "filesystem.list": {
+    domain: "files",
+    verb: "see",
+  },
   "filesystem.read": {
     domain: "files",
     verb: "see",
@@ -9949,10 +9959,20 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "act",
     },
   },
+  "filesystem.list": {
+    title: "List workspace files and folders",
+    action: "list files and folders",
+    description: "Show file and folder names without sharing file contents.",
+    group: "workspace",
+    authorityCategory: {
+      domain: "files",
+      verb: "see",
+    },
+  },
   "filesystem.read": {
-    title: "Share workspace files with this website",
-    action: "read workspace files",
-    description: "This website and agents it starts can read all files in this workspace.",
+    title: "Read workspace files",
+    action: "read file contents",
+    description: "Read the selected workspace files or folders.",
     group: "workspace",
     authorityCategory: {
       domain: "files",
@@ -9960,10 +9980,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "filesystem.write": {
-    title: "Let this website change workspace files",
-    action: "change workspace files",
-    description:
-      "This website and agents it starts can create, change, and delete files in this workspace.",
+    title: "Change workspace files",
+    action: "change files",
+    description: "Create, change, or delete the selected workspace files or folders.",
     group: "workspace",
     authorityCategory: {
       domain: "files",

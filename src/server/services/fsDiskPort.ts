@@ -14,6 +14,7 @@ export function createFsDiskPort(process: ProcessAdapter): FsDiskPort & { retire
             panelId: scope.panelId,
             exposeHostPaths: scope.exposeHostPaths,
             ownerCallerIds: scope.ownerCallerIds,
+            ...(scope.pathAuthority ? { pathAuthority: scope.pathAuthority } : {}),
           },
           method,
           args,

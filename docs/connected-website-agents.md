@@ -11,10 +11,13 @@ scoped eval, agent launch, private-operation denial, and document replacement.
 Import from the runtime asset served with your website. Call `connectWorkspace()`
 from a user interaction and present `workspaceConnection.status/error` while the
 native approval is pending. A connection makes RPC available; it does not approve
-every protected operation. Workspace-file read and write are separate permissions
-covering all files in the connected workspace, explicitly stated on the consent
-card. Their grants retain the selected task, page, or remembered lifetime; they
-do not grant credential administration, private state, or native access.
+every protected operation. Listing the workspace structure and its projects needs
+its own consent. Reading contents and changing files require separate consent for
+the named file or folder; folder consent covers its descendants, not sibling
+projects. Copying requires source read and destination write consent; moving
+requires consent to change both locations. Whole-workspace history queries state
+that scope explicitly. Grants retain the selected task, page, or remembered
+lifetime and do not grant credential administration, private state, or native access.
 
 ```js
 import {

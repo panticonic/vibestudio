@@ -25,6 +25,16 @@ import * as path from "path";
 import { createHash, randomBytes } from "node:crypto";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
+import {
+  preparedAuthorityState,
+  preparedAuthorityPayload,
+} from "@vibestudio/shared/serviceDefinition";
+import {
+  workspaceFileResource,
+  type WorkspaceFileAccess,
+} from "@vibestudio/shared/authority/workspaceFiles";
+import { workspaceFileSelections } from "./workspaceFileAuthority.js";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
 import { FsCallerLifetime } from "./fsCallerLifetime.js";
@@ -214,6 +224,7 @@ const AUTHORITY_PATH_METHODS = new Set([
 /** Tracked file handle with cleanup metadata. */
 interface TrackedHandle {
   nativeId: number;
+  path: string;
   panelId: string;
   ownerCallerIds: readonly string[];
 }
@@ -302,6 +313,11 @@ interface FsCallScope {
   contextId?: string;
   exposeHostPaths: boolean;
   ownerCallerIds: readonly string[];
+}
+
+export interface PreparedFsFileAuthority {
+  args: unknown[];
+  accesses: WorkspaceFileAccess[];
 }
 
 function codedError(code: string, message: string): NodeJS.ErrnoException {
@@ -1138,10 +1154,15 @@ export class FsService {
   // FileHandle helpers
   // =========================================================================
 
-  private trackHandle(nativeId: number, scope: FsCallScope): number {
+  private trackHandle(nativeId: number, scope: FsCallScope, logicalPath: string): number {
     const panelId = scope.panelId;
     const id = this.nextHandleId++;
-    this.openHandles.set(id, { nativeId, panelId, ownerCallerIds: scope.ownerCallerIds });
+    this.openHandles.set(id, {
+      nativeId,
+      path: logicalPath,
+      panelId,
+      ownerCallerIds: scope.ownerCallerIds,
+    });
     return id;
   }
 
@@ -1172,7 +1193,20 @@ export class FsService {
     await this.recordProjectedIngestion(ctx, "fs-native-read", [
       { key: `session:native-fs:${scope.contextId ?? "scratch"}`, derivedClass: "external" },
     ]);
-    return this.disk.call(scope, method, args, ctx.signal);
+    const prepared = ctx.preparedAuthority?.resolver.startsWith("fs.files.")
+      ? preparedAuthorityPayload<PreparedFsFileAuthority>(ctx, ctx.preparedAuthority.resolver)
+      : undefined;
+    return this.disk.call(
+      {
+        ...scope,
+        ...(prepared?.accesses.length
+          ? { pathAuthority: prepared.accesses.map(workspaceFileResource) }
+          : {}),
+      },
+      method,
+      args,
+      ctx.signal
+    );
   }
 
   private async recordProjectedIngestion(
@@ -1873,6 +1907,94 @@ export class FsService {
   async handleCall(ctx: ServiceContext, method: string, rawArgs: unknown[]): Promise<unknown> {
     return this.lifetime.run(this.callerOwners(ctx), () => this.performCall(ctx, method, rawArgs));
   }
+  /** Resolve the same coordinates used by execution before requesting consent. */
+  async prepareFileAuthority(ctx: ServiceContext, method: string, rawArgs: unknown[]) {
+    if (!websiteAuthorityIdentity(ctx.caller))
+      return preparedAuthorityState([], { args: rawArgs, accesses: [] });
+    const args = [...rawArgs];
+    const scope = await this.resolveContextRoot(ctx, args);
+    const accesses: WorkspaceFileAccess[] = [];
+    const add = async (
+      index: number,
+      effect: WorkspaceFileAccess["effect"],
+      folder = false,
+      preserveLeaf = false
+    ) => {
+      const logical = contextLogicalPath(String(args[index]), { directory: method === "readdir" });
+      let canonical = logical;
+      let directory = folder;
+      if (requiresSemanticAuthority(logical)) {
+        if (method === "rename") {
+          const bridge = this.semanticBridge(scope);
+          if (!bridge || !scope.contextId)
+            throw codedError("EACCES", "Semantic filesystem authority is unavailable");
+          const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
+          directory = (await managedWorkspaceFiles(bridge, snapshot)).some((file) =>
+            `${file.repoPath}/${file.path}`.startsWith(`${logical}/`)
+          );
+        }
+      } else {
+        const resolved = (await this.disk.call(scope, "authorityPath", [
+          logical,
+          { directory: folder, preserveLeaf },
+        ])) as { path: string; directory: boolean };
+        canonical = resolved.path;
+        directory ||= resolved.directory && (method === "rename" || method === "rm");
+      }
+      args[index] = canonical || "/";
+      accesses.push({ effect, path: canonical, kind: directory ? "folder" : "file" });
+    };
+    if (method === "handleClose")
+      return preparedAuthorityState([], { args: rawArgs, accesses: [] });
+    if (method.startsWith("handle")) {
+      const handle = this.getTrackedHandle(args[0] as number, scope.panelId);
+      accesses.push({
+        effect: method === "handleRead" ? "read" : method === "handleWrite" ? "write" : "list",
+        path: handle.path,
+        kind: "file",
+      });
+    } else if (method === "grep" || method === "glob") {
+      const options = { ...(args[1] as { path?: string } | undefined) };
+      const searchPath = options.path ?? "/";
+      const logical = contextLogicalPath(searchPath, { directory: true });
+      let canonical = logical;
+      if (!requiresSemanticAuthority(logical)) {
+        const resolved = (await this.disk.call(scope, "authorityPath", [
+          logical,
+          { directory: true },
+        ])) as { path: string };
+        canonical = resolved.path;
+      }
+      options.path = canonical || "/";
+      args[1] = options;
+      accesses.push({
+        effect: method === "grep" ? "read" : "list",
+        path: canonical,
+        kind: "folder",
+      });
+    } else if (method === "copyFile" || method === "rename") {
+      await add(0, method === "copyFile" ? "read" : "write", false, method === "rename");
+      await add(1, "write", accesses[0]?.kind === "folder", method === "rename");
+    } else if (method === "open") {
+      const flags = String(args[1] ?? "r");
+      if (flags.startsWith("r") || flags.includes("+")) await add(0, "read");
+      if (/[wa+]/.test(flags)) await add(0, "write");
+    } else {
+      const effect = ["readdir", "stat", "lstat", "exists", "access"].includes(method)
+        ? "list"
+        : ["readFile", "readText", "readBytes"].includes(method)
+          ? "read"
+          : "write";
+      await add(
+        0,
+        effect,
+        ["readdir", "mkdir", "rmdir"].includes(method) ||
+          (method === "rm" && (args[1] as { recursive?: boolean } | undefined)?.recursive === true),
+        ["lstat", "unlink", "rm", "rmdir"].includes(method)
+      );
+    }
+    return preparedAuthorityState(workspaceFileSelections(accesses), { args, accesses });
+  }
   private async performCall(
     ctx: ServiceContext,
     method: string,
@@ -2041,7 +2163,9 @@ export class FsService {
       const nativeId = (result as { handleId: number }).handleId;
       if (!Number.isSafeInteger(nativeId) || nativeId < 1)
         throw new Error("Invalid native file handle");
-      return { handleId: this.trackHandle(nativeId, diskScope) };
+      return {
+        handleId: this.trackHandle(nativeId, diskScope, contextLogicalPath(String(args[0]))),
+      };
     }
     return result;
   }

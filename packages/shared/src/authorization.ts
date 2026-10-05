@@ -39,6 +39,8 @@ export interface AuthorityEvaluationInput {
   context: AuthorizationContext;
   requirement: AuthorityRequirement;
   resourceKey: string;
+  /** An operation over a set must be covered in full, not just at its root key. */
+  resource?: ResourceScope;
   grants: readonly AuthorityGrant[];
   locks?: readonly AuthorityLock[];
   now?: number;
@@ -418,7 +420,10 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         manifest.requested.some(
           (scope) =>
             capabilityPatternCovers(scope.capability, requirement.capability) &&
-            scopeCovers(scope.resource, input.resourceKey)
+            resourceScopeContains(
+              scope.resource,
+              input.resource ?? { kind: "exact", key: input.resourceKey }
+            )
         );
       if (!requested) {
         const manifestDetail =
@@ -579,7 +584,7 @@ export function resourceScopeContains(parent: ResourceScope, child: ResourceScop
   if (parent.kind !== child.kind) return false;
   switch (parent.kind) {
     case "prefix":
-      return child.kind === "prefix" && child.prefix.startsWith(parent.prefix);
+      return child.kind === "prefix" && scopeCovers(parent, child.prefix);
     case "origin":
       return child.kind === "origin" && child.origin === parent.origin;
     case "domain":
@@ -673,6 +678,7 @@ export function matchingAuthorityGrants(input: {
   subjects: ReadonlySet<import("@vibestudio/rpc").AuthorityGrantSubject>;
   capability: string;
   resourceKey: string;
+  resource?: ResourceScope;
   invocationDigest?: string;
   providerExecutionDigest?: string;
   now?: number;
@@ -691,7 +697,10 @@ export function matchingAuthorityGrants(input: {
         input.invocationDigest,
         input.providerExecutionDigest
       ) &&
-      scopeCovers(grant.resource, input.resourceKey)
+      (input.resource
+        ? resourceScopeContains(grant.resource, input.resource) ||
+          (grant.effect === "deny" && resourceScopeContains(input.resource, grant.resource))
+        : scopeCovers(grant.resource, input.resourceKey))
   );
 }
 

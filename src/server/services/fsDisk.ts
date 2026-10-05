@@ -31,11 +31,14 @@ import {
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import { scopeCovers, type ResourceScope } from "@vibestudio/shared/authorization";
 export interface FsDiskScope {
   root: string;
   panelId: string;
   exposeHostPaths: boolean;
   ownerCallerIds: readonly string[];
+  /** Host-selected logical paths admitted for this exact filesystem effect. */
+  pathAuthority?: readonly ResourceScope[];
 }
 interface TrackedHandle {
   handle: NodeFileHandle;
@@ -121,7 +124,32 @@ async function resolveFsPathInfo(
   userPath: string,
   options: ResolveFsPathOptions = {}
 ): Promise<ResolvedFsPath> {
-  return sandboxPath(scope.root, userPath, options);
+  const resolved = await sandboxPath(scope.root, userPath, options);
+  if (scope.pathAuthority) {
+    const relative = await canonicalContextRelativePath(
+      { ...scope, pathAuthority: undefined },
+      userPath,
+      {
+        directory: true,
+        preserveLeaf: options.leafMode === "entry",
+      }
+    );
+    const key = `workspace-path/${relative}`;
+    const requestedKey = `workspace-path/${path.relative(scope.root, resolved.path).split(path.sep).join("/")}`;
+    const covers = (resource: ResourceScope, value: string) =>
+      scopeCovers(resource, value) || scopeCovers(resource, `${value}/`);
+    if (
+      !scope.pathAuthority.some(
+        (resource) => covers(resource, requestedKey) && covers(resource, key)
+      )
+    ) {
+      throw codedError(
+        "EACCES",
+        "Resolved filesystem path is outside the approved files or folders"
+      );
+    }
+  }
+  return resolved;
 }
 
 async function resolveFsPath(
@@ -562,6 +590,17 @@ export class FsDisk implements FsDiskPort {
     if (signal?.aborted) throw signal.reason;
     const { panelId } = scope;
     switch (method) {
+      case "authorityPath": {
+        const options = args[1] as { directory?: boolean; preserveLeaf?: boolean };
+        const relative = await canonicalContextRelativePath(scope, args[0] as string, options);
+        let directory = false;
+        try {
+          directory = (await fs.lstat(path.join(scope.root, relative))).isDirectory();
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        return { path: relative, directory };
+      }
       // ----- File content -----
       case "snapshot": {
         const p = await resolveFsFilePath(scope, args[0] as string);

@@ -42,6 +42,26 @@ describe("native filesystem handle lifetime", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it("rejects a symlink replacement crossing admitted operation coordinates", async () => {
+    await fs.writeFile(join(root, "other.txt"), "private");
+    await fs.symlink("original.txt", join(root, "link.txt"));
+    expect(await disk.call(scope, "authorityPath", ["link.txt", {}])).toMatchObject({
+      path: "original.txt",
+    });
+    const admitted = {
+      ...scope,
+      pathAuthority: [
+        { kind: "exact" as const, key: "workspace-path/original.txt" },
+        { kind: "exact" as const, key: "workspace-path/other.txt" },
+      ],
+    };
+    await expect(disk.call(admitted, "readFile", ["original.txt", "utf8"])).resolves.toBe("before");
+    await fs.unlink(join(root, "original.txt"));
+    await fs.symlink("other.txt", join(root, "original.txt"));
+    await expect(disk.call(admitted, "readFile", ["original.txt", "utf8"])).rejects.toMatchObject({
+      code: "EACCES",
+    });
+  });
   async function open() {
     return (await disk.call(scope, "open", ["original.txt", "r+"])) as { handleId: number };
   }

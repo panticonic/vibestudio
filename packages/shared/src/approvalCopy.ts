@@ -623,6 +623,7 @@ function buildCapabilityActionCopy(approval: PendingCapabilityApproval): Approva
 export function getStandardActionCopy(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): ApprovalActionCopy {
+  const copy = buildStandardActionCopy(approval);
   if (
     approval.kind === "capability" &&
     approval.capability === "workspace.connect" &&
@@ -646,18 +647,17 @@ export function getStandardActionCopy(
       approval.authoritySubject?.website?.documentId ??
       (approval.kind === "capability" ? approval.snapshot?.subjectBinding?.documentId : undefined);
     return {
-      once: { label: "Allow once", description: "Allow only this exact operation." },
-      session: document
-        ? {
-            label: "Allow for this page",
-            description: "Ends when this page disconnects or is replaced.",
-          }
-        : null,
+      ...copy,
+      session:
+        document && copy.session
+          ? {
+              label: "Allow for this page",
+              description: "Ends when this page disconnects or is replaced.",
+            }
+          : null,
       version: null,
-      denyDescription: "Do not allow this operation.",
     };
   }
-  const copy = buildStandardActionCopy(approval);
   if (
     !copy.version ||
     !isIdentityScopedVersionApproval(approval) ||

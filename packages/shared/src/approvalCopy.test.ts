@@ -783,6 +783,56 @@ describe("approvalCopy", () => {
     );
   });
 
+  it.each([
+    { capability: "workspace.publish", title: "Update workspace main" },
+    { capability: "git.publish", title: "Save project changes" },
+    { capability: "network.response.read", title: "Connect to example.net" },
+    { capability: "external.open", title: "Open in browser" },
+    {
+      capability: "workspaces.delete",
+      title: "Delete a workspace",
+      cardType: "confirm.critical" as const,
+    },
+  ])("preserves operation copy for website $capability requests", (operation) => {
+    const approval: PendingCapabilityApproval = {
+      ...base,
+      kind: "capability",
+      ...operation,
+      resource: { type: "destination", label: "Destination", value: "https://example.net" },
+      allowedDecisions: ["once", "session", "always", "deny"],
+    };
+    const ordinary = getStandardActionCopy(approval);
+    const website = {
+      ...approval,
+      authoritySubject: {
+        principal: "website:site-1" as const,
+        website: { origin: "https://example.com", workspaceId: "project", documentId: "doc-1" },
+      },
+    };
+    const connected = getStandardActionCopy(website);
+    expect(connected.once).toEqual(ordinary.once);
+    expect(connected.denyDescription).toEqual(ordinary.denyDescription);
+    expect(getApprovalCopy(website)).toEqual(getApprovalCopy(approval));
+    expect(connected.version).toBeNull();
+    if (ordinary.session) {
+      expect(connected.session).toEqual({
+        label: "Allow for this page",
+        description: "Ends when this page disconnects or is replaced.",
+      });
+    } else {
+      expect(connected.session).toBeNull();
+    }
+    expect(
+      getStandardActionCopy({
+        ...website,
+        authoritySubject: {
+          ...website.authoritySubject,
+          website: { origin: "https://example.com", workspaceId: "project" },
+        },
+      }).session
+    ).toBeNull();
+  });
+
   it("keeps reviewed receiver credential permission version-bound while showing its website initiator", () => {
     const operation: PendingCapabilityApproval = {
       ...base, kind: "capability", title: "Use account", capability: "credential.use",

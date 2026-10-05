@@ -65,6 +65,7 @@ import {
   evaluateAuthority,
   requirementForPrincipals,
   scopeCovers,
+  resourceScopeContains,
 } from "./authorization.js";
 import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
@@ -1595,6 +1596,13 @@ export class ServiceDispatcher {
       const collected: PreparedSelection[] = [];
       const seen = new Set<string>();
       for (const selection of prepared.selections) {
+        if (selection.resource && !scopeCovers(selection.resource, selection.resourceKey)) {
+          throw new ServiceError(
+            service,
+            method,
+            "Prepared resource envelope does not cover its key"
+          );
+        }
         const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
           leaf.capability !== undefined
             ? leaf.capability === selection.capability
@@ -1640,6 +1648,7 @@ export class ServiceDispatcher {
         selections: prepared.selections.map(({ selection, requirement, tier }) => ({
           capability: selection.capability,
           resourceKey: selection.resourceKey,
+          resource: selection.resource ?? null,
           requirement,
           authorizingCaller: selection.authorizingCaller
             ? {
@@ -1765,7 +1774,8 @@ export class ServiceDispatcher {
         additional.tier,
         undefined,
         undefined,
-        suppressGrantedObservations
+        suppressGrantedObservations,
+        additional.resource
       );
       if (result) {
         preflightLeaves.push(result.leaf);
@@ -1791,7 +1801,9 @@ export class ServiceDispatcher {
         tier,
         undefined,
         selection.receiverAuthority,
-        suppressGrantedObservations
+        suppressGrantedObservations,
+        undefined,
+        selection.resource
       );
       if (result) {
         preflightLeaves.push(result.leaf);
@@ -1876,7 +1888,9 @@ export class ServiceDispatcher {
       provider: string;
       providerExecutionDigest: string;
     },
-    suppressGrantedObservations = false
+    suppressGrantedObservations = false,
+    resourceDerivation?: MethodAuthorityDescriptor["resource"],
+    resource?: ResourceScope
   ): Promise<{
     origin: import("@vibestudio/rpc").AuthorizationOrigin["kind"];
     leaf: AuthorityPreflightLeaf;
@@ -1894,9 +1908,10 @@ export class ServiceDispatcher {
     const capabilityPresentation = reviewedPresentation ?? describeCapability(capability);
     const methodAuthority = methodDef.authority;
     const declaredResource =
-      capability === methodDef.capability && methodAuthority && "requirement" in methodAuthority
+      resourceDerivation ??
+      (capability === methodDef.capability && methodAuthority && "requirement" in methodAuthority
         ? methodAuthority.resource
-        : null;
+        : null);
     const reviewResource = authorityResourcePresentation(
       declaredResource,
       validatedArgs,
@@ -2033,7 +2048,7 @@ export class ServiceDispatcher {
         const covered = attachedHost.authorityCeiling.some(
           (scope) =>
             capabilityPatternCovers(scope.capability, capability) &&
-            scopeCovers(scope.resource, resourceKey)
+            resourceScopeContains(scope.resource, resource ?? { kind: "exact", key: resourceKey })
         );
         if (
           attachedHost.expiresAt <= Date.now() ||
@@ -2093,7 +2108,7 @@ export class ServiceDispatcher {
         !runManifest.requests.some(
           (scope) =>
             capabilityPatternCovers(scope.capability, capability) &&
-            scopeCovers(scope.resource, resourceKey)
+            resourceScopeContains(scope.resource, resource ?? { kind: "exact", key: resourceKey })
         )
       ) {
         this.observeAuthority(resolved.context, "authority-decided", {
@@ -2140,6 +2155,7 @@ export class ServiceDispatcher {
         context: resolved.context,
         requirement,
         resourceKey,
+        resource,
         grants: resolved.grants,
         locks: resolved.locks,
         tier: reviewedTier,
@@ -2235,7 +2251,7 @@ export class ServiceDispatcher {
           tier,
           caller,
           renderedAction,
-          resource: { kind: "exact", key: resourceKey },
+          resource: resource ?? { kind: "exact", key: resourceKey },
           substance,
           presentation: effectiveChallenge,
           ...(target ? { target } : {}),

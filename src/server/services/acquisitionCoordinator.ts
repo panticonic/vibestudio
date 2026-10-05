@@ -2058,6 +2058,7 @@ export class AcquisitionCoordinator {
           subjects: new Set([snapshot.callerPrincipal]),
           capability: snapshot.capability,
           resourceKey: snapshot.resourceKey,
+          resource: facet.resource,
           invocationDigest: facet.snapshotDigest,
           providerExecutionDigest: snapshot.providerExecutionDigest,
         }).find((grant) => grant.id && issuedIds.has(grant.id) && grant.effect === "allow");

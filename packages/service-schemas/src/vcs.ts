@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  workspaceFileMethodAuthority,
+  type WorkspaceFileEffect,
+} from "@vibestudio/shared/authority/workspaceFiles";
 
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
@@ -9,7 +13,10 @@ import {
 } from "@vibestudio/shared/vcs/pathAdmission";
 import { DigestSchema } from "./blobstore.js";
 import { buildDiagnosticSchema } from "./build.js";
-import { nativeInvocationIdentitySchema, nativeOriginatingInputSchema } from "./nativeInvocation.js";
+import {
+  nativeInvocationIdentitySchema,
+  nativeOriginatingInputSchema,
+} from "./nativeInvocation.js";
 
 /**
  * Public semantic VCS contract.
@@ -1613,7 +1620,11 @@ export const vcsProvenanceRelationRegistry = {
   ],
   "triggered-by": [
     { from: "trajectory-turn", to: "trajectory-message", fact: "turn.trigger-message" },
-    { from: "trajectory-invocation", to: "trajectory-message", fact: "invocation.originating-input" },
+    {
+      from: "trajectory-invocation",
+      to: "trajectory-message",
+      fact: "invocation.originating-input",
+    },
   ],
 } as const;
 
@@ -2464,7 +2475,51 @@ const commonMutationRefs = [
 ] as const;
 
 const defineVcsMethods = <const M extends Record<string, VcsMethodSchema>>(methods: M): M =>
-  defineServiceMethods(methods) as M;
+  defineServiceMethods(
+    Object.fromEntries(
+      Object.entries(methods).map(([method, definition]) => [
+        method,
+        {
+          ...definition,
+          ...(definition.website?.kind === "eligible"
+            ? {
+                authority: workspaceFileMethodAuthority(
+                  `vcs.files.${method}`,
+                  vcsFileEffects[method]!
+                ),
+              }
+            : {}),
+        },
+      ])
+    )
+  ) as M;
+
+const vcsFileEffects: Record<string, readonly WorkspaceFileEffect[]> = {
+  mainState: ["list"],
+  status: ["list"],
+  resolveRepository: ["list"],
+  listDirectory: ["list"],
+  listFiles: ["list"],
+  readFile: ["list", "read"],
+  readMemory: ["read"],
+  blame: ["read"],
+  compare: ["read"],
+  inspect: ["read"],
+  neighbors: ["read"],
+  history: ["read"],
+  walk: ["read"],
+  query: ["read"],
+  search: ["read"],
+  edit: ["write"],
+  move: ["write"],
+  copy: ["read", "write"],
+  importSnapshot: ["write"],
+  merge: ["write"],
+  revert: ["write"],
+  discard: ["write"],
+  push: ["write"],
+  commit: [],
+};
 
 // ---------------------------------------------------------------------------
 // Sole exhaustive public method registry

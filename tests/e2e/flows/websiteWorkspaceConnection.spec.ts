@@ -54,6 +54,7 @@ test("website SDK requires explicit connection and retires access on document re
   const html = `<!doctype html><title>Workspace website acceptance</title>
     <button id="connect">Connect</button><button id="discover">Discover</button><button id="closed">Try host inventory</button>
     <button id="eval">Run scoped eval</button><button id="launch">Launch agent</button><button id="inspect">Inspect template</button><button id="create">Create workspace</button><button id="receipt">Read receipt</button>
+    <button id="tree">List workspace</button><button id="read">Read settings</button><button id="write">Change settings</button>
     <p id="status">Loading SDK</p><script type="module">
     import { connectWorkspace, workspaceConnection, callMain, templates, workspaces, rpc, contextId, launchAgentIntoChannel } from '/runtime.js';
     const output = value => document.querySelector('#status').textContent = value;
@@ -62,6 +63,9 @@ test("website SDK requires explicit connection and retires access on document re
     sessionStorage.setItem('operationId', operationId);
     const attempt = async operation => { try { output(await operation()); } catch (error) { output('error:' + (error.code || '') + ':' + error.message); } };
     document.querySelector('#connect').onclick = () => attempt(async () => { await connectWorkspace(); return 'connected:' + workspaceConnection.connected; });
+    document.querySelector('#tree').onclick = () => attempt(async () => 'tree:' + JSON.stringify(await callMain('fs.readdir', '/')));
+    document.querySelector('#read').onclick = () => attempt(async () => 'read:' + typeof await callMain('fs.readFile', 'meta/vibestudio.yml', 'utf8'));
+    document.querySelector('#write').onclick = () => attempt(async () => { await callMain('fs.writeFile', 'meta/vibestudio.yml', 'should never be written'); return 'unexpected write'; });
     document.querySelector('#discover').onclick = () => attempt(async () => { const entries = await callMain('docs.search', 'read', { limit: 5 }); return 'discovered:' + Array.isArray(entries); });
     document.querySelector('#closed').onclick = () => attempt(async () => { await callMain('websiteHosting.list'); return 'unexpected inventory access'; });
     document.querySelector('#launch').onclick = () => attempt(async () => {
@@ -197,6 +201,27 @@ test("website SDK requires explicit connection and retires access on document re
     await clickApproval(approval.getByRole("button", { name: "Connect this page", exact: true }));
     await expect.poll(text).toContain("connected:true");
     await expect(shell.locator('[data-panel-trust="connected-website"]').first()).toBeVisible();
+    await clickPanelSelector(app, panel.id, "#tree");
+    const treeApproval = await visibleConnectionApproval("filesystem.list");
+    await expect(treeApproval).toContainText("workspace structure");
+    await expect(treeApproval).toContainText("does not allow reading file contents");
+    await clickApproval(
+      treeApproval.getByRole("button", { name: "Allow for this page", exact: true })
+    );
+    await expect.poll(text).toContain("tree:");
+    await clickPanelSelector(app, panel.id, "#read");
+    const readApproval = await visibleConnectionApproval("filesystem.read");
+    await expect(readApproval).toContainText("/meta/vibestudio.yml");
+    await clickApproval(
+      readApproval.getByRole("button", { name: "Allow for this page", exact: true })
+    );
+    await expect.poll(text).toContain("read:string");
+    await clickPanelSelector(app, panel.id, "#write");
+    const writeApproval = await visibleConnectionApproval("filesystem.write");
+    await expect(writeApproval).toContainText("/meta/vibestudio.yml");
+    await clickApproval(writeApproval.getByRole("button", { name: "Don't allow", exact: true }));
+    await expect.poll(text).toContain("error:");
+    expect(await text()).not.toContain("unexpected write");
     await clickPanelSelector(app, panel.id, "#discover");
     await expect.poll(text).toContain("discovered:true");
     await clickPanelSelector(app, panel.id, "#eval");

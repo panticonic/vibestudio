@@ -16,8 +16,10 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { requirementForPrincipals } from "@vibestudio/shared/authorization";
-import type { MethodAuthorityDescriptor } from "@vibestudio/shared/typedServiceClient";
+import {
+  workspaceFileMethodAuthority,
+  type WorkspaceFileEffect,
+} from "@vibestudio/shared/authority/workspaceFiles";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 // Access descriptors classify read / write / destructive operations. The
@@ -231,56 +233,50 @@ export type FsStatWire = z.infer<typeof statSchema>;
 export type FsDirentWire = z.infer<typeof direntSchema>;
 export type FsGrepResult = z.infer<typeof grepResultSchema>;
 
-function fileAuthority(effect: "read" | "write") {
+function fileAuthority(effect: WorkspaceFileEffect, method: string) {
   const capability = `filesystem.${effect}`;
-  const requirement = requirementForPrincipals(["code", "host", "user", "website"], "$method");
-  const authority: MethodAuthorityDescriptor = {
-    requirement,
-    resource: {
-      kind: "literal",
-      key: "workspace-files",
-      presentation: { type: "workspace-file", label: "Workspace file" },
-    },
-    additional: [
-      {
-        capability,
-        requirement: requirementForPrincipals(["website"], capability),
-        resource: {
-          kind: "literal",
-          key: "workspace-files",
-          presentation: { type: "workspace-file", label: "All files in this workspace" },
-        },
-        tier: "gated",
-        when: { origins: ["website"] },
-      },
-    ],
-  };
   return {
     capability,
     presentation: {
       title:
-        effect === "read"
-          ? "Share workspace files with this website"
-          : "Let this website change workspace files",
-      action: effect === "read" ? "read workspace files" : "change workspace files",
+        effect === "list"
+          ? "List workspace files and folders"
+          : effect === "read"
+            ? "Read workspace files"
+            : "Change workspace files",
+      action:
+        effect === "list"
+          ? "list files and folders"
+          : effect === "read"
+            ? "read file contents"
+            : "change files",
       description:
-        effect === "read"
-          ? "This website and agents it starts can read all files in this workspace."
-          : "This website and agents it starts can create, change, and delete files in this workspace.",
+        effect === "list"
+          ? "Show file and folder names without sharing file contents."
+          : effect === "read"
+            ? "Read the selected workspace files or folders."
+            : "Create, change, or delete the selected workspace files or folders.",
       group: "workspace",
       authorityCategory: {
         domain: "files" as const,
-        verb: effect === "read" ? ("see" as const) : ("act" as const),
+        verb: effect === "write" ? ("act" as const) : ("see" as const),
       },
     },
-    authority,
+    authority: workspaceFileMethodAuthority(
+      `fs.files.${method}`,
+      method === "copyFile" || method === "open"
+        ? ["read", "write"]
+        : method === "handleClose"
+          ? []
+          : [effect]
+    ),
   };
 }
 
 export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
-    ...fileAuthority("read"),
+    ...fileAuthority("read", "readFile"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -308,7 +304,7 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   readText: {
-    ...fileAuthority("read"),
+    ...fileAuthority("read", "readText"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -332,7 +328,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/src/index.ts", { offset: 200, limit: 100, maxBytes: 51_200 }] }],
   },
   readBytes: {
-    ...fileAuthority("read"),
+    ...fileAuthority("read", "readBytes"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -356,7 +352,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/assets/data.bin", { offset: 0, limit: 51_200 }] }],
   },
   writeFile: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "writeFile"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -383,7 +379,7 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   appendFile: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "appendFile"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -408,7 +404,7 @@ export const fsMethods = defineServiceMethods({
   },
   // Directories
   readdir: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "readdir"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -432,7 +428,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/"] }, { args: ["/src", { withFileTypes: true, recursive: true }] }],
   },
   mkdir: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "mkdir"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -456,7 +452,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/.tmp/a/b/c", { recursive: true }] }],
   },
   rmdir: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "rmdir"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -476,7 +472,7 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   rm: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "rm"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -501,7 +497,7 @@ export const fsMethods = defineServiceMethods({
   },
   // Stat / metadata
   stat: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "stat"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -521,7 +517,7 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   lstat: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "lstat"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -541,7 +537,7 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   exists: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "exists"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -560,7 +556,7 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   access: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "access"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -584,7 +580,7 @@ export const fsMethods = defineServiceMethods({
   },
   // File manipulation
   unlink: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "unlink"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -604,7 +600,7 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   copyFile: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "copyFile"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -628,7 +624,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [".tmp/a.txt", ".tmp/b.txt"] }],
   },
   rename: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "rename"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -715,7 +711,7 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   truncate: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "truncate"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -831,6 +827,7 @@ export const fsMethods = defineServiceMethods({
   },
   // Search
   grep: {
+    ...fileAuthority("read", "grep"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -854,6 +851,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["TODO", { glob: "*.ts", contextLines: 2 }] }],
   },
   glob: {
+    ...fileAuthority("list", "glob"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -878,7 +876,7 @@ export const fsMethods = defineServiceMethods({
   },
   // File handles
   open: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "open"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -906,7 +904,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/data.bin", "r"] }],
   },
   handleRead: {
-    ...fileAuthority("read"),
+    ...fileAuthority("read", "handleRead"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -933,7 +931,7 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [1, 4096, null] }],
   },
   handleWrite: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "handleWrite"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -956,7 +954,7 @@ export const fsMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   handleClose: {
-    ...fileAuthority("write"),
+    ...fileAuthority("write", "handleClose"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",
@@ -978,7 +976,7 @@ export const fsMethods = defineServiceMethods({
     },
   },
   handleStat: {
-    ...fileAuthority("read"),
+    ...fileAuthority("list", "handleStat"),
     website: {
       kind: "eligible",
       rationale: "Workspace files require the website’s ordinary scoped resource consent.",

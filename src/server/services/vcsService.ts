@@ -12,10 +12,16 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   ServiceError,
   verifiedInitiator,
+  websiteAuthorityIdentity,
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  preparedAuthorityState,
+  preparedAuthorityPayload,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
+import { vcsFileSelections } from "./vcsFileAuthority.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { RpcCausalParent } from "@vibestudio/rpc";
@@ -313,11 +319,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     } satisfies CausalRequest<unknown>);
   };
 
-  const invokeOperation = async (
-    ctx: ServiceContext,
-    method: VcsMethodName,
-    input: unknown
-  ): Promise<unknown> => {
+  const admitOperation = async (ctx: ServiceContext, method: VcsMethodName, input: unknown) => {
     const parsed = parseVcsSemanticRequest(method, input);
     const operation = vcsOperationRegistry[method];
     const isMutation =
@@ -380,6 +382,20 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       parsed.input["visibilityContextIds"] = await reachableContextAuthorities(ctx, deps);
     }
 
+    return parsed.input;
+  };
+
+  const invokeOperation = async (
+    ctx: ServiceContext,
+    method: VcsMethodName,
+    input: unknown
+  ): Promise<unknown> => {
+    const prepared = ctx.preparedAuthority?.resolver === `vcs.files.${method}`;
+    const admittedInput = prepared
+      ? preparedAuthorityPayload<unknown>(ctx, `vcs.files.${method}`)
+      : await admitOperation(ctx, method, input);
+    const parsed = { input: admittedInput };
+    const primaryContextId = vcsOperationContextId(method, admittedInput);
     const epochTransition =
       method === "push" && isRecord(parsed.input) && parsed.input["epochTransition"] === true;
     const semanticInput = epochTransition
@@ -426,6 +442,24 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       "One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.",
     authority: { principals: ["user", "code", "host", "website"] },
     methods: vcsMethods,
+    authorityPreparation: Object.fromEntries(
+      Object.entries(vcsMethods)
+        .filter(([, definition]) => definition.website.kind === "eligible")
+        .map(([method]) => [
+          `vcs.files.${method}`,
+          async (ctx, [input]) => {
+            const admittedInput = await admitOperation(ctx, method as VcsMethodName, input);
+            if (!websiteAuthorityIdentity(ctx.caller))
+              return preparedAuthorityState([], admittedInput);
+            const selections = await vcsFileSelections(
+              method as VcsMethodName,
+              admittedInput,
+              <T>(method: string, input: unknown) => invoke<T>(ctx, method, input)
+            );
+            return preparedAuthorityState(selections, admittedInput);
+          },
+        ])
+    ),
     handler: defineServiceHandler("vcs", vcsMethods, handlers),
   };
 }
