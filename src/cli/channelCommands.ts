@@ -153,7 +153,7 @@ function handleOf(meta: Record<string, unknown> | null | undefined): string | nu
   return null;
 }
 
-function toHistoryEntry(event: ServerLogEvent): ChannelHistoryEntry {
+export function toHistoryEntry(event: ServerLogEvent): ChannelHistoryEntry {
   return {
     seq: event.id,
     messageId: event.messageId,
@@ -161,6 +161,7 @@ function toHistoryEntry(event: ServerLogEvent): ChannelHistoryEntry {
     senderId: event.senderId ?? null,
     senderHandle: handleOf(event.senderMetadata),
     text: extractText(event.payload),
+    payload: event.payload,
     ts: event.ts,
   };
 }

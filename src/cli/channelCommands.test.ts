@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RpcClient } from "./rpcClient.js";
-import { channelEntities, existingChannelTarget } from "./channelCommands.js";
+import { channelEntities, existingChannelTarget, toHistoryEntry } from "./channelCommands.js";
 
 function clientWithEntities() {
   const call = vi.fn(async (method: string) => {
@@ -46,6 +46,29 @@ function clientWithEntities() {
 }
 
 describe("channel diagnostics", () => {
+  it("retains protocol evidence even when a model round has no display text", () => {
+    const payload = {
+      kind: "message.completed",
+      payload: {
+        outcome: "tool_calls_only",
+        blocks: [{ type: "data", metadata: { pi: { type: "toolCall", name: "read" } } }],
+      },
+    };
+    expect(
+      toHistoryEntry({
+        id: 6,
+        messageId: "native:4:41:0",
+        type: "agentic.trajectory.v1/event",
+        payload,
+        ts: 10,
+      })
+    ).toMatchObject({
+      seq: 6,
+      text: null,
+      payload,
+    });
+  });
+
   it("enumerates channel runtime entities without resolving the VCS service", async () => {
     const { client, call } = clientWithEntities();
 

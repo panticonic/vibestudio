@@ -125,7 +125,7 @@ export const channelSummarySchema = z
   .strict();
 export type ChannelSummary = z.infer<typeof channelSummarySchema>;
 
-/** One rendered history line, distilled from a durable channel log event. */
+/** A durable channel event with a readable summary and its original payload. */
 export const channelHistoryEntrySchema = z
   .object({
     seq: z.number(),
@@ -136,6 +136,8 @@ export const channelHistoryEntrySchema = z
     senderHandle: z.string().nullable().optional(),
     /** Best-effort plain-text body (message blocks flattened), when present. */
     text: z.string().nullable().optional(),
+    /** Original replay payload, including model blocks and protocol metadata. */
+    payload: z.unknown(),
     /** Epoch ms. */
     ts: z.number(),
   })

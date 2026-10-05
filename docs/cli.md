@@ -349,6 +349,18 @@ vibestudio agent logs UNIT
 vibestudio agent diag UNIT
 ```
 
+For model-output investigations, `channel history ID --json` includes each
+event's original `payload` alongside its readable `text`. Inspect completed
+message blocks to distinguish commentary, thinking summaries, and tool-only
+rounds; native blocks retain Pi's original content and replay metadata.
+`agent logs` accepts the exact `do:...` entity ID from the channel roster.
+Its `NativeModelTransport` terminal records count received text and reasoning
+deltas, completed items, and terminal response output, attributed to the native
+conversation/task/attempt. Compare those counts with published message blocks
+to locate loss before parsing, during parsing, or during publication. Counts
+contain no prompt, answer, credential, or encrypted reasoning content. An
+encrypted reasoning item with no summary does not provide displayable thinking.
+
 Workspace resources are semantic reads, so `agent skills` uses the selected
 durable agent session's exact context (`default` unless `--session` is given).
 It fails with the corresponding `agent attach` command when that session does
