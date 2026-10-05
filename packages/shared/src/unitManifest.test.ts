@@ -6,7 +6,35 @@ import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
+  validateUnitIconDeclaration,
 } from "./unitManifest.js";
+
+describe("stored unit icons", () => {
+  it.each([undefined, "🎯", "👩🏽‍💻", "./assets/icon.svg", "./icon.png"])(
+    "accepts stored declaration %s",
+    (icon) => expect(() => validateUnitIconDeclaration(icon)).not.toThrow()
+  );
+  it.each([
+    "lucide:orbit",
+    "brand:git",
+    "orbit",
+    "",
+    "🎯 Task",
+    42,
+    "https://example.com/icon.svg",
+    "data:image/svg+xml;base64,AAA",
+    "./../icon.svg",
+  ])("rejects unsupported declaration %s with authoring guidance", (icon) => {
+    try {
+      validateUnitIconDeclaration(icon);
+      throw new Error("Expected declaration rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnitManifestError);
+      expect(error).toMatchObject({ code: "MANIFEST_ICON" });
+      expect((error as Error).message).toContain("setUnitIcon");
+    }
+  });
+});
 
 describe("app capability catalog", () => {
   it("derives native-host support as a strict subset of the target vocabulary", () => {
@@ -38,7 +66,10 @@ describe("validateUnitManifest", () => {
             activationEvents: ["*"],
             dependencyMode: "external",
             methodAuthority: {
-              invoke: { website: { kind: "eligible", rationale: "Explicit extension fixture contract." },  effect: { kind: "open" } },
+              invoke: {
+                website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+                effect: { kind: "open" },
+              },
             },
             providerContracts: {
               gitInterop: { methods: ["upstreamStatus", "pushUpstream"] },

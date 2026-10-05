@@ -11,7 +11,7 @@ describe("unit icon declaration", () => {
   it.each(["./", "./../secret.svg", "./assets/../secret.svg", "./assets\\icon.svg"])(
     "rejects non-canonical path %s",
     (icon) => {
-      expect(() => declaredUnitIconPath({ icon })).toThrow(/escapes the unit source/u);
+      expect(() => declaredUnitIconPath({ icon })).toThrow(/safe unit-relative image path/u);
     }
   );
 

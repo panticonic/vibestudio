@@ -9,3 +9,19 @@ const semanticEmoji = new RegExp(
 export function isSemanticEmoji(icon: string | undefined): icon is string {
   return icon !== undefined && semanticEmoji.test(icon);
 }
+
+export const MAX_UNIT_ICON_BYTES = 1024 * 1024;
+
+/** Canonical image declaration, confined to the declaring unit. */
+export function isUnitIconAssetPath(icon: string | undefined): icon is string {
+  return (
+    typeof icon === "string" &&
+    icon.startsWith("./") &&
+    !/[\\?#%\u0000-\u001f\u007f]/u.test(icon) &&
+    icon
+      .slice(2)
+      .split("/")
+      .every((segment) => segment !== "" && segment !== "." && segment !== "..") &&
+    /\.(svg|png|jpe?g|webp|avif|gif|ico)$/iu.test(icon)
+  );
+}

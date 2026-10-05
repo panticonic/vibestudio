@@ -7,6 +7,7 @@
  */
 
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "@vibestudio/rpc";
+import { isSemanticEmoji, isUnitIconAssetPath } from "./panel/icon.js";
 
 export type UnitKind = "extension" | "app";
 export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
@@ -228,9 +229,12 @@ export class UnitManifestError extends Error {
 
 /** Validate the common icon field before authoring or consuming unit metadata. */
 export function validateUnitIconDeclaration(icon: unknown): asserts icon is string | undefined {
-  if (icon !== undefined && typeof icon !== "string") {
+  if (
+    icon !== undefined &&
+    (typeof icon !== "string" || (!isSemanticEmoji(icon) && !isUnitIconAssetPath(icon)))
+  ) {
     throw new UnitManifestError(
-      'vibestudio.icon must be a string (for example "lucide:columns-3", an emoji, or "./assets/icon.svg")',
+      'vibestudio.icon must be one semantic emoji or a safe unit-relative image path such as "./assets/icon.svg". Catalog IDs are authoring inputs only: use prepareProjects or setUnitIcon from @workspace-skills/workspace-dev to materialize the artwork.',
       "MANIFEST_ICON"
     );
   }

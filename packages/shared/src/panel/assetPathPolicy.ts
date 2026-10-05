@@ -1,4 +1,5 @@
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { isUnitIconAssetPath } from "./icon.js";
 
 /**
  * Panel-origin gateway path policy — the allowlist of gateway paths reachable
@@ -210,7 +211,7 @@ export function unitIconTarget(
   version?: string,
   state?: string
 ): string | null {
-  if (!icon.startsWith("./")) return null;
+  if (!isUnitIconAssetPath(icon)) return null;
   const query = new URLSearchParams({ source, path: icon.slice(2) });
   if (version) query.set("v", version);
   if (state) query.set("s", state);
