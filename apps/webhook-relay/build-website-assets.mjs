@@ -1,5 +1,5 @@
 import { tsImport } from "tsx/esm/api";
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { parseArgs } from "node:util";
@@ -27,6 +27,7 @@ export async function buildWebsiteAssets(outDir = path.join(root, "dist/apex-web
       path.join(appRoot, "design/regatta-palettes.html"),
       path.join(assetOutput, "regatta-palettes.html")
     );
+    await cp(path.join(appRoot, "site"), path.join(assetOutput, "site"), { recursive: true });
     for (const asset of [
       "favicon.svg",
       "vibestudio-symbol.svg",

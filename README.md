@@ -1,54 +1,82 @@
-# vibestudio
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="build-resources/brand/vibestudio-logo-dark.svg"><img src="build-resources/brand/vibestudio-logo.svg" alt="Vibestudio" width="120"></picture></p>
 
-## An integrated personal software environment
+# Vibestudio
 
-Vibestudio is a browser and light-weight sandbox for agents and personalized apps. Its starting point is an **agentic UI continuum**: full apps with agents, agents working through app controls, and interactive UI inside conversations. Build and adapt your own tools, or connect your agents to third-party software, choosing the interface that fits the task.
+There's more to AI software than a chat box. Vibestudio is a browser for apps
+with agents inside them. You can build your own with an agent, or open apps
+other people made and let them run on your models, reaching only what you
+allow.
 
-- **Batteries included.** One build system, version-controlled file structure, background-process runtime, credentials management, and agentic harness -- standardized into a single composable happy-path so agents cannot and need not reinvent the wheel.
-- **Self-modifying agentic harness.** The agentic system is embedded inside the environment it builds, so it can modify itself and be used in or adapted for any app you create.
-- **Sandbox with capability grants.** A browser-style, out-of-band approval system (similar to camera or storage access, but with many more capabilities) gives you fine-grained control over every privileged access -- instead of handing over your keys and hoping for the best.
-- **Agentic chat as an app.** The chat UI is itself an app inside the system, with affordances for inline generative UI and the ability to automate and inspect running apps from within a conversation.
+Most AI apps today look alike: the app, a chat box in the corner, a few tools
+wired up behind it. I think interfaces can do a lot more. They could generate
+parts of themselves as you use them, work with your own data, and put agents
+into games and tools wherever an agent actually helps. Nobody quite knows what
+that looks like yet, so Vibestudio is built to make trying ideas cheap: the
+decisions about builds, deploys, sandboxing and credentials are made up front
+(any language you like, as long as it's TypeScript), and what you build can be
+shared and opened by someone else in seconds.
 
-Vibestudio sandbox details:
+More at [vibestudio.app](https://vibestudio.app).
 
-- Browser-style capability grant / approval system and credential store for external provider integrations (e.g. Google Workspace, OpenAI etc.).
-- Context-isolated file system per app / agent instance.
-- Facilities for building and debugging software within the system, including agents, apps and reusable packages.
-- Light-weight isolation based on browser/JS isolates, arguably the lightest, most wide-spread and battle-tested sandbox out there.
-- Background processes and DB persistence via the included workerd service (the tech that drives Cloudflare Workers).
-- Extension system for native-access Node.js code.
-- Mobile, CLI and desktop apps based on one sandbox runtime that you can customize yourself.
+## What's in it
 
-### Security enables integration
+- **A place to build.** Every workspace comes with a build system, version
+  control, databases and background processes. Agents build apps there without
+  having to reinvent any of it, and the agent harness lives in the same
+  environment, so it can change itself and be dropped into the apps it builds.
+- **The chat is an app too.** The chat panel can show interactive UI inline,
+  open and drive other panels, and be modified like anything else you built.
+- **A browser for other people's agentic apps.** A website can ask to connect
+  to your workspace, much like a web3 site asks to connect to a wallet.
+  Connecting grants almost nothing. The page then asks for specific things,
+  like your model provider or a folder, and you approve each one. Whole
+  workspaces can also be installed from templates, each in its own sandbox.
+- **Approvals an agent can't fake.** Credentials stay outside the sandbox.
+  Apps and agents get capabilities instead of keys, and you grant them through
+  prompts in Vibestudio's own UI, a bit like a browser asking for camera
+  access. You never hand your login to an agent and hope.
+- **Your browser, imported.** Bring over tabs and cookies and stay logged in.
+  With your permission, agents can read and automate those pages.
+- **Desktop, server and phone.** The same sandbox runs the desktop app, a
+  headless home server, the CLI and the mobile app.
 
-Bringing agents and third-party code together requires explicit boundaries. Workspaces separate software, data, and conversations; capability grants control privileged access. Enabled websites can request capabilities within a workspace, while app templates provide full apps in dedicated workspaces. Connecting a website does not approve all its capabilities. This security model serves the continuum: useful integration without blanket access.
+Under the hood, apps and agents are isolated with browser/JS isolates, the
+lightest and most widely deployed sandbox around. Background processes and
+storage run on the bundled workerd (the runtime behind Cloudflare Workers).
+Each app or agent instance gets its own view of the file system, and native
+Node.js code can be added through extensions.
 
 ## Status
 
-This is alpha software. It is _not_ reliable or safe. Or possibly fit for your purposes. The architecture is subject to sudden and violent spasmodic changes. You have been warned.
+This is alpha software. It isn't reliable or safe yet, and the architecture
+still changes in big, sudden ways. Be careful what you connect to it.
 
-The agentic harness currently requires a [Codex](https://chatgpt.com/codex) subscription and has mainly been tested against it. Other providers may work but are not actively validated.
+The agent harness has mostly been tested with a
+[Codex](https://chatgpt.com/codex) (ChatGPT) subscription. Other providers may
+work, but nobody is checking them regularly.
+
+If you build something with it or find something broken, please
+[open an issue](https://github.com/panticonic/vibestudio/issues).
 
 ## Installation
 
 **[Downloads and package repositories →](https://panticonic.github.io/vibestudio/)** ·
 **[Latest release →](https://github.com/panticonic/vibestudio/releases/latest)**
 
-### Desktop app
+Install through your platform's package manager where you can. That's also how
+you get updates.
 
-Each platform's package manager delivers updates, so prefer it over a direct download.
-
-**macOS** — updates with `brew upgrade`:
+**macOS**, updated with `brew upgrade`:
 
 ```bash
 brew install --cask panticonic/tap/vibestudio
 ```
 
-The build is ad-hoc signed rather than signed with an Apple Developer ID, so macOS
-asks you to confirm it on first launch (System Settings → Privacy & Security →
-Open Anyway). It cannot update itself; `brew upgrade` is the update path.
+The app is ad-hoc signed, not signed with an Apple Developer ID, so macOS asks
+you to confirm it the first time (System Settings → Privacy & Security → Open
+Anyway). It can't update itself; use `brew upgrade`.
 
-**Debian / Ubuntu** — updates with `apt upgrade`:
+**Debian / Ubuntu**, updated with `apt upgrade`:
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings
@@ -59,7 +87,7 @@ echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github
 sudo apt update && sudo apt install vibestudio
 ```
 
-**Fedora / RHEL / openSUSE** — updates with `dnf upgrade`:
+**Fedora / RHEL / openSUSE**, updated with `dnf upgrade`:
 
 ```bash
 sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
@@ -67,40 +95,42 @@ sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
 sudo dnf install vibestudio
 ```
 
-**Windows** — the `.exe` installer on the
-[releases page](https://github.com/panticonic/vibestudio/releases/latest). It is not
-yet code signed, so SmartScreen warns on first run.
+**Windows**: run the `.exe` installer from the
+[releases page](https://github.com/panticonic/vibestudio/releases/latest). It
+isn't code-signed yet, so SmartScreen will warn you the first time.
 
-**Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and `.deb`
-files on the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
-install directly. Every packaged format carries the AppArmor profile a workspace
-sandbox needs on Ubuntu 24.04+ — `vibestudio remote doctor` reports whether this host
-permits the sandbox.
+**Arch, or any other distro**: the `.pkg.tar.zst`, `.rpm` and `.deb` files on
+the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
+install directly. Every package includes the AppArmor profile the workspace
+sandbox needs on Ubuntu 24.04 and later. `vibestudio remote doctor` tells you
+whether your system allows the sandbox.
 
 Then:
 
 ```bash
 vibestudio             # launch the desktop app
-vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
+vibestudio --help      # CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
-On the first launch, choose or create a workspace. Its configured onboarding
-prompt is added to the new chat's history and starts the onboarding agent
-automatically.
+On first launch, pick or create a workspace. A chat opens with the onboarding
+agent, which asks what you want to do and helps you set things up.
 
-Vibestudio tells you when a release exists rather than waiting for you to look:
-it reads the releases feed a while after launch and every six hours, and offers
-one action suited to how this copy was installed. On Windows and macOS it
-downloads and installs the release itself, then restarts. On Linux it asks the
-package manager that owns the installation — `apt`, `dnf` or `pacman` — through
-the system's own permission prompt, and offers to restart when that finishes; if
-nothing can raise the command to root, it hands you the exact command instead.
-Nothing installs without being asked, and development or linked launches never
-self-update.
+### Updates
 
-### Headless server (remote/home server; clients connect to it)
+A while after launch, and every six hours after that, Vibestudio checks for a
+new release and offers to install it in whatever way fits how you installed
+it. On Windows and macOS it downloads the release, installs it and restarts. On
+Linux it asks the package manager that owns the installation (`apt`, `dnf` or
+`pacman`) through the system's own password prompt, then offers to restart. If
+it can't get root, it shows you the command to run instead. Nothing installs
+without asking, and development builds never update themselves.
 
-Requires **Node.js 22.19.0+**.
+## Running a server
+
+You can run Vibestudio headless on a home server or VPS and connect your
+desktop and phone to it. All the core services (builds, git, chat, agents,
+credentials) run on the server, and storage lives in workerd Durable Objects,
+so there are no native modules to compile. It needs **Node.js 22.19.0+**.
 
 ```bash
 brew install panticonic/tap/vibestudio-server   # macOS, or Linuxbrew
@@ -108,36 +138,9 @@ npm install -g @panticonic/vibestudio-server    # anywhere else
 vibestudio remote deploy local
 ```
 
-Vibestudio sandboxes both a workspace runtime and the desktop's own renderers,
-and each sandbox needs an unprivileged user namespace. Ubuntu 24.04+ sets
-`kernel.apparmor_restrict_unprivileged_userns=1`, which grants those only to
-binaries carrying an AppArmor profile, so `apt`/`dnf` packages ship one for
-each and install them; npm cannot. Prefer a package manager on such a host.
-`vibestudio remote doctor` reports whether this host permits the sandbox and
-what to do when it does not.
-
-Working from a source checkout, install the same two profiles for that tree:
-
-```bash
-sudo scripts/install-dev-apparmor-profile.sh
-```
-
-A profile attaches to an absolute path, and a checkout lives wherever it was
-cloned, which is why a developer tree installs its own rather than using the
-packaged ones. It covers the checkout's workspace launcher and its Electron
-binary — and through that binary every development client the desktop launches,
-since a client reuses the same executable from a private directory. Re-run it
-after moving the checkout. See [Linux sandbox
-setup](docs/linux-sandbox-setup.md) for what each profile permits, how to
-recognise each failure, and how to run a desktop client on a headless host.
-
-On Linux with systemd, `deploy local` installs an always-on user service on this
-computer, enables it at login/boot, runs end-to-end diagnostics, and prints the
-first-device pairing QR. The gateway remains loopback-only; remote clients use
-endpoint-authenticated Iroh QUIC with explicit HTTPS relay fallback. The service does not
-publish pairing readiness until the default workspace can provide a compiled
-desktop shell, so first-use build work happens before a laptop consumes its
-one-time link. Manage it with:
+On Linux with systemd, `deploy local` installs a user service that starts at
+login or boot, runs end-to-end checks, and prints a QR code for pairing your
+first device. Manage it with:
 
 ```bash
 vibestudio remote deploy status local
@@ -146,23 +149,29 @@ vibestudio remote deploy logs local
 vibestudio remote deploy update local
 ```
 
-For a foreground session instead, or a quick one-off without a global install:
+`pairing` shows secrets; `logs` is for diagnostics. For a one-off session in
+the foreground instead:
 
 ```bash
 vibestudio remote serve --port 3030
-npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
+npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030   # without installing
+pnpm cli remote serve --port 3030                                          # from a source checkout
 ```
 
-Remote clients pair directly to the advertised Iroh Endpoint ID. Reaches carry
-an explicit ordered relay set; Iroh upgrades to direct paths when possible and
-uses the relays when necessary. See [relay operations](docs/iroh-relay-operations.md)
-and [CLI operations](docs/cli.md). Each RPC request owns a QUIC stream, while
-immutable initial panel assets are verified and cached through one bundled transfer. See
-[docs/architecture/remote-transport-qos.md](docs/architecture/remote-transport-qos.md).
+The installed launcher always uses its own package as the app root, so it works
+from any directory.
 
-The headless server does not update itself. Install the desired CLI release,
-then let the deployment lifecycle reinstall that exact version and restart the
-service:
+**The sandbox on Ubuntu.** Vibestudio sandboxes both the workspace runtime and
+the desktop's renderers, and each sandbox needs an unprivileged user namespace.
+Ubuntu 24.04+ sets `kernel.apparmor_restrict_unprivileged_userns=1`, which only
+allows that for binaries with an AppArmor profile. The `apt` and `dnf` packages
+ship and install those profiles; npm can't. So on Ubuntu, prefer a package
+manager. `vibestudio remote doctor` reports whether the sandbox is allowed and
+what to do if it isn't. [Linux sandbox setup](docs/linux-sandbox-setup.md) has
+the details.
+
+**Updating.** The server doesn't update itself. Install the release you want,
+then let the deployment reinstall exactly that version and restart:
 
 ```bash
 brew upgrade vibestudio-server                          # or:
@@ -170,32 +179,89 @@ npm install -g @panticonic/vibestudio-server@latest
 vibestudio remote deploy update local
 ```
 
-#### Inviting a user
+### How devices connect
 
-Identity lives in one hub-owned database (`server-auth/identity.db`); the flow is:
+The server only listens on loopback. Remote devices reach it over Iroh QUIC,
+authenticated by the server's endpoint ID, falling back to HTTPS relays when a
+direct path isn't possible. There's no public port, TLS setup, Tailscale or VPN
+to configure. On startup the server prints something like:
 
-1. **Root bootstrap** — on a fresh server the startup pairing code is the root
-   invite: the first device to redeem it becomes the `root` user. Until that
-   happens, the server replaces expired root invites and publishes the current
-   QR/link through `remote deploy pairing <target>`; it never becomes permanently
-   unclaimable because an operator stepped away.
-2. **Invite a user** (root/admin only) — mint a user-bound pairing code with a
-   handle and optional workspace memberships; the invitee's first device
-   redeems it and is issued as that user.
-3. **Pair your own devices** (any member) — additional pairing codes are bound
-   to your own account; phones, laptops, and terminals all become devices of
-   the same user.
-4. **Membership** (root/admin only) — users see and enter only workspaces they
-   are members of; inside a workspace, all members are mutually trusted.
+```
+Pair a Vibestudio device
+  Endpoint ID: ...
+  Relays:      https://relay.vibestudio.app/, https://relay-eu.vibestudio.app/
+  Pair URL:    https://vibestudio.app/p#<compact-payload>
+```
 
-See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
-[System remote-access skill](https://github.com/panticonic/vibestudio-system/blob/main/skills/remote-access/SKILL.md)
-for the operational runbook.
+The pair URL is a complete invitation. Its fragment packs the one-time secret,
+endpoint ID, expiry and relay list, so it works without SSH or a link
+shortener. The server doesn't show it until the default workspace has built
+the desktop shell and initial panels, so your first connection doesn't sit
+waiting on a build.
 
-The remote-transport suite uses real native Iroh endpoints and the current
-one-time root-device invite contract. Run it with `pnpm test:remote-transport`.
+Pairing links work once. After one is used, nobody who copied or photographed
+it can add another device with it. If the desktop can't store the credential
+locally, it tells you the link was **not used** and you can retry. Once the
+server accepts a link, any later failure tells you to get a fresh invite.
 
-### Develop (contributors)
+See [relay operations](docs/iroh-relay-operations.md),
+[CLI operations](docs/cli.md) and
+[remote transport](docs/architecture/remote-transport-qos.md) for more.
+
+### Users and devices
+
+1. **The first device is root.** On a fresh server, the startup pairing code is
+   the root invite, and the first device to redeem it becomes the `root` user.
+   Until then, the server replaces the invite when it expires and
+   `remote deploy pairing <target>` always shows the current one, so you can
+   step away without locking yourself out.
+2. **Inviting people** (root or admin): create a pairing code bound to a new
+   handle, optionally with workspace memberships. The invitee's first device
+   redeems it.
+3. **Adding your own devices** (anyone): pairing codes you create are bound to
+   your account, so phones, laptops and terminals all become devices of the
+   same user.
+4. **Workspace membership** (root or admin): users only see workspaces they're
+   members of. Inside a workspace, all members trust each other.
+
+Identity lives in one database on the hub (`server-auth/identity.db`). See
+[docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
+the [remote-access skill](https://github.com/panticonic/vibestudio-system/blob/main/skills/remote-access/SKILL.md)
+for the full runbook.
+
+### Pairing an Android phone
+
+```bash
+vibestudio mobile install --launch
+```
+
+Scan the server's startup QR if this is the first device. For another phone,
+create a link from the desktop (connection badge → **Paired devices** →
+**Connect a device**), from the phone (**Settings** → **Devices** → **Connect
+another device**), or with `vibestudio remote pair-device`.
+
+With no managed server running, `vibestudio mobile pair --port 3030` pairs in
+the foreground. From a source checkout, run `pnpm build`, then
+`pnpm cli mobile install --launch`.
+
+### Server flags
+
+| Flag                                 | Description                                              |
+| ------------------------------------ | -------------------------------------------------------- |
+| `--port PORT`, `--gateway-port PORT` | Hub ingress port (environment override or `3030`)        |
+| `--app-root PATH`                    | Application root (the installed package root by default) |
+| `--relay-url URL`                    | Explicit canonical HTTPS Iroh relay (repeatable)         |
+| `--dev`                              | Development mode                                         |
+
+There's no `--host`, `--public-url`, `--protocol` or TLS flag; public ingress
+was removed in favor of Iroh. OAuth and webhook callbacks go through the
+callback relay (`VIBESTUDIO_RELAY_URL`).
+
+The public server is always a hub. Clients pair with the hub, choose a
+workspace, and connect to `/_workspace/<name>`. Workspace flags are reserved
+for internal child runtimes and the public server rejects them.
+
+## Development
 
 Requires Node.js 22.19+, pnpm, and the normal Electron system libraries.
 Bootstrap rejects unsupported Node.js versions before installing dependencies.
@@ -232,7 +298,27 @@ pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
 
-#### Host and workspace-template co-development
+### Sandbox profiles for a source checkout
+
+On Ubuntu 24.04+, install AppArmor profiles for your checkout's workspace
+launcher and Electron binary:
+
+```bash
+sudo scripts/install-dev-apparmor-profile.sh
+```
+
+A profile attaches to an absolute path, so a developer tree installs its own
+instead of using the packaged ones. The Electron profile also covers every
+development client the desktop launches, since clients reuse the same
+executable from a private directory. Re-run the script after moving the
+checkout. See [Linux sandbox setup](docs/linux-sandbox-setup.md) for what each
+profile permits, how to recognise each failure, and how to run a desktop client
+on a headless host.
+
+The remote-transport suite uses real native Iroh endpoints and the current
+one-time root-device invite contract. Run it with `pnpm test:remote-transport`.
+
+### Host and workspace-template co-development
 
 Base, Personal and System are independent, publishable workspace-template
 repositories. Personal and System each declare Base as a normal template
@@ -349,7 +435,7 @@ Native workspace commands and linked Claude use normal networking through stock 
 
 Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its OS-preparation diagnostics refer to an installed tool. Preparation requiring elevation remains an explicit administrator operation; startup never applies it silently.
 
-## Scripts
+### Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools
 - `pnpm bootstrap` - Install the complete host and userland workspace graph
@@ -380,7 +466,7 @@ fresh root-bootstrap `vibestudio://connect` link from the hub ready file. It
 uses a disposable instance root, like `pnpm dev`; named workspace selection
 happens through the paired client, as it does in production.
 
-### Memory Diagnostics (optional)
+### Memory diagnostics (optional)
 
 You can enable lightweight memory logging to identify which panel/worker is growing. Logs are derived from `app.getAppMetrics()` and include working set, peak working set, and (Windows-only) private bytes for each view’s process.
 
@@ -400,109 +486,3 @@ To temporarily increase the renderer V8 heap limit in dev:
 ```bash
 VIBESTUDIO_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
 ```
-
-## Headless Server
-
-Vibestudio can run without Electron as a standalone Node.js server. All core
-services — build, git, channels, AI, agents, tokens — are available over
-WebSocket RPC. Persistent storage lives inside workerd Durable Objects (each
-DO owns its own SQLite-backed `this.sql`); the server has no native module
-dependencies. Panels can optionally be served to a regular web browser over
-HTTP.
-
-### Prerequisites
-
-```bash
-npm install -g @panticonic/vibestudio-server
-```
-
-For development from a source checkout instead: `pnpm bootstrap && pnpm build`.
-
-### Running
-
-For an always-on Linux server managed by the normal user-service lifecycle:
-
-```bash
-vibestudio remote deploy local
-```
-
-Use `remote deploy pairing local`, `status local`, `logs local`, and `update
-local` to manage that same service. Pairing is the secret-bearing setup surface;
-logs remain diagnostic output. For a foreground session instead:
-
-```bash
-vibestudio remote serve --port 3030
-# from a source checkout:
-pnpm cli remote serve --port 3030
-```
-
-The installed launcher pins the app root to the package, so it works from any
-directory. On startup the pairing server prints a QR/deep-link:
-
-```
-Pair a Vibestudio device
-  Endpoint ID: ...
-  Relays:      https://relay.vibestudio.app/, https://relay-eu.vibestudio.app/
-  Pair URL:    https://vibestudio.app/p#<compact-payload>
-```
-
-On a fresh server, that root-bootstrap invite is automatically replaced when it
-expires. The foreground command prints each replacement; a managed service
-atomically updates its protected ready state, so
-`vibestudio remote deploy pairing local` always shows the current QR/link until
-the first device claims the root account. Published server commands also gate
-that ready state on the selected workspace's Electron artifact and every
-deduplicated `initPanels` artifact. A visible pair URL is therefore a
-first-surface readiness promise, not merely proof that the endpoint bound.
-
-Pairing links are one-time bearer capabilities. Consuming a link prevents
-anyone who copied or photographed it from replaying it to add another device.
-The desktop checks its encrypted credential store before contacting the server;
-if that check fails, it says that the link was **not used** and the same link can
-be retried after fixing local storage. Once the server accepts a link, any later
-failure says that the link is used and that a fresh invite is required—never the
-ambiguous “Invalid token.”
-
-### CLI Flags
-
-| Flag                                 | Description                                              |
-| ------------------------------------ | -------------------------------------------------------- |
-| `--port PORT`, `--gateway-port PORT` | Hub ingress port (environment override or `3030`)        |
-| `--app-root PATH`                    | Application root (the installed package root by default) |
-| `--relay-url URL`                    | Explicit canonical HTTPS Iroh relay (repeatable)         |
-| `--dev`                              | Development mode                                         |
-
-The gateway binds loopback only; remote clients reach it over Iroh (paired by
-QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
-decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
-through the callback relay (`VIBESTUDIO_RELAY_URL`).
-
-The public server is always a hub. Clients pair with the hub, choose a
-workspace, and then connect to `/_workspace/<name>`. Workspace flags are
-reserved for internal child runtimes and are rejected by the public server.
-
-### Android phone pairing
-
-For an npm installation, install the Android app. Pairing authenticates the
-server Iroh Endpoint ID — no Tailscale/VPN or HTTPS serve setup:
-
-```bash
-vibestudio mobile install --launch
-```
-
-Scan the managed server's current startup QR if this is the first device. For an
-additional phone, create a link from desktop via the connection badge →
-**Paired devices** → **Connect a device**, or from mobile via **Settings** →
-**Devices** → **Connect another device**. `vibestudio remote pair-device` is the
-equivalent paired-CLI flow.
-
-`vibestudio mobile pair --port 3030` remains the foreground, one-off path when
-no managed server is running. From a source checkout, run `pnpm build` first,
-then use `pnpm cli mobile install --launch` and the same pairing flow.
-
-The QR carries the complete, self-contained
-`https://vibestudio.app/p#<compact-payload>` invitation. Protocol v4 packs the
-one-time secret, authenticated Endpoint ID, expiry, and explicit relay set into
-one URL-safe fragment. It does not depend on SSH or a link-shortening service.
-The first phone, desktop, or CLI to redeem a fresh
-server's current startup invitation becomes the root account.

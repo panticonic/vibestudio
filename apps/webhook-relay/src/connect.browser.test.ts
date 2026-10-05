@@ -68,6 +68,15 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
       } else if (request.url === "/connect.js") {
         response.writeHead(200, { "content-type": "text/javascript" });
         response.end(readFileSync(join(import.meta.dirname, "connect.js")));
+      } else if (request.url?.startsWith("/site/")) {
+        const file = request.url.slice("/site/".length);
+        if (!["regency-game.webp", "approval-prompt.webp"].includes(file)) {
+          response.writeHead(404);
+          response.end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "image/webp" });
+        response.end(readFileSync(resolve(import.meta.dirname, "../site", file)));
       } else if (request.url?.startsWith("/brand/")) {
         const file = request.url.slice("/brand/".length);
         if (
@@ -244,17 +253,13 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
       try {
         await page.goto(origin);
         const headerLogo = page.locator(".brand-mark img");
-        const heroLogo = page.locator(".hero-art img");
-        const hero = page.locator(".hero-art");
+        const body = page.locator("body");
         await expect
           .poll(() => headerLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
           .toContain("vibestudio-symbol.svg");
         await expect
-          .poll(() => heroLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
-          .toContain("vibestudio-symbol.svg");
-        await expect
-          .poll(() => hero.evaluate((element) => getComputedStyle(element).backgroundColor))
-          .toBe("rgb(241, 243, 247)");
+          .poll(() => body.evaluate((element) => getComputedStyle(element).backgroundColor))
+          .toBe("rgb(246, 242, 234)");
         await expect
           .poll(() =>
             page
@@ -269,11 +274,8 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
           .poll(() => headerLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
           .toContain("vibestudio-symbol-dark.svg");
         await expect
-          .poll(() => heroLogo.evaluate((image: HTMLImageElement) => image.currentSrc))
-          .toContain("vibestudio-symbol-dark.svg");
-        await expect
-          .poll(() => hero.evaluate((element) => getComputedStyle(element).backgroundColor))
-          .toBe("rgb(50, 62, 78)");
+          .poll(() => body.evaluate((element) => getComputedStyle(element).backgroundColor))
+          .toBe("rgb(26, 32, 42)");
         await expect
           .poll(() =>
             page
