@@ -22,7 +22,7 @@ includes only the selected vendor payload.
 Model/config integrity is also checked when loading. Signing may change native
 code bytes, so installed kernels use the application's code trust boundary.
 
-The host's `speech.transcribe` service owns one resident inference subprocess
+The host's speech service owns one resident inference subprocess
 and serializes invocations. It launches the installed standalone Node runtime
 at the immutable resource coordinate with a minimal environment, rather than
 inheriting host credentials or Node options. Audio/results remain invocation data and
@@ -31,7 +31,19 @@ service shutdown and owner disconnect retire it. Errors propagate through
 the ordinary RPC response stream. There are no inference deadlines or
 automatic retries.
 
-The chat composer requests microphone access only after a click, records using
+`speech.status` reads readiness without starting the model. `speech.prepare`
+loads it without recording and streams actual weight-loading progress followed
+by a terminal ready event. Preparation and transcription use the same serialized
+native owner, cancellation, and failure propagation.
+
+The chat composer hides dictation when there is no audio input device and listens
+for device changes. A cold microphone click offers explicit model preparation;
+loading keeps the draft editable. The ready notice offers Start speaking or
+Dismiss and disappears after eight seconds without unloading the resident model.
+Subsequent microphone clicks record immediately while the model is ready. Voice
+status floats above the composer without changing the field's geometry.
+
+The chat composer requests microphone access only when recording starts, records using
 the browser's supported codec, and resamples through Web Audio to mono 16 kHz
 float32 PCM. Stopping dictation inserts text at the draft selection for review.
 The draft cannot be sent or edited during capture/transcription. Failed

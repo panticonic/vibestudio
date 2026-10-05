@@ -130,7 +130,7 @@ export class PhononEngine {
       const packed = new Map();
       const weights = new Map();
       const raw = new Map();
-      progress("Loading Phonon-2…");
+      progress("Checking voice model…");
       const model = path.join(root, "model.fermion");
       const configFile = path.join(root, "config.json");
       verify(model, distribution.model.files["model.fermion"]);
@@ -144,7 +144,8 @@ export class PhononEngine {
       )
         throw new Error("Unsupported Phonon-2 architecture");
       this.vocabulary = config.labels;
-      readContainer(model, (record, bytes) => {
+      progress("Loading voice model…");
+      readContainer(model, (record, bytes, amount) => {
         if (record.k === "five_value") {
           const [rows, columns] = record.shape;
           const planes = fiveValuePlanes(bytes, rows, columns);
@@ -162,6 +163,7 @@ export class PhononEngine {
           weights.set(record.n, table.dense);
           raw.set(record.n, table);
         } else throw new Error(`Unsupported weight encoding: ${record.k}`);
+        progress("Loading voice model…", amount);
       });
       if (packed.size !== 264) throw new Error("Incomplete Phonon-2 encoder");
       const weight = (name) => {
@@ -169,6 +171,7 @@ export class PhononEngine {
         if (!value) throw new Error(`Missing Phonon tensor: ${name}`);
         return value;
       };
+      progress("Preparing speech recognition…");
       this.encoder = fn("phonon2_enc_create", pointer, Array(7).fill("int"))(
         24,
         1024,

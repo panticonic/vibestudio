@@ -29,6 +29,17 @@ it("dispatches bundled offline speech as a host Response and joins its native ow
     connectionSignal: connection.signal,
   };
   try {
+    expect(await dispatcher.dispatch(ctx, "speech", "status", [])).toEqual({ ready: false });
+    const preparing = (await dispatcher.dispatch(ctx, "speech", "prepare", [])) as Response;
+    const preparation = (await preparing.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(
+      preparation.some((event) => event.type === "progress" && event.completed !== undefined)
+    ).toBe(true);
+    expect(preparation.at(-1)).toEqual({ type: "ready" });
+    expect(await dispatcher.dispatch(ctx, "speech", "status", [])).toEqual({ ready: true });
     const response = (await dispatcher.dispatch(ctx, "speech", "transcribe", [
       { format: "pcm_f32le", sampleRate: 16000, audio: audio.toString("base64") },
     ])) as Response;

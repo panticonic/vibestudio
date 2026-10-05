@@ -609,6 +609,8 @@ Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
+| `speech.status` | Read bundled speech model readiness without loading it. |
+| `speech.prepare` | Load the bundled speech model without capturing audio. Returns NDJSON progress and a terminal ready event. |
 | `speech.transcribe` | Transcribe supplied mono audio locally using the bundled English Phonon-2 model. Returns an NDJSON progress/result stream. |
 
 ## `vcs`

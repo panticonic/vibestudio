@@ -11,10 +11,39 @@ export const speechRecordingSchema = z.object({
 });
 export type SpeechRecording = z.infer<typeof speechRecordingSchema>;
 export type SpeechEvent =
-  | { type: "progress"; message: string }
+  | { type: "progress"; message: string; completed?: number; total?: number }
+  | { type: "ready" }
   | { type: "result"; text: string; model: "phonon-2"; language: "en" };
 
+const preparationAccess = {
+  access: { sensitivity: "read" } as const,
+  website: {
+    kind: "eligible",
+    rationale:
+      "Prepares only the bundled offline speech model; no microphone or host data is accessed.",
+  } as const,
+  tier: {
+    tier: "open",
+    session: "family",
+    residency: "native-effect",
+    family: "speech.transcribe",
+    rationale: "Readiness and preparation of the bundled local speech model.",
+  } as const,
+};
 export const speechMethods = defineServiceMethods({
+  status: {
+    description: "Read bundled speech model readiness without loading it.",
+    args: z.tuple([]),
+    returns: z.object({ ready: z.boolean() }),
+    ...preparationAccess,
+  },
+  prepare: {
+    description:
+      "Load the bundled speech model without capturing audio. Returns NDJSON progress and a terminal ready event.",
+    args: z.tuple([]),
+    returns: StreamResponseSchema,
+    ...preparationAccess,
+  },
   transcribe: {
     description:
       "Transcribe supplied mono audio locally using the bundled English Phonon-2 model. Returns an NDJSON progress/result stream.",

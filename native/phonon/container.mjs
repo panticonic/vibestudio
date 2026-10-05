@@ -113,6 +113,8 @@ export function readContainer(file, consume) {
     if (header.format !== "fermion-five-value-parakeet-v1" || !Array.isArray(header.index))
       throw new Error("Unsupported Phonon container");
     const names = new Set();
+    const total = header.index.reduce((sum, record) => sum + record.b, 0);
+    let completed = 0;
     for (const record of header.index) {
       if (
         typeof record.n !== "string" ||
@@ -125,7 +127,8 @@ export function readContainer(file, consume) {
       )
         throw new Error("Invalid Phonon tensor index");
       names.add(record.n);
-      consume(record, read(record.b));
+      completed += record.b;
+      consume(record, read(record.b), { completed, total });
     }
     if (readSync(descriptor, Buffer.alloc(1), 0, 1, null))
       throw new Error("Trailing Phonon container bytes");

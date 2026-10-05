@@ -7167,6 +7167,28 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "speech.prepare": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "speech.transcribe",
+      rationale: "Readiness and preparation of the bundled local speech model.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "speech.status": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "speech.transcribe",
+      rationale: "Readiness and preparation of the bundled local speech model.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "speech.transcribe": {
     tier: {
       tier: "open",

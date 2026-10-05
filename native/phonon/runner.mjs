@@ -8,8 +8,8 @@ process.on("disconnect", () => process.exit(0));
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 let engine;
 try {
-  engine = new PhononEngine(fileURLToPath(new URL("../../", import.meta.url)), (message) =>
-    send({ type: "progress", message })
+  engine = new PhononEngine(fileURLToPath(new URL("../../", import.meta.url)), (message, amount) =>
+    send({ type: "progress", message, ...amount })
   );
   send({ type: "ready", ...engine.description });
   for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {

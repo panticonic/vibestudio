@@ -16699,6 +16699,40 @@
       ]
     },
     "methods": {
+      "prepare": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "speech.transcribe",
+          "rationale": "Readiness and preparation of the bundled local speech model."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "status": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "speech.transcribe",
+          "rationale": "Readiness and preparation of the bundled local speech model."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "transcribe": {
         "authority": {
           "inherits": true

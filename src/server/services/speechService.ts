@@ -1,4 +1,4 @@
-import { speechMethods, type SpeechRecording } from "@vibestudio/service-schemas/speech";
+import { speechMethods, type SpeechEvent } from "@vibestudio/service-schemas/speech";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -15,7 +15,7 @@ export function createSpeechService(deps: {
 }): ServiceDefinition & { stop(): Promise<void> } {
   let runtime: SpeechRuntime | null = null;
   let stopped = false;
-  const transcribe = (ctx: ServiceContext, recording: SpeechRecording): Response => {
+  const getRuntime = () => {
     if (stopped) throw new Error("Speech service has stopped");
     if (!runtime) {
       const speech = getInstalledSpeechRuntime(deps.appRoot);
@@ -24,6 +24,17 @@ export function createSpeechService(deps: {
         entryRoot: speech.entryRoot,
       });
     }
+    return runtime;
+  };
+  const streamOperation = (
+    ctx: ServiceContext,
+    operation: (
+      owner: SpeechRuntime,
+      signal: AbortSignal,
+      emit: (event: SpeechEvent) => void
+    ) => Promise<void>
+  ): Response => {
+    const owner = getRuntime();
     const cancellation = new AbortController();
     const caller = AbortSignal.any(
       [ctx.signal, ctx.connectionSignal].filter((signal): signal is AbortSignal => !!signal)
@@ -37,19 +48,19 @@ export function createSpeechService(deps: {
     if (caller.aborted) abort();
     let work: Promise<void> = Promise.resolve();
     const encoder = new TextEncoder();
-    const owner = runtime;
     const body = new ReadableStream<Uint8Array>({
       start(stream) {
         controller = stream;
         if (cancellation.signal.aborted) {
+          controller = null;
+          caller.removeEventListener("abort", abort);
           stream.error(cancellation.signal.reason);
           return;
         }
-        work = owner
-          .transcribe(recording, cancellation.signal, (event) => {
-            if (!cancellation.signal.aborted)
-              stream.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-          })
+        work = operation(owner, cancellation.signal, (event) => {
+          if (!cancellation.signal.aborted)
+            stream.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        })
           .then(
             () => {
               if (!cancellation.signal.aborted) stream.close();
@@ -77,7 +88,10 @@ export function createSpeechService(deps: {
     authority: { principals: ["host", "user", "code", "website"] },
     methods: speechMethods,
     handler: defineServiceHandler("speech", speechMethods, {
-      transcribe: (ctx, [recording]) => transcribe(ctx, recording),
+      status: () => ({ ready: !stopped && (runtime?.status().ready ?? false) }),
+      prepare: (ctx) => streamOperation(ctx, (owner, signal, emit) => owner.prepare(signal, emit)),
+      transcribe: (ctx, [recording]) =>
+        streamOperation(ctx, (owner, signal, emit) => owner.transcribe(recording, signal, emit)),
     }),
     async stop() {
       stopped = true;

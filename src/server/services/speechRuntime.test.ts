@@ -13,7 +13,7 @@ afterEach(async () => {
   }
   vi.unstubAllEnvs();
 });
-async function fixture() {
+async function fixture(ready = true) {
   const root = await mkdtemp(path.join(os.tmpdir(), "speech-owner-"));
   await writeFile(
     path.join(root, "runner.mjs"),
@@ -21,7 +21,8 @@ async function fixture() {
     import {createInterface} from 'node:readline';
     process.on('disconnect',()=>process.exit(0));
     const send = x => process.stdout.write(JSON.stringify(x)+'\\n');
-    send({type:'ready'});
+    send({type:'progress',message:'Loading weights',completed:1,total:2});
+    if (${ready}) send({type:'ready'});
     for await(const line of createInterface({input:process.stdin})) {
       const request=JSON.parse(line);
       send({type:'progress',message:'started'});
@@ -91,4 +92,49 @@ it("propagates native exit diagnostics and retires owned work on service shutdow
   await expect(
     runtime.transcribe(recording("later"), new AbortController().signal, () => {})
   ).rejects.toThrow(/stopped/);
+});
+
+it("prepares without a recording and exposes readiness for reuse", async () => {
+  const runtime = await fixture();
+  expect(runtime.status()).toEqual({ ready: false });
+  const preparation: unknown[] = [];
+  await runtime.prepare(new AbortController().signal, (event) => preparation.push(event));
+  expect(preparation).toEqual([
+    { type: "progress", message: "Loading weights", completed: 1, total: 2 },
+    { type: "ready" },
+  ]);
+  expect(runtime.status()).toEqual({ ready: true });
+  const reuse: unknown[] = [];
+  await runtime.prepare(new AbortController().signal, (event) => reuse.push(event));
+  expect(reuse).toEqual([{ type: "ready" }]);
+  await runtime.stop();
+  expect(runtime.status()).toEqual({ ready: false });
+});
+
+it("cancels model loading before readiness and joins its process", async () => {
+  const runtime = await fixture(false);
+  const signal = new AbortController();
+  let began!: () => void;
+  const loading = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const operation = runtime.prepare(signal.signal, () => began());
+  const rejected = expect(operation).rejects.toMatchObject({ name: "AbortError" });
+  await loading;
+  expect(runtime.status()).toEqual({ ready: false });
+  signal.abort();
+  await rejected;
+  expect(runtime.status()).toEqual({ ready: false });
+});
+
+it("rejects invalid audio asynchronously without loading the model", async () => {
+  const runtime = await fixture();
+  await expect(
+    runtime.transcribe(
+      { ...recording("audio"), sampleRate: 8000 } as unknown as SpeechRecording,
+      new AbortController().signal,
+      () => {}
+    )
+  ).rejects.toThrow();
+  expect(runtime.status()).toEqual({ ready: false });
 });

@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:860701714ee51d0bf21b5679c480e3b0b4ee4c7ff6214d76186fbcf1c368ee71",
+  "censusDigest": "sha256:8301e7da86fd0a612475712007b10ff9dcf4249f7b243a9e6814f0e7a4d85ef2",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -1184,6 +1184,14 @@
     "host:shellApproval.submitSecretInput": {
       "review": "root-presenter-independent-secret-input",
       "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
+    },
+    "host:speech.prepare": {
+      "review": "explicit-speech-model-preparation",
+      "change": "Adds explicit preparation of the bundled local speech model with actual loading progress and terminal readiness. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
+    },
+    "host:speech.status": {
+      "review": "explicit-speech-model-preparation",
+      "change": "Adds read-only readiness without starting the model. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
     },
     "host:speech.transcribe": {
       "review": "supplied-audio-native-inference",

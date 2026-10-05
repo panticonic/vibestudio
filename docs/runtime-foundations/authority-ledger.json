@@ -30113,6 +30113,100 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:speech.prepare",
+      "rpcPlane": "host-service",
+      "owner": "speech",
+      "method": "prepare",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "speech.transcribe",
+      "reviewRationale": "Readiness and preparation of the bundled local speech model.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:speech.prepare"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:speech.prepare),allOf(capability(user,service:speech.prepare),workspace-member),allOf(capability(code,service:speech.prepare),workspace-member))",
+      "r3b": {
+        "review": "explicit-speech-model-preparation",
+        "change": "Adds explicit preparation of the bundled local speech model with actual loading progress and terminal readiness. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
+      },
+      "capability": "service:speech.prepare",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:speech.status",
+      "rpcPlane": "host-service",
+      "owner": "speech",
+      "method": "status",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "speech.transcribe",
+      "reviewRationale": "Readiness and preparation of the bundled local speech model.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:speech.status"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:speech.status),allOf(capability(user,service:speech.status),workspace-member),allOf(capability(code,service:speech.status),workspace-member))",
+      "r3b": {
+        "review": "explicit-speech-model-preparation",
+        "change": "Adds read-only readiness without starting the model. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
+      },
+      "capability": "service:speech.status",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:speech.transcribe",
       "rpcPlane": "host-service",
       "owner": "speech",

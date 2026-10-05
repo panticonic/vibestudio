@@ -18,6 +18,10 @@ export class SpeechRuntime {
   private emit: ((event: SpeechEvent) => void) | null = null;
   private tail: Promise<void> = Promise.resolve();
   private stopped = false;
+  private modelReady = false;
+  status(): { ready: boolean } {
+    return { ready: this.modelReady && !this.stopped };
+  }
   constructor(private readonly installation: { executable: string; entryRoot: string }) {}
 
   private launch(): Promise<void> {
@@ -44,6 +48,7 @@ export class SpeechRuntime {
     let stderr = "";
     const fail = (error: Error) => {
       failure = error;
+      this.modelReady = false;
       readyReject(error);
       this.pending?.reject(error);
       this.pending = null;
@@ -59,12 +64,11 @@ export class SpeechRuntime {
     });
     lines.on("line", (line) => {
       try {
-        const event = JSON.parse(line) as
-          | SpeechEvent
-          | { type: "ready" }
-          | { type: "error"; message: string };
-        if (event.type === "ready") readyResolve();
-        else if (event.type === "progress") this.emit?.(event);
+        const event = JSON.parse(line) as SpeechEvent | { type: "error"; message: string };
+        if (event.type === "ready") {
+          this.modelReady = true;
+          readyResolve();
+        } else if (event.type === "progress") this.emit?.(event);
         else if (event.type === "result") {
           this.emit?.(event);
           this.pending?.resolve();
@@ -86,6 +90,7 @@ export class SpeechRuntime {
         if (this.child === child) {
           this.child = null;
           this.ready = null;
+          this.modelReady = false;
         }
         resolve();
       })
@@ -93,15 +98,14 @@ export class SpeechRuntime {
     return this.ready;
   }
 
-  transcribe(
-    recording: SpeechRecording,
+  private run(
     signal: AbortSignal,
-    emit: (event: SpeechEvent) => void
+    emit: (event: SpeechEvent) => void,
+    action: () => Promise<void>
   ): Promise<void> {
     const work = this.tail.then(async () => {
       signal.throwIfAborted();
       if (this.stopped) throw new Error("Speech service has stopped");
-      speechRecordingSchema.parse(recording);
       this.emit = emit;
       const abort = () => {
         this.child?.kill("SIGKILL");
@@ -110,13 +114,7 @@ export class SpeechRuntime {
       try {
         await (this.ready ?? this.launch());
         signal.throwIfAborted();
-        const result = new Promise<void>((resolve, reject) => {
-          this.pending = { resolve, reject };
-        });
-        this.child!.stdin!.write(`${JSON.stringify(recording)}\n`, (error) => {
-          if (error) this.pending?.reject(error);
-        });
-        await result;
+        await action();
       } catch (error) {
         this.child?.kill("SIGKILL");
         await this.closed;
@@ -130,6 +128,29 @@ export class SpeechRuntime {
     });
     this.tail = work.catch(() => {});
     return work;
+  }
+
+  prepare(signal: AbortSignal, emit: (event: SpeechEvent) => void): Promise<void> {
+    return this.run(signal, emit, async () => {
+      emit({ type: "ready" });
+    });
+  }
+
+  async transcribe(
+    recording: SpeechRecording,
+    signal: AbortSignal,
+    emit: (event: SpeechEvent) => void
+  ): Promise<void> {
+    speechRecordingSchema.parse(recording);
+    return this.run(signal, emit, async () => {
+      const result = new Promise<void>((resolve, reject) => {
+        this.pending = { resolve, reject };
+      });
+      this.child!.stdin!.write(`${JSON.stringify(recording)}\n`, (error) => {
+        if (error) this.pending?.reject(error);
+      });
+      await result;
+    });
   }
 
   async stop(): Promise<void> {
