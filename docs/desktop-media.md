@@ -29,7 +29,7 @@ implies display access.
 Electron 45 classifies both standard display capture and older
 `chromeMediaSource` requests as `display-capture`; earlier releases cannot cleanly
 separate display capture from device requests. This implementation pins
-45.0.0-alpha.13 because [that change](https://github.com/electron/electron/pull/52824)
+45.0.0-alpha.14 because [that change](https://github.com/electron/electron/pull/52824)
 has not been backported to stable Electron.
 A stable 45 release should replace the prerelease after native verification.
 

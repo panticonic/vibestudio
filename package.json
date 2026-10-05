@@ -193,7 +193,7 @@
     "@types/ws": "^8.18.1",
     "@vitest/browser": "3.2.7",
     "dts-bundle-generator": "^9.5.1",
-    "electron": "45.0.0-alpha.13",
+    "electron": "45.0.0-alpha.14",
     "electron-builder": "^26.15.3",
     "electron-builder-squirrel-windows": "26.15.3",
     "husky": "^9.1.7",
