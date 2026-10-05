@@ -287,6 +287,33 @@ afterEach(() => {
 });
 
 describe("WorkerdManager", () => {
+  it("waits for handle retirement and finishes worker cleanup before propagating its failure", async () => {
+    const deps = createMockDeps({
+      cleanupWebhookSubscriptions: vi.fn(),
+      unregisterEgressCaller: vi.fn(),
+    });
+    const manager = new WorkerdManager(deps);
+    const instance = await manager.startWorker(startArgs());
+    const original = new Error("native close failed");
+    let reject!: (error: unknown) => void;
+    vi.mocked(deps.fsService.closeHandlesForCaller).mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        })
+    );
+    const stopping = manager.stopWorker(instance.targetId);
+    const outcome = stopping.catch((error) => error);
+    expect(statusOf(manager, "hello")).not.toBeNull();
+    expect(deps.cleanupWebhookSubscriptions).not.toHaveBeenCalled();
+    reject(original);
+    expect(await outcome).toBe(original);
+    expect(statusOf(manager, "hello")).toBeNull();
+    expect(deps.cleanupWebhookSubscriptions).toHaveBeenCalledWith(instance.targetId);
+    expect(deps.unregisterEgressCaller).toHaveBeenCalledWith(instance.targetId);
+    await manager.shutdown();
+  });
+
   it("keeps generated execution inputs isolated under each workspace's owned state", async () => {
     const firstDeps = createMockDeps();
     const secondDeps = createMockDeps();

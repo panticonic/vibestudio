@@ -25,7 +25,7 @@ import { StringDecoder } from "node:string_decoder";
 import ignore, { type Ignore } from "ignore";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
-import { createDevLogger } from "@vibestudio/dev-log";
+import { FsCallerLifetime, joinFsCleanup } from "./fsCallerLifetime.js";
 import {
   canonicalizeWorkspaceFilePath,
   splitRepoPath,
@@ -35,18 +35,16 @@ export interface FsDiskScope {
   root: string;
   panelId: string;
   exposeHostPaths: boolean;
+  ownerCallerIds: readonly string[];
 }
 interface TrackedHandle {
   handle: NodeFileHandle;
   panelId: string;
-  timer: ReturnType<typeof setTimeout>;
+  ownerCallerIds: readonly string[];
+  closing?: Promise<void>;
 }
 
-const log = createDevLogger("FsService");
-
 const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
-
-const HANDLE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface ResolvedFsPath {
   path: string;
@@ -494,7 +492,7 @@ async function grepWithRipgrep(
 }
 export interface FsDiskPort {
   call(scope: FsDiskScope, method: string, args: unknown[], signal?: AbortSignal): Promise<unknown>;
-  closeCaller(callerId: string, signal?: AbortSignal): Promise<void>;
+  closeCaller(callerId: string): Promise<void>;
 }
 
 /** Native disk operations only. No ServiceContext, semantic bridge or authority resolver. */
@@ -502,48 +500,60 @@ export class FsDisk implements FsDiskPort {
   constructor(private readonly ripgrepPath: string) {}
   private readonly openHandles = new Map<number, TrackedHandle>();
   private nextHandleId = 1;
-  async closeCaller(callerId: string): Promise<void> {
-    const closing: Promise<void>[] = [];
-    for (const [id, tracked] of this.openHandles) {
-      if (tracked.panelId !== callerId) continue;
-      this.openHandles.delete(id);
-      clearTimeout(tracked.timer);
-      closing.push(tracked.handle.close());
-    }
-    await Promise.allSettled(closing);
+  private readonly lifetime = new FsCallerLifetime();
+  closeCaller(callerId: string): Promise<void> {
+    return this.lifetime.retire(callerId, () => this.closeOwnedHandles(callerId));
   }
-  async stop(): Promise<void> {
-    await Promise.all(
-      [...new Set([...this.openHandles.values()].map((x) => x.panelId))].map((id) =>
-        this.closeCaller(id)
+  stop(): Promise<void> {
+    return this.lifetime.stop((callerId) => this.closeOwnedHandles(callerId));
+  }
+  private closeOwnedHandles(callerId: string): Promise<void> {
+    return joinFsCleanup(
+      [...this.openHandles].flatMap(([id, tracked]) =>
+        tracked.ownerCallerIds.includes(callerId) ? [this.closeHandle(id, tracked)] : []
       )
     );
   }
-  private trackHandle(handle: NodeFileHandle, panelId: string): number {
+  private closeHandle(id: number, tracked: TrackedHandle): Promise<void> {
+    if (tracked.closing) return tracked.closing;
+    const closing = Promise.resolve().then(() => tracked.handle.close());
+    tracked.closing = closing;
+    void closing.then(
+      () => this.openHandles.delete(id),
+      () => {
+        tracked.closing = undefined;
+      }
+    );
+    return closing;
+  }
+  private trackHandle(handle: NodeFileHandle, scope: FsDiskScope): number {
     const id = this.nextHandleId++;
-    const timer = setTimeout(() => {
-      log.info(`Closing idle file handle ${id} for ${panelId}`);
-      handle.close().catch(() => {});
-      this.openHandles.delete(id);
-    }, HANDLE_IDLE_TIMEOUT_MS);
-    this.openHandles.set(id, { handle, panelId, timer });
+    this.openHandles.set(id, {
+      handle,
+      panelId: scope.panelId,
+      ownerCallerIds: scope.ownerCallerIds,
+    });
     return id;
   }
   private getTrackedHandle(handleId: number, callerPanelId: string): TrackedHandle {
     const tracked = this.openHandles.get(handleId);
     if (!tracked) throw new Error(`Invalid file handle: ${handleId}`);
-    if (tracked.panelId !== callerPanelId) {
+    if (tracked.panelId !== callerPanelId)
       throw new Error(`File handle ${handleId} does not belong to caller`);
-    }
-    // Reset idle timer
-    clearTimeout(tracked.timer);
-    tracked.timer = setTimeout(() => {
-      tracked.handle.close().catch(() => {});
-      this.openHandles.delete(handleId);
-    }, HANDLE_IDLE_TIMEOUT_MS);
+    if (tracked.closing) throw new Error(`File handle ${handleId} is closing`);
     return tracked;
   }
   async call(
+    scope: FsDiskScope,
+    method: string,
+    args: unknown[],
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    return this.lifetime.run(scope.ownerCallerIds, () =>
+      this.performCall(scope, method, args, signal)
+    );
+  }
+  private async performCall(
     scope: FsDiskScope,
     method: string,
     args: unknown[],
@@ -789,7 +799,7 @@ export class FsDisk implements FsDiskPort {
         const flags = (args[1] as string) ?? "r";
         const mode = args[2] as number | undefined;
         const handle = await fs.open(p, flags, mode);
-        const handleId = this.trackHandle(handle, panelId);
+        const handleId = this.trackHandle(handle, scope);
         return { handleId };
       }
 
@@ -826,9 +836,7 @@ export class FsDisk implements FsDiskPort {
           if (tracked.panelId !== panelId) {
             throw new Error(`File handle ${id} does not belong to caller`);
           }
-          clearTimeout(tracked.timer);
-          await tracked.handle.close();
-          this.openHandles.delete(id);
+          await this.closeHandle(id, tracked);
         }
         return;
       }

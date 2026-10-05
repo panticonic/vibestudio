@@ -1750,6 +1750,7 @@ async function main() {
           {
             root: layout.contextScratch,
             panelId: "installed:context-lifecycle",
+            ownerCallerIds: ["installed:context-lifecycle"],
             exposeHostPaths: false,
           },
           "mkdir",
@@ -1769,6 +1770,7 @@ async function main() {
           {
             root: layout.contextScratch,
             panelId: "installed:context-lifecycle",
+            ownerCallerIds: ["installed:context-lifecycle"],
             exposeHostPaths: false,
           },
           "rm",
@@ -5085,7 +5087,7 @@ async function main() {
           // survive an abandoned client.
           approvalQueue.cancelForCaller(callerId);
           panelRuntimeCoordinator.unregisterClientsForCaller(callerId);
-          fsService.closeHandlesForCaller(callerId);
+          return fsService.closeHandlesForCaller(callerId);
         },
         capabilityGrantStore,
         userlandResourceHandles,

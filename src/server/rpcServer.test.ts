@@ -5725,6 +5725,59 @@ describe("RpcServer caller identity", () => {
 });
 
 describe("RpcServer caller retirement", () => {
+  it("shutdown callers join pending owner cleanup and receive its original failure", async () => {
+    let fail!: (error: unknown) => void;
+    const original = new Error("retirement cleanup failed");
+    const { server } = createServer({
+      onClientDisconnect: () =>
+        new Promise<void>((_, reject) => {
+          fail = reject;
+        }),
+    });
+    const retired = server.retireCaller("shell:shutdown", "shell");
+    const retirementResult = retired.catch((error) => error);
+    await Promise.resolve();
+    const shutdown = server.stop();
+    expect(server.stop()).toBe(shutdown);
+    const shutdownResult = shutdown.catch((error) => error);
+    fail(original);
+    expect(await retirementResult).toBe(original);
+    expect(await shutdownResult).toBe(original);
+    await expect(server.stop()).rejects.toBe(original);
+  });
+
+  it("waits for asynchronous owner cleanup after transport drains", async () => {
+    let complete!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const onClientDisconnect = vi.fn(() => cleanup);
+    const { server } = createServer({ onClientDisconnect });
+    const retired = server.retireCaller("shell:cleanup", "shell");
+    let settled = false;
+    void retired.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(onClientDisconnect).toHaveBeenCalledWith("shell:cleanup", "shell");
+    expect(settled).toBe(false);
+    expect(server.retireCaller("shell:cleanup")).toBe(retired);
+    complete();
+    await retired;
+    expect(settled).toBe(true);
+  });
+
+  it("preserves failed owner cleanup and resumes only on explicit retirement", async () => {
+    const original = new Error("native descriptor close failed");
+    const onClientDisconnect = vi.fn().mockRejectedValueOnce(original).mockResolvedValue(undefined);
+    const { server } = createServer({ onClientDisconnect });
+    await expect(server.retireCaller("shell:cleanup", "shell")).rejects.toBe(original);
+    expect(onClientDisconnect).toHaveBeenCalledOnce();
+    await server.retireCaller("shell:cleanup");
+    expect(onClientDisconnect).toHaveBeenCalledTimes(2);
+    expect(onClientDisconnect).toHaveBeenLastCalledWith("shell:cleanup", "shell");
+  });
+
   it("queues a self-revocation response before closing and skips reconnect grace", async () => {
     const onClientDisconnect = vi.fn();
     const { server, tokenManager } = createServer({ onClientDisconnect });

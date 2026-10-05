@@ -16,7 +16,7 @@ import { FsDisk, _setRipgrepPathForTests } from "./fsDisk.js";
  * into the cache to register the panel's context.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -530,7 +530,8 @@ describe("FsService", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await service.stop();
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -557,6 +558,103 @@ describe("FsService", () => {
       }),
     ]);
     expect(JSON.stringify(telemetry)).not.toContain("entry.txt");
+  });
+
+  describe("caller handle retirement", () => {
+    it("keeps the caller-visible handle valid through idle time until explicit close", async () => {
+      const ctx = makeWorkerCtx("do:workers/agent:Agent:idle-fd");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-idle-fd");
+      mkdirSync(path.join(tmpRoot, "ctx-idle-fd-scratch"), { recursive: true });
+      writeFileSync(path.join(tmpRoot, "ctx-idle-fd-scratch", "value.txt"), "ready");
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const opened = (await service.handleCall(ctx, "open", ["value.txt", "r"])) as {
+          handleId: number;
+        };
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+        await expect(
+          service.handleCall(ctx, "handleStat", [opened.handleId])
+        ).resolves.toMatchObject({ isFile: true, size: 5 });
+        await service.handleCall(ctx, "handleClose", [opened.handleId]);
+        await expect(service.handleCall(ctx, "handleStat", [opened.handleId])).rejects.toThrow(
+          /Invalid file handle/
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("closes shell handles using the real runtime owner", async () => {
+      const ctx = makeShellCtx("shell-fd");
+      const contextId = "ctx-shell-fd";
+      registerContext("do:shell-context-owner", "do", contextId);
+      mkdirSync(path.join(tmpRoot, `${contextId}-scratch`), { recursive: true });
+      writeFileSync(path.join(tmpRoot, `${contextId}-scratch`, "value.txt"), "ready");
+      const opened = (await service.handleCall(ctx, "open", [contextId, "value.txt", "r"])) as {
+        handleId: number;
+      };
+      await service.closeHandlesForCaller(ctx.caller.runtime.id);
+      await expect(
+        service.handleCall(ctx, "handleStat", [contextId, opened.handleId])
+      ).rejects.toThrow(/Invalid file handle/);
+    });
+
+    it.each(["extension", "delegate"])(
+      "closes delegated handles when the %s owner retires",
+      async (owner) => {
+        const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
+        ctx.chainCaller = {
+          callerId: "do:workers/agent:Agent:fd",
+          callerKind: "do",
+          repoPath: "workers/agent",
+          effectiveVersion: "ev-1",
+        };
+        registerContext(ctx.chainCaller.callerId, "do", "ctx-delegated-fd");
+        mkdirSync(path.join(tmpRoot, "ctx-delegated-fd"), { recursive: true });
+        mkdirSync(path.join(tmpRoot, "ctx-delegated-fd-scratch"), { recursive: true });
+        writeFileSync(path.join(tmpRoot, "ctx-delegated-fd-scratch", "value.txt"), "ready");
+        const opened = (await service.handleCall(ctx, "open", ["value.txt", "r"])) as {
+          handleId: number;
+        };
+        await service.closeHandlesForCaller(
+          owner === "extension" ? ctx.caller.runtime.id : ctx.chainCaller.callerId
+        );
+        await expect(service.handleCall(ctx, "handleStat", [opened.handleId])).rejects.toThrow(
+          /Invalid file handle/
+        );
+      }
+    );
+
+    it("waits for native close and propagates its original failure", async () => {
+      const disk = new FsDisk(bundledRipgrepPath);
+      const original = new Error("native close failed");
+      let reject!: (error: unknown) => void;
+      const close = vi.spyOn(disk, "closeCaller").mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          })
+      );
+      const observed = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk,
+        contextAuthority: { kind: "scratch-only" },
+      });
+      const cleanup = observed.closeHandlesForCaller("shell-owned");
+      const outcome = cleanup.catch((error) => error);
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(close).toHaveBeenCalledWith("shell-owned");
+      expect(settled).toBe(false);
+      reject(original);
+      expect(await outcome).toBe(original);
+      await observed.closeHandlesForCaller("shell-owned");
+      await observed.stop();
+      await disk.stop();
+    });
   });
 
   // ─── Error code preservation (ENOENT) ─────────────────────────────────────

@@ -1,10 +1,52 @@
 # Durable Pi: installed acceptance still open
 
-Status: 5 October 2026, through production checkpoint 105 (published `.11`, native child and authoring acceptance). This inventory separates unresolved verdicts from tests with no completed acceptance run. It does not classify every failed verdict as a product defect. Private trajectories remain private.
+Status: 5 October 2026, through production checkpoint 105 and regression checkpoints 106–107 (published `.11`, native child and authoring acceptance). This inventory separates unresolved verdicts from tests with no completed acceptance run. It does not classify every failed verdict as a product defect. Private trajectories remain private.
 
 The original 39-case failure inventory, all thirteen subsequently exercised workflows, and all fifteen authoring cases have passing installed receipts. Checkpoint 94 clears native image generation and task-management build/launch/debug. Checkpoint 96 clears browser click/evaluation, click profiling and panel optimization; checkpoint 97 also passes strict rebuild/reacquisition. Checkpoint 95 also clears panel state and workspace reload profiling. Android acceptance is complete. The explicitly lower-priority self-development/local-model cases remain unverified. Optional template composition acceptance is complete through checkpoint 100. Source-only repairs are not installed acceptance.
 
 The shared checkout incorporates the concurrent 0.1.54 release without discarding pending source edits. Reconciliation passes the full build, commit gates, 99 host integration checks, 90 focused Base checks, and System-testing composition types. Fresh installed checkpoint 92 completes fourteen cases: seven passes, four failures, three errors, eight unexpected tool faults, 1,025.470 seconds. Its instance and desktop executor are retired, including both temporary roots. Source checks are not counted as installed acceptance.
+
+## Expanded regression coverage — checkpoints 106–107
+
+After the cutover commit `c0ad4d123` was pushed, three new installed scenarios
+were added and accepted on fresh isolated instances:
+
+- `eval-cell-local-imports-retained-handle`: `st_2190d3c8d1b141209eabc4d9d1f196bd`.
+  Static imports stay cell-local; an explicitly retained imported function remains
+  callable across turns, with one native kernel incarnation throughout.
+- `eval-rejected-cell-preserves-live-scope`: `st_f7706ae3a52f46e4bcfad6be013bc7cd`.
+  A deliberate guest exception preserves the original callable and counter for
+  the next turn. Exactly one invocation increments the counter in each successful cell.
+- `scratch-file-handle-survives-rename`: `st_b5e952a4c1984f0f9960b2f163d8b51e`.
+  The retained descriptor and renamed path both read the updated bytes, followed
+  by explicit close and scratch cleanup.
+
+Each final run has one pass and zero failures, errors or unexpected tool faults.
+The initial counter failure came from an ambiguous test instruction that caused
+two increments per cell; the strict validator was retained and the instruction
+clarified. The initial descriptor run exposed a live-help gap: it described the
+raw RPC handle without the portable facade and still claimed idle expiry. Live
+help now states the actual supported methods and `{ bytesRead, buffer }` return.
+The test consults that public help instead of being supplied a bespoke implementation.
+
+The expansion also exposed actual host lifecycle defects. Filesystem handles no
+longer expire after five idle minutes. Admission tracks real runtime owners
+separately from logical access keys, including both the extension and delegated
+caller. Retirement at both IPC ends joins admitted operations before closing,
+so a late open cannot escape cleanup. Failed closes retain ownership and report
+the original error; another explicit retirement can resume cleanup. RPC and
+worker retirement await cleanup, drain remaining resources, and propagate failures.
+There is no cleanup timeout, background retry loop, or compatibility path.
+
+Verification passes: all 337 focused host filesystem, RPC, runtime-cleanup, native
+receiver, worker and schema tests; 70 scenario-validator tests; host/workerd and
+System-testing composition types.
+Validators reject invented success, reconstructed state, changed/missing kernel
+identity, unrelated failures and stale descriptor content. Both managed instances
+and their temporary roots are retired. Private failure trajectories remain private.
+The suite expansion is committed and pushed as System-testing `be29725`.
+The nine explicitly lower-priority self-development/local-model cases remain
+unverified and are not counted as passing acceptance.
 
 ## Android checkpoints 102–103 — acceptance complete
 
@@ -282,7 +324,7 @@ These remain unverified; their priority was explicitly reduced by the user.
 - `self-development-owned-cleanup`
 - `local-model-download-and-task`
 
-Suite expansion follows completion, scoped commits and pushes of the current work. No additional installed scenarios have been introduced in this repair phase.
+Suite expansion followed the committed and pushed cutover. Three additional installed scenarios now pass; see checkpoints 106–107 above. These nine lower-priority cases remain separate from that completed regression work.
 
 Checkpoint 86 isolates child task-grant reuse (`st_acb1310a598b46ada94f37d617bffc48`): the parent and child perform native log reads under the same task grant, with zero tool faults or lifecycle errors, but the old validator requires stats instead of accepting canonical query/tail evidence. The source validator now uses native read receipts. Its seven-case repair checkpoint (`st_77340079c4a34f5d851adf767413e914`) passes integration, browser navigation, originating-request recovery and both notification scenarios; credential resolution and unit-health reporting still fail. Credential lookup reconstructed audience matching from inventory metadata; canonical resolver guidance is clarified. Health inspection proves native zero buffer counts, while ordinary shared-quantifier prose was rejected. Follow-up source regressions pass.
 

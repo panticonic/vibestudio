@@ -9,14 +9,19 @@ export function createFsDiskPort(process: ProcessAdapter): FsDiskPort & { retire
       port.call(
         "call",
         [
-          { root: scope.root, panelId: scope.panelId, exposeHostPaths: scope.exposeHostPaths },
+          {
+            root: scope.root,
+            panelId: scope.panelId,
+            exposeHostPaths: scope.exposeHostPaths,
+            ownerCallerIds: scope.ownerCallerIds,
+          },
           method,
           args,
         ],
         signal
       ),
-    closeCaller: async (callerId, signal) => {
-      await port.call("closeCaller", [callerId], signal);
+    closeCaller: async (callerId) => {
+      await port.call("closeCaller", [callerId]);
     },
     retire: () => port.retire(),
   };

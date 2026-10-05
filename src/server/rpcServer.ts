@@ -590,12 +590,14 @@ export class RpcServer {
     {
       promise: Promise<void>;
       resolve: () => void;
+      reject: (error: unknown) => void;
       pendingSockets: Set<RpcSessionChannel>;
       callerKind?: CallerKind;
-      settled: boolean;
+      phase: "draining" | "cleanup" | "failed" | "settled";
     }
   >();
   private stopped = false;
+  private shutdown?: Promise<void>;
   private quiescing = false;
 
   private isShuttingDown(): boolean {
@@ -632,7 +634,7 @@ export class RpcServer {
       /** Required when direct DO relay is configured. */
       workspaceId?: string;
       /** Called when an authenticated client disconnects (e.g., for fs handle cleanup) */
-      onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void;
+      onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void | Promise<void>;
       /** Called when a client successfully authenticates */
       onClientAuthenticate?: (callerId: string, callerKind: CallerKind) => void;
       /**
@@ -1014,7 +1016,7 @@ export class RpcServer {
       inboxCapacity: deps.sessionInboxCapacity,
       ttlMs: deps.sessionTtlMs,
       onSessionExpire: (callerId, callerKind) => {
-        this.deps.onClientDisconnect?.(callerId, callerKind);
+        void this.retireCaller(callerId, callerKind);
         // Session-TTL expiry ends the reconnect-grace window (WP4 §5): fan a
         // change signal so WP8 presence can flap a truly-departed user without
         // polling. Connection maps are already updated on disconnect; this
@@ -1656,7 +1658,9 @@ export class RpcServer {
   }
 
   /** Register a callback for client disconnect events. */
-  setOnClientDisconnect(handler: (callerId: string, callerKind: CallerKind) => void): void {
+  setOnClientDisconnect(
+    handler: (callerId: string, callerKind: CallerKind) => void | Promise<void>
+  ): void {
     this.deps.onClientDisconnect = handler;
   }
 
@@ -2062,7 +2066,7 @@ export class RpcServer {
     // Credential validation may have raced a revocation while awaiting its
     // durable redeemer. Retirement is terminal; never resurrect its session.
     const priorRetirement = this.callerRetirements.get(callerId);
-    if (priorRetirement && !priorRetirement.settled) {
+    if (priorRetirement && priorRetirement.phase !== "settled") {
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
@@ -2075,7 +2079,7 @@ export class RpcServer {
     // Caller ids are stable identities, not credential generations. Once the
     // old transport is fully gone, a newly valid credential (for example after
     // workspace membership is restored) may establish a fresh generation.
-    if (priorRetirement?.settled) this.callerRetirements.delete(callerId);
+    if (priorRetirement?.phase === "settled") this.callerRetirements.delete(callerId);
 
     const pendingTimer = this.disconnectTimers.get(connectionKey);
     if (pendingTimer) {
@@ -2354,29 +2358,38 @@ export class RpcServer {
   /**
    * Retire one authenticated caller without racing its currently executing RPC
    * response. Authentication is already invalid when TokenManager invokes this;
-   * this method owns only transport disposal. Idle sockets close immediately,
+   * this method drains transport and awaits caller resource cleanup. Idle
+   * sockets close immediately,
    * while a socket dispatching a unary request closes after that response has
-   * been queued. The promise settles after every concrete socket has closed, so
-   * callers may then tear down the Iroh room that carries those sessions.
+   * been queued. The promise settles after every socket has closed and owner
+   * cleanup completes, so callers may then tear down the Iroh room carrying
+   * those sessions.
    */
-  retireCaller(callerId: string): Promise<void> {
+  retireCaller(callerId: string, callerKind?: CallerKind): Promise<void> {
     const existing = this.callerRetirements.get(callerId);
-    if (existing) return existing.promise;
+    if (existing && existing.phase !== "failed") return existing.promise;
+    callerKind ??= existing?.callerKind;
 
     const clients = this.getCallerConnections(callerId);
     let resolve!: () => void;
-    const promise = new Promise<void>((done) => {
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((done, fail) => {
       resolve = done;
+      reject = fail;
     });
+    // Token/session notifications have no waiting caller. Keep their original
+    // failure in this same retirement promise for explicit retirement and stop.
+    void promise.catch((error) => log.error("Caller retirement failed", { callerId, error }));
     const sessionKind = this.sessions.retire(callerId);
     const retirement = {
       promise,
       resolve,
+      reject,
       pendingSockets: new Set(clients.map((client) => client.ws)),
-      ...(clients[0]?.caller.runtime.kind || sessionKind
-        ? { callerKind: clients[0]?.caller.runtime.kind ?? sessionKind }
+      ...(clients[0]?.caller.runtime.kind || sessionKind || callerKind
+        ? { callerKind: clients[0]?.caller.runtime.kind ?? sessionKind ?? callerKind }
         : {}),
-      settled: false,
+      phase: "draining" as "draining" | "cleanup" | "failed" | "settled",
     };
     this.callerRetirements.set(callerId, retirement);
     this.clearReconnectStateForRetirement(callerId);
@@ -2412,12 +2425,24 @@ export class RpcServer {
 
   private maybeCompleteCallerRetirement(callerId: string): void {
     const retirement = this.callerRetirements.get(callerId);
-    if (!retirement || retirement.settled || retirement.pendingSockets.size > 0) return;
-    retirement.settled = true;
-    if (retirement.callerKind) {
-      this.deps.onClientDisconnect?.(callerId, retirement.callerKind);
-    }
-    retirement.resolve();
+    if (!retirement || retirement.phase !== "draining" || retirement.pendingSockets.size > 0)
+      return;
+    retirement.phase = "cleanup";
+    const cleanup = Promise.resolve().then(() =>
+      retirement.callerKind
+        ? this.deps.onClientDisconnect?.(callerId, retirement.callerKind)
+        : undefined
+    );
+    void cleanup.then(
+      () => {
+        retirement.phase = "settled";
+        retirement.resolve();
+      },
+      (error) => {
+        retirement.phase = "failed";
+        retirement.reject(error);
+      }
+    );
   }
 
   private finishRetiredConnection(client: WsClientState): void {
@@ -3489,7 +3514,7 @@ export class RpcServer {
       this.failRoutedRequestsForCallee(callerId, client.connectionId);
       this.cleanupRoutedOriginsForConnection(callerId, client.connectionId);
       if (this.getCallerConnections(callerId).length === 0) {
-        this.deps.onClientDisconnect?.(callerId, callerKind);
+        void this.retireCaller(callerId, callerKind);
       }
     }, RpcServer.DISCONNECT_GRACE_MS);
 
@@ -6020,8 +6045,11 @@ export class RpcServer {
   }
 
   /** Shut down the server */
-  async stop(): Promise<void> {
-    if (this.stopped) return;
+  stop(): Promise<void> {
+    return (this.shutdown ??= this.finishStop());
+  }
+
+  private async finishStop(): Promise<void> {
     this.stopped = true;
     this.disposeTokenRevocationListener?.();
     this.disposeTokenRevocationListener = null;
@@ -6032,5 +6060,17 @@ export class RpcServer {
       this.wss.close();
       this.wss = null;
     }
+    const results = await Promise.allSettled(
+      [...this.callerRetirements.values()].map((retirement) => retirement.promise)
+    );
+    const failures = [
+      ...new Set(
+        results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason as unknown] : []
+        )
+      ),
+    ];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Caller retirement failed");
   }
 }

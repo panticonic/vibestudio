@@ -27,7 +27,7 @@ import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
-import { createDevLogger } from "@vibestudio/dev-log";
+import { FsCallerLifetime } from "./fsCallerLifetime.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   canonicalizeWorkspaceFilePath,
@@ -171,7 +171,6 @@ type VcsListFilesResult = {
   nextCursor: string | null;
 };
 
-const log = createDevLogger("FsService");
 const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
 const CANONICAL_SOURCE_ROOT_BY_LOWER = new Map(
   WORKSPACE_SOURCE_DIRS.map((sourceRoot) => [sourceRoot.toLowerCase(), sourceRoot])
@@ -212,15 +211,11 @@ const AUTHORITY_PATH_METHODS = new Set([
   "open",
 ]);
 
-/** Idle timeout for open file handles (5 minutes). */
-const HANDLE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-
 /** Tracked file handle with cleanup metadata. */
 interface TrackedHandle {
   nativeId: number;
   panelId: string;
-  timer: ReturnType<typeof setTimeout>;
-  scope: FsCallScope;
+  ownerCallerIds: readonly string[];
 }
 
 interface ContextIngestionDescriptor {
@@ -306,6 +301,7 @@ interface FsCallScope {
   panelId: string;
   contextId?: string;
   exposeHostPaths: boolean;
+  ownerCallerIds: readonly string[];
 }
 
 function codedError(code: string, message: string): NodeJS.ErrnoException {
@@ -843,7 +839,7 @@ function readTextRangeFromBuffer(bytes: Buffer, options?: ReadTextOptions): Read
 
 export class FsService {
   private readonly disk: FsDiskPort;
-  private readonly pendingCloses = new Set<Promise<void>>();
+  private readonly lifetime = new FsCallerLifetime();
   private readonly contextFolderManager: ContextFolderManager;
   private readonly entityCache: EntityCache;
   /** Explicit semantic-workspace or scratch-only construction authority. */
@@ -1010,36 +1006,28 @@ export class FsService {
   // FileHandle cleanup
   // =========================================================================
 
-  /** Close all open file handles for a given caller. */
-  closeHandlesForCaller(callerId: string): void {
-    this._closeHandlesImpl(callerId);
+  /** Join admitted filesystem calls and every handle owned by this real caller. */
+  closeHandlesForCaller(callerId: string): Promise<void> {
+    return this.lifetime.retire(callerId, () => this.closeOwnedHandles(callerId));
   }
-
-  private closeDisk(operation: Promise<unknown>): void {
-    const closing = operation
-      .then(
-        () => undefined,
-        (error) => {
-          log.warn("Disk handle cleanup failed", { error: String(error) });
-        }
-      )
-      .finally(() => this.pendingCloses.delete(closing));
-    this.pendingCloses.add(closing);
+  stop(): Promise<void> {
+    return this.lifetime.stop((callerId) => this.closeOwnedHandles(callerId));
   }
-
-  async stop(): Promise<void> {
-    for (const caller of new Set([...this.openHandles.values()].map((handle) => handle.panelId)))
-      this._closeHandlesImpl(caller);
-    await Promise.all(this.pendingCloses);
-  }
-
-  private _closeHandlesImpl(callerId: string): void {
+  private async closeOwnedHandles(callerId: string): Promise<void> {
+    await this.disk.closeCaller(callerId);
     for (const [id, tracked] of this.openHandles) {
-      if (tracked.panelId !== callerId) continue;
-      clearTimeout(tracked.timer);
-      this.openHandles.delete(id);
+      if (tracked.ownerCallerIds.includes(callerId)) this.openHandles.delete(id);
     }
-    this.closeDisk(this.disk.closeCaller(callerId, AbortSignal.timeout(1_000)));
+  }
+  private callerOwners(ctx: ServiceContext): readonly string[] {
+    return [
+      ...new Set([
+        ctx.caller.runtime.id,
+        ...(ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+          ? [ctx.chainCaller.callerId]
+          : []),
+      ]),
+    ];
   }
 
   // =========================================================================
@@ -1104,6 +1092,7 @@ export class FsService {
           sourceRoot: root,
           root: await this.contextFolderManager.ensureContextScratch(contextId),
           panelId,
+          ownerCallerIds: this.callerOwners(ctx),
           contextId,
           exposeHostPaths: true,
         };
@@ -1139,6 +1128,7 @@ export class FsService {
       sourceRoot: root,
       root: await this.contextFolderManager.ensureContextScratch(contextId),
       panelId,
+      ownerCallerIds: this.callerOwners(ctx),
       contextId,
       exposeHostPaths: false,
     };
@@ -1151,19 +1141,8 @@ export class FsService {
   private trackHandle(nativeId: number, scope: FsCallScope): number {
     const panelId = scope.panelId;
     const id = this.nextHandleId++;
-    const timer = setTimeout(() => this.expireHandle(id), HANDLE_IDLE_TIMEOUT_MS);
-    this.openHandles.set(id, { nativeId, panelId, timer, scope });
+    this.openHandles.set(id, { nativeId, panelId, ownerCallerIds: scope.ownerCallerIds });
     return id;
-  }
-
-  private expireHandle(id: number): void {
-    const tracked = this.openHandles.get(id);
-    if (!tracked) return;
-    this.openHandles.delete(id);
-    clearTimeout(tracked.timer);
-    this.closeDisk(
-      this.disk.call(tracked.scope, "handleClose", [tracked.nativeId], AbortSignal.timeout(1_000))
-    );
   }
 
   private getTrackedHandle(id: number, callerId: string): TrackedHandle {
@@ -1171,8 +1150,6 @@ export class FsService {
     if (!tracked) throw new Error(`Invalid file handle: ${id}`);
     if (tracked.panelId !== callerId)
       throw new Error(`File handle ${id} does not belong to caller`);
-    clearTimeout(tracked.timer);
-    tracked.timer = setTimeout(() => this.expireHandle(id), HANDLE_IDLE_TIMEOUT_MS);
     return tracked;
   }
 
@@ -1894,6 +1871,13 @@ export class FsService {
   // =========================================================================
 
   async handleCall(ctx: ServiceContext, method: string, rawArgs: unknown[]): Promise<unknown> {
+    return this.lifetime.run(this.callerOwners(ctx), () => this.performCall(ctx, method, rawArgs));
+  }
+  private async performCall(
+    ctx: ServiceContext,
+    method: string,
+    rawArgs: unknown[]
+  ): Promise<unknown> {
     // Clone args so shift() in resolveContextRoot doesn't mutate the original
     const args = [...rawArgs];
     const scopeStartedAt = Date.now();
@@ -1953,14 +1937,14 @@ export class FsService {
     // authority/projection mismatch instead of a silent partial read.
     if (bridge) await this.demandForReadMethod(bridge, scope, method, args);
 
+    let closedHandleId: number | undefined;
     if (method.startsWith("handle")) {
       const id = args[0] as number;
       if (method === "handleClose" && !this.openHandles.has(id)) return;
       const tracked = this.getTrackedHandle(id, panelId);
       args[0] = tracked.nativeId;
       if (method === "handleClose") {
-        clearTimeout(tracked.timer);
-        this.openHandles.delete(id);
+        closedHandleId = id;
       }
     }
     const target =
@@ -2044,6 +2028,7 @@ export class FsService {
     let result: unknown;
     try {
       result = await this.callDisk(ctx, diskScope, method, args);
+      if (closedHandleId !== undefined) this.openHandles.delete(closedHandleId);
     } finally {
       this.emitTelemetry({
         method,

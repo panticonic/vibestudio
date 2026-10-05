@@ -63,7 +63,12 @@ it("runs the production disk receiver under its platform execution contract", as
       appRoot: process.cwd(),
     });
     await waitForNativeJob(runtime.fork(probe, {}));
-    const scope = { root: scratchRoot, panelId: "fixture", exposeHostPaths: false };
+    const scope = {
+      root: scratchRoot,
+      panelId: "fixture",
+      ownerCallerIds: ["fixture"],
+      exposeHostPaths: false,
+    };
     await runtime.disk.call(scope, "writeFile", ["note.txt", "private scratch"]);
     expect(await runtime.disk.call(scope, "readFile", ["note.txt", "utf8"])).toBe(
       "private scratch"
@@ -71,6 +76,18 @@ it("runs the production disk receiver under its platform execution contract", as
     expect(
       await runtime.disk.call({ ...scope, root: sourceRoot }, "readFile", ["source.txt", "utf8"])
     ).toBe("immutable source");
+    const delegatedScope = {
+      ...scope,
+      panelId: "extension:fixture:chain:agent",
+      ownerCallerIds: ["fixture-extension", "fixture-agent"],
+    };
+    const opened = (await runtime.disk.call(delegatedScope, "open", ["note.txt", "r"])) as {
+      handleId: number;
+    };
+    await runtime.disk.closeCaller("fixture-agent");
+    await expect(
+      runtime.disk.call(delegatedScope, "handleStat", [opened.handleId])
+    ).rejects.toThrow(/Invalid file handle/);
     if (process.platform === "win32") {
       // This platform deliberately runs workspace code as the normal host user.
       await runtime.disk.call({ ...scope, root: sourceRoot }, "writeFile", [

@@ -17,6 +17,9 @@ serveNativeOperations(
       typeof scope.root !== "string" ||
       typeof scope.panelId !== "string" ||
       typeof scope.exposeHostPaths !== "boolean" ||
+      !Array.isArray(scope.ownerCallerIds) ||
+      scope.ownerCallerIds.length === 0 ||
+      scope.ownerCallerIds.some((owner) => typeof owner !== "string" || !owner) ||
       typeof operation !== "string" ||
       !Array.isArray(values)
     )

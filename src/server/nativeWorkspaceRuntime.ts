@@ -170,7 +170,12 @@ export async function startNativeWorkspaceRuntime(input: {
       })
       .catch((error) => console.error("Native dependency retirement failed:", error));
     await disk.call(
-      { root: home, panelId: "installed:filesystem", exposeHostPaths: false },
+      {
+        root: home,
+        panelId: "installed:filesystem",
+        ownerCallerIds: ["installed:filesystem"],
+        exposeHostPaths: false,
+      },
       "mkdir",
       ["tmp", { recursive: true }],
       AbortSignal.timeout(10_000)

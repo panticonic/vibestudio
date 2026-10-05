@@ -892,7 +892,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths.",
+      "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose RPC calls. The portable runtime fs.open facade instead returns { fd, read, write, stat, close }; it has no readFile method. Use const buffer = new Uint8Array(length); const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0); decode buffer.subarray(0, bytesRead). read returns { bytesRead, buffer }, not a numeric count. Close with await handle.close() in finally. Handles remain valid until explicitly closed or their caller retires; elapsed idle time does not expire them. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths.",
     args: z.union([
       z.tuple([z.string(), z.string().optional(), z.number().optional()]),
       z.tuple([z.string(), z.string(), z.string().optional(), z.number().optional()]),

@@ -1436,31 +1436,41 @@ export class WorkerdManager {
       }
     }
 
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     this.deps.unregisterEgressCaller(callerId);
     this.revokeWorkerBearer(callerId);
-    this.deps.fsService.closeHandlesForCaller(callerId);
-    await this.deps.cleanupWebhookSubscriptions?.(callerId);
+    await attempt(() => this.deps.fsService.closeHandlesForCaller(callerId));
+    await attempt(async () => this.deps.cleanupWebhookSubscriptions?.(callerId));
 
-    if (!foundInstance || !foundName) return;
-
-    if (this.deps.routeRegistry) {
-      const canonical = canonicalInstanceNameForSource(foundInstance.source);
-      if (foundInstance.name === canonical) {
-        this.deps.routeRegistry.unregisterWorkerRoutes(foundInstance.source);
+    if (foundInstance && foundName) {
+      if (this.deps.routeRegistry) {
+        const canonical = canonicalInstanceNameForSource(foundInstance.source);
+        if (foundInstance.name === canonical) {
+          this.deps.routeRegistry.unregisterWorkerRoutes(foundInstance.source);
+        }
       }
+
+      foundInstance.status = "stopped";
+      this.instances.delete(foundName);
+      this.runtimeImages.delete(foundInstance.runtimeImageId);
+
+      // No restart: the worker host is static and loads code on demand, so a
+      // destroyed worker simply stops being addressable (its `/_workerversion`
+      // 404s and its cached isolate idles out). Only stop workerd when nothing
+      // is left to serve.
+      await attempt(() => this.stopWorkerdIfIdle());
+
+      log.info(`Worker entity "${callerId}" stopped`);
     }
-
-    foundInstance.status = "stopped";
-    this.instances.delete(foundName);
-    this.runtimeImages.delete(foundInstance.runtimeImageId);
-
-    // No restart: the worker host is static and loads code on demand, so a
-    // destroyed worker simply stops being addressable (its `/_workerversion`
-    // 404s and its cached isolate idles out). Only stop workerd when nothing
-    // is left to serve.
-    await this.stopWorkerdIfIdle();
-
-    log.info(`Worker entity "${callerId}" stopped`);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Worker cleanup failed");
   }
 
   private async abortUserlandDOFacet(
@@ -1545,17 +1555,24 @@ export class WorkerdManager {
       key: ref.objectKey,
     });
     this.retireEgressCaller(targetId);
-    let abortError: unknown;
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     if (!isInternalDOSource(ref.source)) {
       try {
         await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
       } catch (error) {
-        abortError = error;
+        failures.push(error);
       }
     }
     this.revokeWorkerBearer(targetId);
-    this.deps.fsService.closeHandlesForCaller(targetId);
-    await this.deps.cleanupWebhookSubscriptions?.(targetId);
+    await attempt(() => this.deps.fsService.closeHandlesForCaller(targetId));
+    await attempt(async () => this.deps.cleanupWebhookSubscriptions?.(targetId));
     const removedImage = this.sealedDoImages.get(targetId) ?? this.runtimeImages.get(targetId);
     this.runtimeImages.delete(targetId);
     this.sealedDoImages.delete(targetId);
@@ -1584,7 +1601,8 @@ export class WorkerdManager {
       const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
       this.maybeCompactRetiredDynamicIsolates(rssBytes);
     }
-    if (abortError) throw abortError;
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Durable Object cleanup failed");
   }
 
   /**
@@ -4584,7 +4602,7 @@ export class WorkerdManager {
     // Cleanup all instances
     for (const [, instance] of this.instances) {
       this.revokeWorkerBearer(instance.callerId);
-      this.deps.fsService.closeHandlesForCaller(instance.callerId);
+      await attempt(() => this.deps.fsService.closeHandlesForCaller(instance.callerId));
     }
     this.instances.clear();
 

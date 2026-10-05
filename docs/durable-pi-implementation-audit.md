@@ -14,6 +14,48 @@ imports and compatibility code whose sole purpose is preserving pre-release
 data. Recovery and retention of new-system work remain required; future
 released-data upgrades are separate work. See the [cutover contract](durable-pi-migration-plan.md#131-no-compatibility-execution-path).
 
+## Expanded regression coverage — checkpoints 106–107
+
+After the cutover commit `c0ad4d123` was pushed, three new installed scenarios
+were added and accepted on fresh isolated instances:
+
+- `eval-cell-local-imports-retained-handle`: `st_2190d3c8d1b141209eabc4d9d1f196bd`.
+  Static imports stay cell-local; an explicitly retained imported function remains
+  callable across turns, with one native kernel incarnation throughout.
+- `eval-rejected-cell-preserves-live-scope`: `st_f7706ae3a52f46e4bcfad6be013bc7cd`.
+  A deliberate guest exception preserves the original callable and counter for
+  the next turn. Exactly one invocation increments the counter in each successful cell.
+- `scratch-file-handle-survives-rename`: `st_b5e952a4c1984f0f9960b2f163d8b51e`.
+  The retained descriptor and renamed path both read the updated bytes, followed
+  by explicit close and scratch cleanup.
+
+Each final run has one pass and zero failures, errors or unexpected tool faults.
+The initial counter failure came from an ambiguous test instruction that caused
+two increments per cell; the strict validator was retained and the instruction
+clarified. The initial descriptor run exposed a live-help gap: it described the
+raw RPC handle without the portable facade and still claimed idle expiry. Live
+help now states the actual supported methods and `{ bytesRead, buffer }` return.
+The test consults that public help instead of being supplied a bespoke implementation.
+
+The expansion also exposed actual host lifecycle defects. Filesystem handles no
+longer expire after five idle minutes. Admission tracks real runtime owners
+separately from logical access keys, including both the extension and delegated
+caller. Retirement at both IPC ends joins admitted operations before closing,
+so a late open cannot escape cleanup. Failed closes retain ownership and report
+the original error; another explicit retirement can resume cleanup. RPC and
+worker retirement await cleanup, drain remaining resources, and propagate failures.
+There is no cleanup timeout, background retry loop, or compatibility path.
+
+Verification passes: all 337 focused host filesystem, RPC, runtime-cleanup, native
+receiver, worker and schema tests; 70 scenario-validator tests; host/workerd and
+System-testing composition types.
+Validators reject invented success, reconstructed state, changed/missing kernel
+identity, unrelated failures and stale descriptor content. Both managed instances
+and their temporary roots are retired. Private failure trajectories remain private.
+The suite expansion is committed and pushed as System-testing `be29725`.
+The nine explicitly lower-priority self-development/local-model cases remain
+unverified and are not counted as passing acceptance.
+
 ## Current acceptance boundary — 5 October 2026
 
 The maintained fork `.11` is published and the product source uses Durable Pi.
@@ -84,7 +126,7 @@ reject ambiguous refs at admission, before workspace registration, using the
 existing canonical-ref contract (77 focused host tests pass). Follow-up host
 source `cc0e9b65` is committed and pushed with complete commit gates passing.
 Self-development and local-model acceptance remain explicitly lower priority
-and unverified. Expanded tricky-case coverage follows the release-pin commit.
+and unverified. Expanded tricky-case coverage is accepted at checkpoints 106–107.
 The [installed acceptance inventory](durable-pi-installed-acceptance-remaining.md)
 records the exact remaining tests and evidence. Published fork packages and source
 checks alone do not establish a published product cutover.
