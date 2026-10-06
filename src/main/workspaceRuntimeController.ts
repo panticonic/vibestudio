@@ -489,13 +489,28 @@ export function createDesktopWorkspaceRuntime(deps: {
     rendererRecovery.abort(new Error("Workspace recovery superseded"));
     rendererRecovery = new AbortController();
     const signal = rendererRecovery.signal;
+    const recoverStep = async <T>(name: string, operation: () => Promise<T>): Promise<T> => {
+      console.log(`[WorkspaceRuntime:${workspaceId}] Recovery ${epoch} started: ${name}`);
+      try {
+        const result = await operation();
+        console.log(`[WorkspaceRuntime:${workspaceId}] Recovery ${epoch} completed: ${name}`);
+        return result;
+      } catch (error) {
+        console.error(`[WorkspaceRuntime:${workspaceId}] Recovery ${epoch} failed: ${name}`, error);
+        throw error;
+      }
+    };
     // Registration is a prerequisite of event replay:
     // recovered events can themselves acquire panel runtime leases.
-    await controller.orchestrator.recoverRuntimeClientRegistration();
+    await recoverStep("runtime registration", () =>
+      controller.orchestrator.recoverRuntimeClientRegistration()
+    );
     if (closed || epoch !== semanticRecoveryEpoch) return;
-    await watch.recover();
+    await recoverStep("event watch", () => watch.recover());
     if (closed || epoch !== semanticRecoveryEpoch) return;
-    await controller.orchestrator.recoverShellSnapshot({ loadFocusedView: false });
+    await recoverStep("native snapshot", () =>
+      controller.orchestrator.recoverShellSnapshot({ loadFocusedView: false })
+    );
     if (closed || epoch !== semanticRecoveryEpoch) return;
     const renderers = new Set<Electron.WebContents>();
     for (const { panelId } of controller.registry.listPanels()) {
@@ -506,12 +521,15 @@ export function createDesktopWorkspaceRuntime(deps: {
     }
     const chrome = window.viewManager?.getHostedShellWebContents();
     if (chrome && !chrome.isDestroyed()) renderers.add(chrome);
-    const results = await Promise.allSettled(
-      [...renderers].map((contents) => recoverRenderer(contents, kind, workspaceId, signal))
-    );
+    await recoverStep("renderer replay", async () => {
+      const results = await Promise.allSettled(
+        [...renderers].map((contents) => recoverRenderer(contents, kind, workspaceId, signal))
+      );
+      if (closed || epoch !== semanticRecoveryEpoch) return;
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    });
     if (closed || epoch !== semanticRecoveryEpoch) return;
-    const failure = results.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") throw failure.reason;
     recoveryPending = false;
     publishConnectionStatus("connected");
     await deps.onRecovered?.(kind);
