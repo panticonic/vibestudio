@@ -539,30 +539,37 @@ export function createDesktopWorkspaceRuntime(deps: {
   const assertOpen = () => {
     if (closed) throw new Error("Workspace runtime is closed");
   };
-  type CleanupStep = { done: boolean; run: () => unknown; running?: Promise<void> };
+  type CleanupStep = { name: string; done: boolean; run: () => unknown; running?: Promise<void> };
+  const cleanupStep = (name: string, run: () => unknown): CleanupStep => ({
+    name,
+    done: false,
+    run,
+  });
   const producerCleanup: CleanupStep[] = [
-    () => rendererRecovery.abort(new Error("Workspace runtime closed")),
-    stopDirectEvents,
-    stopAttention,
-    stopNotificationAction,
-    stopCapture,
-    stopRecovery,
-    stopStatus,
-    () => watch.close(),
-    () => browserPermissions.stop(),
-    () => cdp?.stop(),
-    () => {
+    cleanupStep("renderer recovery", () =>
+      rendererRecovery.abort(new Error("Workspace runtime closed"))
+    ),
+    cleanupStep("direct events", stopDirectEvents),
+    cleanupStep("attention", stopAttention),
+    cleanupStep("notification actions", stopNotificationAction),
+    cleanupStep("capture", stopCapture),
+    cleanupStep("recovery listener", stopRecovery),
+    cleanupStep("status listener", stopStatus),
+    cleanupStep("event watch", () => watch.close()),
+    cleanupStep("browser permissions", () => browserPermissions.stop()),
+    cleanupStep("CDP provider", () => cdp?.stop()),
+    cleanupStep("panel log timer", () => {
       if (panelLogFlushTimer) clearTimeout(panelLogFlushTimer);
-    },
-  ].map((run) => ({ done: false, run }));
+    }),
+  ];
   const resourceCleanup: CleanupStep[] = [
-    () => controller.orchestrator.unregisterRuntimeClient(),
-    () => container.stopAll(),
-    () => downloads?.stop(),
-    () => flushPanelLog(),
-  ].map((run) => ({ done: false, run }));
+    cleanupStep("runtime registration", () => controller.orchestrator.unregisterRuntimeClient()),
+    cleanupStep("services", () => container.stopAll()),
+    cleanupStep("downloads", () => downloads?.stop()),
+    cleanupStep("panel log writes", () => flushPanelLog()),
+  ];
   const ownerCleanup: CleanupStep[] = [
-    async () => {
+    cleanupStep("problem reporting", async () => {
       stopMainCapture();
       dispatcher.setFailureObserver(undefined);
       dispatcher.setSuccessObserver(undefined);
@@ -570,10 +577,10 @@ export function createDesktopWorkspaceRuntime(deps: {
       await reportingUsage.stop();
       await reportingDelivery.stop();
       reportingStore.close();
-    },
-    () => controller.core.shutdown(),
-    () => window.detachWorkspace(workspaceId),
-  ].map((run) => ({ done: false, run }));
+    }),
+    cleanupStep("core", () => controller.core.shutdown()),
+    cleanupStep("native workspace", () => window.detachWorkspace(workspaceId)),
+  ];
   const runCleanup = async (steps: CleanupStep[]): Promise<unknown[]> => {
     const results = await Promise.allSettled(
       steps
@@ -581,10 +588,23 @@ export function createDesktopWorkspaceRuntime(deps: {
         .map((step) => {
           if (!step.running) {
             const operation = Promise.resolve()
-              .then(step.run)
               .then(() => {
-                step.done = true;
-              });
+                console.log(`[WorkspaceRuntime:${workspaceId}] Cleanup started: ${step.name}`);
+                return step.run();
+              })
+              .then(
+                () => {
+                  step.done = true;
+                  console.log(`[WorkspaceRuntime:${workspaceId}] Cleanup completed: ${step.name}`);
+                },
+                (error: unknown) => {
+                  console.error(
+                    `[WorkspaceRuntime:${workspaceId}] Cleanup failed: ${step.name}`,
+                    error
+                  );
+                  throw error;
+                }
+              );
             step.running = operation;
             void operation.then(
               () => {

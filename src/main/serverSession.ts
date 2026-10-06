@@ -79,8 +79,10 @@ function ownSessionResources(
   let closing: Promise<void> | null = null;
   return () => {
     if (closing) return closing;
-    closing = (async () => {
-      const settled = await Promise.allSettled(resources.map((resource) => resource.close()));
+    closing = Promise.resolve().then(async () => {
+      const settled = await Promise.allSettled(
+        resources.map((resource) => Promise.resolve().then(() => resource.close()))
+      );
       const failures = settled.flatMap((result, index) => {
         if (result.status !== "rejected") return [];
         const resource = resources[index];
@@ -92,7 +94,7 @@ function ownSessionResources(
       if (failures.length > 1) {
         throw new AggregateError(failures, "Session resources could not all be closed");
       }
-    })();
+    });
     return closing;
   };
 }
@@ -812,18 +814,10 @@ async function buildRemoteSessionConnection(
     hubControlClient,
     hubProcessManager: null,
     workspaceSessions,
-    // Facades and workspace sessions drain before their shared Iroh supervisor.
+    // Revoke the supervisor before joining acquisitions that depend on its I/O.
     close: ownSessionResources([
-      {
-        label: "remote workspace directory",
-        close: async () => {
-          try {
-            await workspaceSessions.close();
-          } finally {
-            await closeRemote();
-          }
-        },
-      },
+      { label: "remote workspace directory", close: () => workspaceSessions.close() },
+      { label: "remote Iroh connection supervisor", close: closeRemote },
     ]),
   };
 }

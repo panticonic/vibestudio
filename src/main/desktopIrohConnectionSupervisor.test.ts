@@ -77,6 +77,100 @@ function fakeClient(
 }
 
 describe("desktop Iroh process connection supervisor", () => {
+  it("joins retirement of a client acquired during shutdown and preserves its failure", async () => {
+    const owner = new EndpointGenerationOwner({ bind: async () => new FakeEndpoint() });
+    let endpointRetired!: () => void;
+    const retired = new Promise<void>((resolve) => {
+      endpointRetired = resolve;
+    });
+    vi.spyOn(owner, "close").mockImplementation(async () => {
+      endpointRetired();
+    });
+    let admitted!: () => void;
+    const creating = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    let closeStarted!: () => void;
+    const retiring = new Promise<void>((resolve) => {
+      closeStarted = resolve;
+    });
+    let releaseClose!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const failure = new Error("Original late acquisition cleanup failure");
+    const client = fakeClient([]);
+    vi.mocked(client.close).mockImplementation(async () => {
+      closeStarted();
+      await cleanupGate;
+      throw failure;
+    });
+    const supervisor = new DesktopIrohConnectionSupervisor(new Uint8Array(32), relays, {
+      endpointOwner: owner as unknown as EndpointGenerationOwner<
+        NodePhysicalConnection,
+        NodePhysicalEndpoint
+      >,
+      createClient: vi.fn(async () => {
+        admitted();
+        await retired;
+        return client;
+      }) as never,
+    });
+    const connecting = supervisor.connect(reach(HUB_ID), {
+      callerId: "shell:device",
+      getShellToken: () => "token",
+    });
+    const rejectedConnection = expect(connecting).rejects.toBe(failure);
+    await creating;
+    let settled = false;
+    const closing = supervisor.close().finally(() => {
+      settled = true;
+    });
+    const rejectedClose = expect(closing).rejects.toBe(failure);
+    try {
+      await retiring;
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      releaseClose();
+      await Promise.all([rejectedConnection, rejectedClose]);
+    }
+  });
+  it("retires the endpoint before joining client operations waiting for it", async () => {
+    const owner = new EndpointGenerationOwner({ bind: async () => new FakeEndpoint() });
+    let release!: () => void;
+    const retired = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const closeEndpoint = vi.spyOn(owner, "close").mockImplementation(async () => {
+      release();
+    });
+    const client = fakeClient([]);
+    vi.mocked(client.close).mockImplementation(async () => {
+      await retired;
+    });
+    const supervisor = new DesktopIrohConnectionSupervisor(new Uint8Array(32), relays, {
+      endpointOwner: owner as unknown as EndpointGenerationOwner<
+        NodePhysicalConnection,
+        NodePhysicalEndpoint
+      >,
+      createClient: vi.fn(async () => client) as never,
+    });
+    await supervisor.connect(reach(HUB_ID), {
+      callerId: "shell:device",
+      getShellToken: () => "token",
+    });
+    const closing = supervisor.close();
+    try {
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(closeEndpoint).toHaveBeenCalledOnce();
+      expect(supervisor.close()).toBe(closing);
+      await closing;
+    } finally {
+      release();
+      await closing;
+    }
+  });
   it("invalidates hub and workspace clients on the same endpoint-generation edge", async () => {
     const endpoints: FakeEndpoint[] = [];
     const owner = new EndpointGenerationOwner({

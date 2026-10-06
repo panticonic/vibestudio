@@ -120,7 +120,41 @@ class FakePipe implements IrohClientPipe {
 }
 
 describe("Iroh server client lifecycle", () => {
-  it("publishes complete transport diagnostics and closes sessions before the pipe", async () => {
+  it("retires the pipe before joining session I/O and retains cleanup failures", async () => {
+    const pipe = new FakePipe([]);
+    let release!: () => void;
+    const physicalClosed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = new FakeSession([]);
+    const originalFailure = new Error("Original session retirement failure");
+    vi.spyOn(session, "close").mockImplementation(async () => {
+      await physicalClosed;
+      throw originalFailure;
+    });
+    vi.spyOn(pipe, "openSession").mockReturnValue(session);
+    const closePipe = vi.spyOn(pipe, "close").mockImplementation(async () => {
+      release();
+    });
+    const client = await createIrohServerClient({
+      reach,
+      callerId: "shell:device",
+      getShellToken: () => "token",
+      pipe,
+    });
+    const closing = client.close();
+    void closing.catch(() => undefined);
+    try {
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(closePipe).toHaveBeenCalledOnce();
+      await expect(closing).rejects.toMatchObject({ errors: [originalFailure] });
+      expect(client.close()).toBe(closing);
+    } finally {
+      release();
+      await closing.catch(() => undefined);
+    }
+  });
+  it("publishes complete transport diagnostics and retires pipe I/O before joining sessions", async () => {
     const closeOrder: string[] = [];
     const observed: unknown[] = [];
     const client = await createIrohServerClient({
@@ -148,13 +182,13 @@ describe("Iroh server client lifecycle", () => {
     expect(client.transportDiagnostics()).toEqual(expected);
 
     await client.close();
-    expect(closeOrder).toEqual(["session", "pipe"]);
+    expect(closeOrder).toEqual(["pipe", "session"]);
     expect(client.isClosed()).toBe(true);
   });
 });
 
 describe("Iroh trusted workspace UI transport", () => {
-  it("opens a separate device-authenticated session and closes it before the shared pipe", async () => {
+  it("opens a separate device-authenticated session and joins it during pipe retirement", async () => {
     const closeOrder: string[] = [];
     const pipe = new FakePipe(closeOrder);
     const options: IrohClientSessionOptions[] = [];
@@ -187,7 +221,7 @@ describe("Iroh trusted workspace UI transport", () => {
     expect(send).toHaveBeenCalledWith(envelope);
     await client.close();
     expect(ui.isClosed?.()).toBe(true);
-    expect(closeOrder).toEqual(["session", "session", "pipe"]);
+    expect(closeOrder).toEqual(["pipe", "session", "session"]);
     await expect(client.openHostUiSession()).rejects.toThrow("closing");
   });
 });

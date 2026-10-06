@@ -39,6 +39,8 @@ export class DesktopIrohConnectionSupervisor {
     NodePhysicalEndpoint
   >;
   private readonly clients = new Set<IrohServerClient>();
+  private readonly acquisitions = new Set<Promise<IrohServerClient>>();
+  private readonly acquisitionCleanupFailures: unknown[] = [];
   private readonly unsubscribeInvalidation: () => void;
   private readonly createClient: typeof createIrohServerClient;
   private closing: Promise<void> | null = null;
@@ -78,45 +80,56 @@ export class DesktopIrohConnectionSupervisor {
     });
   }
 
-  async connect(reach: IrohReach, options: DesktopIrohClientOptions): Promise<IrohServerClient> {
-    if (this.closing) throw new Error("Desktop Iroh connection supervisor is closing");
-    const client = await this.createClient({
-      reach,
-      endpointOwner: this.endpointOwner,
-      ...options,
+  connect(reach: IrohReach, options: DesktopIrohClientOptions): Promise<IrohServerClient> {
+    if (this.closing)
+      return Promise.reject(new Error("Desktop Iroh connection supervisor is closing"));
+    const acquisition = Promise.resolve().then(async () => {
+      if (this.closing) throw new Error("Desktop Iroh connection supervisor is closing");
+      const client = await this.createClient({
+        reach,
+        endpointOwner: this.endpointOwner,
+        ...options,
+      });
+      if (this.closing) {
+        try {
+          await client.close();
+        } catch (error) {
+          this.acquisitionCleanupFailures.push(error);
+          throw error;
+        }
+        throw new Error("Desktop Iroh connection supervisor closed while connecting");
+      }
+      this.clients.add(client);
+      return client;
     });
-    if (this.closing) {
-      await client.close();
-      throw new Error("Desktop Iroh connection supervisor closed while connecting");
-    }
-    this.clients.add(client);
-    return client;
+    this.acquisitions.add(acquisition);
+    void acquisition.then(
+      () => this.acquisitions.delete(acquisition),
+      () => this.acquisitions.delete(acquisition)
+    );
+    return acquisition;
   }
 
   close(): Promise<void> {
-    return (this.closing ??= (async () => {
+    return (this.closing ??= Promise.resolve().then(async () => {
       const clients = [...this.clients];
       this.clients.clear();
       this.unsubscribeInvalidation();
-      // Logical sessions finish their control writers while the native
-      // endpoint is still alive. Only then release the process endpoint.
-      const clientResults = await Promise.allSettled(
-        clients.map((client) => Promise.resolve().then(() => client.close()))
-      );
-      const endpointResult = await Promise.resolve()
-        .then(() => this.endpointOwner.close())
-        .then(
-          () => ({ status: "fulfilled" as const, value: undefined }),
-          (reason) => ({ status: "rejected" as const, reason })
-        );
-      const settled = [...clientResults, endpointResult];
+      // Endpoint retirement releases pending dials and native session I/O.
+      // Start it alongside every client, then join all admitted acquisitions.
+      const settled = await Promise.allSettled([
+        ...clients.map((client) => Promise.resolve().then(() => client.close())),
+        Promise.resolve().then(() => this.endpointOwner.close()),
+      ]);
+      await Promise.allSettled([...this.acquisitions]);
       const failures = settled.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
       );
+      failures.push(...this.acquisitionCleanupFailures);
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) {
         throw new AggregateError(failures, "Desktop Iroh connections could not all be closed");
       }
-    })());
+    }));
   }
 }

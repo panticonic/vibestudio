@@ -250,6 +250,7 @@ export async function createIrohServerClient(
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
   let closing = false;
+  let closePromise: Promise<void> | null = null;
 
   const createScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
     if (closing) throw new Error("Iroh server client is closing");
@@ -474,21 +475,31 @@ export async function createIrohServerClient(
     transportDiagnostics(): RemoteTransportDiagnostics | null {
       return remoteDiagnosticsOf(transport.diagnostics());
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
+      if (closePromise) return closePromise;
       closing = true;
-      const uiCleanup = await Promise.allSettled(
-        [...hostUiSessions].map((session) => session.close())
-      );
-      const scoped = [...materializedScopedClients];
-      scopedClients.clear();
-      await Promise.allSettled([mainSession.close(), ...scoped.map((client) => client.close())]);
-      materializedScopedClients.clear();
-      await transport.close();
-      const failures = uiCleanup.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      if (failures.length)
-        throw new AggregateError(failures, "Workspace UI sessions failed to close");
+      closePromise = Promise.resolve().then(async () => {
+        const scoped = [...materializedScopedClients];
+        scopedClients.clear();
+        // Revoke every owner before joining. Pending native session I/O may
+        // need physical retirement to settle; it cannot precede pipe.close().
+        const owners = [
+          () => transport.close(),
+          ...[...hostUiSessions].map((session) => () => session.close()),
+          () => mainSession.close(),
+          ...scoped.map((client) => () => client.close()),
+        ];
+        const settled = await Promise.allSettled(
+          owners.map((close) => Promise.resolve().then(close))
+        );
+        materializedScopedClients.clear();
+        const failures = settled.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (failures.length)
+          throw new AggregateError(failures, "Iroh server client cleanup failed");
+      });
+      return closePromise;
     },
   };
 }

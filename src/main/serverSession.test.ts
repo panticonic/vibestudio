@@ -45,6 +45,78 @@ const entries = [
 
 beforeEach(() => vi.clearAllMocks());
 describe("remote startup workspace focus", () => {
+  it("retires the supervisor while a workspace directory acquisition is pending", async () => {
+    let release!: () => void;
+    const retirement = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let admitted!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const failure = new Error("Workspace route cancelled by supervisor retirement");
+    const hub = {
+      call: vi.fn(async (_service: string, method: string, args: unknown[]) => {
+        if (method === "ensureUserWorkspaces") return pair;
+        if (method === "listWorkspaces") return entries;
+        if (method === "routeWorkspace") {
+          const id = (args[0] as { workspaceId: string }).workspaceId;
+          if (id === "project-id") {
+            admitted();
+            await retirement;
+            throw failure;
+          }
+          const entry = entries.find((entry) => entry.workspaceId === id)!;
+          return {
+            workspaceId: id,
+            workspace: entry.name,
+            serverId: "srv_" + "a".repeat(24),
+            serverBootId: "boot_" + "b".repeat(24),
+            running: true,
+            serverUrl: "http://localhost:1234",
+            workspaceReach,
+          };
+        }
+        throw new Error(`Unexpected hub call: ${method}`);
+      }),
+    };
+    const workspace = {
+      call: vi.fn(async () => ({
+        id: "system-id",
+        name: "System",
+        config: { id: "system-id", systemEpoch: 0 },
+        path: "/remote/system",
+        statePath: "/remote/state",
+        contextProjectionsPath: "/remote/contexts",
+      })),
+      close: vi.fn(async () => {}),
+    };
+    mocks.connect
+      .mockImplementationOnce(async (_reach, options) => {
+        options.onPaired({ deviceId: "device-test", refreshToken: "test-token" });
+        return hub;
+      })
+      .mockResolvedValue(workspace);
+    mocks.close.mockImplementationOnce(async () => {
+      release();
+    });
+    const connection = await establishServerSession({
+      mode: null,
+      pendingPairing: { ...reach, code: "test-code" },
+      centralData: {} as CentralDataManager,
+    });
+    const rejected = expect(connection.workspaceSessions.get("project-id")).rejects.toBe(failure);
+    await pending;
+    const closing = connection.close();
+    try {
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(mocks.close).toHaveBeenCalledOnce();
+      await closing;
+    } finally {
+      release();
+      await Promise.all([rejected, closing]);
+    }
+  });
   it("pairs the account into Personal while hosting the shell in System", async () => {
     let finishPersonal!: () => void;
     const personalHost = new Promise<void>((resolve) => {
