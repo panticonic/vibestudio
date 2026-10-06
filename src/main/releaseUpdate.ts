@@ -1,6 +1,8 @@
 import { clipboard } from "electron";
 import semver from "semver";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import type { NotificationAction } from "@vibestudio/shared/events";
+import { RELEASES_FEED, macReleaseDownload } from "@vibestudio/shared/releaseDownloads";
 
 /**
  * Tell the user a new release exists, and install it where the platform lets us.
@@ -17,15 +19,15 @@ import type { EventService } from "@vibestudio/shared/eventsService";
  *            `auto_updates true` and therefore defers to this updater.
  *   Linux    deb/rpm/pacman belong to the system package manager, which is the
  *            right owner and the wrong thing to drive silently from a GUI. We
- *            name the exact command instead.
+ *            run the upgrade with explicit authorization, or offer the command.
  */
-const RELEASES_FEED = "https://api.github.com/repos/panticonic/vibestudio/releases/latest";
 const STARTUP_DELAY_MS = 30_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 const RECOVERY_TRIGGER_AGE_MS = 15 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const NOTIFICATION_ID = "desktop-release-update";
+const INSTALL_NOTIFICATION_ID = "desktop-release-update-install-status";
 
 export type ReleaseUpdateCheckReason = "startup" | "interval" | "resume" | "network";
 
@@ -48,7 +50,8 @@ export interface LinuxUpgrade {
  */
 export type UpdateDelivery =
   | { kind: "in-app" }
-  | { kind: "command"; upgrade: LinuxUpgrade; elevate: boolean }
+  | { kind: "download" }
+  | { kind: "command"; upgrade: LinuxUpgrade; elevate: boolean; canRun: boolean }
   | { kind: "announce-only" };
 
 export interface AvailableRelease {
@@ -56,6 +59,7 @@ export interface AvailableRelease {
   targetVersion: string;
   checkedAt: number;
   delivery: UpdateDelivery;
+  downloadUrl?: string;
 }
 
 export interface ReleaseUpdateController {
@@ -65,11 +69,12 @@ export interface ReleaseUpdateController {
   triggerIfStale(reason: "resume" | "network"): void;
   requestInstall(): Promise<void>;
   copyUpgradeCommand(): void;
+  handleNotificationAction(id: string, actionId: string): Promise<void>;
 }
 
 export interface ReleaseUpdateInstaller {
   downloadUpdate(): Promise<unknown>;
-  quitAndInstall(): void;
+  quitAndInstall(): void | Promise<void>;
 }
 
 export interface ReleaseUpdateControllerDeps {
@@ -92,6 +97,9 @@ export interface ReleaseUpdateControllerDeps {
     options: { elevate: boolean }
   ) => Promise<{ code: number | null; stderr: string }>;
   installer?: () => ReleaseUpdateInstaller;
+  openExternal?: (url: string) => Promise<void>;
+  restart?: () => Promise<void>;
+  installedVersion?: () => Promise<string | null>;
   /** Preserve the outgoing workspace host before any installer can replace it. */
   prepareInstall: () => Promise<void>;
   fetch?: typeof globalThis.fetch;
@@ -124,8 +132,8 @@ export function linuxUpgradeCommandFor(
       };
     case "rpm":
       return {
-        display: "sudo dnf upgrade vibestudio",
-        argv: ["sh", "-lc", "dnf upgrade -y vibestudio"],
+        display: "sudo dnf upgrade --refresh vibestudio",
+        argv: ["sh", "-lc", "dnf upgrade --refresh -y vibestudio"],
       };
     case "pacman":
       return {
@@ -154,14 +162,16 @@ export function updateDeliveryFor(input: {
     if (input.developerIdSigned) return { kind: "in-app" };
     // An ad-hoc signed build cannot replace itself, so the cask that installed
     // it is the update path — the reason that tap exists.
-    if (input.brewUpgrade) return { kind: "command", upgrade: input.brewUpgrade, elevate: false };
-    return { kind: "announce-only" };
+    if (input.brewUpgrade)
+      return { kind: "command", upgrade: input.brewUpgrade, elevate: false, canRun: true };
+    return { kind: "download" };
   }
   if (input.platform === "linux") {
     if (input.linuxUpgrade && input.canElevate) {
-      return { kind: "command", upgrade: input.linuxUpgrade, elevate: true };
+      return { kind: "command", upgrade: input.linuxUpgrade, elevate: true, canRun: true };
     }
-    if (input.linuxUpgrade) return { kind: "command", upgrade: input.linuxUpgrade, elevate: false };
+    if (input.linuxUpgrade)
+      return { kind: "command", upgrade: input.linuxUpgrade, elevate: false, canRun: false };
     return { kind: "announce-only" };
   }
   return null;
@@ -210,6 +220,7 @@ export function createReleaseUpdateController(
   let installInFlight: Promise<void> | null = null;
   let lastCompletedAt = 0;
   let candidate: AvailableRelease | null = null;
+  let dismissedVersion: string | null = null;
 
   const schedule = (delay: number, reason: ReleaseUpdateCheckReason) => {
     if (stopped) return;
@@ -234,19 +245,25 @@ export function createReleaseUpdateController(
 
   const performCheck = async (): Promise<void> => {
     const payload = await fetchLatestRelease(fetchImpl);
+    if (stopped) return;
     const newer = newerReleaseVersion(payload, deps.currentVersion);
     if (!newer) {
       candidate = null;
       deps.eventService.emit("notification:dismiss", { id: NOTIFICATION_ID });
       return;
     }
+    // Release creation precedes artifact publication. Wait for the installer
+    // for this exact release rather than offering a download that isn't ready.
+    const downloadUrl = delivery.kind === "download" ? macReleaseDownload(payload) : undefined;
+    if (delivery.kind === "download" && !downloadUrl) return;
     candidate = Object.freeze({
       currentVersion: deps.currentVersion,
       targetVersion: newer.version,
       checkedAt: now(),
       delivery,
+      ...(downloadUrl ? { downloadUrl } : {}),
     });
-    showCandidate(candidate);
+    if (dismissedVersion !== candidate.targetVersion) showCandidate(candidate);
   };
 
   const checkNow = async (reason: ReleaseUpdateCheckReason): Promise<void> => {
@@ -274,7 +291,7 @@ export function createReleaseUpdateController(
     const installer = deps.installer?.();
     if (!installer) throw new Error("This build cannot install updates by itself.");
     await installer.downloadUpdate();
-    installer.quitAndInstall();
+    await installer.quitAndInstall();
   };
 
   /**
@@ -287,14 +304,24 @@ export function createReleaseUpdateController(
    */
   const installThroughPackageManager = async (
     upgrade: LinuxUpgrade,
-    elevate: boolean
+    elevate: boolean,
+    targetVersion: string
   ): Promise<void> => {
     const run = deps.runCommand;
     if (!run) throw new Error("This host cannot run the upgrade command.");
     const result = await run(upgrade.argv, { elevate });
     if (result.code === 0) {
+      const installed = await deps.installedVersion?.();
+      const version = installed ? semver.coerce(installed) : null;
+      if (!version)
+        throw new Error("The upgrade finished, but the installed version could not be verified.");
+      if (semver.lt(version, targetVersion)) {
+        throw new Error(
+          `The package repository still provides Vibestudio ${installed}. Version ${targetVersion} is not available there yet. Your current app is still usable; try the upgrade again once the repository publishes it.`
+        );
+      }
       deps.eventService.emit("notification:show", {
-        id: NOTIFICATION_ID,
+        id: INSTALL_NOTIFICATION_ID,
         type: "success",
         title: "Vibestudio updated",
         message: "Restart to use the new release.",
@@ -312,9 +339,9 @@ export function createReleaseUpdateController(
     }
     // 126/127 are polkit's own refusals: dismissed, unauthorized, or no agent
     // to ask. None of those mean the upgrade itself would fail.
-    if (result.code === 126 || result.code === 127) {
+    if (elevate && (result.code === 126 || result.code === 127)) {
       throw new Error(
-        `The system did not authorize the upgrade. Run it yourself with: ${upgrade.display}`
+        `The system did not authorize the upgrade. ${result.stderr.trim().slice(0, 400)} Run it yourself with: ${upgrade.display}`
       );
     }
     throw new Error(
@@ -323,7 +350,7 @@ export function createReleaseUpdateController(
     );
   };
 
-  return {
+  const controller: ReleaseUpdateController = {
     start() {
       if (stopped) return;
       schedule(STARTUP_DELAY_MS, "startup");
@@ -344,12 +371,47 @@ export function createReleaseUpdateController(
       if (delivery.kind === "announce-only") {
         throw new Error("This installation updates from the releases page.");
       }
+      if (delivery.kind === "command" && !delivery.canRun) {
+        throw new Error(`Run this command in a terminal: ${delivery.upgrade.display}`);
+      }
       if (installInFlight) return installInFlight;
+      const available = candidate;
+      if (delivery.kind !== "download") {
+        deps.eventService.emit("notification:show", {
+          id: INSTALL_NOTIFICATION_ID,
+          type: "info",
+          title: "Updating Vibestudio",
+          message:
+            delivery.kind === "in-app"
+              ? "Downloading the update. Vibestudio will restart when it is ready."
+              : "Installing through your package manager. Complete the system permission prompt if asked; you can keep working while the upgrade runs.",
+          ttl: 0,
+        });
+      }
       installInFlight = (async () => {
         await deps.prepareInstall();
+        if (delivery.kind === "download") {
+          if (!available.downloadUrl || !deps.openExternal) {
+            throw new Error("The Mac installer download is unavailable.");
+          }
+          await deps.openExternal(available.downloadUrl);
+          deps.eventService.emit("notification:show", {
+            id: "desktop-release-update-download-instructions",
+            type: "info",
+            title: "Install the downloaded update",
+            message:
+              "Open the downloaded DMG, quit Vibestudio, drag Vibestudio into Applications and choose Replace, then reopen it. If macOS blocks it, choose Open Anyway in Privacy & Security.",
+            ttl: 0,
+          });
+          return;
+        }
         return delivery.kind === "in-app"
           ? installInApp()
-          : installThroughPackageManager(delivery.upgrade, delivery.elevate);
+          : installThroughPackageManager(
+              delivery.upgrade,
+              delivery.elevate,
+              available.targetVersion
+            );
       })().finally(() => {
         installInFlight = null;
       });
@@ -366,13 +428,46 @@ export function createReleaseUpdateController(
         ttl: 6000,
       });
     },
+    async handleNotificationAction(id, actionId) {
+      if (
+        stopped ||
+        (id !== NOTIFICATION_ID &&
+          id !== INSTALL_NOTIFICATION_ID &&
+          id !== "desktop-release-update-error")
+      )
+        return;
+      if (actionId === "dismiss") {
+        dismissedVersion = candidate?.targetVersion ?? null;
+        return;
+      }
+      try {
+        if (actionId === "desktop-release-update-install") await controller.requestInstall();
+        else if (actionId === "desktop-release-update-restart") await deps.restart?.();
+        else if (actionId === "desktop-release-update-copy-command")
+          controller.copyUpgradeCommand();
+      } catch (error) {
+        deps.eventService.emit("notification:dismiss", { id: INSTALL_NOTIFICATION_ID });
+        deps.eventService.emit("notification:show", {
+          id: "desktop-release-update-error",
+          type: "error",
+          title: "Update could not continue",
+          message: error instanceof Error ? error.message : String(error),
+          ttl: 0,
+          actions: updateActions(delivery),
+        });
+        throw error;
+      }
+    },
   };
+  return controller;
 }
 
 function updateMessage(delivery: UpdateDelivery): string {
   switch (delivery.kind) {
     case "in-app":
       return "Install it and restart when you are ready.";
+    case "download":
+      return "Download the DMG, quit Vibestudio, replace it in Applications, then reopen it.";
     case "command":
       return delivery.elevate
         ? "Your package manager installs it; the system will ask for permission."
@@ -384,14 +479,29 @@ function updateMessage(delivery: UpdateDelivery): string {
 
 function updateActions(delivery: UpdateDelivery) {
   if (delivery.kind === "announce-only") return [];
-  return [
-    {
+  const actions: NotificationAction[] = [];
+  if (delivery.kind !== "command" || delivery.canRun) {
+    actions.push({
       id: "desktop-release-update-install",
-      label: "Update and restart",
+      label:
+        delivery.kind === "download"
+          ? "Download update"
+          : delivery.kind === "command"
+            ? "Install update"
+            : "Update and restart",
       variant: "solid" as const,
       command: { type: "desktop.installUpdate" as const },
-    },
-  ];
+    });
+  }
+  if (delivery.kind === "command") {
+    actions.push({
+      id: "desktop-release-update-copy-command",
+      label: "Copy upgrade command",
+      variant: "soft" as const,
+      command: { type: "desktop.copyUpgradeCommand" as const },
+    });
+  }
+  return actions;
 }
 
 async function fetchLatestRelease(fetchImpl: typeof globalThis.fetch): Promise<unknown> {

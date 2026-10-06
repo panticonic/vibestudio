@@ -54,24 +54,26 @@ describe("update delivery", () => {
       kind: "command",
       upgrade: brew,
       elevate: false,
+      canRun: true,
     });
   });
 
   it("elevates a Linux package manager, and only when it can", () => {
     expect(
       updateDeliveryFor({ ...base, platform: "linux", linuxUpgrade: upgrade, canElevate: true })
-    ).toEqual({ kind: "command", upgrade, elevate: true });
+    ).toEqual({ kind: "command", upgrade, elevate: true, canRun: true });
     expect(updateDeliveryFor({ ...base, platform: "linux", linuxUpgrade: upgrade })).toEqual({
       kind: "command",
       upgrade,
       elevate: false,
+      canRun: false,
     });
   });
 
   it("still announces a release it cannot install", () => {
     // A Linux tree no package database claims, and an unsigned mac without brew.
     expect(updateDeliveryFor({ ...base, platform: "linux" })).toEqual({ kind: "announce-only" });
-    expect(updateDeliveryFor({ ...base, platform: "darwin" })).toEqual({ kind: "announce-only" });
+    expect(updateDeliveryFor({ ...base, platform: "darwin" })).toEqual({ kind: "download" });
   });
 
   it("says nothing at all for an unpackaged launch", () => {
@@ -110,6 +112,7 @@ function harness(
     linuxUpgrade: () => linuxUpgradeCommandFor("deb"),
     canElevate: () => true,
     runCommand: async () => ({ code: 0, stderr: "" }),
+    installedVersion: async () => "0.2.0",
     fetch: (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch,
     now: () => 1_000,
     ...overrides,
@@ -118,6 +121,139 @@ function harness(
 }
 
 describe("release update controller", () => {
+  const macDownload =
+    "https://github.com/panticonic/vibestudio/releases/download/v0.2.0/Vibestudio-0.2.0-arm64.dmg";
+  const macRelease = release("v0.2.0", {
+    assets: [
+      { name: "Vibestudio-0.2.0-arm64.dmg", state: "uploaded", browser_download_url: macDownload },
+    ],
+  });
+
+  it("offers the Mac installer and persistent instructions through the real notification action", async () => {
+    const openExternal = vi.fn(async () => {});
+    const prepareInstall = vi.fn(async () => {});
+    const { controller, emitted } = harness(
+      { platform: "darwin", openExternal, prepareInstall },
+      macRelease
+    );
+    await controller!.checkNow("startup");
+    expect(emitted.at(-1)?.payload).toMatchObject({
+      ttl: 0,
+      actions: [{ label: "Download update" }],
+    });
+    await controller!.handleNotificationAction(
+      "desktop-release-update",
+      "desktop-release-update-install"
+    );
+    expect(openExternal).toHaveBeenCalledWith(macDownload);
+    expect(prepareInstall).toHaveBeenCalledOnce();
+    expect(emitted.at(-1)?.payload).toMatchObject({
+      id: "desktop-release-update-download-instructions",
+      ttl: 0,
+      message: expect.stringContaining("choose Replace"),
+    });
+    controller!.stop();
+  });
+
+  it("waits for the Mac installer to be published", async () => {
+    const { controller, emitted } = harness({ platform: "darwin" });
+    await controller!.checkNow("startup");
+    expect(emitted).toEqual([]);
+    controller!.stop();
+  });
+
+  it("keeps a dismissed version quiet but offers the next release", async () => {
+    let payload = release("v0.2.0");
+    const { controller, emitted } = harness({
+      fetch: (async () => new Response(JSON.stringify(payload))) as typeof fetch,
+    });
+    await controller!.checkNow("startup");
+    await controller!.handleNotificationAction("desktop-release-update", "dismiss");
+    emitted.length = 0;
+    await controller!.checkNow("interval");
+    expect(emitted).toEqual([]);
+    payload = release("v0.3.0");
+    await controller!.checkNow("interval");
+    expect(emitted.at(-1)?.payload["title"]).toBe("Vibestudio 0.3.0 is available");
+    controller!.stop();
+  });
+
+  it("offers install and copy actions and copies without invoking the installer", async () => {
+    const writeClipboard = vi.fn();
+    const runCommand = vi.fn();
+    const { controller, emitted } = harness({ writeClipboard, runCommand });
+    await controller!.checkNow("startup");
+    expect(emitted.at(-1)?.payload["actions"]).toMatchObject([
+      { label: "Install update" },
+      { label: "Copy upgrade command" },
+    ]);
+    await controller!.handleNotificationAction(
+      "desktop-release-update",
+      "desktop-release-update-copy-command"
+    );
+    expect(writeClipboard).toHaveBeenCalledWith(linuxUpgradeCommandFor("deb")!.display);
+    expect(runCommand).not.toHaveBeenCalled();
+    controller!.stop();
+  });
+
+  it("offers only the manual command when Linux cannot authorize the upgrade", async () => {
+    const { controller, emitted } = harness({ canElevate: () => false });
+    await controller!.checkNow("startup");
+    expect(emitted.at(-1)?.payload["actions"]).toMatchObject([{ label: "Copy upgrade command" }]);
+    await expect(controller!.requestInstall()).rejects.toThrow("Run this command in a terminal");
+    controller!.stop();
+  });
+
+  it("reports a lagging repository without claiming an update succeeded", async () => {
+    const { controller, emitted } = harness({ installedVersion: async () => "0.1.34-1" });
+    await controller!.checkNow("startup");
+    await expect(
+      controller!.handleNotificationAction(
+        "desktop-release-update",
+        "desktop-release-update-install"
+      )
+    ).rejects.toThrow("not available there yet");
+    expect(emitted.at(-1)?.payload).toMatchObject({ type: "error", ttl: 0 });
+    expect(emitted.some(({ payload }) => payload["title"] === "Vibestudio updated")).toBe(false);
+    controller!.stop();
+  });
+
+  it("runs the Windows installer through the notification action and propagates restart failures", async () => {
+    const downloadUpdate = vi.fn(async () => {});
+    const quitAndInstall = vi.fn(async () => {
+      throw new Error("Installer could not restart");
+    });
+    const { controller, emitted } = harness({
+      platform: "win32",
+      installer: () => ({ downloadUpdate, quitAndInstall }),
+    });
+    await controller!.checkNow("startup");
+    await expect(
+      controller!.handleNotificationAction(
+        "desktop-release-update",
+        "desktop-release-update-install"
+      )
+    ).rejects.toThrow("Installer could not restart");
+    expect(downloadUpdate).toHaveBeenCalledOnce();
+    expect(emitted.at(-1)?.payload["message"]).toBe("Installer could not restart");
+    controller!.stop();
+  });
+
+  it("restarts after a package update through the completion notification", async () => {
+    const restart = vi.fn(async () => {});
+    const { controller } = harness({ restart });
+    await controller!.checkNow("startup");
+    await controller!.handleNotificationAction(
+      "desktop-release-update",
+      "desktop-release-update-install"
+    );
+    await controller!.handleNotificationAction(
+      "desktop-release-update-install-status",
+      "desktop-release-update-restart"
+    );
+    expect(restart).toHaveBeenCalledOnce();
+    controller!.stop();
+  });
   it("announces a newer release with the action its platform can perform", async () => {
     const { controller, emitted } = harness();
 
@@ -125,7 +261,10 @@ describe("release update controller", () => {
 
     const shown = emitted.find((entry) => entry.event === "notification:show");
     expect(shown?.payload["title"]).toBe("Vibestudio 0.2.0 is available");
-    expect(shown?.payload["actions"]).toMatchObject([{ id: "desktop-release-update-install" }]);
+    expect(shown?.payload["actions"]).toMatchObject([
+      { id: "desktop-release-update-install" },
+      { id: "desktop-release-update-copy-command" },
+    ]);
   });
 
   it("names the command when it cannot raise it to root itself", async () => {

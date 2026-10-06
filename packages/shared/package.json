@@ -7,6 +7,7 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./releaseDownloads": "./src/releaseDownloads.ts",
     "./jsonSchemaNumericType": "./src/jsonSchemaNumericType.ts",
     "./problemReportingConversation": "./src/problemReportingConversation.ts",
     "./mediaRecording": "./src/mediaRecording.ts",

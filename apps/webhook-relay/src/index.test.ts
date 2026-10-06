@@ -26,6 +26,49 @@ function makeEnv(overrides: Partial<Env> = {}): {
 }
 
 describe("webhook relay Worker — routing", () => {
+  it("redirects the Mac download to the published installer", async () => {
+    const { env, stub } = makeEnv();
+    const installer =
+      "https://github.com/panticonic/vibestudio/releases/download/v0.2.0/Vibestudio-0.2.0-arm64.dmg";
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          assets: [
+            {
+              name: "Vibestudio-0.2.0-arm64.dmg",
+              state: "uploaded",
+              browser_download_url: installer,
+            },
+          ],
+        })
+      )
+    );
+    try {
+      const response = await worker.fetch(new Request("https://vibestudio.app/download/mac"), env);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(installer);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(stub.fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("reports an unavailable download rather than redirecting to an unpublished asset", async () => {
+    const { env } = makeEnv();
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ assets: [] })));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await worker.fetch(new Request("https://vibestudio.app/download/mac"), env);
+      expect(response.status).toBe(503);
+      expect(response.headers.has("location")).toBe(false);
+    } finally {
+      fetch.mockRestore();
+      error.mockRestore();
+    }
+  });
   it("answers health checks without touching the DO", async () => {
     const { env, stub } = makeEnv();
     const resp = await worker.fetch(new Request("https://vibestudio.app/healthz"), env);

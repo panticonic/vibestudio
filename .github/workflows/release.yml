@@ -66,7 +66,8 @@ jobs:
             sudo dnf install vibestudio
             ```
 
-            **macOS** — updates arrive with `brew upgrade`.
+            **macOS** — [download the DMG](https://vibestudio.app/download/mac) (Apple Silicon, macOS 14+)
+            or install through Homebrew:
 
             ```sh
             brew install --cask panticonic/tap/vibestudio
@@ -74,10 +75,19 @@ jobs:
 
             The macOS build is ad-hoc signed rather than signed with an Apple Developer ID,
             so macOS asks you to confirm it on first launch (System Settings → Privacy &
-            Security → Open Anyway). It cannot update itself; `brew upgrade` is the update path.
+            Security → Open Anyway). The app checks for updates and offers the new DMG:
+            quit, replace Vibestudio in Applications, then reopen it. Homebrew installs
+            offer to run `brew upgrade --cask vibestudio` instead.
 
             **Windows** — download the `.exe` installer below. It is not yet code signed,
             so SmartScreen will warn on first run.
+
+            **Updating** — the desktop app checks for new releases and keeps its update
+            notification visible until dismissed. Windows offers to download, install,
+            and restart. Linux and Homebrew offer **Install update** plus **Copy upgrade
+            command** for manual control. Linux upgrades refresh repository metadata;
+            if the package repository is still behind, the app tells you instead of
+            claiming the update succeeded. After a package upgrade, choose **Restart now**.
 
             **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
             `.deb` files below install directly. Every packaged format carries the AppArmor

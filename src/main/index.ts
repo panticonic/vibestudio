@@ -41,6 +41,8 @@ import {
 import { spawn, spawnSync } from "node:child_process";
 import { hasDeveloperIdSignature } from "@vibestudio/credential-client/macCodeSignature";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
+import { macCaskUpgrade } from "./macCaskUpgrade.js";
+import { installedPackageVersion } from "./installedPackageVersion.js";
 import {
   createReleaseUpdateController,
   linuxUpgradeCommandFor,
@@ -496,16 +498,7 @@ function detectLinuxPackageOwner(executable: string): "deb" | "rpm" | "pacman" |
 /** The Homebrew upgrade for the installed cask, when brew is reachable. */
 function brewCaskUpgrade(): { display: string; argv: readonly string[] } | null {
   if (process.platform !== "darwin") return null;
-  // A GUI launch inherits a minimal PATH, so brew is found by its install
-  // locations rather than by name.
-  for (const brew of ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]) {
-    if (!fs.existsSync(brew)) continue;
-    return {
-      display: "brew upgrade --cask vibestudio",
-      argv: [brew, "upgrade", "--cask", "vibestudio"],
-    };
-  }
-  return null;
+  return macCaskUpgrade(app.getPath("exe"));
 }
 
 /** Whether one command can be raised to root with a prompt the user can answer. */
@@ -530,7 +523,7 @@ function runUpgradeCommand(
 ): Promise<{ code: number | null; stderr: string }> {
   const [command, ...rest] = options.elevate ? ["pkexec", ...argv] : argv;
   if (!command) return Promise.resolve({ code: 127, stderr: "no upgrade command" });
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child = spawn(command, rest, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr?.setEncoding("utf8");
@@ -538,7 +531,7 @@ function runUpgradeCommand(
       // Bound what a failing package manager can hand back to a dialog.
       if (stderr.length < 8_192) stderr += chunk;
     });
-    child.once("error", (error) => resolve({ code: 127, stderr: error.message }));
+    child.once("error", reject);
     child.once("close", (code) => resolve({ code, stderr }));
   });
 }
@@ -1895,6 +1888,16 @@ app.on("ready", async () => {
     canElevate: () => canRunPrivilegedCommand(),
     developerIdSigned: () => hasDeveloperIdSignature(app.getPath("exe")),
     brewUpgrade: () => brewCaskUpgrade(),
+    openExternal: (url) => shell.openExternal(url),
+    restart: () => relaunchWithIntent(),
+    installedVersion: async () => {
+      if (process.platform === "darwin") {
+        const brew = brewCaskUpgrade()?.argv[0];
+        return brew ? installedPackageVersion("brew", brew) : null;
+      }
+      const owner = detectLinuxPackageOwner(app.getPath("exe"));
+      return owner ? installedPackageVersion(owner) : null;
+    },
     runCommand: (argv, options) => runUpgradeCommand(argv, options),
     prepareInstall: async () => {
       const { retainInstalledWorkspaceHost } = await import("./retainWorkspaceHost.js");
@@ -1909,11 +1912,10 @@ app.on("ready", async () => {
         await autoUpdater.checkForUpdates();
         return autoUpdater.downloadUpdate();
       },
-      quitAndInstall: () => {
-        void import("electron-updater").then(({ autoUpdater }) => {
-          quitIntent = { kind: "relaunch", exitCode: 0 };
-          autoUpdater.quitAndInstall();
-        });
+      quitAndInstall: async () => {
+        const { autoUpdater } = await import("electron-updater");
+        quitIntent = { kind: "relaunch", exitCode: 0 };
+        autoUpdater.quitAndInstall();
       },
     }),
   });
@@ -2286,6 +2288,8 @@ app.on("ready", async () => {
         },
         events: {
           onAttentionRequired: handleAttentionRequired,
+          onNotificationAction: (id, actionId) =>
+            releaseUpdateController?.handleNotificationAction(id, actionId),
           onApprovalPendingChanged: (pending) =>
             approvalAttention?.handlePendingChanged({
               workspaceId: id,
@@ -2342,6 +2346,8 @@ app.on("ready", async () => {
   > = {
     applyAppAvailable: applyReadyElectronLaunchEvent,
     onAttentionRequired: handleAttentionRequired,
+    onNotificationAction: (id, actionId) =>
+      releaseUpdateController?.handleNotificationAction(id, actionId),
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
@@ -3326,6 +3332,7 @@ app.on("before-quit", (event) => {
 
 // Use will-quit with preventDefault to properly await async shutdown
 app.on("will-quit", (event) => {
+  releaseUpdateController?.stop();
   // Prevent re-entry. An explicit server stop is fail-closed: a second quit
   // request must not bypass the still-running hub termination proof.
   if (isCleaningUp) {
