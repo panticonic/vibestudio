@@ -120,6 +120,39 @@ class FakePipe implements IrohClientPipe {
 }
 
 describe("Iroh server client lifecycle", () => {
+  it("joins native retirement before wrapper closure can write another session control frame", async () => {
+    const pipe = new FakePipe([]);
+    const session = new FakeSession([]);
+    let release!: () => void;
+    const retiring = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gone = false;
+    vi.spyOn(pipe, "openSession").mockReturnValue(session);
+    vi.spyOn(pipe, "close").mockImplementation(async () => {
+      await retiring;
+      gone = true;
+    });
+    const closeSession = vi.spyOn(session, "close").mockImplementation(async () => {
+      if (!gone) throw new Error("Session control write raced its physical owner's closure");
+    });
+    const client = await createIrohServerClient({
+      reach,
+      callerId: "shell:device",
+      getShellToken: () => "token",
+      pipe,
+    });
+    const closing = client.close();
+    void closing.catch(() => undefined);
+    try {
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(closeSession).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await closing;
+    }
+    expect(closeSession).toHaveBeenCalledOnce();
+  });
   it("retires the pipe before joining session I/O and retains cleanup failures", async () => {
     const pipe = new FakePipe([]);
     let release!: () => void;

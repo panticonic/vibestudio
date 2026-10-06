@@ -481,10 +481,14 @@ export async function createIrohServerClient(
       closePromise = Promise.resolve().then(async () => {
         const scoped = [...materializedScopedClients];
         scopedClients.clear();
-        // Revoke every owner before joining. Pending native session I/O may
-        // need physical retirement to settle; it cannot precede pipe.close().
+        // The pipe owns the native sessions and releases their pending I/O.
+        // Join its retirement before closing logical wrappers; racing an
+        // independent SESSION_CLOSE write against physical closure invents a
+        // cleanup failure from this owner's own cancellation.
+        const physical = await Promise.allSettled([
+          Promise.resolve().then(() => transport.close()),
+        ]);
         const owners = [
-          () => transport.close(),
           ...[...hostUiSessions].map((session) => () => session.close()),
           () => mainSession.close(),
           ...scoped.map((client) => () => client.close()),
@@ -493,7 +497,7 @@ export async function createIrohServerClient(
           owners.map((close) => Promise.resolve().then(close))
         );
         materializedScopedClients.clear();
-        const failures = settled.flatMap((result) =>
+        const failures = [...physical, ...settled].flatMap((result) =>
           result.status === "rejected" ? [result.reason] : []
         );
         if (failures.length)
