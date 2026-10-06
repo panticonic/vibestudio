@@ -126,6 +126,73 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("releases a closed session's connection waiter while preserving the shared dial", async () => {
+    const pipe = new FakePipe();
+    let finishDial!: (value: IrohClientPipe) => void;
+    const dialing = new Promise<IrohClientPipe>((resolve) => {
+      finishDial = resolve;
+    });
+    const closeEndpoint = vi.fn(async () => {});
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: () => dialing,
+      closeEndpoint,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    const opening = session.ready!().catch((error: unknown) => error);
+    try {
+      await session.close();
+      expect(await opening).toMatchObject({ code: "CONNECTION_LOST" });
+      expect(closeEndpoint).not.toHaveBeenCalled();
+      finishDial(pipe);
+      const sibling = owner.openSession({ getToken: () => "credential" });
+      await sibling.ready!();
+      expect(owner.status()).toBe("connected");
+    } finally {
+      finishDial(pipe);
+      await opening;
+      await owner.close();
+    }
+  });
+  it("closes an acquired inner session before waiting for its authentication", async () => {
+    const pipe = new FakePipe();
+    let acquired!: () => void;
+    const acquisition = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    let rejectReady!: (error: Error) => void;
+    const readiness = new Promise<void>((_resolve, reject) => {
+      rejectReady = reject;
+    });
+    const inner = new FakeSession({ getToken: () => "credential" });
+    inner.ready = () => readiness;
+    const close = vi.spyOn(inner, "close").mockImplementation(async () => {
+      rejectReady(new Error("authentication cancelled"));
+    });
+    vi.spyOn(pipe, "openSession").mockImplementation(() => {
+      acquired();
+      return inner;
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: async () => pipe,
+      closeEndpoint: async () => {},
+    });
+    await owner.ready();
+    const session = owner.openSession({ getToken: () => "credential" });
+    const opening = session.ready!().catch((error: unknown) => error);
+    await acquisition;
+    try {
+      await session.close();
+      expect(close).toHaveBeenCalledOnce();
+      expect(await opening).toMatchObject({ message: "authentication cancelled" });
+    } finally {
+      rejectReady(new Error("fixture released"));
+      await opening;
+      await owner.close();
+    }
+  });
+
   it("returns a failed initial acquisition and lets an explicit retry connect", async () => {
     // The physical connection is answered and then dropped inside the same
     // turn that installs it, which is the one window where the drop has no

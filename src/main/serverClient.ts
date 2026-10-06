@@ -3,6 +3,7 @@
  */
 
 import { WebSocket } from "ws";
+import { finishSessionOpening } from "./sessionOpening.js";
 import { randomUUID } from "node:crypto";
 import {
   createRpcClient,
@@ -160,7 +161,7 @@ export interface ServerClient {
   isClosed(): boolean;
   onRecovery(listener: (kind: "resubscribe" | "cold-recover") => void | Promise<void>): () => void;
   onConnectionStatusChange(listener: (status: ConnectionStatus) => void): () => void;
-  openHostUiSession(): Promise<HostUiSession>;
+  openHostUiSession(signal?: AbortSignal): Promise<HostUiSession>;
   /**
    * Publish one Electron-owned host method to the authenticated server.
    * Direct routed calls from workspace principals are rejected at this client
@@ -451,7 +452,7 @@ export async function createServerClient(
         statusListeners.delete(listener);
       };
     },
-    async openHostUiSession(): Promise<HostUiSession> {
+    async openHostUiSession(signal?: AbortSignal): Promise<HostUiSession> {
       if (closing) throw new Error("Desktop server client is closing");
       const uiTransport = wsClientTransport({
         selfId: `desktop-ui:${randomUUID()}`,
@@ -493,14 +494,14 @@ export async function createServerClient(
         },
       };
       hostUiSessions.add(ui);
-      try {
-        await uiTransport.connectAndWait();
-        if (closing) throw new Error("Desktop server client is closing");
-        return ui;
-      } catch (error) {
-        await ui.close();
-        throw error;
-      }
+      return finishSessionOpening(
+        ui,
+        async () => {
+          await uiTransport.connectAndWait();
+          if (closing) throw new Error("Desktop server client is closing");
+        },
+        signal
+      );
     },
     exposeHostStream(method, handler): void {
       exposeServerOriginatedHostStream(rpc, method, handler);

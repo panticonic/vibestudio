@@ -428,4 +428,21 @@ describe("UiSessions", () => {
     expect(session.close).toHaveBeenCalledOnce();
     await directory.close();
   });
+  it("revokes an opening session when its renderer is destroyed", async () => {
+    const { directory, runtime } = setup();
+    let signal!: AbortSignal;
+    vi.mocked(runtime.serverClient.openHostUiSession).mockImplementationOnce(
+      (openingSignal) =>
+        new Promise((_resolve, reject) => {
+          signal = openingSignal!;
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        })
+    );
+    const opening = directory.session(caller, runtime);
+    const rejected = expect(opening).rejects.toMatchObject({ code: "CONNECTION_LOST" });
+    await directory.closeCaller(caller.callerId);
+    expect(signal.aborted).toBe(true);
+    await rejected;
+    await directory.close();
+  });
 });

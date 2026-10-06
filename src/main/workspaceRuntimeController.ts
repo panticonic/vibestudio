@@ -539,7 +539,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   const assertOpen = () => {
     if (closed) throw new Error("Workspace runtime is closed");
   };
-  type CleanupStep = { done: boolean; run: () => unknown };
+  type CleanupStep = { done: boolean; run: () => unknown; running?: Promise<void> };
   const producerCleanup: CleanupStep[] = [
     () => rendererRecovery.abort(new Error("Workspace runtime closed")),
     stopDirectEvents,
@@ -548,6 +548,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     stopCapture,
     stopRecovery,
     stopStatus,
+    () => watch.close(),
     () => browserPermissions.stop(),
     () => cdp?.stop(),
     () => {
@@ -555,7 +556,6 @@ export function createDesktopWorkspaceRuntime(deps: {
     },
   ].map((run) => ({ done: false, run }));
   const resourceCleanup: CleanupStep[] = [
-    () => watch.close(),
     () => controller.orchestrator.unregisterRuntimeClient(),
     () => container.stopAll(),
     () => downloads?.stop(),
@@ -578,9 +578,24 @@ export function createDesktopWorkspaceRuntime(deps: {
     const results = await Promise.allSettled(
       steps
         .filter((step) => !step.done)
-        .map(async (step) => {
-          await step.run();
-          step.done = true;
+        .map((step) => {
+          if (!step.running) {
+            const operation = Promise.resolve()
+              .then(step.run)
+              .then(() => {
+                step.done = true;
+              });
+            step.running = operation;
+            void operation.then(
+              () => {
+                step.running = undefined;
+              },
+              () => {
+                step.running = undefined;
+              }
+            );
+          }
+          return step.running;
         })
     );
     return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -702,8 +717,12 @@ export function createDesktopWorkspaceRuntime(deps: {
     closed = true;
     if (closing) return closing;
     const operation = (async () => {
+      // Startup can be waiting for a watch ACK or a permission producer.
+      // Revoke producers before joining startup, then retire its resources.
+      const errors = await runCleanup(producerCleanup);
       await starting?.catch(() => undefined);
       await dispose();
+      if (errors.length) throw new AggregateError(errors, "Workspace producers failed to stop");
     })();
     closing = operation;
     void operation.catch(() => {
@@ -832,6 +851,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           for (const service of personalBrowser.publishedServices)
             publishHostService(connection.serverClient, dispatcher, service);
         }
+        assertOpen();
         cdp = new CdpHostProvider({
           serverUrl: connection.gatewayConfig.serverUrl,
           hostConnectionId,

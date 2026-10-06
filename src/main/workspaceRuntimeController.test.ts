@@ -258,7 +258,7 @@ function fixture(
   const watch = {
     recover: vi.fn(async (): Promise<void> => undefined),
     close: vi.fn(async () => undefined),
-    retainAll: vi.fn(async () => undefined),
+    retainAll: vi.fn(async (): Promise<void> => undefined),
     retainMany: vi.fn(() => () => {}),
   };
   edges.watch.mockReturnValueOnce(watch);
@@ -665,6 +665,28 @@ describe("workspace runtime ownership", () => {
     expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
     expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
     expect(owner.shutdown).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the startup watch before joining startup on close", async () => {
+    const owner = fixture("system");
+    const acknowledgement = deferred<void>();
+    const original = new Error("watch cancelled");
+    owner.watch.retainAll.mockReturnValueOnce(acknowledgement.promise);
+    owner.watch.close.mockImplementationOnce(async () => {
+      acknowledgement.reject(original);
+    });
+    const started = owner.runtime.start();
+    const rejected = expect(started).rejects.toBe(original);
+    await vi.waitFor(() => expect(owner.watch.retainAll).toHaveBeenCalledOnce());
+    try {
+      await owner.runtime.close();
+      await rejected;
+      expect(owner.watch.close).toHaveBeenCalledOnce();
+      expect(owner.shutdown).toHaveBeenCalledOnce();
+    } finally {
+      acknowledgement.reject(original);
+      await rejected;
+    }
   });
 
   it("cleans allocated resources after startup failure", async () => {

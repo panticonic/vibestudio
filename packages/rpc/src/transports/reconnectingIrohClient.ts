@@ -4,6 +4,7 @@ import type { IrohClientPipe, IrohClientSession, IrohClientSessionOptions } from
 import type { IrohConnectionDiagnostics } from "@vibestudio/iroh-transport";
 import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import { secureRandomUuid } from "../randomId.js";
+import { RpcBoundaryError } from "../errors.js";
 
 export interface ReconnectingIrohPipeOptions {
   peerEndpointId: string;
@@ -58,6 +59,10 @@ class ReconnectingSession implements IrohClientSession {
   private generation = 0;
   private closed = false;
   private terminal = false;
+  private readonly retirement = new AbortController();
+  private closePromise: Promise<void> | null = null;
+  private readonly acquired = new Set<{ generation: number; close(): Promise<void> }>();
+  private readonly activations = new Set<Promise<IrohClientSession>>();
   private authenticatedCallerId: string | null = null;
   private readonly messageListeners = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
@@ -123,21 +128,43 @@ class ReconnectingSession implements IrohClientSession {
     return inner.streamReadable(envelope, signal, body, headTimeoutMs, trafficClass);
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.retirement.abort(
+      new RpcBoundaryError(
+        `Iroh session ${this.logicalId} is closed`,
+        "transport",
+        SESSION_CONNECTION_LOST_CODE
+      )
+    );
     this.owner.removeSession(this);
-    const inner = this.inner;
     this.inner = null;
     this.activation = null;
-    await inner?.close().catch(() => undefined);
-    this.emitStatus("disconnected");
+    const retiring = [...this.acquired].map((inner) => inner.close());
+    this.closePromise = (async () => {
+      const results = await Promise.allSettled(retiring);
+      await Promise.allSettled([...this.activations]);
+      this.emitStatus("disconnected");
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (errors.length) throw new AggregateError(errors, "Iroh session cleanup failed");
+    })();
+    return this.closePromise;
   }
 
   invalidate(generation: number): void {
     if (generation !== this.generation) return;
     this.inner = null;
     this.activation = null;
+    for (const inner of this.acquired) {
+      if (inner.generation === generation) {
+        // Keep failed cleanup owned so close() reports it; successful
+        // retirement releases the old generation immediately.
+        void inner.close().catch(() => undefined);
+      }
+    }
     if (!this.closed && !this.terminal) this.emitStatus("connecting");
   }
 
@@ -155,13 +182,37 @@ class ReconnectingSession implements IrohClientSession {
       }
       throw error;
     });
+    const activation = this.activation;
+    this.activations.add(activation);
+    void activation.then(
+      () => this.activations.delete(activation),
+      () => this.activations.delete(activation)
+    );
     return this.activation;
   }
 
   private async ensureInner(): Promise<IrohClientSession> {
     if (this.closed) throw new Error(`Iroh session ${this.logicalId} is closed`);
     if (this.terminal) throw new Error(`Iroh session ${this.logicalId} is terminal`);
-    const { pipe, generation } = await this.owner.ensureConnected();
+    // This waiter belongs to the logical session. The shared physical dial
+    // stays owned by the pipe and can serve other sessions after this closes.
+    const connection = this.owner.ensureConnected();
+    const signal = this.retirement.signal;
+    const { pipe, generation } = await new Promise<ConnectedGeneration>((resolve, reject) => {
+      const cancelled = () => reject(signal.reason);
+      signal.addEventListener("abort", cancelled, { once: true });
+      void connection.then(
+        (value) => {
+          signal.removeEventListener("abort", cancelled);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", cancelled);
+          reject(error);
+        }
+      );
+      if (signal.aborted) cancelled();
+    });
     return this.activate(pipe, generation);
   }
 
@@ -202,21 +253,37 @@ class ReconnectingSession implements IrohClientSession {
         this.emitStatus("disconnected");
       },
     });
+    // Acquisition precedes authentication. Shutdown must be able to revoke
+    // this owner while ready() is still waiting for the server's result.
+    let closing: Promise<void> | null = null;
+    const acquired = {
+      generation,
+      close: () =>
+        (closing ??= inner.close().then(() => {
+          this.acquired.delete(acquired);
+        })),
+    };
+    this.acquired.add(acquired);
     inner.onMessage((envelope) => {
       if (this.generation !== generation) return;
       for (const listener of [...this.messageListeners]) listener(envelope);
     });
-    await inner.ready?.();
-    if (terminalError) throw terminalError;
-    if (this.closed || this.generation !== generation || this.owner.generation() !== generation) {
-      await inner.close().catch(() => undefined);
-      throw new Error(`Iroh session ${this.logicalId} opened on a stale connection generation`);
+    try {
+      await inner.ready?.();
+      if (terminalError) throw terminalError;
+      if (this.closed || this.generation !== generation || this.owner.generation() !== generation)
+        throw new Error(`Iroh session ${this.logicalId} opened on a stale connection generation`);
+      this.inner = inner;
+      this.authenticatedCallerId = inner.callerId();
+      this.emitStatus("connected");
+      if (recovery !== undefined) await this.options.onRecovery?.(recovery);
+      return inner;
+    } catch (error) {
+      await acquired.close().catch((cleanupError: unknown) => {
+        throw new AggregateError([error, cleanupError], "Iroh session opening and cleanup failed");
+      });
+      throw error;
     }
-    this.inner = inner;
-    this.authenticatedCallerId = inner.callerId();
-    this.emitStatus("connected");
-    if (recovery !== undefined) await this.options.onRecovery?.(recovery);
-    return inner;
   }
 
   private emitStatus(status: RpcConnectionStatus): void {

@@ -81,6 +81,48 @@ describe("EventsClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it("cancels and joins a watch that is still waiting for its acknowledgement", async () => {
+    let signal!: AbortSignal;
+    let response!: ReadableStreamDefaultController<Uint8Array>;
+    let responseClosed = false;
+    const closeResponse = () => {
+      if (responseClosed) return;
+      responseClosed = true;
+      response.close();
+    };
+    let admitted!: () => void;
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const pendingClient = new EventsClient({
+      stream: async (_target, _method, _args, options) => {
+        signal = options!.signal!;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              response = controller;
+              signal.addEventListener("abort", closeResponse, { once: true });
+              admitted();
+            },
+          })
+        );
+      },
+    });
+    const opening = pendingClient.subscribe("panel-tree-invalidated");
+    const rejected = expect(opening).rejects.toThrow("before its ACK");
+    await admission;
+    try {
+      const closing = pendingClient.unsubscribeAll();
+      expect(signal.aborted).toBe(true);
+      await closing;
+      await rejected;
+    } finally {
+      closeResponse();
+      await rejected;
+      await pendingClient.unsubscribeAll();
+    }
+  });
+
   it("creates a cryptographic watch id when randomUUID is unavailable", async () => {
     vi.stubGlobal("crypto", {
       getRandomValues(bytes: Uint8Array) {

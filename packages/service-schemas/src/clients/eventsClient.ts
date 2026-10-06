@@ -114,7 +114,7 @@ export class EventsClient {
   }
 
   async unsubscribeAll(): Promise<void> {
-    if (this.subscriptions.size === 0 && !this.active) return;
+    if (this.subscriptions.size === 0 && !this.active && !this.pending) return;
     this.subscriptions.clear();
     await this.queueRefresh();
   }
@@ -140,7 +140,18 @@ export class EventsClient {
   }
 
   private queueRefresh(): Promise<void> {
-    return serializeByKey(this.refreshQueue, "events-watch", () => this.refresh());
+    // Empty demand revokes the response now, including an opening watch whose
+    // ACK is holding the serializer. Queuing cancellation behind that ACK
+    // makes the cancellation wait for the operation it must release.
+    const retiring =
+      this.subscriptions.size === 0
+        ? [...new Set([this.pending, this.active].filter((watch) => watch !== null))]
+        : [];
+    for (const watch of retiring) watch.controller.abort();
+    const refresh = serializeByKey(this.refreshQueue, "events-watch", () => this.refresh());
+    return Promise.all([refresh, ...retiring.map((watch) => watch.terminal.catch(() => {}))]).then(
+      () => undefined
+    );
   }
 
   private async refresh(): Promise<void> {

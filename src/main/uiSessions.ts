@@ -46,7 +46,10 @@ const CONNECTION_LOST_MESSAGE = "Connection lost before the response arrived";
 
 /** Owns device/user sessions exclusively for native-admitted System chrome. */
 export class UiSessions {
-  private readonly sessions = new Map<string, Promise<SessionEntry>>();
+  private readonly sessions = new Map<
+    string,
+    { opening: Promise<SessionEntry>; abort: AbortController }
+  >();
   private closed = false;
 
   constructor(
@@ -109,14 +112,15 @@ export class UiSessions {
     const key = this.key(caller, runtime.destination);
     const existing = this.sessions.get(key);
     if (existing) {
-      const entry = await existing;
+      const entry = await existing.opening;
       if (entry.runtime.serverClient === runtime.serverClient && !entry.session.isClosed?.())
         return entry.session;
       await this.closeEntry(key);
     }
     if (this.closed) throw new Error("Workspace UI sessions are closed");
-    const opening = runtime.serverClient.openHostUiSession().then(async (session) => {
-      if (this.closed || this.sessions.get(key) !== opening) {
+    const abort = new AbortController();
+    const opening = runtime.serverClient.openHostUiSession(abort.signal).then(async (session) => {
+      if (this.closed || this.sessions.get(key)?.opening !== opening) {
         await session.close();
         throw new RpcBoundaryError(
           "Workspace UI session was released while opening",
@@ -266,7 +270,7 @@ export class UiSessions {
         deliveryTail = deliveryTail
           .then(() => this.admit(caller, runtime.destination))
           .then(async (current) => {
-            if (!current || this.sessions.get(key) !== opening) return;
+            if (!current || this.sessions.get(key)?.opening !== opening) return;
             if (current.serverClient !== runtime.serverClient) {
               await this.closeEntry(key);
               return;
@@ -284,11 +288,11 @@ export class UiSessions {
       });
       return { caller, runtime, session: trackedSession, unsubscribe, pending, streamAborts };
     });
-    this.sessions.set(key, opening);
+    this.sessions.set(key, { opening, abort });
     try {
       return (await opening).session;
     } catch (error) {
-      if (this.sessions.get(key) === opening) this.sessions.delete(key);
+      if (this.sessions.get(key)?.opening === opening) this.sessions.delete(key);
       throw error;
     }
   }
@@ -320,8 +324,15 @@ export class UiSessions {
     const pending = this.sessions.get(key);
     this.sessions.delete(key);
     if (!pending) return;
+    pending.abort.abort(
+      new RpcBoundaryError(
+        "Workspace UI session was released while opening",
+        "transport",
+        "CONNECTION_LOST"
+      )
+    );
     try {
-      const entry = await pending;
+      const entry = await pending.opening;
       entry.unsubscribe();
       for (const abort of entry.streamAborts) abort.abort(CONNECTION_LOST_MESSAGE);
       entry.streamAborts.clear();

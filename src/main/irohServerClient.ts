@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { finishSessionOpening } from "./sessionOpening.js";
 import {
   createRpcClient,
   type RpcClient,
@@ -367,7 +368,7 @@ export async function createIrohServerClient(
         statusListeners.delete(listener);
       };
     },
-    async openHostUiSession() {
+    async openHostUiSession(signal?: AbortSignal) {
       if (closing) throw new Error("Iroh server client is closing");
       const session = transport.openSession({
         connectionId: randomUUID(),
@@ -393,14 +394,14 @@ export async function createIrohServerClient(
         },
       };
       hostUiSessions.add(ui);
-      try {
-        await session.ready?.();
-        if (closing) throw new Error("Iroh server client is closing");
-        return ui;
-      } catch (error) {
-        await ui.close();
-        throw error;
-      }
+      return finishSessionOpening(
+        ui,
+        async () => {
+          await session.ready?.();
+          if (closing) throw new Error("Iroh server client is closing");
+        },
+        signal
+      );
     },
     invalidateEndpointGeneration(generation, reason): void {
       lifecycleTransport?.invalidateEndpointGeneration(generation, reason);

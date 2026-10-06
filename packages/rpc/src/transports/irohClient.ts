@@ -344,10 +344,17 @@ class ClientSession implements IrohClientSession {
     if (this.closePromise) return this.closePromise;
     if (this.terminal) return this.failureCompletion;
     this.terminal = true;
-    const retirement = this.failOutstanding(new Error(`Iroh session ${this.sid} closed`));
+    const retirement = this.failOutstanding(
+      new RpcBoundaryError(
+        `Iroh session ${this.sid} closed`,
+        "transport",
+        SESSION_CONNECTION_LOST_CODE
+      )
+    );
     this.closePromise = (async () => {
       try {
-        await this.pipe.writeControl({ t: IROH_SESSION_CLOSE, sid: this.sid, code: 1000 });
+        if (this.pipe.status() !== "disconnected")
+          await this.pipe.writeControl({ t: IROH_SESSION_CLOSE, sid: this.sid, code: 1000 });
       } finally {
         // A failed control write must not strand this session's request owners.
         await retirement;
@@ -376,6 +383,9 @@ class ClientSession implements IrohClientSession {
   }
 
   handleOpenResult(frame: IrohSessionOpenResultFrame): void {
+    // A close can revoke the pending authentication before its wire result
+    // arrives. That result belongs to this retired session, not the pipe.
+    if (this.terminal) return;
     this.pipe.settleOpen(frame);
   }
 
@@ -409,16 +419,21 @@ class ClientSession implements IrohClientSession {
 
   private async open(): Promise<void> {
     await this.pipe.ready();
+    if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
+    const generation = this.requestGeneration;
     const resultPromise = this.pipe.waitForOpen(this.sid);
     // Observe the server result while credentials and the control write are
     // pending: disconnect can reject it before either operation completes.
     const [result] = await Promise.all([
       resultPromise,
       (async () => {
+        const token = await this.options.getToken();
+        if (this.terminal || this.requestGeneration !== generation)
+          throw new Error(`Iroh session ${this.sid} closed during credential acquisition`);
         await this.pipe.writeControl({
           t: IROH_SESSION_OPEN,
           sid: this.sid,
-          token: await this.options.getToken(),
+          token,
           ...(this.options.connectionId ? { connectionId: this.options.connectionId } : {}),
           ...(this.options.clientSessionId
             ? { clientSessionId: this.options.clientSessionId }
@@ -712,6 +727,7 @@ class ClientSession implements IrohClientSession {
 
   private failOutstanding(error: Error): Promise<void> {
     this.requestGeneration += 1;
+    this.pipe.rejectOpen(this.sid, error);
     const retirements: Promise<unknown>[] = [this.failureCompletion];
     for (const [requestId, outbound] of this.outboundRequests) {
       this.emitTransportFailure(requestId, error);
@@ -861,6 +877,12 @@ class ClientPipe implements IrohClientPipe {
     if (!pending) throw new Error(`Unexpected Iroh open-result for ${frame.sid}`);
     this.pendingOpens.delete(frame.sid);
     pending.resolve(frame);
+  }
+
+  rejectOpen(sid: string, error: Error): void {
+    const pending = this.pendingOpens.get(sid);
+    this.pendingOpens.delete(sid);
+    pending?.reject(error);
   }
 
   removeSession(sid: string, session: ClientSession): void {
