@@ -1757,8 +1757,7 @@ async function main() {
             exposeHostPaths: false,
           },
           "mkdir",
-          [contextId, { recursive: true }],
-          AbortSignal.timeout(10_000)
+          [contextId, { recursive: true }]
         );
       },
       remove: async (contextId) => {
@@ -1777,8 +1776,7 @@ async function main() {
             exposeHostPaths: false,
           },
           "rm",
-          [contextId, { recursive: true, force: true }],
-          AbortSignal.timeout(10_000)
+          [contextId, { recursive: true, force: true }]
         );
       },
     },

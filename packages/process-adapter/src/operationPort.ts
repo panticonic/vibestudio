@@ -9,16 +9,17 @@ type Pending = { resolve(value: unknown): void; reject(error: Error): void; disp
  * outstanding operation; they never dispatch a method in the owner. */
 export class NativeOperationPort {
   private readonly pending = new Map<string, Pending>();
-  private retired = false;
+  private retirementError: Error | null = null;
+  private readonly ended = (): void => this.retire();
   constructor(private readonly process: ProcessAdapter) {
     process.on("message", this.receive);
-    process.on("exit", this.retire);
-    process.on("disconnect", this.retire);
+    process.on("exit", this.ended);
+    process.on("disconnect", this.ended);
     process.on("error", this.retire);
   }
 
   call(method: string, args: unknown[], signal?: AbortSignal): Promise<unknown> {
-    if (this.retired) return Promise.reject(new Error("Native operation port retired"));
+    if (this.retirementError) return Promise.reject(this.retirementError);
     if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.pending.size >= MAX_PENDING)
       return Promise.reject(new Error("Native operation limit reached"));
@@ -38,8 +39,8 @@ export class NativeOperationPort {
         reject(signal?.reason ?? new Error("Native operation cancelled"));
         try {
           this.process.postMessage({ type: "cancel-operation", id });
-        } catch {
-          this.retire();
+        } catch (error) {
+          this.retire(error instanceof Error ? error : new Error(String(error)));
         }
       };
       this.pending.set(id, {
@@ -54,13 +55,13 @@ export class NativeOperationPort {
         this.pending.delete(id);
         signal?.removeEventListener("abort", abort);
         reject(error);
-        this.retire();
+        this.retire(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
 
   private receive = (frame: unknown): void => {
-    if (this.retired) return;
+    if (this.retirementError) return;
     if (!frame || typeof frame !== "object") {
       this.retire();
       return;
@@ -90,17 +91,17 @@ export class NativeOperationPort {
     } else pending.resolve(response["value"]);
   };
 
-  readonly retire = (): void => {
-    if (this.retired) return;
-    this.retired = true;
+  readonly retire = (error = new Error("Native operation port retired")): void => {
+    if (this.retirementError) return;
+    this.retirementError = error;
     this.process.off("message", this.receive);
-    this.process.off("exit", this.retire);
-    this.process.off("disconnect", this.retire);
+    this.process.off("exit", this.ended);
+    this.process.off("disconnect", this.ended);
     // Keep the idempotent error consumer until the adapter itself is collected;
     // asynchronous send errors can arrive after logical retirement.
     for (const pending of this.pending.values()) {
       pending.dispose();
-      pending.reject(new Error("Native operation port retired"));
+      pending.reject(error);
     }
     this.pending.clear();
   };

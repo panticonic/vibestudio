@@ -9,6 +9,35 @@ function fixture() {
   return { adapter, port };
 }
 
+it("preserves the worker error for all pending and later operations", async () => {
+  const { adapter, port } = fixture();
+  const first = port.call("mkdir", []);
+  const second = port.call("read", []);
+  const failure = new Error("Worker IPC failed");
+  adapter.emit("error", failure);
+  await expect(first).rejects.toBe(failure);
+  await expect(second).rejects.toBe(failure);
+  await expect(port.call("read", [])).rejects.toBe(failure);
+});
+
+it("keeps a slow operation pending until its actual response arrives", async () => {
+  vi.useFakeTimers();
+  const { adapter, port } = fixture();
+  const pending = port.call("mkdir", []);
+  const frame = adapter.postMessage.mock.calls[0]![0];
+  const settled = vi.fn();
+  void pending.then(settled, settled);
+  try {
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(settled).not.toHaveBeenCalled();
+    adapter.emit("message", { type: "operation-result", id: frame.id, value: "created" });
+    await expect(pending).resolves.toBe("created");
+  } finally {
+    port.retire();
+    vi.useRealTimers();
+  }
+});
+
 it("accepts only results for outstanding operations and retires on attempted owner dispatch", async () => {
   const { adapter, port } = fixture();
   const request = port.call("read", []);

@@ -177,8 +177,7 @@ export async function startNativeWorkspaceRuntime(input: {
         exposeHostPaths: false,
       },
       "mkdir",
-      ["tmp", { recursive: true }],
-      AbortSignal.timeout(10_000)
+      ["tmp", { recursive: true }]
     );
     return {
       disk,
