@@ -7,6 +7,7 @@ import { printConnectBanner } from "./connect-banner.mjs";
 import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
+import { bindProcessLifetimeToParent } from "../../owned-process-tree.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -252,6 +253,7 @@ by clients after pairing.
 }
 
 export async function runPairServer(config, argv = process.argv.slice(2), hooks = {}) {
+  if (process.send) bindProcessLifetimeToParent();
   const options = parsePairArgs(argv, config);
   if (options.help) {
     printPairHelp(config);
@@ -429,7 +431,10 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       ? hooks.spawnServer({ serverArgs, env, repoRoot, invocation })
       : spawn(invocation.command, invocation.args, {
           cwd: repoRoot,
-          stdio: ["inherit", "pipe", "inherit"],
+          // The hub consumes this lease before bootstrap. Even when Windows
+          // terminates the wrapper without delivering a signal, disconnect
+          // revokes the hub and its descendants before their state is retired.
+          stdio: ["inherit", "pipe", "inherit", "ipc"],
           env,
           // Keep the child out of the wrapper terminal's foreground process
           // group on POSIX. Otherwise Ctrl-C reaches child and wrapper at the

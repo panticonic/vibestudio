@@ -449,7 +449,7 @@ function spawnManaged(command, args, options = {}) {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
     detached: process.platform !== "win32",
-    stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
+    stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
   });
   child.stdout?.on("data", (chunk) =>
     prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)

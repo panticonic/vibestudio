@@ -7,6 +7,7 @@ export default defineConfig({
   test: {
     include: [
       "tests/packageManagerInvocation.test.ts",
+      "tests/parent-owned-server.test.ts",
       "packages/process-adapter/src/isolation/**/*.test.ts",
       "packages/extension-host/src/childRuntime.integration.test.ts",
       "packages/extension-host/src/atomicStorage.test.ts",
