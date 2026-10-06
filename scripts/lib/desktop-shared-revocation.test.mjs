@@ -7,34 +7,38 @@ import {
   waitForApprovalSettlement,
 } from "./desktop-shared-revocation.mjs";
 
-function rpcPage(responseOwner) {
+function rpcPage(responseOwner, deferResponse = false) {
   let sent;
+  let receive;
+  let subscriptions = 0;
+  const respond = () =>
+    receive({
+      delivery: { caller: responseOwner },
+      message: { type: "response", requestId: sent.message.requestId, result: "ok" },
+    });
   return {
+    respond,
+    get subscriptions() {
+      return subscriptions;
+    },
     get sent() {
       return sent;
     },
     async evaluate(run, input) {
       const previousWindow = globalThis.window;
-      let receive;
       globalThis.window = {
         __vibestudioTransport: {
           identity: { runtimeId: "native:System:shell", workspaceId: "system-workspace" },
           onMessage(listener) {
             receive = listener;
-            return () => {};
+            subscriptions++;
+            return () => {
+              subscriptions--;
+            };
           },
           async send(envelope) {
             sent = envelope;
-            queueMicrotask(() =>
-              receive({
-                delivery: { caller: responseOwner },
-                message: {
-                  type: "response",
-                  requestId: envelope.message.requestId,
-                  result: "ok",
-                },
-              })
-            );
+            if (!deferResponse) queueMicrotask(respond);
           },
         },
       };
@@ -46,6 +50,28 @@ function rpcPage(responseOwner) {
     },
   };
 }
+
+test("native RPC retains a slow live request until its owning response", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const page = rpcPage({ callerId: "hub", callerKind: "server" }, true);
+  let outcome;
+  const request = nativeRpc(page, { kind: "hub" }, "hubControl.listWorkspaces", []).then(
+    (value) => {
+      outcome = { value };
+    },
+    (error) => {
+      outcome = { error };
+    }
+  );
+  t.mock.timers.tick(120_000);
+  await Promise.resolve();
+  assert.equal(outcome, undefined);
+  assert.equal(page.subscriptions, 1);
+  page.respond();
+  await request;
+  assert.deepEqual(outcome, { value: "ok" });
+  assert.equal(page.subscriptions, 0);
+});
 
 test("native RPC sends an explicit hub destination", async () => {
   const page = rpcPage({ callerId: "hub", callerKind: "server" });

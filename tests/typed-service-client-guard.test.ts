@@ -82,6 +82,8 @@ describe("typed service client guard", () => {
       execFileSync(
         process.execPath,
         [
+          "--import",
+          "tsx",
           "--input-type=module",
           "--eval",
           "await import('@vibestudio/service-schemas/extensions');",

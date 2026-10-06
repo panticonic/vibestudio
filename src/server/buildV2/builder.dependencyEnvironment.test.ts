@@ -19,6 +19,31 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("preserves prefix-only Node built-ins without admitting unknown Node modules", async () => {
+    const options: esbuild.BuildOptions = {
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      logLevel: "silent",
+      plugins: [createDependencyEnvironmentResolvePlugin([])],
+    };
+    const result = await esbuild.build({
+      ...options,
+      stdin: {
+        contents: 'export { DatabaseSync } from "node:sqlite"; export { test } from "node:test";',
+      },
+    });
+    const output = result.outputFiles?.[0]?.text;
+    expect(output).toContain('"node:sqlite"');
+    expect(output).toContain('"node:test"');
+    await expect(
+      esbuild.build({
+        ...options,
+        stdin: { contents: 'import "node:unknown-vibestudio-module";' },
+      })
+    ).rejects.toThrow("not present in the prepared build environment");
+  });
   it.each([true, false])(
     "owns only declared transitive workspace source links (declared=%s)",
     async (declared) => {

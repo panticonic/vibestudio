@@ -32,7 +32,7 @@ export async function chromePage(app, deadline) {
 }
 
 /** Uses the same authenticated native UI carrier as the existing selected-copy E2E. */
-export async function nativeRpc(page, destination, method, args, timeoutMs = 30_000) {
+export async function nativeRpc(page, destination, method, args) {
   if (
     !destination ||
     (destination.kind !== "hub" &&
@@ -45,18 +45,16 @@ export async function nativeRpc(page, destination, method, args, timeoutMs = 30_
     throw new Error(`Native RPC ${method} requires an explicit hub or workspace destination`);
   }
   return page.evaluate(
-    async ({ destination, method, args, timeoutMs }) => {
+    async ({ destination, method, args }) => {
       const bridge = window.__vibestudioTransport;
       if (!bridge) throw new Error("Native workspace transport is unavailable");
       const requestId = `e2e-revocation-${crypto.randomUUID()}`;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          off();
-          reject(new Error(`Timed out calling ${method}`));
-        }, timeoutMs);
+        // The owning acceptance run bounds and joins the app and server.
+        // A slow live request remains pending until its response, send failure,
+        // or destruction of this page settles the evaluation.
         const off = bridge.onMessage(({ message, delivery }) => {
           if (message.type !== "response" || message.requestId !== requestId) return;
-          clearTimeout(timer);
           off();
           const responseWorkspaceId = delivery?.caller?.workspaceId;
           if (
@@ -91,13 +89,12 @@ export async function nativeRpc(page, destination, method, args, timeoutMs = 30_
             message: { type: "request", requestId, fromId: caller.callerId, method, args },
           })
           .catch((error) => {
-            clearTimeout(timer);
             off();
             reject(error);
           });
       });
     },
-    { destination, method, args, timeoutMs }
+    { destination, method, args }
   );
 }
 
@@ -346,8 +343,7 @@ export async function runSharedMemberRevocation({
         capabilities: ["geolocation"],
         deviceLabel: "Revocation acceptance desktop",
       },
-    ],
-    Math.max(1, deadline - Date.now())
+    ]
   ).then(
     (result) => (settledRequest = { result }),
     (error) => (settledRequest = { error: error.message })
@@ -423,8 +419,7 @@ export async function runSharedMemberRevocation({
     owner,
     { kind: "hub" },
     "hubControl.removeWorkspaceMember",
-    removalArgs,
-    Math.max(1, deadline - Date.now())
+    removalArgs
   ).then(
     (result) => (removalOutcome = { result }),
     (error) => (removalOutcome = { error })

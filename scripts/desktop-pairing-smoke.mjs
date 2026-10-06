@@ -319,12 +319,12 @@ function evaluateElectron(app, pageFunction, arg, label) {
  * Whether a failed observation only means "the desktop cannot answer yet".
  *
  * The scenario restarts the workspace server on purpose, so every read taken
- * around that restart can land in the gap it opens. Three shapes come back from
+ * around that restart can land in the gap it opens. Terminal failures come back from
  * that one cause: the main process refuses an RPC because the workspace session
  * is not back ("temporarily unavailable"), an in-flight call dies with the
- * socket, or the answer simply does not arrive inside one evaluation budget.
+ * socket, or the page hosting the request is released.
  *
- * A polling loop has to treat all three the same, because which one it sees is
+ * A polling loop has to treat those transport failures the same, because which one it sees is
  * a matter of where in the gap it happened to ask. Each loop deciding that for
  * itself is what let one of them tolerate the slow shape and fail the run on
  * the unavailable shape — the same condition, told apart by nothing that
@@ -344,14 +344,7 @@ function isTransientDesktopObservation(error) {
     // The host types this one properly — `RpcBoundaryError(.., "transport",
     // "CONNECTION_LOST")` in uiSessions.ts — but only its message survives the
     // Playwright boundary, so the text is all there is to match on here.
-    /Workspace UI session was released while opening/iu.test(message) ||
-    // `nativeRpc`'s own in-page deadline. A call that goes unanswered while a
-    // restarted server is still bringing its workspaces back is the same
-    // transition as the transport failures above, only observed by waiting
-    // rather than by being told. A call that is genuinely wedged still ends
-    // the run: retrying is bounded by the caller's deadline and the last
-    // failure is what surfaces.
-    /^Timed out calling /u.test(message)
+    /Workspace UI session was released while opening/iu.test(message)
   );
 }
 
@@ -1330,6 +1323,39 @@ async function readInitialPanelHistory(app, webContentsId, workspaceId) {
 }
 
 async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, ownerSignal) {
+  // Readiness may require the shell's own install review to finish. Its UI
+  // decisions must keep running while a request waits for that admission.
+  let finished = false;
+  const reviews = (async () => {
+    try {
+      while (!finished && !ownerSignal.aborted) {
+        await clickDesktopButton(app, /^Keep automatic reports off$/i);
+        if (await clickDesktopButton(app, /^Add to workspace$/i)) await sleep(750);
+        else await sleep(250);
+      }
+    } catch (error) {
+      // This phase owns the desktop: destroying it settles any pending page
+      // evaluation before both tasks are joined and the original error escapes.
+      await app.close().catch(() => {});
+      throw error;
+    }
+  })();
+  const observation = observePersonalPanel(
+    app,
+    workspaceId,
+    expectedSource,
+    deadline,
+    ownerSignal
+  ).finally(() => {
+    finished = true;
+  });
+  const [panelResult, reviewResult] = await Promise.allSettled([observation, reviews]);
+  if (reviewResult.status === "rejected") throw reviewResult.reason;
+  if (panelResult.status === "rejected") throw panelResult.reason;
+  return panelResult.value;
+}
+
+async function observePersonalPanel(app, workspaceId, expectedSource, deadline, ownerSignal) {
   let latestObservation = null;
   let latestWebContentsId;
   while (Date.now() < deadline) {
@@ -1341,10 +1367,6 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
     );
     if (reportingFailure)
       throw new Error(`Reporting preference blocked startup: ${reportingFailure}`);
-    if (await clickDesktopButton(app, /^Add to workspace$/i)) {
-      await sleep(750);
-      continue;
-    }
     const layout = await evaluateHostedChrome(
       app,
       `(() => {

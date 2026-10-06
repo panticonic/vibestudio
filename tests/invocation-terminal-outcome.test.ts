@@ -140,40 +140,54 @@ describe("invocation terminal event literals", () => {
     const misses: string[] = [];
     // `workers/test-agent` ships in the system-testing template, the rest in
     // Base: the contract covers whichever repository supplies the unit.
-    const sources = ROOTS.flatMap((root) => exactUnitRoots(root).flatMap(tsFiles)).map(
-      (fileName) => ({
+    const sources = ROOTS.flatMap((root) => exactUnitRoots(root).flatMap(tsFiles))
+      .map((fileName) => ({
         fileName,
         content: readFileSync(fileName, "utf8"),
-      })
-    );
-    usingTypeScriptProject(sources, (project) => {
-      for (const { fileName: file, content: source } of sources) {
-        const sourceFile = project.program.getSourceFile(file);
-        if (!sourceFile) throw new Error(`TypeScript did not parse ${file}`);
+      }))
+      .filter(
+        ({ content }) =>
+          // A terminal literal contains this prefix unless it uses an escape.
+          // Keep every escaped source too, including Unicode and line continuations,
+          // so candidate selection cannot exclude an encoded terminal kind.
+          content.includes("invocation.") || content.includes("\\")
+      );
+    usingTypeScriptProject(
+      sources,
+      (project) => {
+        for (const { fileName: file, content: source } of sources) {
+          const sourceFile = project.program.getSourceFile(file);
+          if (!sourceFile) throw new Error(`TypeScript did not parse ${file}`);
 
-        function visit(node: ts.Node): void {
-          if (ts.isObjectLiteralExpression(node)) {
-            const kind = terminalKindValue(node);
-            if (kind) {
-              const payload = propertyValue(node, "payload");
-              if (
-                !isSchemaRejectionFixture(node, source) &&
-                !isMatcherExpectation(node) &&
-                (!payload || !hasValidTerminalPayloadSignal(payload, kind))
-              ) {
-                const line = sourceFile.getLineAndCharacterOfPosition(
-                  node.getStart(sourceFile)
-                ).line;
-                misses.push(`${relative(exactTemplateRoots.base, file)}:${line + 1}`);
+          function visit(node: ts.Node): void {
+            if (ts.isObjectLiteralExpression(node)) {
+              const kind = terminalKindValue(node);
+              if (kind) {
+                const payload = propertyValue(node, "payload");
+                if (
+                  !isSchemaRejectionFixture(node, source) &&
+                  !isMatcherExpectation(node) &&
+                  (!payload || !hasValidTerminalPayloadSignal(payload, kind))
+                ) {
+                  const line = sourceFile.getLineAndCharacterOfPosition(
+                    node.getStart(sourceFile)
+                  ).line;
+                  misses.push(`${relative(exactTemplateRoots.base, file)}:${line + 1}`);
+                }
               }
             }
+            node.forEachChild(visit);
           }
-          node.forEachChild(visit);
-        }
 
-        visit(sourceFile);
+          visit(sourceFile);
+        }
+      },
+      {
+        // This census checks literals in these exact sources. Loading their
+        // dependency type graphs adds no evidence to a syntax-only traversal.
+        compilerOptions: { noResolve: true, noLib: true, types: [] },
       }
-    });
+    );
 
     expect(misses).toEqual([]);
   }, 30_000);

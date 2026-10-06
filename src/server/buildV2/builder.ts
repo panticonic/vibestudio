@@ -31,7 +31,7 @@ import { ASSET_URL_EXTENSIONS } from "@vibestudio/shared/assetModules";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
-import { builtinModules, createRequire } from "module";
+import { builtinModules, createRequire, isBuiltin } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
@@ -799,6 +799,12 @@ export function createDependencyEnvironmentResolvePlugin(
             ? (args.pluginData as Record<string, unknown>)
             : {};
         if (priorData[recursionKey] === true) return null;
+        // Prefix-only built-ins (including node:sqlite and node:test) are not
+        // listed by builtinModules. Ask Node about the exact specifier instead
+        // of treating its runtime modules as package-manager dependencies.
+        if (build.initialOptions.platform === "node" && isBuiltin(args.path)) {
+          return { path: args.path, external: true };
+        }
         if (externalSpecifierMatches(args.path, externals)) {
           return { path: args.path, external: true };
         }
