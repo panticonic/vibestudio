@@ -2824,6 +2824,31 @@ async function main(parentOwnerSignal) {
     if (JSON.stringify(personalIdsAfter) !== JSON.stringify(personalIdsBefore)) {
       throw new Error("Reconnect changed the retained Personal panel tree");
     }
+    // Restoring transport does not dismiss a failed user decision. Exercise
+    // the offered recovery action once, after the server is actually ready.
+    const reportingRecovery = await evaluateHostedChrome(
+      electronApp,
+      `(() => {
+        const status = document.querySelector('[data-shell-top-chrome="reporting-choice-status"]');
+        const error = status?.querySelector('[role="alert"]')?.textContent;
+        if (!error) return null;
+        const retry = [...status.querySelectorAll('button')].find(button =>
+          /^(Retry|Retry sharing choice)$/.test(button.textContent.trim()));
+        if (!retry || retry.disabled) throw new Error(error);
+        retry.click();
+        return error;
+      })()`,
+      "retrying the interrupted reporting decision after server restoration"
+    );
+    if (reportingRecovery) {
+      await waitForChromeResult(
+        electronApp,
+        `!document.querySelector('[data-shell-top-chrome="reporting-choice-status"] [role="alert"]')`,
+        `completing reporting recovery: ${reportingRecovery}`,
+        Math.min(30000, deadlineMs - Date.now())
+      );
+      console.log("[desktop-smoke] Recovered reporting decision through its Retry action");
+    }
     const recoveredOnboarding = await waitForPersonalPanel(
       electronApp,
       personalWorkspace.workspaceId,
