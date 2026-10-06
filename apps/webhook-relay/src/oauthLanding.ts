@@ -181,23 +181,51 @@ const APEX_LANDING_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#F6F2EA" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#1A202A" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F6F2EA" media="(prefers-color-scheme: light)" data-scheme="light">
+  <meta name="theme-color" content="#1A202A" media="(prefers-color-scheme: dark)" data-scheme="dark">
   <meta name="description" content="Vibestudio is an open-source browser for apps with agents inside them. Build your own, or open other people's and run them on your own models, with your approval.">
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
-  <title>Vibestudio — more than a chat box</title>
+  <title>Vibestudio — build and share deeply AI-infused apps</title>
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const system = matchMedia("(prefers-color-scheme: dark)");
+      let chosen = null;
+      try { chosen = localStorage.getItem("theme"); } catch {}
+      if (chosen !== "light" && chosen !== "dark") chosen = null;
+      const apply = () => {
+        if (chosen) root.dataset.theme = chosen; else delete root.dataset.theme;
+        for (const element of document.querySelectorAll("[data-scheme]")) {
+          const scheme = element.dataset.scheme;
+          element.media = chosen ? (chosen === scheme ? "all" : "not all") : "(prefers-color-scheme: " + scheme + ")";
+        }
+        const toggle = document.getElementById("theme-toggle");
+        if (toggle) toggle.setAttribute("aria-pressed", String((chosen ?? (system.matches ? "dark" : "light")) === "dark"));
+      };
+      apply();
+      system.addEventListener("change", apply);
+      document.addEventListener("DOMContentLoaded", () => {
+        apply();
+        document.getElementById("theme-toggle").addEventListener("click", () => {
+          const dark = (chosen ?? (system.matches ? "dark" : "light")) === "dark";
+          chosen = dark ? "light" : "dark";
+          try { localStorage.setItem("theme", chosen); } catch {}
+          apply();
+        });
+      });
+    })();
+  </script>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f2ea;--paper:#fffdf8;--ink:#14243d;--muted:#56627a;--line:#e0d8c9;--primary:#204fa3;--primary-hover:#183e83;--on-primary:#fff;--link:#204fa3;--signal:#c73f2d;--signal-soft:#f7ded6;--tint:#e6edf8;--accent-a:#204fa3;--accent-b:#c73f2d;--wash-a:#c9d8f2;--wash-b:#f2c6b8;--shadow:0 30px 80px -30px #14243d59;--shadow-sm:0 14px 34px -18px #14243d40;--sans:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-    @media(prefers-color-scheme:dark){:root{--bg:#1a202a;--paper:#222a36;--ink:#f1eee8;--muted:#b8c0cb;--line:#36414f;--primary:#496fa8;--primary-hover:#5a7fb8;--link:#afc8f0;--signal:#e8a08f;--signal-soft:#3d2c2f;--tint:#232f42;--accent-a:#8fb0e8;--accent-b:#e8a08f;--wash-a:#2a3d5c;--wash-b:#4a3036;--shadow:0 30px 80px -30px #000c;--shadow-sm:0 14px 34px -18px #0009}}
+    :root{color-scheme:light dark;--bg:light-dark(#f6f2ea,#1a202a);--paper:light-dark(#fffdf8,#222a36);--ink:light-dark(#14243d,#f1eee8);--muted:light-dark(#56627a,#b8c0cb);--line:light-dark(#e0d8c9,#36414f);--primary:light-dark(#204fa3,#496fa8);--primary-hover:light-dark(#183e83,#5a7fb8);--on-primary:#fff;--link:light-dark(#204fa3,#afc8f0);--signal:light-dark(#c73f2d,#e8a08f);--signal-soft:light-dark(#f7ded6,#3d2c2f);--tint:light-dark(#e6edf8,#232f42);--accent-a:light-dark(#204fa3,#8fb0e8);--accent-b:light-dark(#c73f2d,#e8a08f);--shadow:0 30px 80px -30px light-dark(#14243d59,#000c);--shadow-sm:0 14px 34px -18px light-dark(#14243d40,#0009);--sans:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
     *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.65 var(--sans);-webkit-font-smoothing:antialiased}a{color:var(--link);text-underline-offset:3px}button,input,textarea{font:inherit}button,a{-webkit-tap-highlight-color:transparent}a:focus-visible,button:focus-visible,textarea:focus-visible{outline:3px solid var(--link);outline-offset:4px}button:disabled{cursor:default;opacity:.65}[hidden]{display:none!important}img{max-width:100%}main{overflow-x:clip}
     .wrap{width:min(1120px,calc(100% - 64px));margin-inline:auto}.narrow{width:min(680px,calc(100% - 64px));margin-inline:auto}
-    .topbar{position:relative;z-index:1;height:84px;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:750;letter-spacing:-.04em;text-decoration:none;color:var(--ink)}.brand-mark{display:block;width:24px;height:32px}.brand-mark img{display:block;width:100%;height:100%;object-fit:contain}.nav{display:flex;align-items:center;gap:28px;font-size:15px;font-weight:600}.nav a{text-decoration:none;color:var(--link)}.nav a:hover{text-decoration:underline}
+    .topbar{height:84px;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:750;letter-spacing:-.04em;text-decoration:none;color:var(--ink)}.brand-mark{display:block;width:24px;height:32px}.brand-mark img{display:block;width:100%;height:100%;object-fit:contain}.nav{display:flex;align-items:center;gap:28px;font-size:15px;font-weight:600}.nav a{text-decoration:none;color:var(--link)}.nav a:hover{text-decoration:underline}.theme-toggle{display:grid;place-items:center;width:38px;height:38px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--paper);color:var(--ink);cursor:pointer;transition:border-color .15s}.theme-toggle:hover{border-color:var(--primary)}.theme-toggle svg{width:18px;height:18px}
     h1,h2,h3{font-weight:750;letter-spacing:-.035em}
     .kicker{display:block;margin:0 0 14px;font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--signal)}
-    .hero{position:relative;isolation:isolate;padding-block:48px 0;text-align:center}.hero:before{content:"";position:absolute;inset:-160px -30vw auto;height:720px;background:radial-gradient(38% 48% at 28% 42%,var(--wash-a),transparent 72%),radial-gradient(34% 44% at 74% 30%,var(--wash-b),transparent 72%);z-index:-1;pointer-events:none}
+    .hero{padding-block:48px 0;text-align:center}
     .eyebrow{display:inline-flex;align-items:center;gap:10px;margin:0 0 28px;padding:6px 16px 6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--paper);font-size:13px;font-weight:600;color:var(--muted)}.eyebrow i{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 0 4px var(--signal-soft)}
-    h1{font-size:clamp(44px,7vw,92px);line-height:.98;letter-spacing:-.05em;margin:0 auto 28px;max-width:13ch;text-wrap:balance}.accent{background:linear-gradient(100deg,var(--accent-a) 10%,var(--accent-b) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}.lede{font-size:20px;line-height:1.6;color:var(--muted);max-width:36em;margin:0 auto}.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}.hero .actions{justify-content:center}.button{display:inline-flex;justify-content:center;align-items:center;gap:10px;min-height:48px;padding:11px 24px;border:1px solid var(--line);border-radius:999px;font-size:15px;font-weight:650;white-space:nowrap;text-decoration:none;cursor:pointer;transition:transform .15s,box-shadow .15s,background .15s,border-color .15s}.button:hover{transform:translateY(-1px)}.primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary);box-shadow:0 10px 24px -10px var(--primary)}.primary:hover{background:var(--primary-hover);box-shadow:0 14px 28px -10px var(--primary)}.secondary{background:var(--paper);color:var(--ink)}.secondary:hover{border-color:var(--primary)}.fine{font-size:14px;color:var(--muted);margin:18px 0 0}
-    .shot{position:relative;margin:64px auto 0;max-width:1040px}.shot img{display:block;width:100%;height:auto;border-radius:16px;border:1px solid var(--line);box-shadow:var(--shadow);background:#1a202a}figcaption{font-size:14px;color:var(--muted);margin-top:16px;line-height:1.5}.shot figcaption{text-align:center}
+    h1{font-size:clamp(44px,7vw,92px);line-height:.98;letter-spacing:-.05em;margin:0 auto 28px;max-width:14ch;text-wrap:balance}.accent{white-space:nowrap;background:linear-gradient(100deg,var(--accent-a) 10%,var(--accent-b) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}.lede{font-size:20px;line-height:1.6;color:var(--muted);max-width:36em;margin:0 auto}.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}.hero .actions{justify-content:center}.button{display:inline-flex;justify-content:center;align-items:center;gap:10px;min-height:48px;padding:11px 24px;border:1px solid var(--line);border-radius:999px;font-size:15px;font-weight:650;white-space:nowrap;text-decoration:none;cursor:pointer;transition:transform .15s,box-shadow .15s,background .15s,border-color .15s}.button:hover{transform:translateY(-1px)}.primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary);box-shadow:0 10px 24px -10px var(--primary)}.primary:hover{background:var(--primary-hover);box-shadow:0 14px 28px -10px var(--primary)}.secondary{background:var(--paper);color:var(--ink)}.secondary:hover{border-color:var(--primary)}.fine{font-size:14px;color:var(--muted);margin:18px 0 0}
+    .shot{position:relative;margin:56px auto 0;max-width:560px}.shot img{display:block;width:100%;height:auto;border-radius:12px;border:1px solid var(--line);box-shadow:var(--shadow);background:#1a202a}figcaption{font-size:14px;color:var(--muted);margin-top:16px;line-height:1.5}.shot figcaption{text-align:center}
     .section-title{font-size:clamp(32px,4.4vw,52px);line-height:1.05;margin:0 0 24px}
     .essay{padding-block:120px 48px}.essay p{font-size:19px;line-height:1.75;margin:0 0 22px}.essay .section-title+p{font-size:22px;line-height:1.6;font-weight:500}
     .watch{padding-block:16px 104px}.video{margin:0 auto;max-width:960px}.video iframe{display:block;width:100%;aspect-ratio:16/9;height:auto;border:0;border-radius:16px;box-shadow:var(--shadow);background:#1a202a}.video figcaption{text-align:center}
@@ -214,11 +242,11 @@ const APEX_LANDING_HTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <header class="wrap topbar"><a class="brand" href="#top" aria-label="Vibestudio home"><picture class="brand-mark"><source media="(prefers-color-scheme: dark)" srcset="/brand/vibestudio-symbol-dark.svg"><img src="/brand/vibestudio-symbol.svg" alt=""></picture>Vibestudio</a><nav class="nav" aria-label="Main navigation"><a href="https://github.com/panticonic/vibestudio">GitHub</a><a href="#install">Download</a></nav></header>
+  <header class="wrap topbar"><a class="brand" href="#top" aria-label="Vibestudio home"><picture class="brand-mark"><source media="(prefers-color-scheme: dark)" data-scheme="dark" srcset="/brand/vibestudio-symbol-dark.svg"><img src="/brand/vibestudio-symbol.svg" alt=""></picture>Vibestudio</a><nav class="nav" aria-label="Main navigation"><a href="https://github.com/panticonic/vibestudio">GitHub</a><a href="#install">Download</a><button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></svg></button></nav></header>
   <main id="top">
     <section class="wrap hero">
       <p class="eyebrow"><i></i>Open source, very much alpha</p>
-      <h1>There’s more to AI software <span class="accent">than a chat&nbsp;box.</span></h1>
+      <h1>Build and share deeply <span class="accent">AI-infused apps</span></h1>
       <p class="lede">Vibestudio is a browser for apps with agents inside them. Build your own with an agent, or open someone else’s and let it run on your models, reaching only what you allow.</p>
       <div class="actions"><a class="button primary" href="#install">Download</a><a class="button secondary" href="https://github.com/panticonic/vibestudio">Source on GitHub</a></div>
       <p class="fine">For macOS, Windows and Linux.</p>
@@ -227,7 +255,7 @@ const APEX_LANDING_HTML = `<!doctype html>
 
     <section class="narrow essay" aria-labelledby="why">
       <span class="kicker">The idea</span>
-      <h2 class="section-title" id="why">Why I built it</h2>
+      <h2 class="section-title" id="why">There’s more to AI-UX than a chat box</h2>
       <p>Most AI apps follow the same template: the app, a chat box in the corner, a few tools wired up behind it. I think interfaces can do a lot more than that. They could generate parts of themselves while you use them, work with your own data, and drop agents into games and tools wherever an agent actually helps.</p>
       <p>Actually turning that hot take into something better isn’t quite as straightforward though. The models we write code with learned from software that came before any of this. And I think it is also really easy to suffer from a lack of imagination here. So I built Vibestudio as an intuition pump to move in the direction of what comes next.</p>
       <p>When JS-enabled browsers were initially introduced, when the first web-apps started working, they made new software something you could try in seconds instead of minutes or hours. Even today, your agent can build something roughly right in minutes, but making it delightful still takes hours. It’s worth a lot to open something another person already thought hard about, and run it on your own AI — but we need a runtime to connect 3rd party AI-enabled apps to your agentic environment.</p>
@@ -287,7 +315,7 @@ const APEX_LANDING_HTML = `<!doctype html>
 
     <section class="wrap install" id="install" aria-labelledby="install-title">
       <div class="install-copy"><span class="kicker">Install</span><h2 class="section-title" id="install-title">Get it</h2><p>Install the desktop app, open a workspace, and tell the onboarding agent what you want to do. It works best with a ChatGPT (Codex) subscription right now. API keys and local models can be connected too, but get less testing.</p><p>Want it always on? Run Vibestudio on a <a href="https://github.com/panticonic/vibestudio#running-a-server">home server</a> and connect your laptop and phone to it.</p><div class="actions"><a class="button primary" href="https://panticonic.github.io/vibestudio/">All downloads</a><a class="button secondary" href="https://github.com/panticonic/vibestudio/releases/latest">Latest release</a></div></div>
-      <ul class="platforms"><li><b>macOS</b><span><code>brew install --cask panticonic/tap/vibestudio</code><br>The app isn’t notarized yet, so on first launch choose Open Anyway in Privacy &amp; Security.</span></li><li><b>Debian / Ubuntu</b><span>Add the signed apt repository from the <a href="https://panticonic.github.io/vibestudio/">downloads page</a>, then <code>apt install vibestudio</code>.</span></li><li><b>Fedora / RHEL</b><span>Add the RPM repository, then <code>dnf install vibestudio</code>.</span></li><li><b>Windows</b><span>Run the .exe installer from the latest release. It isn’t code-signed yet, so SmartScreen will warn you.</span></li></ul>
+      <ul class="platforms"><li><b>macOS</b><span><a href="/download/mac">Download for Mac</a> (Apple Silicon, macOS 14+). Open the DMG and drag Vibestudio into Applications.<br>Or use Homebrew: <code>brew install --cask panticonic/tap/vibestudio</code><br>The app isn’t notarized yet, so on first launch choose Open Anyway in Privacy &amp; Security. The app checks for updates and offers a new download; quit, replace it in Applications, then reopen it. Homebrew installs can upgrade through the app.</span></li><li><b>Debian / Ubuntu</b><span>Add the signed apt repository from the <a href="https://panticonic.github.io/vibestudio/">downloads page</a>, then <code>apt install vibestudio</code>.</span></li><li><b>Fedora / RHEL</b><span>Add the RPM repository, then <code>dnf install vibestudio</code>.</span></li><li><b>Windows</b><span>Run the .exe installer from the latest release. It isn’t code-signed yet, so SmartScreen will warn you.</span></li></ul>
     </section>
 
     <section class="narrow closing" aria-label="A note on status">

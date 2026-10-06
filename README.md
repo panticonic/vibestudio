@@ -2,8 +2,8 @@
 
 # Vibestudio
 
-There's more to AI software than a chat box. Vibestudio is a browser for apps
-with agents inside them. You can build your own with an agent, or open apps
+Build and share deeply AI-infused apps. Vibestudio is a browser for apps with
+agents inside them. You can build your own with an agent, or open apps
 other people made and let them run on your models, reaching only what you
 allow.
 
@@ -66,7 +66,8 @@ If you build something with it or find something broken, please
 Install through your platform's package manager where you can. That's also how
 you get updates.
 
-**macOS**, updated with `brew upgrade`:
+**macOS** (Apple Silicon, macOS 14+): [Download the DMG](https://vibestudio.app/download/mac),
+open it and drag Vibestudio into Applications. Or install through Homebrew:
 
 ```bash
 brew install --cask panticonic/tap/vibestudio
@@ -74,7 +75,9 @@ brew install --cask panticonic/tap/vibestudio
 
 The app is ad-hoc signed, not signed with an Apple Developer ID, so macOS asks
 you to confirm it the first time (System Settings → Privacy & Security → Open
-Anyway). It can't update itself; use `brew upgrade`.
+Anyway). Direct installs offer a download when an update is available: quit the
+app, replace it in Applications, then reopen it. Homebrew installs offer to run
+`brew upgrade --cask vibestudio` for you.
 
 **Debian / Ubuntu**, updated with `apt upgrade`:
 
@@ -119,10 +122,17 @@ agent, which asks what you want to do and helps you set things up.
 
 A while after launch, and every six hours after that, Vibestudio checks for a
 new release and offers to install it in whatever way fits how you installed
-it. On Windows and macOS it downloads the release, installs it and restarts. On
+it. The notification stays until dismissed; a dismissed release stays quiet for
+the rest of that session. On Windows and Developer ID signed macOS builds it
+downloads the release, installs it and restarts. Ad-hoc signed Mac builds offer
+a DMG download or upgrade through Homebrew when Homebrew owns the app. On
 Linux it asks the package manager that owns the installation (`apt`, `dnf` or
-`pacman`) through the system's own password prompt, then offers to restart. If
-it can't get root, it shows you the command to run instead. Nothing installs
+`pacman`) through the system's own password prompt, then offers to restart.
+Package-manager installs also offer **Copy upgrade command** if you prefer to
+run the upgrade yourself; that remains available when the desktop cannot ask
+for permission. Linux upgrades refresh repository metadata first. Vibestudio
+checks the installed package version afterwards and tells you if the repository
+does not have the new release yet. Nothing installs
 without asking, and development builds never update themselves.
 
 ## Running a server
