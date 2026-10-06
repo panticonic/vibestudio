@@ -122,9 +122,9 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#FFFFFF">
-<meta name="description" content="Install Vibestudio on Debian, Ubuntu, Fedora, RHEL, and openSUSE using signed Linux packages.">
+<meta name="description" content="Download Vibestudio for macOS and Windows, install through Homebrew, or use signed Linux package repositories.">
 <link rel="icon" type="image/svg+xml" href="./vibestudio-symbol.svg">
-<title>Install Vibestudio for Linux</title>
+<title>Download Vibestudio</title>
 <style>
  :root{color-scheme:light;--bg:#FFFFFF;--panel:#FFFFFF;--line:#D4D9E2;--ink:#14243D;--muted:#58677D;--primary:#204FA3;--chrome:#F1F3F7}
  *{box-sizing:border-box}
@@ -167,13 +167,34 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
  </header>
  <main class="wrap">
    <section class="hero" aria-labelledby="page-title">
-     <div class="eyebrow">Linux packages</div>
-     <h1 id="page-title">Vibestudio, at home on Linux.</h1>
-     <p class="lede">Install with the package manager you already use. Signed packages and repository metadata keep updates flowing through your normal system updates.</p>
-     <div class="trust"><span class="badge">Signed repositories</span><span class="badge">Automatic package updates</span><span class="badge">x86_64 and ARM64</span></div>
+     <div class="eyebrow">Desktop downloads</div>
+     <h1 id="page-title">Get Vibestudio.</h1>
+     <p class="lede">Download the desktop app or install with your package manager. Vibestudio checks for new releases and offers the update action that fits your installation.</p>
+     <div class="trust"><span class="badge">macOS</span><span class="badge">Windows</span><span class="badge">Linux</span></div>
+   </section>
+   <section aria-labelledby="desktop-title">
+     <h2 class="section-title" id="desktop-title">macOS &amp; Windows</h2>
+     <div class="grid">
+       <article class="card">
+         <div class="card-head"><div class="os-icon" aria-hidden="true">M</div><h2>macOS</h2></div>
+         <p>Apple Silicon, macOS 14 or later. <a href="https://vibestudio.app/download/mac">Download the Mac DMG</a>, open it, and drag Vibestudio into Applications.</p>
+         <p>The app isn’t notarized yet. If macOS blocks the first launch, choose Open Anyway in System Settings → Privacy &amp; Security.</p>
+         <div class="step-label">Or install with Homebrew</div>
+         <pre><code>brew install --cask panticonic/tap/vibestudio</code></pre>
+         <div class="step-label">Updates</div>
+         <p>Direct downloads offer a new DMG: quit Vibestudio, replace it in Applications, then reopen it. Homebrew installs offer Install update or Copy upgrade command.</p>
+       </article>
+       <article class="card">
+         <div class="card-head"><div class="os-icon" aria-hidden="true">W</div><h2>Windows</h2></div>
+         <p><a href="https://vibestudio.app/download/windows">Download the Windows installer</a> and run the .exe. The x64 app also runs on Windows 11 ARM through emulation.</p>
+         <p>The installer isn’t code-signed yet, so SmartScreen may warn. For the official Vibestudio installer, choose More info → Run anyway if offered.</p>
+         <div class="step-label">Updates</div>
+         <p>The app offers to download the update, install it, and restart when you choose Update and restart.</p>
+       </article>
+     </div>
    </section>
    <section aria-labelledby="install-title">
-     <h2 class="section-title" id="install-title">Choose your package manager</h2>
+     <h2 class="section-title" id="install-title">Linux package repositories</h2>
      <div class="grid">
        <article class="card">
          <div class="card-head"><div class="os-icon" aria-hidden="true">D</div><h2>Debian &amp; Ubuntu</h2></div>

@@ -17,7 +17,7 @@
  */
 
 import { RelayRegistry, type Env as RelayEnv } from "./registry";
-import { handleMacDownload } from "./download";
+import { handleDesktopDownload } from "./download";
 import {
   handleProblemReports,
   sweepProblemReports,
@@ -63,7 +63,10 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/download/mac") return handleMacDownload();
+    if (request.method === "GET" && url.pathname === "/download/mac")
+      return handleDesktopDownload("mac");
+    if (request.method === "GET" && url.pathname === "/download/windows")
+      return handleDesktopDownload("windows");
     if (url.pathname === "/v1/problem-reports" || url.pathname.startsWith("/v1/problem-reports/"))
       return handleProblemReports(request, env);
 

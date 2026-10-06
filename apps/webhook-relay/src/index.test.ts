@@ -26,16 +26,18 @@ function makeEnv(overrides: Partial<Env> = {}): {
 }
 
 describe("webhook relay Worker — routing", () => {
-  it("redirects the Mac download to the published installer", async () => {
+  it.each([
+    ["mac", "Vibestudio-0.2.0-arm64.dmg"],
+    ["windows", "Vibestudio.Setup.0.2.0.exe"],
+  ])("redirects the %s download to the published installer", async (platform, name) => {
     const { env, stub } = makeEnv();
-    const installer =
-      "https://github.com/panticonic/vibestudio/releases/download/v0.2.0/Vibestudio-0.2.0-arm64.dmg";
+    const installer = `https://github.com/panticonic/vibestudio/releases/download/v0.2.0/${name}`;
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
           assets: [
             {
-              name: "Vibestudio-0.2.0-arm64.dmg",
+              name,
               state: "uploaded",
               browser_download_url: installer,
             },
@@ -44,7 +46,10 @@ describe("webhook relay Worker — routing", () => {
       )
     );
     try {
-      const response = await worker.fetch(new Request("https://vibestudio.app/download/mac"), env);
+      const response = await worker.fetch(
+        new Request(`https://vibestudio.app/download/${platform}`),
+        env
+      );
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe(installer);
       expect(response.headers.get("cache-control")).toBe("no-store");
