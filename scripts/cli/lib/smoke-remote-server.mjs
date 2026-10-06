@@ -90,10 +90,15 @@ export function createRemoteServeArgs(repoRoot, readyFile, port) {
   ];
 }
 
-/** Provider credentials stay in the normal profile; this run owns only hub state. */
+/** Native acceptance owns a fresh account profile as well as its hub state. */
 export function createRemoteSmokeServerEnvironment(base, instanceRoot, sharedDerivedCacheDir) {
   const env = {
     ...base,
+    HOME: path.join(instanceRoot, "home"),
+    USERPROFILE: path.join(instanceRoot, "home"),
+    XDG_CONFIG_HOME: path.join(instanceRoot, "config"),
+    APPDATA: path.join(instanceRoot, "appdata"),
+    LOCALAPPDATA: path.join(instanceRoot, "local-appdata"),
     NODE_ENV: base.NODE_ENV ?? "development",
     VIBESTUDIO_TEST_MODE: "1",
     VIBESTUDIO_SERVER_ENTRY: "live",

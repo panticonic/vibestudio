@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 
 export interface AssetIndexEntry {
   digest: string;
@@ -9,7 +10,9 @@ export interface AssetIndexEntry {
 export class AssetIndex {
   private readonly db: DatabaseSync;
   constructor(file: string) {
-    this.db = new DatabaseSync(file);
+    // SQLite opens through the native OS API, rather than Node's fs layer.
+    // Supply an absolute native filename, including Windows' long-path namespace.
+    this.db = new DatabaseSync(path.toNamespacedPath(path.resolve(file)));
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS assets (

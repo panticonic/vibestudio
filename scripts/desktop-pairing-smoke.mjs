@@ -31,10 +31,6 @@ import {
   createOwnedTemporaryDirectory,
 } from "./lib/desktop-observation-owner.mjs";
 import { inspectPresentedDesktopDocuments } from "./lib/presented-desktop-documents.mjs";
-import {
-  approveOwnedOnboardingCredential,
-  readOwnedOnboardingFromPanel,
-} from "./lib/desktop-onboarding-reviews.mjs";
 const { createOwnedProcessLifetime } = await tsImport(
   "./development-client-lifecycle.ts",
   import.meta.url
@@ -1333,20 +1329,6 @@ async function readInitialPanelHistory(app, webContentsId, workspaceId) {
   );
 }
 
-async function readOwnedOnboardingRequest(app, webContentsId) {
-  return evaluateElectron(
-    app,
-    async ({ webContents }, { id, script }) => {
-      const contents = webContents.fromId(id);
-      if (!contents || contents.isDestroyed() || contents.isLoadingMainFrame())
-        throw new Error("Original onboarding panel is not ready for review");
-      return contents.executeJavaScript(script);
-    },
-    { id: webContentsId, script: `(${readOwnedOnboardingFromPanel.toString()})()` },
-    "binding the original onboarding credential review"
-  );
-}
-
 async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, ownerSignal) {
   let latestObservation = null;
   let latestWebContentsId;
@@ -1444,10 +1426,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
               return contents.executeJavaScript(`(() => {
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
-              const setup = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
-                  (frame) => frame.textContent?.includes('Your Vibestudio') &&
-                    frame.querySelector('[aria-label="Refresh setup overview"]')
-                );
+              const connect = document.querySelector('[role="region"][aria-label="Connect a model provider"]');
               return {
                 source: window.__vibestudioSourceRepo,
                 text: document.body.innerText,
@@ -1456,7 +1435,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
                 submittedPrompt: [...document.querySelectorAll('[data-message-role="player"]')]
                   .some((message) => message.textContent.includes(initialPrompt)),
-                setupReady: Boolean(setup)
+                credentialSetupReady: Boolean(connect?.querySelector("button:not([disabled])"))
               };
             })()`);
             },
@@ -1473,7 +1452,7 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
           configuredPrompt: rendered.configuredPrompt,
           configuredSystemPrompt: rendered.configuredSystemPrompt,
           submittedPrompt: rendered.submittedPrompt,
-          setupReady: rendered.setupReady,
+          credentialSetupReady: rendered.credentialSetupReady,
         };
         if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
           latestObservation = observed;
@@ -1487,19 +1466,9 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
         if (expectedSource === "panels/chat") {
           if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
-          if (!rendered.submittedPrompt || !rendered.setupReady) {
-            if (rendered.submittedPrompt) {
-              const review = await approveOwnedOnboardingCredential(
-                app,
-                workspaceId,
-                () => readOwnedOnboardingRequest(app, snapshot.presentation.webContentsId),
-                deadline
-              );
-              if (review)
-                console.log(
-                  `[desktop-smoke] Approved exact onboarding credential review through visible Use once: ${JSON.stringify(review)}`
-                );
-            }
+          // A fresh account has no model credential. Its next actionable step
+          // must be visible without requiring an AI turn to complete first.
+          if (!rendered.submittedPrompt || !rendered.credentialSetupReady) {
             await sleep(500);
             continue;
           }
@@ -1549,7 +1518,10 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline, 
           source: rendered.source,
           ...(history
             ? { history }
-            : { submittedPrompt: rendered.submittedPrompt, setupReady: rendered.setupReady }),
+            : {
+                submittedPrompt: rendered.submittedPrompt,
+                credentialSetupReady: rendered.credentialSetupReady,
+              }),
           screenshotPath,
         };
       }
@@ -2577,7 +2549,7 @@ async function main(parentOwnerSignal) {
       console.log("[desktop-smoke] Personal New launched Help with the keyboard");
       await assertCleanDesktopDiagnostics(electronApp);
       console.log(
-        "[desktop-smoke] PASS account-only local startup; exactly Personal/System; one initial onboarding chat auto-submitted its configured prompt and rendered setup inline at full width; separately opened Personal New and read history; both workspace icons decoded"
+        "[desktop-smoke] PASS account-only local startup; exactly Personal/System; one initial onboarding chat auto-submitted its configured prompt and rendered provider connection inline at full width; separately opened Personal New and read history; both workspace icons decoded"
       );
       await cleanup();
       return;

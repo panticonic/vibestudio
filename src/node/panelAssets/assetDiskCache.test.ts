@@ -64,6 +64,40 @@ describe("AssetDiskCache", () => {
     return cache;
   }
 
+  it("persists and reopens assets under a long desktop connection path", async () => {
+    const cacheDir = path.join(
+      dir,
+      "account-profile-with-persisted-desktop-connection-state",
+      "electron-user-data",
+      "connections",
+      "a".repeat(64),
+      "workspaces",
+      "b".repeat(64),
+      "panel-asset-facade",
+      "asset-cache"
+    );
+    expect(path.join(cacheDir, "index.db").length).toBeGreaterThan(260);
+    const cache = new AssetDiskCache({ dir: cacheDir });
+    caches.push(cache);
+    await cache.init();
+    const response = await cache.serve("/assets/long-path.js", async () =>
+      immutableResponse("long-path asset")
+    );
+    expect(response.kind).toBe("passthrough");
+    if (response.kind === "passthrough") await readStream(response.response.body!);
+    await cache.close();
+    caches.splice(caches.indexOf(cache), 1);
+    const reopened = new AssetDiskCache({ dir: cacheDir });
+    caches.push(reopened);
+    await reopened.init();
+    const fetcher = vi.fn();
+    const hit = await reopened.serve("/assets/long-path.js", fetcher);
+    expect(hit.kind).toBe("asset");
+    if (hit.kind === "asset")
+      expect(Buffer.concat(await hit.asset.body.toArray()).toString()).toBe("long-path asset");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("serves a miss then a hit without a second fetch (zero pipe bytes)", async () => {
     const cache = await newCache();
     const fetcher = vi.fn(async () => immutableResponse("console.log(1)"));

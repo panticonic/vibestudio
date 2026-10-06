@@ -62,7 +62,7 @@ export type WorkspaceSourceSemanticDispatchResult =
   | { kind: "host-content"; request: Record<string, unknown> };
 
 export interface WorkspaceSemanticRequest {
-  input: unknown;
+  input?: unknown;
   ingress: {
     causalParent: RpcCausalParent | null;
   };

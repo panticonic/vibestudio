@@ -15,6 +15,7 @@ import {
 } from "@vibestudio/trajectory-identity";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import { createVcsService } from "./vcsService.js";
+import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
 const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
@@ -139,7 +140,6 @@ describe("canonical vcsService", () => {
     const { definition, semanticCall } = service({ result: EVENT, referencesReachable: false });
     await expect(definition.handler(agentContext(), "mainState", [])).resolves.toEqual(EVENT);
     expect(semanticCall).toHaveBeenCalledWith("vcsMainState", {
-      input: undefined,
       ingress: { causalParent: null },
     });
     await expect(
@@ -152,6 +152,34 @@ describe("canonical vcsService", () => {
       ])
     ).rejects.toThrow("unavailable from the caller's reachable context graph");
     expect(semanticCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains zero arguments through authority preparation and the semantic wire contract", async () => {
+    const { definition, semanticCall } = service({
+      semanticCall: (_method, request) => {
+        gadWireMethods.vcsMainState.args.parse([request]);
+        return EVENT;
+      },
+    });
+    const ctx = agentContext();
+    const resolver = "vcs.files.mainState";
+    const prepared = await definition.authorityPreparation![resolver]!(ctx, []);
+    expect(prepared.payload).toEqual([]);
+    await expect(
+      definition.handler(
+        {
+          ...ctx,
+          preparedAuthority: {
+            resolver,
+            digest: "test",
+            payload: JSON.parse(JSON.stringify(prepared.payload)),
+          },
+        },
+        "mainState",
+        []
+      )
+    ).resolves.toEqual(EVENT);
+    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", { ingress: { causalParent: null } });
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {

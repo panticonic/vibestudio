@@ -15,7 +15,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { applyPatch, parsePatch } from "diff";
 import semver from "semver";
-import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+import { dependencyCacheRoot } from "./dependencyCachePaths.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import { getInstalledNodeRuntime } from "@vibestudio/shared/runtimePaths";
 import {
@@ -700,11 +700,11 @@ function assertDependencyPatchRootsPresent(
 }
 
 function getExternalDepsBaseDir(): string {
-  return path.join(getSharedDerivedDataPath(), "external-deps");
+  return dependencyCacheRoot("external-deps");
 }
 
 function getExtensionRuntimeDepsBaseDir(): string {
-  return path.join(getSharedDerivedDataPath(), "extension-runtime-deps");
+  return dependencyCacheRoot("extension-runtime-deps");
 }
 
 function validateNpmSpecMap(kind: string, specs: Record<string, string>): void {

@@ -1,21 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
+import { dependencyCacheLocation } from "./dependencyCachePaths.js";
 import {
   deduplicateDependencyContent,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
-
-function validatedCacheDir(value: string): string {
-  const cacheDir = path.resolve(value);
-  const baseDir = path.resolve(getSharedDerivedDataPath(), "external-deps");
-  if (path.dirname(cacheDir) !== baseDir || !/^[a-f0-9]{16}$/u.test(path.basename(cacheDir))) {
-    throw new Error(`Refusing dependency maintenance path outside ${baseDir}`);
-  }
-  return cacheDir;
-}
 
 async function main(): Promise<void> {
   try {
@@ -23,12 +14,16 @@ async function main(): Promise<void> {
   } catch {
     // Priority adjustment is advisory and unavailable on some platforms.
   }
-  const root = path.join(getSharedDerivedDataPath(), "external-deps");
-  const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+  const owners = new Map<string, DerivedCacheCoordinator>();
   try {
     for (const argument of process.argv.slice(2)) {
-      const cacheDir = validatedCacheDir(argument);
-      const lease = owner.acquire(root, path.basename(cacheDir));
+      const { root, key, directory: cacheDir } = dependencyCacheLocation(argument);
+      let owner = owners.get(root);
+      if (!owner) {
+        owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+        owners.set(root, owner);
+      }
+      const lease = owner.acquire(root, key);
       try {
         await owner.maintain(cacheDir, async () => {
           if (fs.existsSync(path.join(cacheDir, ".ready")))
@@ -40,7 +35,7 @@ async function main(): Promise<void> {
     }
     await pruneUnreferencedDependencyContent();
   } finally {
-    owner.close();
+    for (const owner of owners.values()) owner.close();
   }
 }
 

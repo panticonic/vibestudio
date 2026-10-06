@@ -67,7 +67,7 @@ export interface VcsServiceDeps {
 }
 
 type CausalRequest<T> = {
-  input: T;
+  input?: T;
   ingress: {
     causalParent: RpcCausalParent | null;
   };
@@ -314,7 +314,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           );
     }
     return deps.workspaceVcs.semanticCall<T>(method, {
-      input,
+      ...(input === undefined ? {} : { input }),
       ingress,
     } satisfies CausalRequest<unknown>);
   };
@@ -392,7 +392,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   ): Promise<unknown> => {
     const prepared = ctx.preparedAuthority?.resolver === `vcs.files.${method}`;
     const admittedInput = prepared
-      ? preparedAuthorityPayload<unknown>(ctx, `vcs.files.${method}`)
+      ? preparedAuthorityPayload<readonly unknown[]>(ctx, `vcs.files.${method}`)[0]
       : await admitOperation(ctx, method, input);
     const parsed = { input: admittedInput };
     const primaryContextId = vcsOperationContextId(method, admittedInput);
@@ -454,14 +454,17 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           `vcs.files.${method}`,
           async (ctx, [input]) => {
             const admittedInput = await admitOperation(ctx, method as VcsMethodName, input);
+            // Seal the canonical argument tuple as JSON. Zero-argument calls
+            // retain absence rather than an undefined payload's null default.
+            const admittedArgs = admittedInput === undefined ? [] : [admittedInput];
             if (!websiteAuthorityIdentity(ctx.caller))
-              return preparedAuthorityState([], admittedInput);
+              return preparedAuthorityState([], admittedArgs);
             const selections = await vcsFileSelections(
               method as VcsMethodName,
               admittedInput,
               <T>(method: string, input: unknown) => invoke<T>(ctx, method, input)
             );
-            return preparedAuthorityState(selections, admittedInput);
+            return preparedAuthorityState(selections, admittedArgs);
           },
         ])
     ),

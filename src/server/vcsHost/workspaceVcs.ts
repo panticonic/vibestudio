@@ -204,7 +204,7 @@ export interface PreparedWorkspaceGc {
 }
 
 interface SemanticRequest {
-  input: unknown;
+  input?: unknown;
   ingress: {
     causalParent: import("@vibestudio/rpc").RpcCausalParent | null;
   };
@@ -544,7 +544,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {
     return this.semanticCall<T>(method, {
-      input,
+      ...(input === undefined ? {} : { input }),
       ingress: { causalParent: null },
     } satisfies SemanticRequest);
   }
