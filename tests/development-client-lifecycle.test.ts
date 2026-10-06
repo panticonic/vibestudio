@@ -1,12 +1,22 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, access, rm } from "node:fs/promises";
+import { mkdtemp, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startEphemeralLinuxSecretService } from "../scripts/lib/linux-secret-service.mjs";
 import { createDevelopmentClientLifetime } from "../scripts/development-client-lifecycle.js";
 import { createOwnedProcessLifetime } from "../scripts/development-client-lifecycle.js";
+
+function expectGroupStopped(processGroupId: number): void {
+  // kill(pgid, 0) also succeeds for dead, unreaped descendants. Observe the
+  // executable members independently of the owner's retirement implementation.
+  const members = execFileSync("ps", ["-axo", "pgid=,stat="], { encoding: "utf8" })
+    .split(/\r?\n/u)
+    .map((line) => line.trim().split(/\s+/u))
+    .filter(([group, state]) => Number(group) === processGroupId && state && !/^[ZX]/u.test(state));
+  expect(members, `Executable members of retired process group ${processGroupId}`).toEqual([]);
+}
 
 describe.skipIf(process.platform === "win32")("development client lifetime", () => {
   it("joins one acquired generation before starting its replacement", async () => {
@@ -16,7 +26,7 @@ describe.skipIf(process.platform === "win32")("development client lifetime", () 
       const first = lifetime.acquire(start);
       await once(first.stdout!, "data");
       await lifetime.retireChild(first);
-      expect(() => process.kill(-first.pid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+      expectGroupStopped(first.pid!);
       const next = lifetime.acquire(start);
       await once(next.stdout!, "data");
       expect(() => process.kill(-next.pid!, 0)).not.toThrow();
@@ -52,7 +62,7 @@ describe.skipIf(process.platform === "win32")("development client lifetime", () 
       await lifetime.close();
     }
     for (const pid of groups) {
-      expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+      expectGroupStopped(pid);
     }
     await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -80,6 +90,7 @@ describe.skipIf(process.platform === "win32")("development client lifetime", () 
       groups.push(leader.pid!);
       await once(leader, "exit");
       await access(root);
+      expect(() => expectGroupStopped(leader.pid!)).toThrow();
       lifetime.requestStop();
       let created = false;
       const start = () => { created = true; return leader; };
@@ -90,13 +101,10 @@ describe.skipIf(process.platform === "win32")("development client lifetime", () 
       expect(created).toBe(false);
       await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
       for (const pid of groups) {
-        expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+        expectGroupStopped(pid);
       }
     } finally {
-      for (const pid of groups) {
-        try { process.kill(-pid, "SIGKILL"); } catch { /* Already proved absent. */ }
-      }
-      await rm(root, { recursive: true, force: true });
+      await lifetime.close();
     }
   }, 15_000);
 });
