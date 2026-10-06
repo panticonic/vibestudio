@@ -256,11 +256,16 @@ export async function startPanelAssetFacade(
     close: () =>
       (closing ??= (async () => {
         lifetime.abort(new Error("Panel asset facade closed"));
-        await new Promise<void>((resolveClose, rejectClose) => {
+        const listenerClosed = new Promise<void>((resolveClose, rejectClose) => {
           server.close((err) => (err ? rejectClose(err) : resolveClose()));
         });
-        await Promise.allSettled([...requests]);
-        await Promise.allSettled([...prewarmFlights.values()]);
+        // Stop admission and cancel owned work before retiring the sockets.
+        // Chromium can preconnect without sending HTTP headers; server.close()
+        // and closeIdleConnections() do not retire those accepted connections.
+        // Join request handlers first so cancellation can finish its response.
+        await Promise.allSettled([...requests, ...prewarmFlights.values()]);
+        server.closeAllConnections();
+        await listenerClosed;
         await cache?.close();
       })()),
   };

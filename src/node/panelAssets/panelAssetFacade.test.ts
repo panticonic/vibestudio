@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import * as net from "node:net";
+import { once } from "node:events";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import type { PanelAssetStreamClient } from "./panelAssetFacade.js";
 
@@ -205,6 +207,22 @@ describe("startPanelAssetFacade", () => {
 });
 
 describe("panel asset facade lifecycle", () => {
+  it("retires a browser preconnection that has not sent an HTTP request", async () => {
+    const stream = vi.fn<GatewayStream>();
+    const facade = await startPanelAssetFacade(fakeServerClient(stream));
+    const socket = net.connect(facade.port, "127.0.0.1");
+    try {
+      await once(socket, "connect");
+      const disconnected = once(socket, "close");
+      await facade.close();
+      await disconnected;
+      expect(stream).not.toHaveBeenCalled();
+    } finally {
+      socket.destroy();
+      await facade.close();
+    }
+  });
+
   it("settles a pending asset request when its facade closes", async () => {
     const started = deferred<void>();
     const stopped = deferred<void>();

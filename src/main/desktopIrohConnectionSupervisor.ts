@@ -131,7 +131,9 @@ export class DesktopIrohConnectionSupervisor {
           log.info("Shutdown endpoint completed");
         }),
       ]);
+      log.info(`Shutdown joining ${this.acquisitions.size} client acquisitions`);
       await Promise.allSettled([...this.acquisitions]);
+      log.info("Shutdown client acquisitions completed");
       const failures = settled.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
       );

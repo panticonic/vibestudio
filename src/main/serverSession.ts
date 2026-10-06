@@ -81,7 +81,13 @@ function ownSessionResources(
     if (closing) return closing;
     closing = Promise.resolve().then(async () => {
       const settled = await Promise.allSettled(
-        resources.map((resource) => Promise.resolve().then(() => resource.close()))
+        resources.map((resource) =>
+          Promise.resolve().then(async () => {
+            log.info(`Shutdown resource started: ${resource.label}`);
+            await resource.close();
+            log.info(`Shutdown resource completed: ${resource.label}`);
+          })
+        )
       );
       const failures = settled.flatMap((result, index) => {
         if (result.status !== "rejected") return [];
