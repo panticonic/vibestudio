@@ -190,14 +190,26 @@ const APEX_LANDING_HTML = `<!doctype html>
     (() => {
       const root = document.documentElement;
       const system = matchMedia("(prefers-color-scheme: dark)");
-      let chosen = null;
-      try { chosen = localStorage.getItem("theme"); } catch {}
-      if (chosen !== "light" && chosen !== "dark") chosen = null;
+      const valid = (theme) => (theme === "light" || theme === "dark" ? theme : null);
+      const params = new URLSearchParams(location.search);
+      let chosen = valid(params.get("theme"));
+      if (chosen) {
+        try { localStorage.setItem("theme", chosen); } catch {}
+        params.delete("theme");
+        history.replaceState(null, "", location.pathname + (params.size ? "?" + params : "") + location.hash);
+      } else {
+        try { chosen = valid(localStorage.getItem("theme")); } catch {}
+      }
       const apply = () => {
         if (chosen) root.dataset.theme = chosen; else delete root.dataset.theme;
         for (const element of document.querySelectorAll("[data-scheme]")) {
           const scheme = element.dataset.scheme;
           element.media = chosen ? (chosen === scheme ? "all" : "not all") : "(prefers-color-scheme: " + scheme + ")";
+        }
+        for (const link of document.querySelectorAll("a[data-carry-theme]")) {
+          const url = new URL(link.href);
+          if (chosen) url.searchParams.set("theme", chosen); else url.searchParams.delete("theme");
+          link.href = url.href;
         }
         const toggle = document.getElementById("theme-toggle");
         if (toggle) toggle.setAttribute("aria-pressed", String((chosen ?? (system.matches ? "dark" : "light")) === "dark"));
@@ -314,8 +326,8 @@ const APEX_LANDING_HTML = `<!doctype html>
     </section>
 
     <section class="wrap install" id="install" aria-labelledby="install-title">
-      <div class="install-copy"><span class="kicker">Install</span><h2 class="section-title" id="install-title">Get it</h2><p>Install the desktop app, open a workspace, and tell the onboarding agent what you want to do. It works best with a ChatGPT (Codex) subscription right now. API keys and local models can be connected too, but get less testing.</p><p>Want it always on? Run Vibestudio on a <a href="https://github.com/panticonic/vibestudio#running-a-server">home server</a> and connect your laptop and phone to it.</p><div class="actions"><a class="button primary" href="https://panticonic.github.io/vibestudio/">All downloads</a><a class="button secondary" href="https://github.com/panticonic/vibestudio/releases/latest">Latest release</a></div></div>
-      <ul class="platforms"><li><b>macOS</b><span><a href="/download/mac">Download for Mac</a> (Apple Silicon, macOS 14+).<br>Or use Homebrew: <code>brew install --cask panticonic/tap/vibestudio</code></span></li><li><b>Debian / Ubuntu</b><span>Add the signed apt repository from the <a href="https://panticonic.github.io/vibestudio/">downloads page</a>, then <code>apt install vibestudio</code>.</span></li><li><b>Fedora / RHEL</b><span>Add the RPM repository, then <code>dnf install vibestudio</code>.</span></li><li><b>Windows</b><span>Run the .exe installer from the latest release. It isn’t code-signed yet, so SmartScreen will warn you.</span></li></ul>
+      <div class="install-copy"><span class="kicker">Install</span><h2 class="section-title" id="install-title">Get it</h2><p>Install the desktop app, open a workspace, and tell the onboarding agent what you want to do. It works best with a ChatGPT (Codex) subscription right now. API keys and local models can be connected too, but get less testing.</p><p>Want it always on? Run Vibestudio on a <a href="https://github.com/panticonic/vibestudio#running-a-server">home server</a> and connect your laptop and phone to it.</p><div class="actions"><a class="button primary" href="https://panticonic.github.io/vibestudio/" data-carry-theme>All downloads</a><a class="button secondary" href="https://github.com/panticonic/vibestudio/releases/latest">Latest release</a></div></div>
+      <ul class="platforms"><li><b>macOS</b><span><a href="/download/mac">Download for Mac</a> (Apple Silicon, macOS 14+).<br>Or use Homebrew: <code>brew install --cask panticonic/tap/vibestudio</code></span></li><li><b>Debian / Ubuntu</b><span>Add the signed apt repository from the <a href="https://panticonic.github.io/vibestudio/" data-carry-theme>downloads page</a>, then <code>apt install vibestudio</code>.</span></li><li><b>Fedora / RHEL</b><span>Add the RPM repository, then <code>dnf install vibestudio</code>.</span></li><li><b>Windows</b><span>Run the .exe installer from the latest release. It isn’t code-signed yet, so SmartScreen will warn you.</span></li></ul>
     </section>
 
     <section class="narrow closing" aria-label="A note on status">

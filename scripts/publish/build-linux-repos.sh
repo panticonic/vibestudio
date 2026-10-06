@@ -112,8 +112,9 @@ if grep -q "PRIVATE KEY" "$OUTPUT_DIR/gpg.key"; then
   exit 1
 fi
 
-cp "$SCRIPT_ROOT/build-resources/brand/vibestudio-symbol.svg" \
-  "$OUTPUT_DIR/vibestudio-symbol.svg"
+for symbol in vibestudio-symbol.svg vibestudio-symbol-dark.svg; do
+  cp "$SCRIPT_ROOT/build-resources/brand/$symbol" "$OUTPUT_DIR/$symbol"
+done
 
 cat > "$OUTPUT_DIR/index.html" <<HTML
 <!doctype html>
@@ -121,56 +122,116 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#FFFFFF">
+<meta name="theme-color" content="#F6F2EA" media="(prefers-color-scheme: light)" data-scheme="light">
+<meta name="theme-color" content="#1A202A" media="(prefers-color-scheme: dark)" data-scheme="dark">
 <meta name="description" content="Download Vibestudio for macOS and Windows, install through Homebrew, or use signed Linux package repositories.">
 <link rel="icon" type="image/svg+xml" href="./vibestudio-symbol.svg">
 <title>Download Vibestudio</title>
+<script>
+ (() => {
+   const root = document.documentElement;
+   const system = matchMedia("(prefers-color-scheme: dark)");
+   const valid = (theme) => (theme === "light" || theme === "dark" ? theme : null);
+   const params = new URLSearchParams(location.search);
+   let chosen = valid(params.get("theme"));
+   if (chosen) {
+     try { localStorage.setItem("theme", chosen); } catch {}
+     params.delete("theme");
+     history.replaceState(null, "", location.pathname + (params.size ? "?" + params : "") + location.hash);
+   } else {
+     try { chosen = valid(localStorage.getItem("theme")); } catch {}
+   }
+   const apply = () => {
+     if (chosen) root.dataset.theme = chosen; else delete root.dataset.theme;
+     for (const element of document.querySelectorAll("[data-scheme]")) {
+       const scheme = element.dataset.scheme;
+       element.media = chosen ? (chosen === scheme ? "all" : "not all") : "(prefers-color-scheme: " + scheme + ")";
+     }
+     for (const link of document.querySelectorAll("a[data-carry-theme]")) {
+       const url = new URL(link.href);
+       if (chosen) url.searchParams.set("theme", chosen); else url.searchParams.delete("theme");
+       link.href = url.href;
+     }
+     const toggle = document.getElementById("theme-toggle");
+     if (toggle) toggle.setAttribute("aria-pressed", String((chosen ?? (system.matches ? "dark" : "light")) === "dark"));
+   };
+   apply();
+   system.addEventListener("change", apply);
+   document.addEventListener("DOMContentLoaded", () => {
+     apply();
+     document.getElementById("theme-toggle").addEventListener("click", () => {
+       const dark = (chosen ?? (system.matches ? "dark" : "light")) === "dark";
+       chosen = dark ? "light" : "dark";
+       try { localStorage.setItem("theme", chosen); } catch {}
+       apply();
+     });
+   });
+ })();
+</script>
 <style>
- :root{color-scheme:light;--bg:#FFFFFF;--panel:#FFFFFF;--line:#D4D9E2;--ink:#14243D;--muted:#58677D;--primary:#204FA3;--chrome:#F1F3F7}
+ :root{color-scheme:light dark;--bg:light-dark(#F6F2EA,#1A202A);--paper:light-dark(#FFFDF8,#222A36);--line:light-dark(#E0D8C9,#36414F);--ink:light-dark(#14243D,#F1EEE8);--muted:light-dark(#56627A,#B8C0CB);--primary:light-dark(#204FA3,#496FA8);--primary-hover:light-dark(#183E83,#5A7FB8);--link:light-dark(#204FA3,#AFC8F0);--signal:light-dark(#C73F2D,#E8A08F);--signal-soft:light-dark(#F7DED6,#3D2C2F);--tint:light-dark(#E6EDF8,#232F42);--shadow-sm:0 14px 34px -18px light-dark(#14243D40,#0009);--sans:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+ :root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
  *{box-sizing:border-box}
  html{background:var(--bg);scroll-behavior:smooth}
- body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
- a{color:var(--primary)}
- .wrap{width:min(100% - 40px,960px);margin:0 auto}
- .topbar{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}
- .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:18px;font-weight:700;letter-spacing:-.04em}
- .brand img{width:30px;height:30px;display:block}
- .toplink{font-size:14px;color:var(--primary);text-decoration:none}
- .hero{padding:75px 0 43px;max-width:760px}
- .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--primary);font-weight:700}
- h1{font-size:clamp(42px,7vw,68px);letter-spacing:-.06em;line-height:1.05;margin:15px 0 17px}
- .lede{max-width:670px;font-size:18px;color:var(--muted);margin:0}
- .trust{display:flex;gap:10px;flex-wrap:wrap;margin-top:23px}
- .badge{border:1px solid var(--line);background:var(--chrome);border-radius:4px;padding:5px 11px;color:var(--ink);font-size:12px}
- .section-title{font-size:22px;letter-spacing:-.035em;margin:25px 0 16px}
+ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased}
+ a{color:var(--link);text-underline-offset:3px}
+ button:focus-visible,a:focus-visible{outline:3px solid var(--link);outline-offset:4px}
+ .wrap{width:min(100% - 48px,1040px);margin:0 auto}
+ .topbar{height:84px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+ .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:21px;font-weight:750;letter-spacing:-.04em}
+ .brand img{width:24px;height:32px;display:block}
+ .topnav{display:flex;align-items:center;gap:22px}
+ .toplink{font-size:15px;font-weight:600;color:var(--link);text-decoration:none}
+ .toplink:hover{text-decoration:underline}
+ .theme-toggle{display:grid;place-items:center;width:38px;height:38px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--paper);color:var(--ink);cursor:pointer;transition:border-color .15s}
+ .theme-toggle:hover{border-color:var(--primary)}
+ .theme-toggle svg{width:18px;height:18px}
+ .hero{padding:56px 0 64px;text-align:center}
+ .kicker{display:block;margin:0 0 14px;font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--signal)}
+ h1{font-size:clamp(44px,7vw,80px);font-weight:750;letter-spacing:-.05em;line-height:1;margin:0 0 22px}
+ .lede{max-width:36em;margin:0 auto;font-size:19px;color:var(--muted)}
+ .actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px}
+ .button{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:11px 24px;border:1px solid var(--line);border-radius:999px;font-size:15px;font-weight:650;white-space:nowrap;text-decoration:none;transition:transform .15s,box-shadow .15s,background .15s,border-color .15s}
+ .button:hover{transform:translateY(-1px)}
+ .primary{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 10px 24px -10px var(--primary)}
+ .primary:hover{background:var(--primary-hover)}
+ .secondary{background:var(--paper);color:var(--ink)}
+ .secondary:hover{border-color:var(--primary)}
+ .fine{margin:18px 0 0;font-size:14px;color:var(--muted)}
+ section+section{margin-top:56px}
+ .section-title{font-size:clamp(26px,3.4vw,34px);font-weight:750;letter-spacing:-.035em;line-height:1.1;margin:0 0 20px}
  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
- .card{min-width:0;padding:22px;border:1px solid var(--line);border-radius:4px;background:var(--panel);box-shadow:none}
- .card-head{display:flex;align-items:center;gap:11px;margin-bottom:15px}
- .os-icon{width:36px;height:36px;border-radius:4px;display:grid;place-items:center;background:var(--chrome);color:var(--primary);font-size:15px;font-weight:750}
- h2{font-size:19px;line-height:1.25;letter-spacing:-.03em;margin:0}
- .card p{color:var(--muted);font-size:14px;margin:0 0 15px}
- .step-label{margin:17px 0 7px;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
- pre{max-width:100%;margin:0;padding:14px 15px;border:1px solid var(--line);border-radius:4px;background:var(--chrome);color:var(--ink);font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;tab-size:2}
- .arch{margin-top:20px;padding:19px 22px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--muted);font-size:14px}
+ .card{min-width:0;padding:26px;border:1px solid var(--line);border-radius:16px;background:var(--paper);transition:box-shadow .2s,border-color .2s}
+ .card:hover{box-shadow:var(--shadow-sm);border-color:color-mix(in srgb,var(--primary) 40%,var(--line))}
+ .card-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+ .os-icon{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:var(--tint);color:var(--link);font:700 14px var(--mono)}
+ .grid .card:nth-child(even) .os-icon{background:var(--signal-soft);color:var(--signal)}
+ h2{font-size:20px;font-weight:700;line-height:1.25;letter-spacing:-.02em;margin:0}
+ .card p{color:var(--muted);font-size:15px;margin:0 0 14px}
+ .step-label{margin:20px 0 8px;color:var(--signal);font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+ pre{max-width:100%;margin:0;padding:14px 16px;border-radius:12px;background:var(--tint);color:var(--ink);font:12.5px/1.75 var(--mono);white-space:pre;overflow:auto;tab-size:2}
+ .arch{margin-top:16px;padding:20px 26px;border:1px solid var(--line);border-radius:16px;background:var(--paper);color:var(--muted);font-size:15px}
  .arch strong{color:var(--ink)}
  .arch p{margin:4px 0 0}
- footer{margin-top:56px;padding:20px 0 30px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:13px}
- footer a{color:var(--primary);text-decoration:none}
- @media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding:57px 0 32px}.card{padding:18px}}
- @media(max-width:420px){.wrap{width:min(100% - 28px,960px)}.topbar{height:66px}.hero{padding-top:45px}.lede{font-size:16px}footer{display:block}footer span{display:block;margin-top:6px}}
+ footer{margin-top:72px;padding:24px 0 40px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:14px}
+ footer a{color:var(--link);text-decoration:none}
+ @media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding:36px 0 48px}.card{padding:20px}.actions .button{flex:1}}
+ @media(max-width:420px){.wrap{width:min(100% - 32px,1040px)}.topbar{height:72px}.lede{font-size:17px}footer{display:block}footer span{display:block;margin-top:6px}}
+ @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.button,.card{transition:none}.button:hover{transform:none}}
 </style>
  </head>
  <body>
  <header class="wrap topbar">
-   <a class="brand" href="https://vibestudio.app/"><img src="./vibestudio-symbol.svg" alt="">Vibestudio</a>
-   <a class="toplink" href="https://github.com/panticonic/vibestudio/releases">All releases ↗</a>
+   <a class="brand" href="https://vibestudio.app/" data-carry-theme><picture><source media="(prefers-color-scheme: dark)" data-scheme="dark" srcset="./vibestudio-symbol-dark.svg"><img src="./vibestudio-symbol.svg" alt=""></picture>Vibestudio</a>
+   <div class="topnav"><a class="toplink" href="https://github.com/panticonic/vibestudio/releases">All releases ↗</a><button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></svg></button></div>
  </header>
  <main class="wrap">
    <section class="hero" aria-labelledby="page-title">
-     <div class="eyebrow">Desktop downloads</div>
+     <span class="kicker">Desktop downloads</span>
      <h1 id="page-title">Get Vibestudio.</h1>
      <p class="lede">Download the desktop app or install with your package manager. Vibestudio checks for new releases and offers the update action that fits your installation.</p>
-     <div class="trust"><span class="badge">macOS</span><span class="badge">Windows</span><span class="badge">Linux</span></div>
+     <div class="actions"><a class="button primary" href="https://vibestudio.app/download/mac">Download for Mac</a><a class="button secondary" href="https://vibestudio.app/download/windows">Download for Windows</a></div>
+     <p class="fine">Linux packages are <a href="#install-title">below</a>.</p>
    </section>
    <section aria-labelledby="desktop-title">
      <h2 class="section-title" id="desktop-title">macOS &amp; Windows</h2>
@@ -226,7 +287,7 @@ sudo dnf install vibestudio</code></pre>
      <aside class="arch"><strong>Arch Linux</strong><p>Download the Arch package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
    </section>
  </main>
- <footer class="wrap"><a href="https://vibestudio.app/">Vibestudio</a><span>Questions or issues? <a href="https://github.com/panticonic/vibestudio/issues">Get help on GitHub</a></span></footer>
+ <footer class="wrap"><a href="https://vibestudio.app/" data-carry-theme>Vibestudio</a><span>Questions or issues? <a href="https://github.com/panticonic/vibestudio/issues">Get help on GitHub</a></span></footer>
  </body>
 </html>
 HTML
