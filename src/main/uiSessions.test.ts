@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRpcClient, isRpcConnectionLost, type RpcEnvelope } from "@vibestudio/rpc";
+import {
+  createRpcClient,
+  isRpcConnectionLost,
+  RpcBoundaryError,
+  type RpcEnvelope,
+} from "@vibestudio/rpc";
 import { UiSessions, type UiIpcRuntime } from "./uiSessions.js";
+import { FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import type { HostUiSession } from "./serverClient.js";
 
 const caller = {
@@ -68,6 +74,77 @@ function rendererClient(fixture: ReturnType<typeof setup>) {
   });
 }
 describe("UiSessions", () => {
+  it("preserves its session when an admission check fails before deciding access", async () => {
+    const fixture = setup();
+    const originalSession = await fixture.directory.session(caller, fixture.runtime);
+    const failure = new RpcBoundaryError(
+      "Hub admission unavailable",
+      "transport",
+      "CONNECTION_LOST"
+    );
+    fixture.resolve.mockRejectedValue(failure);
+    try {
+      await expect(fixture.directory.admit(caller, fixture.runtime.destination)).rejects.toBe(
+        failure
+      );
+      expect(fixture.session.close).not.toHaveBeenCalled();
+      fixture.resolve.mockResolvedValue(fixture.runtime);
+      const restored = await fixture.directory.require(caller, fixture.runtime.destination);
+      expect(await fixture.directory.session(caller, restored)).toBe(originalSession);
+      expect(restored.serverClient.openHostUiSession).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.directory.close();
+    }
+  });
+
+  it.each(["unary", "stream"] as const)(
+    "reports a failed %s response admission check without retiring its desired session",
+    async (mode) => {
+      const fixture = setup();
+      const rpc = rendererClient(fixture);
+      const options = { destination: fixture.runtime.destination };
+      const call =
+        mode === "unary"
+          ? rpc.call("main", "workspace.read", [], options)
+          : rpc.stream("main", "workspace.read", [], options);
+      await vi.waitFor(() => expect(fixture.session.send).toHaveBeenCalledOnce());
+      const sent = vi.mocked(fixture.session.send).mock.calls[0]![0];
+      if (sent.message.type !== "request" && sent.message.type !== "stream-request")
+        throw new Error("Expected request");
+      fixture.resolve.mockRejectedValue(
+        new RpcBoundaryError("Hub admission unavailable", "transport", "ADMISSION_UNAVAILABLE")
+      );
+      fixture.incoming({
+        ...sent,
+        from: sent.target,
+        target: sent.from,
+        message:
+          mode === "unary"
+            ? {
+                type: "response",
+                requestId: sent.message.requestId,
+                result: "unverified response",
+              }
+            : {
+                type: "stream-frame",
+                requestId: sent.message.requestId,
+                fromId: sent.target,
+                frameType: FRAME_HEAD,
+                payload: "unverified response",
+              },
+      });
+      try {
+        await expect(call).rejects.toMatchObject({
+          message: "Hub admission unavailable",
+          code: "ADMISSION_UNAVAILABLE",
+          errorKind: "transport",
+        });
+        expect(fixture.session.close).not.toHaveBeenCalled();
+      } finally {
+        await fixture.directory.close();
+      }
+    }
+  );
   it("carries hub traffic on its admitted owner session without inventing a workspace", async () => {
     const { directory, runtime, incoming, deliver } = setup();
     runtime.destination = { kind: "hub" };
@@ -132,7 +209,7 @@ describe("UiSessions", () => {
   it("rechecks admission on incoming traffic and closes revoked sessions", async () => {
     const { directory, runtime, session, resolve, incoming, deliver } = setup();
     await directory.session(caller, runtime);
-    resolve.mockRejectedValue(new Error("membership revoked"));
+    resolve.mockResolvedValue(null);
     incoming(request);
     await vi.waitFor(() => expect(session.close).toHaveBeenCalledOnce());
     expect(deliver).not.toHaveBeenCalled();
@@ -147,7 +224,7 @@ describe("UiSessions", () => {
     await vi.waitFor(() => expect(fixture.session.send).toHaveBeenCalledOnce());
     const sent = vi.mocked(fixture.session.send).mock.calls[0]![0];
     if (sent.message.type !== "request") throw new Error("Expected an RPC request");
-    fixture.resolve.mockRejectedValue(new Error("membership revoked"));
+    fixture.resolve.mockResolvedValue(null);
     fixture.incoming({
       ...sent,
       from: sent.target,

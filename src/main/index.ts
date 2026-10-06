@@ -2660,17 +2660,13 @@ app.on("ready", async () => {
           system?.workspaceId !== identity.workspaceId ||
           identity.workspaceId !== conn.workspaceId
         ) {
-          throw new Error("Only your System workspace may host desktop UI");
+          return null;
         }
         if (
           destination.kind === "workspace" &&
           !workspaces.some((entry) => entry.workspaceId === destination.workspaceId)
         ) {
-          throw new RpcBoundaryError(
-            "You no longer have access to this workspace",
-            "transport",
-            "CONNECTION_LOST"
-          );
+          return null;
         }
         const workspace =
           destination.kind === "workspace"
@@ -2689,7 +2685,7 @@ app.on("ready", async () => {
           current.codeIdentity?.executionDigest !== code.executionDigest ||
           current.codeIdentity.effectiveVersion !== code.effectiveVersion
         ) {
-          throw new Error("Desktop UI execution changed while opening the workspace");
+          return null;
         }
         const currentMembers = (await conn.hubControlClient.call(
           "hubControl",
@@ -2700,16 +2696,12 @@ app.on("ready", async () => {
           currentMembers.find((entry) => entry.privateRole === "system")?.workspaceId !==
           identity.workspaceId
         )
-          throw new Error("System workspace access was removed during UI admission");
+          return null;
         if (
           destination.kind === "workspace" &&
           !currentMembers.some((entry) => entry.workspaceId === destination.workspaceId)
         )
-          throw new RpcBoundaryError(
-            "Workspace access was removed during startup",
-            "transport",
-            "CONNECTION_LOST"
-          );
+          return null;
         return target;
       },
       dispatcher,

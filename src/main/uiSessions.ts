@@ -1,5 +1,7 @@
 import {
   RpcBoundaryError,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
   rpcDestinationKey,
   stampEnvelopeCaller,
   type RpcEnvelope,
@@ -28,6 +30,7 @@ export interface UiIpcRuntime {
   serverClient: ServerClient;
   workspace?: WorkspaceIpcRuntime;
 }
+/** null is a completed denial; a rejected check has not decided admission. */
 export type ResolveUiRuntime = (
   caller: NativeIpcCaller,
   destination: RpcDestination
@@ -86,26 +89,21 @@ export class UiSessions {
   async admit(caller: NativeIpcCaller, destination: RpcDestination): Promise<UiIpcRuntime | null> {
     if (this.closed) throw new Error("Workspace UI sessions are closed");
     const key = this.key(caller, destination);
-    try {
-      const runtime = await this.resolve(caller, destination);
-      if (!runtime) {
-        await this.closeEntry(key);
-        return null;
-      }
-      if (rpcDestinationKey(runtime.destination) !== rpcDestinationKey(destination))
-        throw new Error("UI admission returned another owner");
-      if (
-        runtime.workspace &&
-        (destination.kind !== "workspace" ||
-          runtime.workspace.workspaceId !== destination.workspaceId ||
-          runtime.workspace.serverClient !== runtime.serverClient)
-      )
-        throw new Error("UI admission returned a mismatched native workspace");
-      return runtime;
-    } catch (error) {
+    const runtime = await this.resolve(caller, destination);
+    if (!runtime) {
       await this.closeEntry(key);
-      throw error;
+      return null;
     }
+    if (rpcDestinationKey(runtime.destination) !== rpcDestinationKey(destination))
+      throw new Error("UI admission returned another owner");
+    if (
+      runtime.workspace &&
+      (destination.kind !== "workspace" ||
+        runtime.workspace.workspaceId !== destination.workspaceId ||
+        runtime.workspace.serverClient !== runtime.serverClient)
+    )
+      throw new Error("UI admission returned a mismatched native workspace");
+    return runtime;
   }
 
   async session(caller: NativeIpcCaller, runtime: UiIpcRuntime): Promise<HostUiSession> {
@@ -284,9 +282,21 @@ export class UiSessions {
               pending.delete(message.requestId);
             this.deliverEnvelope(caller, runtime, envelope);
           })
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            const message = envelope.message;
+            if ("requestId" in message && typeof message.requestId === "string")
+              this.failRequest(entry, message.requestId, error);
+          });
       });
-      return { caller, runtime, session: trackedSession, unsubscribe, pending, streamAborts };
+      const entry = {
+        caller,
+        runtime,
+        session: trackedSession,
+        unsubscribe,
+        pending,
+        streamAborts,
+      };
+      return entry;
     });
     this.sessions.set(key, { opening, abort });
     try {
@@ -336,40 +346,41 @@ export class UiSessions {
       entry.unsubscribe();
       for (const abort of entry.streamAborts) abort.abort(CONNECTION_LOST_MESSAGE);
       entry.streamAborts.clear();
-      for (const { requestId, envelope, stream } of entry.pending.values()) {
-        try {
-          this.deliverEnvelope(entry.caller, entry.runtime, {
-            ...envelope,
-            from: envelope.target,
-            target: envelope.from,
-            message: stream
-              ? {
-                  type: "stream-frame",
-                  requestId,
-                  fromId: envelope.target,
-                  frameType: FRAME_ERROR,
-                  payload: JSON.stringify({
-                    message: CONNECTION_LOST_MESSAGE,
-                    code: "CONNECTION_LOST",
-                    errorKind: "transport",
-                  }),
-                }
-              : {
-                  type: "response",
-                  requestId,
-                  error: CONNECTION_LOST_MESSAGE,
-                  errorCode: "CONNECTION_LOST",
-                  errorKind: "transport",
-                },
-          });
-        } catch {
-          /* Renderer teardown can race terminal delivery; the session still closes below. */
-        }
-      }
-      entry.pending.clear();
+      const failure = new RpcBoundaryError(CONNECTION_LOST_MESSAGE, "transport", "CONNECTION_LOST");
+      for (const requestId of entry.pending.keys()) this.failRequest(entry, requestId, failure);
       await entry.session.close();
     } catch {
       /* A failed opening already owns its cleanup. */
+    }
+  }
+
+  private failRequest(entry: SessionEntry, requestId: string, failure: unknown): void {
+    const request = entry.pending.get(requestId);
+    if (!request) return;
+    entry.pending.delete(requestId);
+    const message = failure instanceof Error ? failure.message : String(failure);
+    const errorKind = rpcErrorKindOf(failure, "internal");
+    const errorCode = (failure as { code?: unknown } | null)?.code;
+    const code = typeof errorCode === "string" ? errorCode : undefined;
+    const errorData = rpcErrorDataOf(failure);
+    const { envelope, stream } = request;
+    try {
+      this.deliverEnvelope(entry.caller, entry.runtime, {
+        ...envelope,
+        from: envelope.target,
+        target: envelope.from,
+        message: stream
+          ? {
+              type: "stream-frame",
+              requestId,
+              fromId: envelope.target,
+              frameType: FRAME_ERROR,
+              payload: JSON.stringify({ message, code, errorKind, errorData }),
+            }
+          : { type: "response", requestId, error: message, errorCode: code, errorKind, errorData },
+      });
+    } catch {
+      /* A destroyed renderer cannot receive its settled request. */
     }
   }
 
