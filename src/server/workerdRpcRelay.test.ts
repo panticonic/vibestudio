@@ -425,7 +425,18 @@ describe("workerdRpcRelay", () => {
   });
 
   it("annotates fetch failures with the DO relay URL and low-level cause", async () => {
-    const cause = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
+    const cause = Object.assign(new Error("other side closed"), {
+      code: "UND_ERR_SOCKET",
+      socket: {
+        localAddress: "127.0.0.1",
+        localPort: 9000,
+        remoteAddress: "127.0.0.1",
+        remotePort: 8787,
+        bytesWritten: 512,
+        bytesRead: 0,
+        authorization: "must-not-be-logged",
+      },
+    });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
     vi.stubGlobal(
       "fetch",
@@ -443,7 +454,7 @@ describe("workerdRpcRelay", () => {
         workerdGatewayToken: "gateway-token",
       })
     ).rejects.toThrow(
-      `DO RPC fetch to ${url} failed: fetch failed (cause: Error: other side closed code=UND_ERR_SOCKET)`
+      `DO RPC fetch to ${url} failed: fetch failed (cause: Error: other side closed code=UND_ERR_SOCKET localAddress=127.0.0.1 localPort=9000 remoteAddress=127.0.0.1 remotePort=8787 bytesWritten=512 bytesRead=0)`
     );
   });
 

@@ -656,9 +656,23 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     method: "prepare" | "resume",
     arg: unknown
   ): Promise<unknown> {
-    return this.withProgressReport(`${doRefKey(ref)}.__lifecycle/${method}`, () =>
-      this.dispatchLifecycleImpl(ref, method, arg)
-    );
+    const label = `${doRefKey(ref)}.__lifecycle/${method}`;
+    const input = arg as { mode?: unknown; reason?: unknown; epoch?: unknown } | null;
+    console.info(`[DODispatch] lifecycle started ${label}`, {
+      mode: input?.mode,
+      reason: input?.reason,
+      epoch: input?.epoch,
+    });
+    try {
+      const result = await this.withProgressReport(label, () =>
+        this.dispatchLifecycleImpl(ref, method, arg)
+      );
+      console.info(`[DODispatch] lifecycle completed ${label}`, result);
+      return result;
+    } catch (error) {
+      console.error(`[DODispatch] lifecycle failed ${label}`, error);
+      throw error;
+    }
   }
 
   private async dispatchLifecycleImpl(

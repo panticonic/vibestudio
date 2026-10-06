@@ -6,6 +6,28 @@ import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import { secureRandomUuid } from "../randomId.js";
 import { RpcBoundaryError } from "../errors.js";
 
+/** Cancel one waiter while its shared session/connection remains owned. */
+function waitForSharedOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const cancelled = () => {
+      signal.removeEventListener("abort", cancelled);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", cancelled, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", cancelled);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", cancelled);
+        reject(error);
+      }
+    );
+    if (signal.aborted) cancelled();
+  });
+}
+
 export interface ReconnectingIrohPipeOptions {
   peerEndpointId: string;
   dial(): Promise<IrohClientPipe>;
@@ -100,7 +122,7 @@ class ReconnectingSession implements IrohClientSession {
   }
 
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
-    return (await this.requireAvailableInner()).send(envelope, signal);
+    return (await this.requireAvailableInner(signal)).send(envelope, signal);
   }
 
   async stream(
@@ -110,7 +132,7 @@ class ReconnectingSession implements IrohClientSession {
     headTimeoutMs?: number,
     trafficClass?: RpcStreamTrafficClass
   ): Promise<Response> {
-    const inner = await this.requireAvailableInner();
+    const inner = await this.requireAvailableInner(signal);
     if (!inner.stream) throw new Error("Iroh session does not implement streaming RPC");
     return inner.stream(envelope, signal, body, headTimeoutMs, trafficClass);
   }
@@ -122,7 +144,7 @@ class ReconnectingSession implements IrohClientSession {
     headTimeoutMs?: number,
     trafficClass?: RpcStreamTrafficClass
   ): Promise<DecodedFramedStream> {
-    const inner = await this.requireAvailableInner();
+    const inner = await this.requireAvailableInner(signal);
     if (!inner.streamReadable)
       throw new Error("Iroh session does not implement readable streaming");
     return inner.streamReadable(envelope, signal, body, headTimeoutMs, trafficClass);
@@ -196,23 +218,10 @@ class ReconnectingSession implements IrohClientSession {
     if (this.terminal) throw new Error(`Iroh session ${this.logicalId} is terminal`);
     // This waiter belongs to the logical session. The shared physical dial
     // stays owned by the pipe and can serve other sessions after this closes.
-    const connection = this.owner.ensureConnected();
-    const signal = this.retirement.signal;
-    const { pipe, generation } = await new Promise<ConnectedGeneration>((resolve, reject) => {
-      const cancelled = () => reject(signal.reason);
-      signal.addEventListener("abort", cancelled, { once: true });
-      void connection.then(
-        (value) => {
-          signal.removeEventListener("abort", cancelled);
-          resolve(value);
-        },
-        (error) => {
-          signal.removeEventListener("abort", cancelled);
-          reject(error);
-        }
-      );
-      if (signal.aborted) cancelled();
-    });
+    const { pipe, generation } = await waitForSharedOperation(
+      this.owner.ensureConnected(),
+      this.retirement.signal
+    );
     return this.activate(pipe, generation);
   }
 
@@ -223,17 +232,19 @@ class ReconnectingSession implements IrohClientSession {
    * callers get one typed, retryable availability failure for work attempted
    * during the outage.
    */
-  private requireAvailableInner(): Promise<IrohClientSession> {
+  private requireAvailableInner(signal?: AbortSignal | null): Promise<IrohClientSession> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.closed) return Promise.reject(new Error(`Iroh session ${this.logicalId} is closed`));
     if (this.terminal)
       return Promise.reject(new Error(`Iroh session ${this.logicalId} is terminal`));
     if (this.authenticatedCallerId !== null && this.owner.status() !== "connected") {
       return Promise.reject(workspaceServerUnavailableError());
     }
-    if (this.inner && this.generation === this.owner.generation()) {
-      return Promise.resolve(this.inner);
-    }
-    return this.ensureInner();
+    const availability =
+      this.inner && this.generation === this.owner.generation()
+        ? Promise.resolve(this.inner)
+        : this.ensureInner();
+    return signal ? waitForSharedOperation(availability, signal) : availability;
   }
 
   private async openInner(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
@@ -310,6 +321,7 @@ class ReconnectingPipe implements IrohClientPipe {
   private statusValue: RpcConnectionStatus = "connecting";
   private generationValue = 0;
   private closed = false;
+  private closePromise: Promise<void> | null = null;
   private suspended = false;
   /**
    * Reconnection is a property of a session that has actually connected.
@@ -423,24 +435,36 @@ class ReconnectingPipe implements IrohClientPipe {
     return session;
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
     this.suspended = false;
-    this.setStatus("disconnected");
-    const sessions = [...this.sessions];
-    this.sessions.clear();
-    await Promise.all(sessions.map((session) => session.close()));
-    const pipe = this.connected?.pipe;
-    this.connected?.disposeObservers();
-    this.connected = null;
-    this.emitDiagnostics();
-    await pipe?.close().catch(() => undefined);
-    await this.options.closeEndpoint();
-    await this.connecting?.catch(() => undefined);
-    this.diagnosticsListeners.clear();
-    this.statusListeners.clear();
-    this.reconnectListeners.clear();
+    // Cache the retirement before notifying observers, which can re-enter close.
+    return (this.closePromise = Promise.resolve().then(async () => {
+      this.setStatus("disconnected");
+      const sessions = [...this.sessions];
+      this.sessions.clear();
+      const pipe = this.connected?.pipe;
+      this.connected?.disposeObservers();
+      this.connected = null;
+      this.emitDiagnostics();
+      // Physical retirement releases session I/O and a pending dial. Start
+      // every owned close before joining any of those dependent operations.
+      const retirements = [
+        Promise.resolve().then(() => pipe?.close()),
+        Promise.resolve().then(() => this.options.closeEndpoint()),
+        ...sessions.map((session) => Promise.resolve().then(() => session.close())),
+      ];
+      const results = await Promise.allSettled(retirements);
+      await this.connecting?.catch(() => undefined);
+      this.diagnosticsListeners.clear();
+      this.statusListeners.clear();
+      this.reconnectListeners.clear();
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (errors.length) throw new AggregateError(errors, "Iroh pipe cleanup failed");
+    }));
   }
 
   removeSession(session: ReconnectingSession): void {

@@ -52,6 +52,82 @@ describe("Iroh RPC client over real local QUIC", () => {
     return endpoint;
   }
 
+  it("retires an unused pipe without opening a handshake or leaking a rejection", async () => {
+    const connection = {
+      peerEndpointId: "unused-peer",
+      openBi: vi.fn(async () => {
+        throw new Error("Unused pipe must not open a stream");
+      }),
+      acceptBi: vi.fn(async () => {
+        throw new Error("Unused pipe must not accept a stream");
+      }),
+      close: vi.fn(),
+      closed: vi.fn(async () => "closed"),
+    };
+    const pipe = createIrohClientPipe(connection);
+    await pipe.close();
+    expect(connection.close).toHaveBeenCalledOnce();
+    expect(connection.openBi).not.toHaveBeenCalled();
+    // Vitest treats a rejected, unobserved private handshake as a test failure.
+  });
+
+  it.each(["pipe", "session"] as const)(
+    "rejects readiness when the %s closes before the peer handshake",
+    async (owner) => {
+      const serverEndpoint = await bind();
+      const clientEndpoint = await bind();
+      const incomingPromise = serverEndpoint.acceptNext();
+      const connecting = clientEndpoint.connect(serverEndpoint.addr(), [...VIBESTUDIO_IROH_ALPN]);
+      const incoming = await incomingPromise;
+      if (!incoming) throw new Error("Server closed before connection");
+      const accepting = await incoming.accept();
+      const [serverNative, clientNative] = await Promise.all([accepting.connect(), connecting]);
+      configureNodeConnection(serverNative);
+      configureNodeConnection(clientNative);
+      const server = new NodePhysicalConnection(serverNative);
+      const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+      const physical = vi.fn();
+      const logical = vi.fn();
+      const physicalReady = pipe.ready().catch(physical);
+      const getToken = vi.fn(() => "credential");
+      const session = pipe.openSession({ getToken });
+      const logicalReady = session.ready!().catch(logical);
+      try {
+        const control = await server.acceptBi();
+        await readIrohStreamPreamble(control.recv);
+        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+        // The peer deliberately has not returned HELLO. Explicit close must
+        // terminate that readiness owner as well as the native connection.
+        await (owner === "pipe" ? pipe : session).close();
+        for (let index = 0; index < 10; index++) await Promise.resolve();
+        expect(logical).toHaveBeenCalledWith(expect.objectContaining({ code: "CONNECTION_LOST" }));
+        if (owner === "pipe") {
+          expect(physical).toHaveBeenCalledWith(
+            expect.objectContaining({ code: "CONNECTION_LOST" })
+          );
+        } else {
+          expect(physical).not.toHaveBeenCalled();
+          await writeFrame(
+            control.send,
+            encodeIrohSessionControlFrame({
+              t: IROH_SESSION_HELLO,
+              protocolVersion: IROH_WIRE_VERSION,
+              contractVersion: RPC_CONTRACT_VERSION,
+            }),
+            MAX_CONTROL_FRAME_BYTES
+          );
+          await pipe.ready();
+          expect(pipe.status()).toBe("connected");
+          expect(getToken).not.toHaveBeenCalled();
+        }
+        await Promise.all([physicalReady, logicalReady]);
+      } finally {
+        await pipe.close();
+        server.close(0n, new TextEncoder().encode("fixture cleanup"));
+      }
+    }
+  );
+
   it("propagates the owner failure when a cancelled native read resolves as EOF", async () => {
     let finishRead!: (bytes: Uint8Array) => void;
     const pendingRead = new Promise<Uint8Array>((resolve) => {

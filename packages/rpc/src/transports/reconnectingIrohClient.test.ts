@@ -126,6 +126,72 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("retires the physical owner before joining session I/O and shares concurrent close", async () => {
+    const pipe = new FakePipe();
+    let finishIo!: () => void;
+    const io = new Promise<void>((resolve) => {
+      finishIo = resolve;
+    });
+    const endpointClose = vi.fn(async () => {});
+    const physicalClose = vi.spyOn(pipe, "close").mockImplementation(async () => {
+      finishIo();
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: async () => pipe,
+      closeEndpoint: endpointClose,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    await session.ready!();
+    vi.spyOn(pipe.sessions[0]!, "close").mockReturnValue(io);
+    const first = owner.close();
+    const second = owner.close();
+    try {
+      expect(second).toBe(first);
+      await first;
+      expect(physicalClose).toHaveBeenCalledOnce();
+      expect(endpointClose).toHaveBeenCalledOnce();
+    } finally {
+      finishIo();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  it("joins endpoint retirement even when a session reports its original cleanup failure", async () => {
+    const original = new Error("Original session cleanup failure");
+    const pipe = new FakePipe();
+    let finishEndpoint!: () => void;
+    const retirement = new Promise<void>((resolve) => {
+      finishEndpoint = resolve;
+    });
+    const endpointClose = vi.fn(() => retirement);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: async () => pipe,
+      closeEndpoint: endpointClose,
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    await session.ready!();
+    vi.spyOn(pipe.sessions[0]!, "close").mockRejectedValue(original);
+    const outcome = vi.fn();
+    const closing = owner.close().then(
+      () => outcome(null),
+      (error: unknown) => outcome(error)
+    );
+    try {
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(endpointClose).toHaveBeenCalledOnce();
+      expect(outcome).not.toHaveBeenCalled();
+      finishEndpoint();
+      await closing;
+      expect(outcome.mock.calls[0]![0]).toMatchObject({
+        errors: [expect.objectContaining({ errors: [original] })],
+      });
+    } finally {
+      finishEndpoint();
+      await closing;
+    }
+  });
   it("releases a closed session's connection waiter while preserving the shared dial", async () => {
     const pipe = new FakePipe();
     let finishDial!: (value: IrohClientPipe) => void;
@@ -253,6 +319,64 @@ describe("reconnecting Iroh client", () => {
 
     await owner.close();
   });
+
+  it.each(["send", "stream", "streamReadable"] as const)(
+    "cancels %s waiting for authentication without retiring the shared session",
+    async (operation) => {
+      const pipe = new FakePipe();
+      let releaseReady!: () => void;
+      const readiness = new Promise<void>((resolve) => {
+        releaseReady = resolve;
+      });
+      const open = pipe.openSession.bind(pipe);
+      vi.spyOn(pipe, "openSession").mockImplementation((options) => {
+        const inner = open(options);
+        inner.ready = () => readiness;
+        return Object.assign(inner, {
+          stream: async () => new Response("ready"),
+          streamReadable: async () => ({
+            status: 200,
+            statusText: "OK",
+            headers: [],
+            finalUrl: "",
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.close();
+              },
+            }),
+          }),
+        });
+      });
+      const closeEndpoint = vi.fn().mockResolvedValue(undefined);
+      const owner = createReconnectingIrohClientPipe({
+        peerEndpointId: pipe.peerEndpointId,
+        dial: async () => pipe,
+        closeEndpoint,
+      });
+      const session = owner.openSession({ getToken: () => "credential" });
+      const controller = new AbortController();
+      const reason = new Error("Request owner stopped during authentication");
+      let failure: unknown;
+      const request = session[operation]!(eventEnvelope, controller.signal).catch((error) => {
+        failure = error;
+      });
+      try {
+        await eventually(() => expect(pipe.sessions).toHaveLength(1));
+        controller.abort(reason);
+        await eventually(() => expect(failure).toBe(reason));
+        expect(closeEndpoint).not.toHaveBeenCalled();
+        expect(pipe.sessions[0]!.sent).toEqual([]);
+        releaseReady();
+        await session.ready!();
+        await session.send(eventEnvelope);
+        expect(pipe.sessions[0]!.sent).toEqual([eventEnvelope]);
+      } finally {
+        releaseReady();
+        await request;
+        await owner.close();
+      }
+    }
+  );
 
   it("allows awaited recovery replay to use the recovered logical session", async () => {
     const first = new FakePipe();

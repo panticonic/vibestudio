@@ -212,12 +212,27 @@ function describeFetchCause(cause: unknown): string {
     syscall?: unknown;
     address?: unknown;
     port?: unknown;
+    socket?: unknown;
   };
   const parts = [`${cause.name}: ${cause.message}`];
   for (const key of ["code", "errno", "syscall", "address", "port"] as const) {
     const value = fields[key];
     if (typeof value === "string" || typeof value === "number") {
       parts.push(`${key}=${value}`);
+    }
+  }
+  if (fields.socket && typeof fields.socket === "object") {
+    const socket = fields.socket as Record<string, unknown>;
+    for (const key of [
+      "localAddress",
+      "localPort",
+      "remoteAddress",
+      "remotePort",
+      "bytesWritten",
+      "bytesRead",
+    ]) {
+      const value = socket[key];
+      if (typeof value === "string" || typeof value === "number") parts.push(`${key}=${value}`);
     }
   }
   return parts.join(" ");

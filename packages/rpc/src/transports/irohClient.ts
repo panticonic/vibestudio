@@ -353,7 +353,7 @@ class ClientSession implements IrohClientSession {
     );
     this.closePromise = (async () => {
       try {
-        if (this.pipe.status() !== "disconnected")
+        if (this.pipe.status() === "connected")
           await this.pipe.writeControl({ t: IROH_SESSION_CLOSE, sid: this.sid, code: 1000 });
       } finally {
         // A failed control write must not strand this session's request owners.
@@ -418,15 +418,19 @@ class ClientSession implements IrohClientSession {
   }
 
   private async open(): Promise<void> {
-    await this.pipe.ready();
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
     const generation = this.requestGeneration;
+    // Admit the logical waiter before the shared handshake. Its own close
+    // can reject readiness without closing a pipe needed by sibling sessions.
     const resultPromise = this.pipe.waitForOpen(this.sid);
     // Observe the server result while credentials and the control write are
     // pending: disconnect can reject it before either operation completes.
     const [result] = await Promise.all([
       resultPromise,
       (async () => {
+        await this.pipe.ready();
+        if (this.terminal || this.requestGeneration !== generation)
+          throw new Error(`Iroh session ${this.sid} closed during the pipe handshake`);
         const token = await this.options.getToken();
         if (this.terminal || this.requestGeneration !== generation)
           throw new Error(`Iroh session ${this.sid} closed during credential acquisition`);
@@ -782,6 +786,10 @@ class ClientPipe implements IrohClientPipe {
   ) {
     this.connection = connection;
     this.peerEndpointId = connection.peerEndpointId;
+    // Retirement may reject the private handshake before ready() starts or
+    // while native setup is pending. Keep that rejection observed; ready()
+    // still receives the original failure when it joins the handshake.
+    void this.helloPromise.catch(() => undefined);
     this.unsubscribePhysicalDiagnostics =
       connection.onDiagnosticsChange?.(() => this.diagnosticsChanged()) ?? null;
   }
@@ -847,6 +855,7 @@ class ClientPipe implements IrohClientPipe {
         "transport",
         SESSION_CONNECTION_LOST_CODE
       );
+      this.helloReject(error);
       const retirements = [...this.sessions.values()].map((session) => session.fail(error));
       this.unsubscribePhysicalDiagnostics?.();
       for (const pending of this.pendingOpens.values()) pending.reject(error);
