@@ -1,6 +1,7 @@
 /** Application close owns graceful shutdown. Process ownership observes the
  * real leader exit and retires only executors orphaned by that terminal event. */
 export async function closeOwnedDesktop(app, owner) {
+  const child = app.process();
   try {
     await app.close();
   } catch (original) {
@@ -20,7 +21,6 @@ export async function closeOwnedDesktop(app, owner) {
     throw original;
   }
   await owner.join();
-  const child = app.process();
   if (child.exitCode !== 0) {
     throw new Error(
       child.exitCode !== null

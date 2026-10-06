@@ -4,12 +4,16 @@ import { closeOwnedDesktop } from "./lib/owned-desktop-close.mjs";
 
 function fixture(exitCode = 0) {
   const events = [];
+  const child = { exitCode, signalCode: null };
+  let closed = false;
   const app = {
     async close() {
       events.push("close");
+      closed = true;
     },
     process() {
-      return { exitCode, signalCode: null };
+      assert.equal(closed, false, "The process handle is released after close");
+      return child;
     },
   };
   const owner = {
