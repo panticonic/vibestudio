@@ -11,7 +11,10 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { processGroupAlive } from "../../scripts/owned-process-tree.mjs";
+import {
+  OwnedProcessGroup,
+  type OwnedProcessGroupHandle,
+} from "@vibestudio/shared/ownedProcessGroup";
 import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { z } from "zod";
@@ -2618,6 +2621,7 @@ async function startWorkspaceRuntime(
       detached: process.platform !== "win32",
     }
   );
+  workspaceChildOwners.set(child, OwnedProcessGroup.create(child));
   onSpawn(child);
   state.workspaceChildren.add(child);
 
@@ -2721,10 +2725,7 @@ async function startWorkspaceRuntime(
   };
 }
 
-type ProcessSignalDeps = {
-  platform?: NodeJS.Platform;
-  killProcess?: typeof process.kill;
-};
+const workspaceChildOwners = new WeakMap<ChildProcess, OwnedProcessGroupHandle>();
 
 function workspaceChildExited(child: ChildProcess): boolean {
   return (
@@ -2850,23 +2851,16 @@ export async function handleWorkspaceChildExit(
 /** The exited group leader is not proof that its runtime was retired. */
 export async function reapWorkspaceChildProcessGroup(
   child: ChildProcess,
-  deps: ProcessSignalDeps & { groupAlive?: (pid: number) => boolean } = {}
+  owner = workspaceChildOwners.get(child)
 ): Promise<void> {
-  const platform = deps.platform ?? process.platform;
-  const pid = child.pid;
-  if (platform === "win32" || !Number.isInteger(pid) || (pid ?? 0) <= 0) return;
-  const alive = deps.groupAlive ?? processGroupAlive;
-  // A reaped leader can leave only zombies, which no longer own executable
-  // work. Observe the group before signalling, and reconcile again if its
-  // final member exits during delivery; the OS error alone is not liveness.
-  if (!alive(pid as number)) return;
+  if (!owner) throw new Error("Workspace child has no retained process creation receipt");
   try {
-    (deps.killProcess ?? process.kill)(-(pid as number), "SIGKILL");
-  } catch (error) {
-    if (!alive(pid as number)) return;
-    throw new Error(`Workspace child ${pid} descendant retirement failed`, { cause: error });
+    // One creation owner observes leader exit, retires orphaned executors, and
+    // joins output producer close. A numeric PID alone grants none of these.
+    await owner.join();
+  } catch (cause) {
+    throw new Error(`Workspace child ${child.pid} descendant retirement failed`, { cause });
   }
-  while (alive(pid as number)) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 /**

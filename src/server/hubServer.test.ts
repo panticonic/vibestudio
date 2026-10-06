@@ -5,6 +5,10 @@ import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import { processGroupAlive } from "../../scripts/owned-process-tree.mjs";
+import {
+  OwnedProcessGroup,
+  type OwnedProcessGroupHandle,
+} from "@vibestudio/shared/ownedProcessGroup";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
@@ -211,16 +215,17 @@ describe("workspace child process-tree ownership", () => {
         ],
         { detached: true, stdio: "ignore" }
       );
+      const owner = OwnedProcessGroup.create(child);
       try {
         await new Promise<void>((resolve, reject) => {
           child.once("exit", () => resolve());
           child.once("error", reject);
         });
         expect(processGroupAlive(child.pid!)).toBe(true);
-        await reapWorkspaceChildProcessGroup(child);
+        await reapWorkspaceChildProcessGroup(child, owner);
         expect(processGroupAlive(child.pid!)).toBe(false);
       } finally {
-        if (child.pid && processGroupAlive(child.pid)) process.kill(-child.pid, "SIGKILL");
+        await owner.retire("SIGKILL");
       }
     }
   );
@@ -248,58 +253,54 @@ describe("workspace child process-tree ownership", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("attempts cleanup of the exact detached child process group", async () => {
-    const child = fakeChild();
-    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
-    const killProcess = vi.fn((_pid: number, signal?: NodeJS.Signals | number): true => {
-      if (signal === 0) throw missing;
-      return true;
-    });
-
-    await reapWorkspaceChildProcessGroup(child, {
-      platform: "linux",
-      killProcess,
-      groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
-    });
-
-    expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
-    expect(killProcess).toHaveBeenCalledTimes(1);
+  it("refuses to derive retirement authority from an exited child's numeric PID", async () => {
+    await expect(reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }))).rejects.toThrow(
+      "no retained process creation receipt"
+    );
   });
 
-  it("does not signal a group with no live runtime members", async () => {
-    const killProcess = vi.fn();
-    await reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
-      platform: "darwin",
-      killProcess,
-      groupAlive: () => false,
+  it("joins the exact creation owner before reporting workspace retirement", async () => {
+    let release!: () => void;
+    const receipt = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    expect(killProcess).not.toHaveBeenCalled();
+    const owner: OwnedProcessGroupHandle = {
+      identity: null,
+      join: vi.fn(() => receipt),
+      retire: vi.fn(),
+    };
+    let retired = false;
+    const retirement = reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), owner).then(
+      () => {
+        retired = true;
+      }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(owner.join).toHaveBeenCalledOnce();
+    expect(retired).toBe(false);
+    release();
+    await retirement;
+    expect(retired).toBe(true);
+    expect(owner.retire).not.toHaveBeenCalled();
   });
 
-  it("joins a group whose last member exits during signal delivery", async () => {
+  it("preserves the original creation owner's retirement failure", async () => {
+    const failure = Object.assign(new Error("native ownership observation failed"), {
+      code: "EOWNERSHIP",
+    });
+    const owner: OwnedProcessGroupHandle = {
+      identity: null,
+      join: vi.fn(async () => {
+        throw failure;
+      }),
+      retire: vi.fn(),
+    };
     await expect(
-      reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), {
-        platform: "darwin",
-        killProcess: () => {
-          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-        },
-        groupAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("retains cleanup failure when descendant retirement cannot be performed", async () => {
-    const child = fakeChild({ exitCode: 0 });
-    const killProcess = vi.fn((): true => {
-      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), owner)
+    ).rejects.toMatchObject({
+      message: "Workspace child 4321 descendant retirement failed",
+      cause: failure,
     });
-    await expect(
-      reapWorkspaceChildProcessGroup(child, {
-        platform: "darwin",
-        killProcess,
-        groupAlive: () => true,
-      })
-    ).rejects.toThrow("descendant retirement failed");
   });
 
   it("does not signal a child whose OS exit is already recorded", async () => {
