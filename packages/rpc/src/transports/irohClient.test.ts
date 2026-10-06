@@ -408,6 +408,18 @@ describe("Iroh RPC client over real local QUIC", () => {
     const headAdmission = new Promise<void>((resolve) => {
       releaseHead = resolve;
     });
+    // Every manually held completion belongs to this test's scope, including
+    // failure cleanup. Otherwise the first assertion failure can strand a
+    // sibling task and hide itself behind the runner's deadline.
+    const releaseGates: (() => void)[] = [headRequested, releaseHead];
+    const deadlineAdmissions = [false, true].map(() => {
+      let admit!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        admit = resolve;
+      });
+      releaseGates.push(admit);
+      return { ready, admit };
+    });
     const serverTask = (async () => {
       const control = await server.acceptBi();
       expect((await readIrohStreamPreamble(control.recv)).k).toBe("control");
@@ -521,6 +533,7 @@ describe("Iroh RPC client over real local QUIC", () => {
           sid: open.sid,
         });
         await readFrame(timedOut.recv, MAX_ENVELOPE_FRAME_BYTES);
+        deadlineAdmissions[body ? 1 : 0]!.admit();
         // Deliberately send no response head. The caller's timeout must stop
         // this request-owned stream without closing its sibling sessions.
         expect(await timedOut.send.stopped()).toBe(0x202);
@@ -617,18 +630,28 @@ describe("Iroh RPC client over real local QUIC", () => {
       const first = await reader.read();
       expect(new TextDecoder().decode(first.value)).toBe("hello");
       reader.releaseLock();
-      await expect(
-        rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
-      ).rejects.toMatchObject({
-        code: "IROH_RESPONSE_HEAD_TIMEOUT",
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const rejected = expect(
+          rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
+        ).rejects.toMatchObject({ code: "IROH_RESPONSE_HEAD_TIMEOUT" });
+        // Exercise expiration while waiting for an admitted response head,
+        // rather than racing native envelope delivery against CI scheduling.
+        await deadlineAdmissions[0]!.ready;
+        vi.advanceTimersByTime(100);
+        await rejected;
+      } finally {
+        vi.useRealTimers();
+      }
       let releaseUploadCancellation!: () => void;
       const cancellationReceipt = new Promise<void>((resolve) => {
         releaseUploadCancellation = resolve;
       });
+      releaseGates.push(releaseUploadCancellation);
       const cancelUpload = vi.fn(() => cancellationReceipt);
       const pendingUpload = new ReadableStream<Uint8Array>({ cancel: cancelUpload });
       let deadlineSettled = false;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const deadline = rpc
         .stream("main", "no-response-upload", [], {
           headTimeoutMs: 100,
@@ -640,6 +663,12 @@ describe("Iroh RPC client over real local QUIC", () => {
       const rejectedDeadline = expect(deadline).rejects.toMatchObject({
         code: "IROH_RESPONSE_HEAD_TIMEOUT",
       });
+      try {
+        await deadlineAdmissions[1]!.ready;
+        vi.advanceTimersByTime(100);
+      } finally {
+        vi.useRealTimers();
+      }
       await expect.poll(() => cancelUpload.mock.calls.length).toBe(1);
       expect(deadlineSettled).toBe(false);
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
@@ -702,6 +731,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const sessionCancellation = new Promise<void>((resolve) => {
         finishSessionCancellation = resolve;
       });
+      releaseGates.push(sessionCancellationStarted, finishSessionCancellation);
       const sessionCancelUpload = vi.fn(() => {
         sessionCancellationStarted();
         return sessionCancellation;
@@ -739,6 +769,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     try {
       await Promise.all([serverTask, clientTask]);
     } finally {
+      for (const release of releaseGates) release();
       await pipe.close();
       await Promise.allSettled([serverTask, clientTask]);
     }

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { internalDoUniqueKey, UNIVERSAL_DO_UNIQUE_KEY } from "./workerdStorageIdentity.js";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
+import { buildWorkerdPrograms } from "../../scripts/build-workerd-programs.mjs";
 
 const require = createRequire(import.meta.url);
 const packages: Record<string, string> = {
@@ -47,6 +48,7 @@ it.each([
   "sqlite-facet",
   "sqlite-facet-long-path",
   "workerLoader",
+  "rpc-early-rejection",
 ] as const)(
   "serves real requests with installed workerd: %s",
   async (feature) => {
@@ -88,7 +90,22 @@ it.each([
       if (sqlite) await mkdir(storageRoot, { recursive: true });
       let source = 'export default { fetch() { return new Response("http-ok"); } };';
       let fields = "";
-      if (feature === "nodejs") {
+      let additionalServices = "";
+      if (feature === "rpc-early-rejection") {
+        source = (await buildWorkerdPrograms({ write: false })).router;
+        fields = `bindings = [
+          (name = "WORKERD_GATEWAY_TOKEN", text = "gateway"),
+          (name = "WORKERD_DISPATCH_SECRET", text = "dispatch"),
+          (name = "WORKERD_DO_BINDINGS", json = "{}"),
+          (name = "UNIVERSAL_DO", durableObjectNamespace = (serviceName = "early", className = "Early"))
+        ],`;
+        additionalServices = `, (name = "early", worker = (
+          compatibilityDate = "2025-12-01",
+          durableObjectNamespaces = [(className = "Early", uniqueKey = "early-rejection")],
+          durableObjectStorage = (inMemory = void),
+          modules = [(name = "early.js", esModule = ${JSON.stringify('export class Early { fetch() { return new Response("warming", {status: 503}); } }')})]
+        ))`;
+      } else if (feature === "nodejs") {
         source = `import { createHash } from 'node:crypto';
           export default { fetch() { return new Response(createHash('sha256').update('native').digest('hex')); } };`;
         fields = 'compatibilityFlags = ["nodejs_compat"],';
@@ -124,7 +141,7 @@ it.each([
       }
       const config = `using Workerd = import "/workerd/workerd.capnp";
       const config :Workerd.Config = (
-        services = [(name = "main", worker = (compatibilityDate = "2025-12-01", ${fields} modules = [(name = "worker.js", esModule = ${JSON.stringify(source)})]))${sqlite ? `, (name = "storage", disk = (path = ${JSON.stringify(storageRoot)}, writable = true))` : ""}],
+        services = [(name = "main", worker = (compatibilityDate = "2025-12-01", ${fields} modules = [(name = "worker.js", esModule = ${JSON.stringify(source)})]))${additionalServices}${sqlite ? `, (name = "storage", disk = (path = ${JSON.stringify(storageRoot)}, writable = true))` : ""}],
         sockets = [(name = "http", address = "127.0.0.1:${port}", http = (), service = "main")]
       );`;
       const configPath = path.join(root, "config.capnp");
@@ -161,15 +178,39 @@ it.each([
             `${feature}: workerd exited ${child.exitCode ?? child.signalCode}: ${failure?.message ?? ""}\n${stderr}\n${stdout}`
           );
         try {
-          response = await fetch(sqlite ? `${endpoint}/ready` : endpoint, {
-            signal: AbortSignal.timeout(1000),
-          });
+          response = await fetch(
+            sqlite
+              ? `${endpoint}/ready`
+              : feature === "rpc-early-rejection"
+                ? `${endpoint}/__vibestudio_workerd_ready`
+                : endpoint,
+            {
+              ...(feature === "rpc-early-rejection"
+                ? { headers: { Authorization: "Bearer gateway" } }
+                : {}),
+              signal: AbortSignal.timeout(1000),
+            }
+          );
           break;
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
       }
       if (!response) throw new Error(`${feature}: workerd never served HTTP\n${stderr}\n${stdout}`);
+      if (feature === "rpc-early-rejection") {
+        // An admitted semantic envelope is owned by the physical HTTP ingress.
+        // A facet may reject before reading it, but its response must reach the
+        // caller intact instead of resetting the physical connection.
+        const rejection = await fetch(`${endpoint}/_u/source%7CClass%7Ckey/__rpc`, {
+          method: "POST",
+          headers: { Authorization: "Bearer gateway", "X-Vibestudio-Dispatch-Secret": "dispatch" },
+          body: JSON.stringify({ args: ["x".repeat(4 * 1024 * 1024)] }),
+          signal: AbortSignal.timeout(10000),
+        });
+        expect(rejection.status, stderr).toBe(503);
+        expect(await rejection.text()).toBe("warming");
+        return;
+      }
       if (sqlite) {
         expect(response.status, stderr).toBe(200);
         expect(await response.text()).toBe("ready");

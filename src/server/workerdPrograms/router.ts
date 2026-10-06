@@ -53,12 +53,26 @@ const router: ExportedHandler<RouterEnv> = {
     if (prefix === "_w" || prefix === "_u") {
       strippedHeaders.set(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, String(Date.now()));
     }
-    const strippedRequest = new Request(request, { headers: strippedHeaders });
+    const doLookup = env.WORKERD_DO_BINDINGS;
+    // Semantic DO dispatch carries a complete serialized envelope. Own those
+    // bytes at the physical HTTP ingress before crossing a service binding:
+    // a warming facet can return without reading its request, and leaving the
+    // socket body unread can reset the connection and lose that response.
+    // Ordinary worker traffic retains its streaming request body.
+    const isDoDispatch = prefix === "_u" || (prefix === "_w" && Object.keys(doLookup).length > 0);
+    const strippedRequest =
+      isDoDispatch && request.body !== null
+        ? new Request(request.url, {
+            method: request.method,
+            headers: strippedHeaders,
+            body: await request.arrayBuffer(),
+            redirect: request.redirect,
+          })
+        : new Request(request, { headers: strippedHeaders });
 
     // /_w/{...source}/{className}/{objectKey}/{...method} — source-scoped
     // static DO routes. When no static namespaces exist, preserve the regular
     // worker route named `_w` by falling through to WORKER_HOST.
-    const doLookup = env.WORKERD_DO_BINDINGS;
     if (prefix === "_w" && Object.keys(doLookup).length > 0) {
       if (parts.length < 5) {
         return new Response("Usage: /_w/{...source}/{className}/{objectKey}/{method}", {

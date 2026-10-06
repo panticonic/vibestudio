@@ -30,14 +30,45 @@ export function bindProcessLifetimeToParent() {
       throw new Error("Parent-owned service must lead its own process group");
     // Snapshot while this owner is alive: after its exit the kernel reparents
     // children and ancestry no longer proves which detached groups it owned.
-    for (const group of ownedProcessGroups(process.pid, process.platform))
-      signalGroup(group, "SIGKILL");
+    const descendants = [];
+    for (const pid of ownedProcessGroups(process.pid, process.platform)) {
+      try {
+        descendants.push(captureOwnedProcessIdentity(pid));
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+    }
+    for (const identity of descendants) signalOwnedProcessIdentity(identity, "SIGKILL");
+    // Keep the lease owner alive until kernel observations prove its detached
+    // descendants have released their resources. Its exit is the parent's join
+    // receipt; sending a signal alone cannot establish that boundary.
+    for (const identity of descendants) {
+      for (;;) {
+        const observation = observeOwnedProcessGroup(identity);
+        if (observation === "absent") break;
+        if (observation === "unknown")
+          throw Object.assign(new Error("Exact descendant ownership can no longer be proven"), {
+            code: "EOWNERSHIP",
+          });
+        // Revocation is terminal. Keep this owner's JS executor sealed while
+        // the kernel drains its children, so bootstrap cannot acquire another
+        // detached child between the ownership snapshot and the owner's exit.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, POLL_MS);
+      }
+    }
     // ownedProcessGroups deliberately excludes the caller's group. This
     // service is that group's leader and owns it, so retire it last.
     signalGroup(process.pid, "SIGKILL");
   };
+  const onMessage = (message) => {
+    if (message?.type === "vibestudio:parent-owned-stop" && process.connected) process.disconnect();
+  };
   process.once("disconnect", onDisconnect);
-  return () => process.off("disconnect", onDisconnect);
+  process.on("message", onMessage);
+  return () => {
+    process.off("disconnect", onDisconnect);
+    process.off("message", onMessage);
+  };
 }
 
 export function processTreeAlive(pid, platform = process.platform) {
