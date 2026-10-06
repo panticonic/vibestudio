@@ -3359,26 +3359,39 @@ app.on("will-quit", (event) => {
   console.log("[App] Shutting down...");
 
   const stopPromises: Promise<void>[] = [];
+  const joinShutdown = (label: string, operation: Promise<void>) => {
+    console.log(`[App] Shutdown phase started: ${label}`);
+    stopPromises.push(
+      operation.then(
+        () => console.log(`[App] Shutdown phase completed: ${label}`),
+        (error: unknown) => {
+          console.error(`[App] Shutdown phase failed: ${label}`, error);
+          throw error;
+        }
+      )
+    );
+  };
   const closeCatalog = closeWorkspaceCatalogWatch;
   closeWorkspaceCatalogWatch = null;
   const catalogClose = closeCatalog?.();
-  if (catalogClose) stopPromises.push(catalogClose);
+  if (catalogClose) joinShutdown("workspace catalog", catalogClose);
   const abortStartup = abortPendingSystemRuntimeStartup;
   abortPendingSystemRuntimeStartup = null;
-  if (abortStartup) stopPromises.push(abortStartup(new Error("Application is shutting down")));
+  if (abortStartup)
+    joinShutdown("runtime startup", abortStartup(new Error("Application is shutting down")));
   let developmentExecutorClose: Promise<void> | null = null;
 
   if (activeIpcDispatcher) {
     const ipcDispatcher = activeIpcDispatcher;
     activeIpcDispatcher = null;
-    stopPromises.push(ipcDispatcher.shutdown());
+    joinShutdown("renderer IPC", ipcDispatcher.shutdown());
   }
 
   if (currentHostDevelopmentExecutor) {
     const executor = currentHostDevelopmentExecutor;
     currentHostDevelopmentExecutor = null;
     developmentExecutorClose = executor.close();
-    stopPromises.push(developmentExecutorClose);
+    joinShutdown("development executor", developmentExecutorClose);
   }
 
   // Server client (device-paired WS connection) + the detached hub process
@@ -3461,7 +3474,7 @@ app.on("will-quit", (event) => {
       if (cleanupFailures.length)
         throw new AggregateError(cleanupFailures, "Workspace session cleanup failed");
     })();
-    stopPromises.push(cleanupThenClose);
+    joinShutdown("workspace sessions", cleanupThenClose);
   }
 
   Promise.allSettled(stopPromises)

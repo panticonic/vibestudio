@@ -646,7 +646,9 @@ export class WorkerdManager {
     const layout = stateLayout(this.deps.statePath).databases;
     fs.mkdirSync(layout.root, { recursive: true });
     fs.mkdirSync(layout.durableObjectBackupsDir, { recursive: true });
-    this.doMaintenanceDb = new DatabaseSync(layout.durableObjectMaintenanceDb);
+    this.doMaintenanceDb = new DatabaseSync(
+      path.toNamespacedPath(layout.durableObjectMaintenanceDb)
+    );
     this.doMaintenanceDb.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS do_maintenance (
@@ -679,7 +681,9 @@ export class WorkerdManager {
         "Durable Object maintenance state is not from the current system epoch; recreate this pre-release instance"
       );
     }
-    this.doSchemaDescriptorDb = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
+    this.doSchemaDescriptorDb = new DatabaseSync(
+      path.toNamespacedPath(layout.durableObjectSchemaDescriptorsDb)
+    );
     // These rows are reproducible probe evidence, never execution state.
     // Effective version alone cannot attest a build: recipes/artifacts can differ.
     this.doSchemaDescriptorDb.exec("PRAGMA journal_mode = WAL");
@@ -4481,9 +4485,9 @@ export class WorkerdManager {
         const targetFile = `${tgtHash}${file.slice(srcHash.length)}`;
         const targetPath = path.join(dir, targetFile);
         createdTargets.push(targetPath);
-        const database = new DatabaseSync(sourcePath, { readOnly: true });
+        const database = new DatabaseSync(path.toNamespacedPath(sourcePath), { readOnly: true });
         try {
-          await backup(database, targetPath);
+          await backup(database, path.toNamespacedPath(targetPath));
         } finally {
           database.close();
         }

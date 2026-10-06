@@ -1152,60 +1152,63 @@ async function getHostViewDebugInfo(app) {
 }
 
 const desktopAssetFailures = new WeakMap();
+const desktopObservedPanels = new WeakMap();
 
 async function captureDesktopFailureDiagnostics(app, failure) {
-  const observations = await Promise.allSettled([
-    evaluateElectron(
-      app,
-      ({ webContents }) => {
-        const debug = globalThis.__testApi?.getHostViewDebugInfo?.();
-        return {
-          host: debug
-            ? {
-                visibleHostChromeAppId: debug.visibleHostChromeAppId,
-                shellOverlayActive: debug.shellOverlayActive,
-                hostedShellUrl: debug.hostedShellUrl,
-                hostedShell: debug.hostedShell
-                  ? {
-                      workspaceIdentity: debug.hostedShell.workspaceIdentity,
-                      visible: debug.hostedShell.visible,
-                    }
-                  : null,
-                nativeSlots: debug.nativeSlots?.slice(0, 50),
-              }
-            : null,
-          contents: webContents
-            .getAllWebContents()
-            .filter((contents) => !contents.isDestroyed())
-            .slice(0, 50)
-            .map((contents) => ({
-              id: contents.id,
-              type: contents.getType(),
-              url: contents.getURL().startsWith("data:")
-                ? "data:"
-                : contents.getURL().slice(0, 512),
-              loading: contents.isLoading(),
-              loadingMainFrame: contents.isLoadingMainFrame(),
-            })),
-        };
-      },
-      undefined,
-      "capturing native desktop view ownership"
-    ),
-    evaluateElectron(
-      app,
-      async ({ webContents }) => {
-        const host = globalThis.__testApi?.getHostViewDebugInfo?.();
-        const contents =
-          host?.hostedShellUrl &&
-          webContents
-            .getAllWebContents()
-            .find(
-              (contents) => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl
-            );
-        if (!contents) return { available: false };
-        if (contents.isLoadingMainFrame()) return { available: true, pendingNavigation: true };
-        return contents.executeJavaScript(`(() => ({
+  const reads = [
+    async () =>
+      evaluateElectron(
+        app,
+        ({ webContents }) => {
+          const debug = globalThis.__testApi?.getHostViewDebugInfo?.();
+          return {
+            host: debug
+              ? {
+                  visibleHostChromeAppId: debug.visibleHostChromeAppId,
+                  shellOverlayActive: debug.shellOverlayActive,
+                  hostedShellUrl: debug.hostedShellUrl,
+                  hostedShell: debug.hostedShell
+                    ? {
+                        workspaceIdentity: debug.hostedShell.workspaceIdentity,
+                        visible: debug.hostedShell.visible,
+                      }
+                    : null,
+                  nativeSlots: debug.nativeSlots?.slice(0, 50),
+                }
+              : null,
+            contents: webContents
+              .getAllWebContents()
+              .filter((contents) => !contents.isDestroyed())
+              .slice(0, 50)
+              .map((contents) => ({
+                id: contents.id,
+                type: contents.getType(),
+                url: contents.getURL().startsWith("data:")
+                  ? "data:"
+                  : contents.getURL().slice(0, 512),
+                loading: contents.isLoading(),
+                loadingMainFrame: contents.isLoadingMainFrame(),
+              })),
+          };
+        },
+        undefined,
+        "capturing native desktop view ownership"
+      ),
+    async () =>
+      evaluateElectron(
+        app,
+        async ({ webContents }) => {
+          const host = globalThis.__testApi?.getHostViewDebugInfo?.();
+          const contents =
+            host?.hostedShellUrl &&
+            webContents
+              .getAllWebContents()
+              .find(
+                (contents) => !contents.isDestroyed() && contents.getURL() === host.hostedShellUrl
+              );
+          if (!contents) return { available: false };
+          if (contents.isLoadingMainFrame()) return { available: true, pendingNavigation: true };
+          return contents.executeJavaScript(`(() => ({
         available: true,
         text: document.body?.innerText?.slice(0, 3000) ?? "",
         dialogs: [...document.querySelectorAll('[role="dialog"]')].slice(0, 10)
@@ -1222,21 +1225,24 @@ async function captureDesktopFailureDiagnostics(app, failure) {
         loadedModules: Object.keys(window.__vibestudioModuleMap__ ?? {}).slice(0, 100),
         loadingModules: Object.keys(window.__vibestudioModuleLoadingPromises__ ?? {}).slice(0, 50),
       }))()`);
-      },
-      undefined,
-      "capturing hosted chrome readiness"
-    ),
-    readDesktopDiagnostics(app).then((diagnostics) =>
-      unexpectedDesktopDiagnostics(diagnostics).slice(-30)
-    ),
-    readMainProcessErrors(app),
-    evaluateElectron(
-      app,
-      () => globalThis.__testApi?.getActiveWorkspaceAssetDiagnostics() ?? [],
-      undefined,
-      "capturing owned panel asset transfers"
-    ),
-  ]);
+        },
+        undefined,
+        "capturing hosted chrome readiness"
+      ),
+    async () =>
+      readDesktopDiagnostics(app).then((diagnostics) =>
+        unexpectedDesktopDiagnostics(diagnostics).slice(-30)
+      ),
+    async () => readMainProcessErrors(app),
+    async () =>
+      evaluateElectron(
+        app,
+        () => globalThis.__testApi?.getActiveWorkspaceAssetDiagnostics() ?? [],
+        undefined,
+        "capturing owned panel asset transfers"
+      ),
+  ];
+  const observations = await Promise.allSettled(reads.map((read) => Promise.resolve().then(read)));
   const names = [
     "nativeViews",
     "hostedChrome",
@@ -1247,6 +1253,7 @@ async function captureDesktopFailureDiagnostics(app, failure) {
   const packet = {
     failure: failure instanceof Error ? failure.message : String(failure),
     assetFailures: desktopAssetFailures.get(app) ?? [],
+    lastPanelObservation: desktopObservedPanels.get(app) ?? null,
   };
   observations.forEach((observation, index) => {
     packet[names[index]] =
@@ -1469,6 +1476,12 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
           await sleep(250);
           continue;
         }
+        desktopObservedPanels.set(app, {
+          observedAt: new Date().toISOString(),
+          webContentsId: snapshot.presentation.webContentsId,
+          ...rendered,
+          text: rendered.text.slice(0, 3000),
+        });
         const observed = {
           source: rendered.source,
           configuredPrompt: rendered.configuredPrompt,

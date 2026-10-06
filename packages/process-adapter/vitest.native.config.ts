@@ -16,6 +16,7 @@ export default defineConfig({
       "src/server/workerdNative.integration.test.ts",
       "src/server/nativeWorkspaceRuntime.integration.test.ts",
       "src/server/storage/blobCas.test.ts",
+      "src/server/storage/sqliteIntegrityWorkerClient.test.ts",
       "src/server/buildV2/dependencyContentStore.test.ts",
       "src/server/buildV2/builder.dependencyEnvironment.test.ts",
     ],

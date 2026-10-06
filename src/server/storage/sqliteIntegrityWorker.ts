@@ -1,5 +1,6 @@
 import { parentPort } from "node:worker_threads";
 import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 
 const port = parentPort;
 if (!port) throw new Error("SQLite integrity worker requires a parent port");
@@ -7,7 +8,9 @@ if (!port) throw new Error("SQLite integrity worker requires a parent port");
 port.on("message", (request: { id: number; paths: string[]; readOnly: boolean }) => {
   try {
     for (const filePath of request.paths) {
-      const database = new DatabaseSync(filePath, { readOnly: request.readOnly });
+      const database = new DatabaseSync(path.toNamespacedPath(path.resolve(filePath)), {
+        readOnly: request.readOnly,
+      });
       try {
         const result = database.prepare("PRAGMA integrity_check").get() as Record<string, unknown>;
         if (!Object.values(result).includes("ok")) {
