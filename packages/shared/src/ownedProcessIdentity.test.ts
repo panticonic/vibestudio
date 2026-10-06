@@ -56,4 +56,12 @@ describe.skipIf(process.platform !== "linux")("native group execution liveness",
     processes({ 101: stat(101, "Z", 101, "2000") });
     expect(observeOwnedProcessGroup(receipt)).toBe("unknown");
   });
+  it("preserves the kernel observation failure for the retiring owner", () => {
+    processes({ 101: stat(101, "S") });
+    const failure = Object.assign(new Error("kernel denied observation"), { code: "EACCES" });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw failure;
+    });
+    expect(() => observeOwnedProcessGroup(receipt)).toThrow(failure);
+  });
 });

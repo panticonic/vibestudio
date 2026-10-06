@@ -79,7 +79,7 @@ function observeOwnedProcessGroup(value) {
         : "absent"
       : "owned";
   } catch (error) {
-    if (error.code !== "ESRCH") return "unknown";
+    if (error.code !== "ESRCH") throw error;
     return processGroupExists(identity.processGroupId) ? "retained" : "absent";
   }
 }

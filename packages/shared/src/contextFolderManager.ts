@@ -91,10 +91,11 @@ export class ContextFolderManager {
     const scratch = path.join(this.contextScratchRoot, contextId);
     try {
       await this.scratch.ensure(contextId);
-    } catch {
+    } catch (cause) {
       // The installed lifecycle consumes only success/failure. Never relay
       // arbitrary native diagnostics through a semantic filesystem operation.
-      throw new Error("Confined context scratch creation failed");
+      console.error("[ContextFolderManager] Confined context scratch creation failed:", cause);
+      throw new Error("Confined context scratch creation failed", { cause });
     }
     return scratch;
   }

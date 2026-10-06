@@ -49,6 +49,34 @@ describe("ContextFolderManager", () => {
     expect(cfm.getContextFolderState("ctx-1")).toEqual({ status: "ready", path: dir });
   });
 
+  it("retains the original scratch failure without exposing it in the semantic message", async () => {
+    const failure = new Error("native filesystem denied /private/host/path");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cfm = new ContextFolderManager({
+      contextProjectionsRoot,
+      contextScratchRoot: path.join(root, "scratch"),
+      scratch: {
+        ensure: async () => {
+          throw failure;
+        },
+        remove: async () => {},
+      },
+      materialize: async () => ({ dir: contextProjectionsRoot }),
+    });
+    try {
+      await expect(cfm.ensureContextScratch("ctx-1")).rejects.toMatchObject({
+        message: "Confined context scratch creation failed",
+        cause: failure,
+      });
+      expect(log).toHaveBeenCalledWith(
+        "[ContextFolderManager] Confined context scratch creation failed:",
+        failure
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("does not re-materialize an existing folder", async () => {
     const materialize = vi.fn(async (contextId: string) => {
       const dir = path.join(contextProjectionsRoot, contextId);
