@@ -2201,7 +2201,36 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
     await orchestrator.registerRuntimeClient();
     serverClient.call.mockClear();
 
-    await orchestrator.recoverShellSnapshot({ loadFocusedView: false });
+    let register!: () => void;
+    const registration = new Promise<undefined>((resolve) => {
+      register = () => resolve(undefined);
+    });
+    serverClient.call.mockImplementationOnce(() => registration);
+    const restoringRegistration = orchestrator.recoverRuntimeClientRegistration();
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith(
+        "panelRuntime",
+        "registerClient",
+        expect.any(Array)
+      )
+    );
+    const restoringViews = orchestrator.recoverShellSnapshot({ loadFocusedView: false });
+    try {
+      await vi.waitFor(() =>
+        expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "getSnapshot", [])
+      );
+      expect(
+        serverClient.call.mock.calls.some(
+          ([service, method]) => service === "panelRuntime" && method === "acquire"
+        )
+      ).toBe(false);
+      register();
+      await Promise.all([restoringRegistration, restoringViews]);
+    } finally {
+      register();
+      await Promise.allSettled([restoringRegistration, restoringViews]);
+      await orchestrator.unregisterRuntimeClient();
+    }
 
     const runtimeCalls = serverClient.call.mock.calls.filter(
       ([service]) => service === "panelRuntime"
@@ -2211,6 +2240,82 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
     expect(methods[1]).toBe("getSnapshot");
     expect(methods.indexOf("acquire")).toBeGreaterThan(methods.indexOf("registerClient"));
   });
+
+  it("joins an in-flight recovered registration before unregistering its native client", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    await orchestrator.registerRuntimeClient();
+    serverClient.call.mockClear();
+    let register!: () => void;
+    const registration = new Promise<undefined>((resolve) => {
+      register = () => resolve(undefined);
+    });
+    serverClient.call.mockImplementationOnce(() => registration);
+    const recovering = orchestrator.recoverRuntimeClientRegistration();
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith(
+        "panelRuntime",
+        "registerClient",
+        expect.any(Array)
+      )
+    );
+    const closing = orchestrator.unregisterRuntimeClient();
+    try {
+      await Promise.resolve();
+      expect(
+        serverClient.call.mock.calls.some(
+          ([service, method]) => service === "panelRuntime" && method === "unregisterClient"
+        )
+      ).toBe(false);
+    } finally {
+      register();
+      await Promise.all([recovering, closing]);
+    }
+    expect(serverClient.call.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "panelRuntime",
+      "unregisterClient",
+    ]);
+  });
+
+  it.each([false, true])(
+    "joins failed registration while preserving its caller failure (closed=%s)",
+    async (closed) => {
+      const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+      const { orchestrator, serverClient } = createOrchestrator(registry);
+      await orchestrator.registerRuntimeClient();
+      serverClient.call.mockClear();
+      let reject!: (error: unknown) => void;
+      const registration = new Promise<undefined>((_resolve, fail) => {
+        reject = fail;
+      });
+      const failure = Object.assign(new Error("Registration connection lost"), {
+        code: "CONNECTION_LOST",
+        errorKind: "transport",
+      });
+      serverClient.call.mockImplementationOnce(() => registration);
+      const recovering = orchestrator.recoverRuntimeClientRegistration();
+      const rejected = expect(recovering).rejects.toBe(failure);
+      await vi.waitFor(() =>
+        expect(serverClient.call).toHaveBeenCalledWith(
+          "panelRuntime",
+          "registerClient",
+          expect.any(Array)
+        )
+      );
+      const closing = orchestrator.unregisterRuntimeClient();
+      const retired = closed
+        ? expect(closing).resolves.toBeUndefined()
+        : expect(closing).rejects.toBe(failure);
+      serverClient.isClosed.mockReturnValue(closed);
+      reject(failure);
+      await Promise.all([rejected, retired]);
+      expect(
+        serverClient.call.mock.calls.some(
+          ([service, method]) => service === "panelRuntime" && method === "unregisterClient"
+        )
+      ).toBe(false);
+    }
+  );
 
   it("syncs tree and leases, resolves focus, and publishes one normalized snapshot", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });

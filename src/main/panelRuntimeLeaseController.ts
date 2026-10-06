@@ -130,7 +130,7 @@ export class PanelPresentationController {
   private readonly clientSupportsCdp: boolean;
   private readonly loadOnLeaseAssignment: boolean;
   private readonly resources: PanelResourcePolicy;
-  private clientRegistered = false;
+  private registrationPromise: Promise<void> | null = null;
   private resourcesStopped = false;
   private readonly connectionBySlot = new Map<
     string,
@@ -550,12 +550,16 @@ export class PanelPresentationController {
   /**
    * Re-establish process-local registration after the server transport has
    * recovered. The remote coordinator may be a fresh process even though this
-   * controller and its renderers survived, so the local registration cache is
+   * controller and its renderers survived, so the old registration receipt is
    * not evidence about remote state.
    */
   async recoverClientRegistration(): Promise<void> {
-    await this.panelRuntime.registerClient(this.registration);
-    this.clientRegistered = true;
+    // Join the previous generation's admission before issuing the new one.
+    // Every lease acquisition then waits for this exact registration receipt.
+    this.registrationPromise = Promise.resolve(this.registrationPromise)
+      .catch(() => undefined)
+      .then(() => this.panelRuntime.registerClient(this.registration));
+    await this.registrationPromise;
   }
 
   async unregisterClient(): Promise<void> {
@@ -563,19 +567,20 @@ export class PanelPresentationController {
       this.resources.stop();
       this.resourcesStopped = true;
     }
-    if (!this.clientRegistered) return;
+    if (!this.registrationPromise) return;
     // Registration belongs to the authenticated session. The server retires
     // it when that session ends; a revoked caller cannot unregister over RPC.
     // A transient disconnect still owes a remote receipt and must remain an
     // error, including when it races an in-flight unregister.
-    if (!this.deps.isClientClosed()) {
-      try {
+    try {
+      await this.registrationPromise;
+      if (!this.deps.isClientClosed()) {
         await this.panelRuntime.unregisterClient(this.clientSessionId);
-      } catch (error) {
-        if (!isRpcConnectionLost(error) || !this.deps.isClientClosed()) throw error;
       }
+    } catch (error) {
+      if (!isRpcConnectionLost(error) || !this.deps.isClientClosed()) throw error;
     }
-    this.clientRegistered = false;
+    this.registrationPromise = null;
   }
 
   async syncLeaseSnapshot(): Promise<void> {
@@ -1624,9 +1629,10 @@ export class PanelPresentationController {
   }
 
   private async ensureClientRegistered(): Promise<void> {
-    if (this.clientRegistered) return;
-    await this.panelRuntime.registerClient(this.registration);
-    this.clientRegistered = true;
+    this.registrationPromise ??= Promise.resolve().then(() =>
+      this.panelRuntime.registerClient(this.registration)
+    );
+    await this.registrationPromise;
   }
 
   private registerExistingCdpTarget(panelId: string): void {

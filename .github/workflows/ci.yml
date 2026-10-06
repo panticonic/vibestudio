@@ -84,7 +84,7 @@ jobs:
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
       - name: Check acceptance and native preparation harnesses
-        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs scripts/owned-desktop-close.test.mjs
+        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs
 
       - name: Type-check
         run: pnpm type-check

@@ -1049,6 +1049,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     await this.runtime.unregisterClient();
   }
 
+  async recoverRuntimeClientRegistration(): Promise<void> {
+    await this.runtime.recoverClientRegistration();
+  }
+
   getFocusedPanelId(): string | null {
     return this.registry.getFocusedPanelId();
   }
@@ -1107,7 +1111,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async recoverShellSnapshot(
     opts: { loadFocusedView?: boolean } = {}
   ): Promise<PanelRecoverySnapshot> {
-    await this.runtime.recoverClientRegistration();
     const { collapsedIds } = await this.shellCore.loadViewState();
     await this.runtime.syncLeaseSnapshot();
     await this.runtime.repairLeasesForExistingViews();

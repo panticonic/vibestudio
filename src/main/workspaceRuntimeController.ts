@@ -489,6 +489,10 @@ export function createDesktopWorkspaceRuntime(deps: {
     rendererRecovery.abort(new Error("Workspace recovery superseded"));
     rendererRecovery = new AbortController();
     const signal = rendererRecovery.signal;
+    // Registration is a prerequisite of event replay:
+    // recovered events can themselves acquire panel runtime leases.
+    await controller.orchestrator.recoverRuntimeClientRegistration();
+    if (closed || epoch !== semanticRecoveryEpoch) return;
     await watch.recover();
     if (closed || epoch !== semanticRecoveryEpoch) return;
     await controller.orchestrator.recoverShellSnapshot({ loadFocusedView: false });

@@ -74,10 +74,21 @@ function workspaceServerUnavailableError(): Error & { code: string; errorKind: "
   });
 }
 
+interface SessionActivation {
+  authenticated: Promise<IrohClientSession>;
+  recovered: Promise<IrohClientSession>;
+}
+
+interface AuthenticatedSession {
+  inner: IrohClientSession;
+  recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
+  retireOnFailure(error: unknown): Promise<never>;
+}
+
 class ReconnectingSession implements IrohClientSession {
   private readonly logicalId = secureRandomUuid();
   private inner: IrohClientSession | null = null;
-  private activation: Promise<IrohClientSession> | null = null;
+  private activation: SessionActivation | null = null;
   private generation = 0;
   private closed = false;
   private terminal = false;
@@ -118,7 +129,9 @@ class ReconnectingSession implements IrohClientSession {
   }
 
   ready(): Promise<void> {
-    return this.ensureInner().then(() => undefined);
+    return this.ensureActivation().then(async (activation) => {
+      await activation.recovered;
+    });
   }
 
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
@@ -190,30 +203,46 @@ class ReconnectingSession implements IrohClientSession {
     if (!this.closed && !this.terminal) this.emitStatus("connecting");
   }
 
-  activate(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
-    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.logicalId} is closed`));
-    if (this.terminal)
-      return Promise.reject(new Error(`Iroh session ${this.logicalId} is terminal`));
-    if (this.inner && this.generation === generation) return Promise.resolve(this.inner);
+  async activate(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
+    return this.acquireActivation(pipe, generation).recovered;
+  }
+
+  private acquireActivation(pipe: IrohClientPipe, generation: number): SessionActivation {
+    if (this.closed) throw new Error(`Iroh session ${this.logicalId} is closed`);
+    if (this.terminal) throw new Error(`Iroh session ${this.logicalId} is terminal`);
     if (this.activation && this.generation === generation) return this.activation;
     this.generation = generation;
-    this.activation = this.openInner(pipe, generation).catch((error) => {
-      if (this.generation === generation) {
-        this.inner = null;
-        this.activation = null;
-      }
-      throw error;
-    });
-    const activation = this.activation;
-    this.activations.add(activation);
-    void activation.then(
-      () => this.activations.delete(activation),
-      () => this.activations.delete(activation)
+    const opening = this.openInner(pipe, generation);
+    const authenticated = opening.then(({ inner }) => inner);
+    // The recovery receipt owns the same authentication failure, even when no
+    // request is waiting for the authentication receipt yet.
+    void authenticated.catch(() => undefined);
+    const recovered = opening
+      .then(async (receipt) => {
+        try {
+          if (receipt.recovery !== undefined) await this.options.onRecovery?.(receipt.recovery);
+          return receipt.inner;
+        } catch (error) {
+          return receipt.retireOnFailure(error);
+        }
+      })
+      .catch((error) => {
+        if (this.generation === generation) {
+          this.inner = null;
+          this.activation = null;
+        }
+        throw error;
+      });
+    this.activation = { authenticated, recovered };
+    this.activations.add(recovered);
+    void recovered.then(
+      () => this.activations.delete(recovered),
+      () => this.activations.delete(recovered)
     );
     return this.activation;
   }
 
-  private async ensureInner(): Promise<IrohClientSession> {
+  private async ensureActivation(): Promise<SessionActivation> {
     if (this.closed) throw new Error(`Iroh session ${this.logicalId} is closed`);
     if (this.terminal) throw new Error(`Iroh session ${this.logicalId} is terminal`);
     // This waiter belongs to the logical session. The shared physical dial
@@ -222,7 +251,7 @@ class ReconnectingSession implements IrohClientSession {
       this.owner.ensureConnected(),
       this.retirement.signal
     );
-    return this.activate(pipe, generation);
+    return this.acquireActivation(pipe, generation);
   }
 
   /**
@@ -243,11 +272,11 @@ class ReconnectingSession implements IrohClientSession {
     const availability =
       this.inner && this.generation === this.owner.generation()
         ? Promise.resolve(this.inner)
-        : this.ensureInner();
+        : this.ensureActivation().then((activation) => activation.authenticated);
     return signal ? waitForSharedOperation(availability, signal) : availability;
   }
 
-  private async openInner(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
+  private async openInner(pipe: IrohClientPipe, generation: number): Promise<AuthenticatedSession> {
     let terminalError: Error | null = null;
     let recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
     const inner = pipe.openSession({
@@ -275,6 +304,12 @@ class ReconnectingSession implements IrohClientSession {
         })),
     };
     this.acquired.add(acquired);
+    const retireOnFailure = async (error: unknown): Promise<never> => {
+      await acquired.close().catch((cleanupError: unknown) => {
+        throw new AggregateError([error, cleanupError], "Iroh session opening and cleanup failed");
+      });
+      throw error;
+    };
     inner.onMessage((envelope) => {
       if (this.generation !== generation) return;
       for (const listener of [...this.messageListeners]) listener(envelope);
@@ -287,13 +322,9 @@ class ReconnectingSession implements IrohClientSession {
       this.inner = inner;
       this.authenticatedCallerId = inner.callerId();
       this.emitStatus("connected");
-      if (recovery !== undefined) await this.options.onRecovery?.(recovery);
-      return inner;
+      return { inner, recovery, retireOnFailure };
     } catch (error) {
-      await acquired.close().catch((cleanupError: unknown) => {
-        throw new AggregateError([error, cleanupError], "Iroh session opening and cleanup failed");
-      });
-      throw error;
+      return retireOnFailure(error);
     }
   }
 
@@ -575,9 +606,11 @@ class ReconnectingPipe implements IrohClientPipe {
         this.emitDiagnostics();
         this.setStatus("connected");
         this.options.onReconnectResult?.({ attempt, success: true });
-        await Promise.allSettled(
-          [...this.sessions].map((session) => session.activate(pipe, generation))
-        );
+        // Physical readiness releases logical authentication waiters. Logical
+        // recovery owns its own receipt and can use those authenticated sessions.
+        // Waiting for replay here would make replay depend on its own readiness.
+        for (const session of this.sessions)
+          void session.activate(pipe, generation).catch(() => undefined);
         return connected;
       } catch (error) {
         const failure = asError(error);

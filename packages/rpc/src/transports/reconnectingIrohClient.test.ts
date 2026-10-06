@@ -126,6 +126,66 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("releases authenticated request waiters before recovery joins those requests", async () => {
+    const pipe = new FakePipe();
+    let authenticate!: () => void;
+    const authentication = new Promise<void>((resolve) => {
+      authenticate = resolve;
+    });
+    const open = pipe.openSession.bind(pipe);
+    vi.spyOn(pipe, "openSession").mockImplementation((options) => {
+      const inner = open(options);
+      inner.ready = async () => {
+        await authentication;
+        await options.onRecovery?.("cold-recover");
+      };
+      return inner;
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: async () => pipe,
+      closeEndpoint: async () => {},
+    });
+    const abort = new AbortController();
+    let enteredRecovery = false;
+    let releaseRecovery!: () => void;
+    const recoveryReceipt = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    let request!: Promise<void>;
+    const session = owner.openSession({
+      getToken: () => "credential",
+      onRecovery: async () => {
+        enteredRecovery = true;
+        await request;
+        await recoveryReceipt;
+      },
+    });
+    let ready = false;
+    const opening = session.ready!().then(() => {
+      ready = true;
+    });
+    void opening.catch(() => {});
+    request = session.send(eventEnvelope, abort.signal);
+    void request.catch(() => {});
+    try {
+      await eventually(() => expect(pipe.sessions).toHaveLength(1));
+      authenticate();
+      await eventually(() => expect(enteredRecovery).toBe(true));
+      await eventually(() => expect(pipe.sessions[0]?.sent).toEqual([eventEnvelope]));
+      await request;
+      expect(ready).toBe(false);
+      releaseRecovery();
+      await opening;
+      expect(ready).toBe(true);
+    } finally {
+      authenticate();
+      releaseRecovery();
+      abort.abort(new Error("Investigation request retired"));
+      await Promise.allSettled([request, opening]);
+      await owner.close();
+    }
+  });
   it.each(["replace", "suspend", "close"] as const)(
     "retires the physical generation before %s observers can close logical sessions",
     async (operation) => {

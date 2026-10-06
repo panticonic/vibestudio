@@ -239,6 +239,7 @@ function fixture(
 ) {
   const orchestrator = {
     registerRuntimeClient: vi.fn(async (): Promise<void> => undefined),
+    recoverRuntimeClientRegistration: vi.fn(async (): Promise<void> => undefined),
     unregisterRuntimeClient: vi.fn(async () => undefined),
     getRuntimeClientSessionId: () => `${workspaceId}-lease-client`,
     initializePanelTree: vi.fn(async () => undefined),
@@ -700,16 +701,30 @@ describe("workspace runtime ownership", () => {
     expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
   });
 
-  it("does not resume panel recovery after the workspace retires during replay", async () => {
+  it("restores panel registration before admitting recovered event snapshots", async () => {
     const owner = fixture("shared");
     await owner.runtime.start();
-    const replay = deferred<void>();
-    owner.watch.recover.mockReturnValueOnce(replay.promise);
+    owner.watch.recover.mockImplementationOnce(async () => {
+      expect(owner.orchestrator.recoverRuntimeClientRegistration).toHaveBeenCalledOnce();
+      expect(owner.orchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    });
+    try {
+      await owner.runtime.recover("cold-recover");
+    } finally {
+      await owner.runtime.close();
+    }
+  });
+
+  it("does not resume event recovery after the workspace retires during registration", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    const registration = deferred<void>();
+    owner.orchestrator.recoverRuntimeClientRegistration.mockReturnValueOnce(registration.promise);
     const recovery = owner.runtime.recover("cold-recover");
     await owner.runtime.close();
-    replay.resolve();
+    registration.resolve();
     await recovery;
-    expect(owner.orchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    expect(owner.watch.recover).not.toHaveBeenCalled();
   });
 
   it("keeps each workspace disconnected until its subscription and panel recovery finish", async () => {
@@ -736,9 +751,11 @@ describe("workspace runtime ownership", () => {
     const recovery = owner.runtime.recover("resubscribe");
     expect(emit).not.toHaveBeenCalled();
     expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await vi.waitFor(() => expect(owner.watch.recover).toHaveBeenCalledOnce());
+    expect(owner.orchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    expect(owner.send).not.toHaveBeenCalled();
     replay.resolve();
     await vi.waitFor(() => expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce());
-    expect(owner.send).not.toHaveBeenCalled();
     snapshot.resolve(undefined);
     await vi.waitFor(() => expect(edges.rendererRecovery).toHaveBeenCalled());
     expect(emit).not.toHaveBeenCalled();
