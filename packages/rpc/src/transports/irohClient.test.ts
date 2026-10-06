@@ -587,7 +587,12 @@ describe("Iroh RPC client over real local QUIC", () => {
         admit = resolve;
       });
       releaseGates.push(admit);
-      return { ready, admit };
+      let releaseWrite!: () => void;
+      const writeCompletion = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      releaseGates.push(releaseWrite);
+      return { ready, admit, writeCompletion, releaseWrite };
     });
     const serverTask = (async () => {
       const control = await server.acceptBi();
@@ -799,17 +804,52 @@ describe("Iroh RPC client over real local QUIC", () => {
       const first = await reader.read();
       expect(new TextDecoder().decode(first.value)).toBe("hello");
       reader.releaseLock();
+      const nativeOpenBi = client.openBi.bind(client);
+      const holdRequestWriteCompletion = (admission: (typeof deadlineAdmissions)[number]) => {
+        vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
+          const stream = await nativeOpenBi();
+          const writeAll = stream.send.writeAll.bind(stream.send);
+          vi.spyOn(stream.send, "writeAll").mockImplementation(async (bytes) => {
+            await writeAll(bytes);
+            if (new TextDecoder().decode(bytes).includes('"method":'))
+              await admission.writeCompletion;
+          });
+          return stream;
+        });
+      };
+      const observeResponseDeadline = () => {
+        let installed!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          installed = resolve;
+        });
+        const schedule = globalThis.setTimeout;
+        const observer = vi
+          .spyOn(globalThis, "setTimeout")
+          .mockImplementation((handler, delay, ...args) => {
+            const timer = schedule(handler, delay, ...args);
+            if (delay === 100) installed();
+            return timer;
+          });
+        return { ready, restore: () => observer.mockRestore() };
+      };
+      holdRequestWriteCompletion(deadlineAdmissions[0]!);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const headDeadline = observeResponseDeadline();
       try {
         const rejected = expect(
           rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
         ).rejects.toMatchObject({ code: "IROH_RESPONSE_HEAD_TIMEOUT" });
-        // Exercise expiration while waiting for an admitted response head,
-        // rather than racing native envelope delivery against CI scheduling.
+        // The peer can receive an envelope before its native write promise
+        // resolves. Hold that completion to exercise the ordering explicitly;
+        // only the client's installed timer admits clock advancement.
         await deadlineAdmissions[0]!.ready;
+        expect(vi.getTimerCount()).toBe(0);
+        deadlineAdmissions[0]!.releaseWrite();
+        await headDeadline.ready;
         vi.advanceTimersByTime(100);
         await rejected;
       } finally {
+        headDeadline.restore();
         vi.useRealTimers();
       }
       let releaseUploadCancellation!: () => void;
@@ -820,7 +860,9 @@ describe("Iroh RPC client over real local QUIC", () => {
       const cancelUpload = vi.fn(() => cancellationReceipt);
       const pendingUpload = new ReadableStream<Uint8Array>({ cancel: cancelUpload });
       let deadlineSettled = false;
+      holdRequestWriteCompletion(deadlineAdmissions[1]!);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const uploadDeadline = observeResponseDeadline();
       const deadline = rpc
         .stream("main", "no-response-upload", [], {
           headTimeoutMs: 100,
@@ -834,8 +876,12 @@ describe("Iroh RPC client over real local QUIC", () => {
       });
       try {
         await deadlineAdmissions[1]!.ready;
+        expect(vi.getTimerCount()).toBe(0);
+        deadlineAdmissions[1]!.releaseWrite();
+        await uploadDeadline.ready;
         vi.advanceTimersByTime(100);
       } finally {
+        uploadDeadline.restore();
         vi.useRealTimers();
       }
       await expect.poll(() => cancelUpload.mock.calls.length).toBe(1);
