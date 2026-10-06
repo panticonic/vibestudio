@@ -979,6 +979,16 @@ describe("Iroh RPC client over real local QUIC", () => {
         return sessionCancellation;
       });
       const sessionUpload = new ReadableStream<Uint8Array>({ cancel: sessionCancelUpload });
+      let uploadFinishes = 0;
+      vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
+        const stream = await nativeOpenBi();
+        const finish = stream.send.finish.bind(stream.send);
+        vi.spyOn(stream.send, "finish").mockImplementation(async () => {
+          uploadFinishes += 1;
+          await finish();
+        });
+        return stream;
+      });
       progress.client = "session pending upload admission";
       await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
@@ -1008,6 +1018,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       }
       await expect.poll(() => sessionCancelUpload.mock.calls.length).toBe(1);
       await expect.poll(() => sessionUpload.locked).toBe(false);
+      expect(uploadFinishes).toBe(0);
       expect(openingCancelUpload).toHaveBeenCalledOnce();
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
     })();

@@ -577,6 +577,42 @@ class ClientSession implements IrohClientSession {
       throw cancellationReason ?? error;
     }
 
+    // The request owns both upload completion and cancellation. Cancelling a
+    // reader also completes its pending read with done=true; that is not a
+    // normal upload EOF and must never race RESET with a fresh FIN.
+    const pumpRequestBody = async (): Promise<void> => {
+      const reader = requestBodyReader;
+      if (!reader) {
+        // Bodyless requests release their send half independently of response
+        // consumption, including consumers that stop at Content-Length.
+        if (cancellation) await cancellation;
+        else await stream.send.finish();
+        return;
+      }
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (cancellation) {
+            await cancellation;
+            return;
+          }
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          for (let offset = 0; offset < value.byteLength; offset += MAX_STREAM_CHUNK_BYTES) {
+            await stream.send.writeAll(
+              value.subarray(offset, Math.min(value.byteLength, offset + MAX_STREAM_CHUNK_BYTES))
+            );
+          }
+        }
+        await stream.send.finish();
+      } catch (error) {
+        await cancel(error);
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
+    };
+
     let uploadSettled = false;
     let responseSettled = false;
     const settle = (): void => {
@@ -587,7 +623,7 @@ class ClientSession implements IrohClientSession {
       this.outboundRequests.delete(request.requestId);
       this.pipe.diagnosticsChanged();
     };
-    const uploadCompletion = this.pumpRequestBody(stream, requestBodyReader, cancel).then(() => {
+    const uploadCompletion = pumpRequestBody().then(() => {
       uploadSettled = true;
       settle();
     }, cancel);
@@ -649,40 +685,6 @@ class ClientSession implements IrohClientSession {
       finalUrl: head.finalUrl,
       body: responseBody,
     };
-  }
-
-  private async pumpRequestBody(
-    stream: IrohPhysicalBiStream,
-    reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
-    cancel: (reason?: unknown) => void
-  ): Promise<void> {
-    // There is no upload after the request envelope. Close this half now—not
-    // when the response consumer happens to pull EOF. HTTP consumers may stop
-    // after Content-Length bytes without an extra EOF read; coupling closure to
-    // that read leaked otherwise successful asset streams and exhausted QUIC
-    // stream credit during cold panel loads.
-    if (!reader) {
-      await stream.send.finish();
-      return;
-    }
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value || value.byteLength === 0) continue;
-        for (let offset = 0; offset < value.byteLength; offset += MAX_STREAM_CHUNK_BYTES) {
-          await stream.send.writeAll(
-            value.subarray(offset, Math.min(value.byteLength, offset + MAX_STREAM_CHUNK_BYTES))
-          );
-        }
-      }
-      await stream.send.finish();
-    } catch (error) {
-      cancel(error);
-      throw error;
-    } finally {
-      reader.releaseLock();
-    }
   }
 
   private async readResponses(
