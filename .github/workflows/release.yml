@@ -26,7 +26,7 @@ jobs:
       contents: read
 
   github-release:
-    name: Create GitHub release
+    name: Create draft GitHub release
     needs: release-quality
     runs-on: ubuntu-24.04
     permissions:
@@ -43,6 +43,7 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          draft: true
           generate_release_notes: true
           body: |
             ### Install
@@ -193,6 +194,7 @@ jobs:
       - name: Attach Linux installers to the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          draft: true
           files: |
             release/*.deb
             release/*.rpm
@@ -201,7 +203,7 @@ jobs:
 
   publish-linux-repos:
     name: Publish signed apt and dnf repositories
-    needs: publish-linux
+    needs: publish-release
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     uses: ./.github/workflows/linux-repositories.yml
     permissions:
@@ -337,6 +339,7 @@ jobs:
       - name: Attach DMG to the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          draft: true
           files: |
             release/*.dmg
             release/*.zip
@@ -410,10 +413,29 @@ jobs:
       - name: Attach installer to the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          draft: true
           files: |
             release/*.exe
             release/latest.yml
             release/SHA256SUMS-windows
+
+  publish-release:
+    name: Publish the verified release
+    needs: [github-release, publish-linux, publish-macos, publish-windows]
+    if: >-
+      ${{ !cancelled() && needs.github-release.result == 'success'
+        && (vars.RELEASE_LINUX != 'true' || needs.publish-linux.result == 'success')
+        && (vars.RELEASE_MAC != 'true' || needs.publish-macos.result == 'success')
+        && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Make the complete release public and latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
   accept-macos-installer:
     name: Install and launch macOS release candidate
