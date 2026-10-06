@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import {
   vcsMethods,
   type VcsProvenanceEdge,
@@ -119,6 +123,12 @@ function service(options?: {
 }
 
 describe("canonical vcsService", () => {
+  it("registers its authority preparers with the production dispatcher", () => {
+    const { definition } = service();
+    const dispatcher = new ServiceDispatcher();
+    expect(() => dispatcher.registerService(definition)).not.toThrow();
+  });
+
   it("exposes exactly the canonical public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());

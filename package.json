@@ -2,7 +2,7 @@
   "type": "module",
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
-  "version": "0.1.55",
+  "version": "0.1.56",
   "private": true,
   "bin": {
     "vibestudio": "scripts/vibestudio-cli-shim.mjs",
@@ -60,7 +60,7 @@
     "scaffold:builtin-service": "node scripts/scaffold-builtin-service.mjs",
     "check:builtin-catalog": "tsx scripts/generate-builtin-catalog.ts --check",
     "check:unit-authority": "pnpm build:infrastructure && node scripts/generate-host-authority-catalog.mjs --check && pnpm run check:builtin-catalog && node scripts/check-host-residency-baselines.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs --check",
-    "check:pair-authority": "node scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/check-capability-notability.mjs && pnpm check:userland-rpc-contracts && node scripts/check-userland-package-manager-boundary.mjs && pnpm check:vcs-skill-release",
+    "check:pair-authority": "node --import tsx scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/check-capability-notability.mjs && pnpm check:userland-rpc-contracts && node scripts/check-userland-package-manager-boundary.mjs && pnpm check:vcs-skill-release",
     "generate:workspace-template-release": "node --import tsx scripts/generate-workspace-template-release.mjs",
     "check:workspace-template-release": "node --import tsx scripts/generate-workspace-template-release.mjs --check",
     "check:ledger-evidence": "node scripts/check-runtime-foundation-evidence.mjs",

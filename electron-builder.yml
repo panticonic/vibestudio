@@ -136,6 +136,7 @@ nsis:
 
 # Linux configuration
 linux:
+  executableName: vibestudio
   # The npm package name is scoped, but distro artifact filenames are flat.
   # Letting the default include `@panticonic/` makes fpm interpret it as a
   # missing output directory.

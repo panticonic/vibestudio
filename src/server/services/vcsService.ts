@@ -443,8 +443,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     authority: { principals: ["user", "code", "host", "website"] },
     methods: vcsMethods,
     authorityPreparation: Object.fromEntries(
-      Object.entries(vcsMethods)
-        .filter(([, definition]) => definition.website.kind === "eligible")
+      Object.entries<ServiceDefinition["methods"][string]>(vcsMethods)
+        .filter(
+          ([, definition]) =>
+            definition.authority &&
+            "requirement" in definition.authority &&
+            definition.authority.prepared
+        )
         .map(([method]) => [
           `vcs.files.${method}`,
           async (ctx, [input]) => {

@@ -26,7 +26,7 @@ describe("profile and instance paths", () => {
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = "./relative-instance";
     expect(getCentralDataPath()).toBe(path.resolve("relative-instance"));
     expect(getProfileDataPath()).not.toBe(getCentralDataPath());
-    expect(getSharedDerivedDataPath()).toBe(path.join(getProfileDataPath(), "derived-cache"));
+    expect(getSharedDerivedDataPath()).toBe(path.join(getProfileDataPath(), "derived-cache", "v2"));
   });
 });
 

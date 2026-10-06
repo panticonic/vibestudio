@@ -70,7 +70,9 @@ export function getSharedDerivedDataPath(): string {
   // hermetic — and it must be an environment variable, because worker threads
   // inherit the environment but not a module-level setter.
   const override = process.env[SHARED_DERIVED_CACHE_ENV]?.trim();
-  return override ? path.resolve(override) : path.join(getProfileDataPath(), "derived-cache");
+  // Lease ownership changed from expiry-based to explicit process lifecycle.
+  // Incompatible coordinators must never prune or migrate one another's data.
+  return override ? path.resolve(override) : path.join(getProfileDataPath(), "derived-cache", "v2");
 }
 
 /** Get the directory containing all managed workspaces. */
