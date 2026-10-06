@@ -27,24 +27,12 @@ function makeEnv(overrides: Partial<Env> = {}): {
 
 describe("webhook relay Worker — routing", () => {
   it.each([
-    ["mac", "Vibestudio-0.2.0-arm64.dmg"],
-    ["windows", "Vibestudio.Setup.0.2.0.exe"],
-  ])("redirects the %s download to the published installer", async (platform, name) => {
+    ["mac", "Vibestudio-arm64.dmg"],
+    ["windows", "Vibestudio-Setup-x64.exe"],
+  ])("redirects the %s download without a GitHub API lookup", async (platform, name) => {
     const { env, stub } = makeEnv();
-    const installer = `https://github.com/panticonic/vibestudio/releases/download/v0.2.0/${name}`;
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          assets: [
-            {
-              name,
-              state: "uploaded",
-              browser_download_url: installer,
-            },
-          ],
-        })
-      )
-    );
+    const installer = `https://github.com/panticonic/vibestudio/releases/latest/download/${name}`;
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("GitHub API HTTP 403"));
     try {
       const response = await worker.fetch(
         new Request(`https://vibestudio.app/download/${platform}`),
@@ -53,25 +41,10 @@ describe("webhook relay Worker — routing", () => {
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe(installer);
       expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(fetch).not.toHaveBeenCalled();
       expect(stub.fetch).not.toHaveBeenCalled();
     } finally {
       fetch.mockRestore();
-    }
-  });
-
-  it("reports an unavailable download rather than redirecting to an unpublished asset", async () => {
-    const { env } = makeEnv();
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ assets: [] })));
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const response = await worker.fetch(new Request("https://vibestudio.app/download/mac"), env);
-      expect(response.status).toBe(503);
-      expect(response.headers.has("location")).toBe(false);
-    } finally {
-      fetch.mockRestore();
-      error.mockRestore();
     }
   });
   it("answers health checks without touching the DO", async () => {

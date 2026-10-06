@@ -97,6 +97,7 @@ mac:
 
 # DMG configuration
 dmg:
+  artifactName: Vibestudio-${arch}.${ext}
   background: build-resources/dmg-background.png
   iconSize: 96
   contents:
@@ -126,6 +127,7 @@ win:
   icon: build-resources/icon.ico
 
 nsis:
+  artifactName: Vibestudio-Setup-${arch}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
