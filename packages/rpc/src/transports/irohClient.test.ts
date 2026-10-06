@@ -16,7 +16,7 @@ import {
   NodePhysicalConnection,
   VIBESTUDIO_IROH_ALPN,
 } from "@vibestudio/iroh-transport/node";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createRpcClient } from "../client.js";
 import { isRpcConnectionLost } from "../errors.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
@@ -551,8 +551,14 @@ describe("Iroh RPC client over real local QUIC", () => {
   });
 
   async function verifyStreamingOwnership(closeOwner: "session" | "pipe") {
+    const progress = { server: "endpoint binding", client: "endpoint binding" };
+    onTestFailed(() => {
+      console.error("Streaming ownership failure", closeOwner, progress);
+    });
     const serverEndpoint = await bind();
     const clientEndpoint = await bind();
+    progress.server = "native connection admission";
+    progress.client = "native connection establishment";
     const incomingPromise = serverEndpoint.acceptNext();
     const clientConnectionPromise = clientEndpoint.connect(serverEndpoint.addr(), [
       ...VIBESTUDIO_IROH_ALPN,
@@ -564,6 +570,8 @@ describe("Iroh RPC client over real local QUIC", () => {
       accepting.connect(),
       clientConnectionPromise,
     ]);
+    progress.server = "session handshake";
+    progress.client = "session handshake";
     configureNodeConnection(serverNative);
     configureNodeConnection(clientNative);
 
@@ -626,6 +634,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         MAX_CONTROL_FRAME_BYTES
       );
 
+      progress.server = "upload-and-download admission";
       const requestStream = await server.acceptBi();
       expect(await readIrohStreamPreamble(requestStream.recv)).toMatchObject({
         body: true,
@@ -663,12 +672,14 @@ describe("Iroh RPC client over real local QUIC", () => {
       await requestStream.send.writeAll(responseBody);
       await requestStream.send.finish();
 
+      progress.server = "failed upload cancellation receipt";
       const failedUpload = await server.acceptBi();
       // An immediate upload failure may reset before buffered envelope bytes
       // reach the peer. Its authoritative outcome is both halves' cancellation.
       expect(await failedUpload.send.stopped()).toBe(0x202);
       expect(await failedUpload.recv.receivedReset()).toBe(0x202);
 
+      progress.server = "bodyless download admission";
       const bodyless = await server.acceptBi();
       expect(await readIrohStreamPreamble(bodyless.recv)).toMatchObject({
         body: false,
@@ -700,6 +711,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       await bodyless.send.finish();
 
       for (const body of [false, true]) {
+        progress.server = "deadline stream admission";
         const timedOut = await server.acceptBi();
         expect(await readIrohStreamPreamble(timedOut.recv)).toMatchObject({
           k: "stream",
@@ -715,6 +727,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       }
       // The stream reset during open is visible to the peer even though no
       // application preamble was sent. It must carry only cancellation.
+      progress.server = "aborted native open receipt";
       const abortedOpen = await server.acceptBi();
       await expect(readIrohStreamPreamble(abortedOpen.recv)).rejects.toThrow();
       for (const [finishResponse, cancellationCode] of [
@@ -722,6 +735,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         [false, 0x202],
         [false, 0x201],
       ] as const) {
+        progress.server = "duplex upload admission";
         const duplex = await server.acceptBi();
         expect(await readIrohStreamPreamble(duplex.recv)).toMatchObject({
           body: true,
@@ -740,6 +754,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         );
         if (finishResponse) await duplex.send.finish();
         else await duplex.send.writeAll(new Uint8Array([1]));
+        progress.server = "duplex cancellation receipt";
         if (closeOwner === "pipe" && cancellationCode === 0x201) {
           // Physical retirement owns the whole connection, so its terminal
           // event is the authoritative peer receipt rather than a stream code.
@@ -775,6 +790,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         });
       void pendingResponse.catch(() => {});
       try {
+        progress.client = "initial response head admission";
         await waitingForHead;
         vi.advanceTimersByTime(30_000);
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -784,6 +800,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         vi.useRealTimers();
         releaseHead();
       }
+      progress.client = "initial response consumption";
       const response = await pendingResponse;
       expect(response.status).toBe(201);
       expect(response.url).toBe("https://example.test/result");
@@ -799,6 +816,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         })
       ).rejects.toBe(uploadFailure);
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
+      progress.client = "bodyless download";
       const download = await rpc.stream("main", "download-only", []);
       const reader = download.body!.getReader();
       const first = await reader.read();
@@ -842,11 +860,14 @@ describe("Iroh RPC client over real local QUIC", () => {
         // The peer can receive an envelope before its native write promise
         // resolves. Hold that completion to exercise the ordering explicitly;
         // only the client's installed timer admits clock advancement.
+        progress.client = "bodyless deadline peer admission";
         await deadlineAdmissions[0]!.ready;
         expect(vi.getTimerCount()).toBe(0);
         deadlineAdmissions[0]!.releaseWrite();
+        progress.client = "bodyless deadline timer installation";
         await headDeadline.ready;
         vi.advanceTimersByTime(100);
+        progress.client = "bodyless deadline cancellation joining";
         await rejected;
       } finally {
         headDeadline.restore();
@@ -875,9 +896,11 @@ describe("Iroh RPC client over real local QUIC", () => {
         code: "IROH_RESPONSE_HEAD_TIMEOUT",
       });
       try {
+        progress.client = "upload deadline peer admission";
         await deadlineAdmissions[1]!.ready;
         expect(vi.getTimerCount()).toBe(0);
         deadlineAdmissions[1]!.releaseWrite();
+        progress.client = "upload deadline timer installation";
         await uploadDeadline.ready;
         vi.advanceTimersByTime(100);
       } finally {
@@ -888,6 +911,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       expect(deadlineSettled).toBe(false);
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
       releaseUploadCancellation();
+      progress.client = "upload deadline cancellation joining";
       await rejectedDeadline;
       await expect.poll(() => pendingUpload.locked).toBe(false);
       await expect.poll(() => pipe.diagnostics()?.activeRequests).toBe(0);
@@ -909,6 +933,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const afterEofAbort = new AbortController();
       const eofCancelUpload = vi.fn();
       const eofUpload = new ReadableStream<Uint8Array>({ cancel: eofCancelUpload });
+      progress.client = "early response with pending upload";
       const earlyResponse = await rpc.stream("main", "response-before-upload", [], {
         body: eofUpload,
         signal: afterEofAbort.signal,
@@ -921,6 +946,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       await expect.poll(() => eofUpload.locked).toBe(false);
 
       let uploadController!: ReadableStreamDefaultController<Uint8Array>;
+      progress.client = "duplex response before upload failure";
       const failedResponse = await rpc.stream("main", "upload-fails-after-head", [], {
         body: new ReadableStream<Uint8Array>({
           start(controller) {
@@ -933,6 +959,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const bodyFailure = new Error("Original duplex upload failure");
       const failedRead = expect(failedReader.read()).rejects.toBe(bodyFailure);
       uploadController.error(bodyFailure);
+      progress.client = "duplex response failure propagation";
       await failedRead;
       failedReader.releaseLock();
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
@@ -952,6 +979,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         return sessionCancellation;
       });
       const sessionUpload = new ReadableStream<Uint8Array>({ cancel: sessionCancelUpload });
+      progress.client = "session pending upload admission";
       await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
       let sessionCloseSettled = false;
@@ -968,12 +996,14 @@ describe("Iroh RPC client over real local QUIC", () => {
         })
       ).rejects.toThrow("closed while opening request");
       try {
+        progress.client = "session upload cancellation hook";
         await sessionCancellationReady;
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(sessionCloseSettled).toBe(false);
         expect(pipe.diagnostics()?.activeRequests).toBe(1);
       } finally {
         finishSessionCancellation();
+        progress.client = "closed native open joining";
         await openingRejected;
       }
       await expect.poll(() => sessionCancelUpload.mock.calls.length).toBe(1);
