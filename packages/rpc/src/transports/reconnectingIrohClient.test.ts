@@ -137,7 +137,7 @@ describe("reconnecting Iroh client", () => {
       const inner = open(options);
       inner.ready = async () => {
         await authentication;
-        await options.onRecovery?.("cold-recover");
+        await options.onRecovery?.("cold-recover", { sessionDirty: true });
       };
       return inner;
     });
@@ -533,7 +533,7 @@ describe("reconnecting Iroh client", () => {
         let ready: Promise<void> | undefined;
         inner.ready = () =>
           (ready ??= Promise.resolve().then(async () => {
-            await options.onRecovery?.(index === 0 ? "resubscribe" : "cold-recover");
+            await options.onRecovery?.("resubscribe", { serverBootId: `boot-${index}` });
           }));
         return inner;
       });

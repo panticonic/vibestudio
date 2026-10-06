@@ -35,6 +35,7 @@ import {
   irohReceiveStreamBody,
   IrohResponseHeadTimeoutError,
 } from "./irohClient.js";
+import { createReconnectingIrohClientPipe } from "./reconnectingIrohClient.js";
 
 const { SecretKey } = loadIrohNodeBinding();
 
@@ -51,6 +52,89 @@ describe("Iroh RPC client over real local QUIC", () => {
     endpoints.add(endpoint);
     return endpoint;
   }
+
+  it.each([
+    ["boot-one", "resubscribe"],
+    ["boot-two", "cold-recover"],
+  ] as const)("classifies replacement server boot %s as %s", async (nextBootId, recoveryKind) => {
+    const serverEndpoint = await bind();
+    const clientEndpoint = await bind();
+    const servers: NodePhysicalConnection[] = [];
+    const serving: Promise<void>[] = [];
+    const recoveries: string[] = [];
+    let recovered!: () => void;
+    const secondRecovery = new Promise<void>((resolve) => {
+      recovered = resolve;
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: serverEndpoint.id().toString(),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+      closeEndpoint: () => clientEndpoint.close(),
+      dial: async () => {
+        const incoming = serverEndpoint.acceptNext();
+        const connecting = clientEndpoint.connect(serverEndpoint.addr(), [...VIBESTUDIO_IROH_ALPN]);
+        const accepted = await incoming;
+        if (!accepted) throw new Error("Server ended before replacement connection");
+        const accepting = await accepted.accept();
+        const [serverNative, clientNative] = await Promise.all([accepting.connect(), connecting]);
+        configureNodeConnection(serverNative);
+        configureNodeConnection(clientNative);
+        const server = new NodePhysicalConnection(serverNative);
+        servers.push(server);
+        const boot = servers.length === 1 ? "boot-one" : nextBootId;
+        const task = (async () => {
+          const control = await server.acceptBi();
+          await readIrohStreamPreamble(control.recv);
+          const hello = decodeIrohSessionControlFrame(
+            await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+          );
+          expect(hello.t).toBe(IROH_SESSION_HELLO);
+          await writeFrame(
+            control.send,
+            encodeIrohSessionControlFrame(hello),
+            MAX_CONTROL_FRAME_BYTES
+          );
+          const open = decodeIrohSessionControlFrame(
+            await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+          );
+          if (open.t !== IROH_SESSION_OPEN) throw new Error("Expected authentication request");
+          await writeFrame(
+            control.send,
+            encodeIrohSessionControlFrame({
+              t: IROH_SESSION_OPEN_RESULT,
+              sid: open.sid,
+              success: true,
+              callerId: "shell:device",
+              serverBootId: boot,
+            }),
+            MAX_CONTROL_FRAME_BYTES
+          );
+        })();
+        void task.catch(() => undefined);
+        serving.push(task);
+        return createIrohClientPipe(new NodePhysicalConnection(clientNative));
+      },
+    });
+    const session = owner.openSession({
+      getToken: () => "credential",
+      onRecovery: (kind) => {
+        recoveries.push(kind);
+        if (recoveries.length === 2) recovered();
+      },
+    });
+    try {
+      await session.ready!();
+      servers[0]!.close(0n, new TextEncoder().encode("Server process restarted"));
+      await secondRecovery;
+      expect(recoveries).toEqual(["resubscribe", recoveryKind]);
+    } finally {
+      await owner.close();
+      for (const server of servers) server.close(0n, new TextEncoder().encode("Test complete"));
+      await Promise.allSettled(serving);
+    }
+  });
 
   it("retires an unused pipe without opening a handshake or leaking a rejection", async () => {
     const connection = {

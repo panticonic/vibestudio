@@ -37,6 +37,7 @@ import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import {
   decodeIrohSessionControlFrame,
+  irohRecoveryKind,
   encodeIrohSessionControlFrame,
   IROH_SESSION_CLOSE,
   IROH_SESSION_CLOSED,
@@ -45,6 +46,7 @@ import {
   IROH_SESSION_OPEN_RESULT,
   type IrohSessionControlFrame,
   type IrohSessionOpenResultFrame,
+  type IrohRecoveryReceipt,
 } from "../protocol/irohSession.js";
 import type {
   ClientPlatform,
@@ -126,7 +128,7 @@ export interface IrohClientSessionOptions {
   oauthCallbackMode?: OAuthCallbackMode;
   getToken(): string | Promise<string>;
   onPaired?(credential: DeviceCredential): void | Promise<void>;
-  onRecovery?(kind: RecoveryKind): void | Promise<void>;
+  onRecovery?(kind: RecoveryKind, receipt: IrohRecoveryReceipt): void | Promise<void>;
   onTerminalClose?(error: Error): void;
 }
 
@@ -460,14 +462,13 @@ class ClientSession implements IrohClientSession {
     if (result.deviceCredential) {
       await this.options.onPaired?.(result.deviceCredential);
     }
-    const recovery: RecoveryKind =
-      this.lastServerBootId !== null && this.lastServerBootId !== result.serverBootId
-        ? "cold-recover"
-        : result.sessionDirty
-          ? "cold-recover"
-          : "resubscribe";
+    const receipt: IrohRecoveryReceipt = {
+      serverBootId: result.serverBootId,
+      sessionDirty: result.sessionDirty,
+    };
+    const recovery = irohRecoveryKind(this.lastServerBootId, receipt);
     this.lastServerBootId = result.serverBootId ?? this.lastServerBootId;
-    await this.options.onRecovery?.(recovery);
+    await this.options.onRecovery?.(recovery, receipt);
   }
 
   private async respondOnInboundStream(

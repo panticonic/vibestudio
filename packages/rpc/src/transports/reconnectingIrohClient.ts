@@ -5,6 +5,7 @@ import type { IrohConnectionDiagnostics } from "@vibestudio/iroh-transport";
 import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import { secureRandomUuid } from "../randomId.js";
 import { RpcBoundaryError } from "../errors.js";
+import { irohRecoveryKind, type IrohRecoveryReceipt } from "../protocol/irohSession.js";
 
 /** Cancel one waiter while its shared session/connection remains owned. */
 function waitForSharedOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -82,6 +83,7 @@ interface SessionActivation {
 interface AuthenticatedSession {
   inner: IrohClientSession;
   recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
+  recoveryReceipt: IrohRecoveryReceipt | undefined;
   retireOnFailure(error: unknown): Promise<never>;
 }
 
@@ -97,6 +99,7 @@ class ReconnectingSession implements IrohClientSession {
   private readonly acquired = new Set<{ generation: number; close(): Promise<void> }>();
   private readonly activations = new Set<Promise<IrohClientSession>>();
   private authenticatedCallerId: string | null = null;
+  private lastServerBootId: string | null = null;
   private readonly messageListeners = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
 
@@ -220,7 +223,8 @@ class ReconnectingSession implements IrohClientSession {
     const recovered = opening
       .then(async (receipt) => {
         try {
-          if (receipt.recovery !== undefined) await this.options.onRecovery?.(receipt.recovery);
+          if (receipt.recovery !== undefined && receipt.recoveryReceipt !== undefined)
+            await this.options.onRecovery?.(receipt.recovery, receipt.recoveryReceipt);
           return receipt.inner;
         } catch (error) {
           return receipt.retireOnFailure(error);
@@ -278,13 +282,13 @@ class ReconnectingSession implements IrohClientSession {
 
   private async openInner(pipe: IrohClientPipe, generation: number): Promise<AuthenticatedSession> {
     let terminalError: Error | null = null;
-    let recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
+    let recoveryReceipt: IrohRecoveryReceipt | undefined;
     const inner = pipe.openSession({
       ...this.options,
       // Recovery replay can call this same logical session. Capture the
       // authentication result until its validated inner session is installed.
-      onRecovery: (kind) => {
-        recovery = kind;
+      onRecovery: (_kind, receipt) => {
+        recoveryReceipt = receipt;
       },
       onTerminalClose: (error) => {
         terminalError = error;
@@ -321,8 +325,13 @@ class ReconnectingSession implements IrohClientSession {
         throw new Error(`Iroh session ${this.logicalId} opened on a stale connection generation`);
       this.inner = inner;
       this.authenticatedCallerId = inner.callerId();
+      const recovery =
+        recoveryReceipt !== undefined
+          ? irohRecoveryKind(this.lastServerBootId, recoveryReceipt)
+          : undefined;
+      this.lastServerBootId = recoveryReceipt?.serverBootId ?? this.lastServerBootId;
       this.emitStatus("connected");
-      return { inner, recovery, retireOnFailure };
+      return { inner, recovery, recoveryReceipt, retireOnFailure };
     } catch (error) {
       return retireOnFailure(error);
     }

@@ -1,5 +1,6 @@
 import { IROH_WIRE_VERSION } from "@vibestudio/iroh-transport";
 import type { CallerKind } from "../types.js";
+import type { RecoveryKind } from "./recoveryCoordinator.js";
 import type {
   ClientPlatform,
   DeviceCredential,
@@ -43,6 +44,19 @@ export interface IrohSessionOpenResultFrame {
   error?: string;
   errorCode?: RpcAuthenticationFailureCode;
   terminal?: boolean;
+}
+
+export type IrohRecoveryReceipt = Pick<IrohSessionOpenResultFrame, "serverBootId" | "sessionDirty">;
+
+/** Boot history belongs to the session lifetime that survives reconnects. */
+export function irohRecoveryKind(
+  previousBootId: string | null,
+  receipt: IrohRecoveryReceipt
+): RecoveryKind {
+  return (previousBootId !== null && previousBootId !== receipt.serverBootId) ||
+    receipt.sessionDirty
+    ? "cold-recover"
+    : "resubscribe";
 }
 
 export interface IrohSessionCloseFrame {
