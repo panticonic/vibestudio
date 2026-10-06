@@ -852,6 +852,8 @@ class ClientPipe implements IrohClientPipe {
 
   async close(): Promise<void> {
     return (this.closePromise ??= (async () => {
+      const prefix = `[IrohPipe:${this.peerEndpointId.slice(0, 12)}]`;
+      console.info(`${prefix} Shutdown started: ${this.sessions.size} sessions`);
       this.setStatus("disconnected");
       const error = new RpcBoundaryError(
         "Iroh pipe closed",
@@ -859,18 +861,29 @@ class ClientPipe implements IrohClientPipe {
         SESSION_CONNECTION_LOST_CODE
       );
       this.helloReject(error);
-      const retirements = [...this.sessions.values()].map((session) => session.fail(error));
+      const retirements = [...this.sessions.values()].map(async (session) => {
+        console.info(`${prefix} Shutdown session started: ${session.sid}`);
+        await session.fail(error);
+        console.info(`${prefix} Shutdown session completed: ${session.sid}`);
+      });
       this.unsubscribePhysicalDiagnostics?.();
       for (const pending of this.pendingOpens.values()) pending.reject(error);
       this.pendingOpens.clear();
       // Closing the physical owner releases pending control writes and native
       // request I/O before joining cleanup, including caller upload hooks.
       this.connection.close(0n, new TextEncoder().encode("client closed"));
-      await Promise.all([...retirements, this.controlWriter?.finish().catch(() => undefined)]);
+      const control = this.controlWriter
+        ?.finish()
+        .catch(() => undefined)
+        .then(() => {
+          console.info(`${prefix} Shutdown control writer completed`);
+        });
+      await Promise.all([...retirements, control]);
       this.sessions.clear();
       this.diagnosticsChanged();
       this.diagnosticsListeners.clear();
       this.statusListeners.clear();
+      console.info(`${prefix} Shutdown complete`);
     })());
   }
 

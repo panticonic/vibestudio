@@ -180,9 +180,15 @@ class ReconnectingSession implements IrohClientSession {
     this.inner = null;
     this.activation = null;
     const retiring = [...this.acquired].map((inner) => inner.close());
+    const prefix = `[IrohSession:${this.logicalId}]`;
+    console.info(
+      `${prefix} Shutdown joining ${retiring.length} acquired sessions and ${this.activations.size} activations`
+    );
     this.closePromise = (async () => {
       const results = await Promise.allSettled(retiring);
+      console.info(`${prefix} Shutdown acquired sessions completed`);
       await Promise.allSettled([...this.activations]);
+      console.info(`${prefix} Shutdown activations completed`);
       this.emitStatus("disconnected");
       const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
@@ -489,6 +495,7 @@ class ReconnectingPipe implements IrohClientPipe {
     this.suspended = false;
     // Cache the retirement before notifying observers, which can re-enter close.
     return (this.closePromise = Promise.resolve().then(async () => {
+      const prefix = `[IrohReconnect:${this.options.peerEndpointId.slice(0, 12)}]`;
       const sessions = [...this.sessions];
       this.sessions.clear();
       const connected = this.connected;
@@ -504,8 +511,13 @@ class ReconnectingPipe implements IrohClientPipe {
         Promise.resolve().then(() => this.options.closeEndpoint()),
         ...sessions.map((session) => Promise.resolve().then(() => session.close())),
       ];
+      console.info(
+        `${prefix} Shutdown joining ${this.retiringPipes.size} physical pipes and ${sessions.length} logical sessions`
+      );
       const results = await Promise.allSettled(retirements);
+      console.info(`${prefix} Shutdown pipe and session retirements completed`);
       await this.connecting?.catch(() => undefined);
+      console.info(`${prefix} Shutdown connection acquisition completed`);
       // A dial admitted before shutdown can hand back a late physical pipe.
       // Successful retirements release themselves; failed ones stay owned.
       const physicalResults = await Promise.allSettled([...this.retiringPipes]);
@@ -520,6 +532,7 @@ class ReconnectingPipe implements IrohClientPipe {
         ),
       ];
       if (errors.length) throw new AggregateError(errors, "Iroh pipe cleanup failed");
+      console.info(`${prefix} Shutdown complete`);
     }));
   }
 

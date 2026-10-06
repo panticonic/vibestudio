@@ -118,8 +118,18 @@ export class DesktopIrohConnectionSupervisor {
       // Endpoint retirement releases pending dials and native session I/O.
       // Start it alongside every client, then join all admitted acquisitions.
       const settled = await Promise.allSettled([
-        ...clients.map((client) => Promise.resolve().then(() => client.close())),
-        Promise.resolve().then(() => this.endpointOwner.close()),
+        ...clients.map((client, index) =>
+          Promise.resolve().then(async () => {
+            log.info(`Shutdown client started: ${index}`);
+            await client.close();
+            log.info(`Shutdown client completed: ${index}`);
+          })
+        ),
+        Promise.resolve().then(async () => {
+          log.info("Shutdown endpoint started");
+          await this.endpointOwner.close();
+          log.info("Shutdown endpoint completed");
+        }),
       ]);
       await Promise.allSettled([...this.acquisitions]);
       const failures = settled.flatMap((result) =>
