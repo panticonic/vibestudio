@@ -4739,6 +4739,40 @@ describe("RpcServer live caller gate", () => {
 });
 
 describe("RpcServer caller identity", () => {
+  it("reports an unrestored panel lease without rejecting its live credential", async () => {
+    const { server, grantPanel, runtimeCoordinator } = createServer();
+    const token = grantPanel("panel:nav-a");
+    runtimeCoordinator.release("panel:nav-a", "conn-1");
+    const waiting = createTestWs();
+    await testServer(server).handleAuth(waiting, token, "conn-1");
+    expect(waiting.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, errorCode: "panel_runtime_leased" })
+    );
+    expect(server.authenticateConnectionGrant(token)).toBeNull();
+    runtimeCoordinator.acquire("panel:nav-a", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "test-desktop",
+      connectionId: "conn-1",
+    });
+    const restored = createTestWs();
+    await testServer(server).handleAuth(restored, token, "conn-1");
+    expect(restored.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await server.stop();
+  });
+
+  it("denies a different viewer even when it presents the active connection id", async () => {
+    const { server, connectionGrants } = createServer();
+    const token = connectionGrants.grant("panel:nav-a", "shell:bob", {
+      subject: { userId: "user-2", handle: "bob" },
+    }).token;
+    const intruder = createTestWs();
+    await testServer(server).handleAuth(intruder, token, "conn-1");
+    expect(intruder.close).toHaveBeenCalled();
+    expect(testServer(server).connections.getCallerConnections("panel:nav-a")).toHaveLength(0);
+    expect(server.authenticateConnectionGrant(token)).toBeNull();
+    await server.stop();
+  });
+
   it("requires a viewer for an unowned seeded panel without changing worker lineage", () => {
     const { server, entityCache, connectionGrants, grantPanel } = createServer({
       userSubjectSource: { resolve: () => ({ userId: "creator", handle: "creator" }) },

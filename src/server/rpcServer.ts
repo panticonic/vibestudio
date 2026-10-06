@@ -1838,6 +1838,22 @@ export class RpcServer {
     token: string,
     remoteEndpointId?: string
   ): { caller: VerifiedCaller; authorizedBy: string } | null {
+    const authenticated = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+    if (
+      authenticated?.caller.runtime.kind === "panel" &&
+      this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(
+        authenticated.caller.runtime.id
+      ) !== authenticated.authorizedBy
+    )
+      return null;
+    return authenticated;
+  }
+
+  /** Credential identity stays valid while a presentation lease is being restored. */
+  private resolveConnectionGrantIdentity(
+    token: string,
+    remoteEndpointId?: string
+  ): { caller: VerifiedCaller; authorizedBy: string } | null {
     const grant = this.deps.connectionGrants?.validate(token, remoteEndpointId);
     if (!grant) return null;
     try {
@@ -1851,12 +1867,6 @@ export class RpcServer {
         undefined,
         kind === "panel" || kind === "app" ? grant.subject : undefined
       );
-      if (
-        kind === "panel" &&
-        this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(grant.principalId) !==
-          grant.issuedBy
-      )
-        return null;
       if (this.deps.membershipGate && !this.deps.membershipGate(caller.subject)) return null;
       if (this.deps.liveCallerGate && !this.deps.liveCallerGate(caller, grant.issuedBy))
         return null;
@@ -1902,7 +1912,7 @@ export class RpcServer {
       resolvedFromTokenManager = !connectionGrant && entry !== null;
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
       if (connectionGrant) {
-        const authenticated = this.authenticateConnectionGrant(token, remoteEndpointId);
+        const authenticated = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
         if (!authenticated) return rejectedCredential();
         subject = authenticated.caller.subject;
       }
@@ -1922,7 +1932,7 @@ export class RpcServer {
       const resolvedEntry = entry;
       const isValidAtUpgrade = (): boolean => {
         if (connectionGrant) {
-          const current = this.authenticateConnectionGrant(token, remoteEndpointId);
+          const current = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
           return (
             current?.caller.runtime.id === resolvedEntry.callerId &&
             current.caller.runtime.kind === resolvedEntry.callerKind
@@ -2046,7 +2056,11 @@ export class RpcServer {
     // relayCalls into the "no client found" invariant throw. Gate, THEN (only on
     // success) clear the timer / wake the waiters.
     if (callerKind === "panel") {
-      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(callerId, connectionId);
+      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(
+        callerId,
+        connectionId,
+        authorizedBy
+      );
       if (!auth?.ok) {
         const msg: WsServerMessage = {
           type: "ws:auth-result",
@@ -2096,24 +2110,6 @@ export class RpcServer {
     if (connectionWaiter) {
       this.connectionReconnectWaiters.delete(connectionKey);
       connectionWaiter.resolve();
-    }
-
-    if (callerKind === "panel") {
-      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(callerId, connectionId);
-      if (!auth?.ok) {
-        const msg: WsServerMessage = {
-          type: "ws:auth-result",
-          success: false,
-          error: auth?.reason ?? "Panel runtime coordinator is unavailable",
-          // A lease that has moved is a transition, not a broken panel: the
-          // code lets the relay and the panel recover quietly instead of
-          // reporting a defect for something their next attempt resolves.
-          errorCode: PANEL_RUNTIME_LEASED_CODE,
-        };
-        ws.sendMessage(msg);
-        ws.close(4090, "Panel runtime lease denied");
-        return;
-      }
     }
 
     // Membership entry gate (WP2 §4, authoritative-at-child): once the
@@ -2526,13 +2522,11 @@ export class RpcServer {
       msg.type !== "ws:auth" &&
       client.caller.runtime.kind === "panel" &&
       client.authorizedBy &&
-      (!this.deps.runtimeCoordinator?.authorizePanelConnection(
+      !this.deps.runtimeCoordinator?.authorizePanelConnection(
         client.caller.runtime.id,
-        client.connectionId
-      ).ok ||
-        this.deps.runtimeCoordinator.resolvePresentationCallerForRuntime(
-          client.caller.runtime.id
-        ) !== client.authorizedBy)
+        client.connectionId,
+        client.authorizedBy
+      ).ok
     ) {
       client.ws.close(4090, "Panel runtime lease denied");
       return;

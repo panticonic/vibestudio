@@ -1021,12 +1021,19 @@ export class PanelRuntimeCoordinator {
 
   authorizePanelConnection(
     runtimeEntityId: string,
-    connectionId: string
+    connectionId: string,
+    authorizedBy?: string
   ): { ok: true } | { ok: false; reason: string } {
     const lease = this.leases.get(asPanelEntityId(runtimeEntityId));
     if (!lease) return { ok: false, reason: "Panel runtime has no active lease" };
     if (lease.connectionId !== connectionId) {
       return { ok: false, reason: `Panel runtime is leased by ${lease.holderLabel}` };
+    }
+    if (
+      authorizedBy !== undefined &&
+      this.resolvePresentationCallerForRuntime(runtimeEntityId) !== authorizedBy
+    ) {
+      return { ok: false, reason: "Panel runtime is leased by another caller" };
     }
     return { ok: true };
   }
