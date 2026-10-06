@@ -104,7 +104,7 @@ it("scopes configurable providers to the account and endpoint supplied by the us
     })
   ).toThrow();
   expect(() =>
-    toCredentialConnectRequest("azure", {
+    toCredentialConnectRequest("azure-openai-responses", {
       configuration: { ENDPOINT: "http://insecure.example" },
     })
   ).toThrow();

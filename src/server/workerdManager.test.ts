@@ -455,6 +455,38 @@ describe("WorkerdManager", () => {
       await mgr.shutdown();
     });
 
+    it("journals probe storage while peers are live and collects after the process exits", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const internals = mgr as unknown as {
+        process: { exitCode: number | null } | null;
+        destroyDurableObjectStorageFiles(ref: unknown): Promise<void>;
+        readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
+      };
+      const ordinaryDestroy = internals.destroyDurableObjectStorageFiles.bind(mgr);
+      const destroy = vi
+        .spyOn(internals, "destroyDurableObjectStorageFiles")
+        .mockImplementation(async (ref) => {
+          if (internals.process?.exitCode === null) throw new Error("database is still open");
+          await ordinaryDestroy(ref);
+        });
+      try {
+        await expect(
+          mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild())
+        ).resolves.toMatchObject({ className: "BoardDO" });
+        expect(destroy).not.toHaveBeenCalled();
+        expect(internals.readOpenDurableObjectMaintenance()).toContainEqual(
+          expect.objectContaining({
+            kind: "destroy",
+            objectKey: expect.stringContaining("__vibestudio_schema_probe:"),
+          })
+        );
+      } finally {
+        await mgr.shutdown();
+      }
+      expect(destroy).toHaveBeenCalledOnce();
+    });
+
     it("preserves both probe and retirement failures and reclaims owned scratch at shutdown", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
@@ -752,7 +784,7 @@ describe("WorkerdManager", () => {
 
     await mgr.shutdown();
 
-    expect(quiesce).toHaveBeenCalledOnce();
+    expect(quiesce).not.toHaveBeenCalled();
     expect(destroy).toHaveBeenCalledOnce();
   });
 

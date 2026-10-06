@@ -275,7 +275,7 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
 
 const CONFIGURED_PROVIDERS = [
   {
-    id: "azure",
+    id: "azure-openai-responses",
     label: "Azure OpenAI API key",
     header: "api-key",
     bases: [""],

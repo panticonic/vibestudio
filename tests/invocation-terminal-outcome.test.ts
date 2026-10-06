@@ -83,6 +83,29 @@ function isSchemaRejectionFixture(node: ts.Node, source: string): boolean {
   return /schema rejection fixture/u.test(source.slice(node.getFullStart(), node.getEnd()));
 }
 
+/** Matcher arguments describe partial expected values, not constructed events. */
+function isMatcherExpectation(node: ts.Node): boolean {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (ts.isCallExpression(parent)) {
+      const callee = parent.expression;
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ["toMatchObject", "toEqual", "toStrictEqual"].includes(callee.name.text)
+      ) {
+        let receiver = callee.expression;
+        while (ts.isPropertyAccessExpression(receiver)) receiver = receiver.expression;
+        return (
+          ts.isCallExpression(receiver) &&
+          ts.isIdentifier(receiver.expression) &&
+          receiver.expression.text === "expect"
+        );
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
 function hasValidTerminalPayloadSignal(node: ts.Node, kind: TerminalKind): boolean {
   let valid = false;
   const allowedOutcomes = TERMINAL_KIND_OUTCOMES[kind];
@@ -117,10 +140,12 @@ describe("invocation terminal event literals", () => {
     const misses: string[] = [];
     // `workers/test-agent` ships in the system-testing template, the rest in
     // Base: the contract covers whichever repository supplies the unit.
-    const sources = ROOTS.flatMap((root) => exactUnitRoots(root).flatMap(tsFiles)).map((fileName) => ({
-      fileName,
-      content: readFileSync(fileName, "utf8"),
-    }));
+    const sources = ROOTS.flatMap((root) => exactUnitRoots(root).flatMap(tsFiles)).map(
+      (fileName) => ({
+        fileName,
+        content: readFileSync(fileName, "utf8"),
+      })
+    );
     usingTypeScriptProject(sources, (project) => {
       for (const { fileName: file, content: source } of sources) {
         const sourceFile = project.program.getSourceFile(file);
@@ -133,6 +158,7 @@ describe("invocation terminal event literals", () => {
               const payload = propertyValue(node, "payload");
               if (
                 !isSchemaRejectionFixture(node, source) &&
+                !isMatcherExpectation(node) &&
                 (!payload || !hasValidTerminalPayloadSignal(payload, kind))
               ) {
                 const line = sourceFile.getLineAndCharacterOfPosition(

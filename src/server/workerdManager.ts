@@ -3320,6 +3320,7 @@ export class WorkerdManager {
           );
         }
       }
+      await this.collectRetiredDurableObjectStorage();
     } finally {
       // Always release the pinned ports — including on the SIGKILL-refusal
       // throw above — so the next transition re-probes via findServicePort.
@@ -3835,13 +3836,11 @@ export class WorkerdManager {
       outcome = { ok: false, error };
     }
     try {
-      // Keep the exact probe image owned until its facet and files are retired.
-      // A failed retirement must never permit deletion underneath a live facet.
+      // Retire the facet now; its universal host keeps a SQLite connection
+      // until the shared process exits. The durable destruction journal owns
+      // physical collection across that process boundary and host crashes.
       await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
-      await this.destroyStorageFiles({
-        dir: this.universalDoStorageDir(),
-        hash: this.universalHostHash(ref),
-      });
+      await this.destroyRetiredDOStorage(ref);
       this.schemaProbeBuilds.delete(objectKey);
       await this.stopWorkerdIfIdle();
     } catch (cleanupFailure) {
@@ -4157,6 +4156,30 @@ export class WorkerdManager {
     for (const file of manifest.files ?? []) {
       await fs.promises.copyFile(path.join(backupDir, file), path.join(storageDir, file));
     }
+  }
+
+  /** Called only after the exact process has been reaped, before replacement. */
+  private async collectRetiredDurableObjectStorage(): Promise<void> {
+    const failures: unknown[] = [];
+    for (const row of this.readOpenDurableObjectMaintenance()) {
+      if (row.kind !== "destroy") continue;
+      try {
+        await this.fenceDurableObjectMaintenance(row);
+        await this.destroyDurableObjectStorageFiles({
+          source: row.source,
+          className: row.className,
+          objectKey: row.objectKey,
+        });
+        this.acceptDurableObjectStorageReplacement(row);
+        this.completeDurableObjectMaintenance(row.operationId);
+        releaseDurableObjectRelaySeal(row.targetId, row.operationId);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Retired storage collection failed");
   }
 
   private async resumeDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
@@ -4500,18 +4523,11 @@ export class WorkerdManager {
     await this.destroyDurableObjectStorageFiles(ref);
   }
 
-  /** Reclaim storage after the runtime registry has retired an entity.
-   * Userland facets are already quiesced by retirement and are removed before
-   * this call resolves. Internal objects share one workerd process: their
-   * logical deletion is durably journaled here, then physical collection runs
-   * only after that process has stopped (orderly shutdown or startup recovery).
-   * Context teardown must never restart every unrelated DO to collect one
-   * retired EvalDO. */
+  /** Journal reclamation after entity retirement. Facet retirement releases
+   * userland execution, but both universal hosts and internal objects keep
+   * process-owned SQLite handles. Physical collection belongs to the stopped
+   * generation, without restarting unrelated live entities. */
   async destroyRetiredDOStorage(ref: DORef): Promise<void> {
-    if (!isInternalDOSource(ref.source)) {
-      await this.destroyDO(ref);
-      return;
-    }
     await this.startDurableObjectMaintenance({
       kind: "destroy",
       ref,
