@@ -311,6 +311,7 @@ interface ConnectedGeneration {
 class ReconnectingPipe implements IrohClientPipe {
   readonly peerEndpointId: string;
   private readonly sessions = new Set<ReconnectingSession>();
+  private readonly retiringPipes = new Set<Promise<void>>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   private readonly reconnectListeners = new Set<(progress: IrohReconnectProgress) => void>();
   private readonly diagnosticsListeners = new Set<
@@ -405,14 +406,21 @@ class ReconnectingPipe implements IrohClientPipe {
     this.connectedSince = null;
     // Suspension is a decision, not a failure, so resuming dials at once.
     this.retryAttempts = 0;
+    connected?.disposeObservers();
+    const physical = connected ? this.retirePipe(connected.pipe) : undefined;
     this.emitDiagnostics();
     this.setStatus("disconnected");
     if (connected) {
-      connected.disposeObservers();
       for (const session of this.sessions) session.invalidate(connected.generation);
-      await connected.pipe.close().catch(() => undefined);
     }
-    await this.options.suspendEndpoint?.();
+    const results = await Promise.allSettled([
+      physical,
+      Promise.resolve().then(() => this.options.suspendEndpoint?.()),
+    ]);
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (errors.length) throw new AggregateError(errors, "Iroh suspension cleanup failed");
   }
 
   async resume(): Promise<void> {
@@ -441,28 +449,36 @@ class ReconnectingPipe implements IrohClientPipe {
     this.suspended = false;
     // Cache the retirement before notifying observers, which can re-enter close.
     return (this.closePromise = Promise.resolve().then(async () => {
-      this.setStatus("disconnected");
       const sessions = [...this.sessions];
       this.sessions.clear();
-      const pipe = this.connected?.pipe;
-      this.connected?.disposeObservers();
+      const connected = this.connected;
       this.connected = null;
+      connected?.disposeObservers();
+      if (connected) this.retirePipe(connected.pipe);
+      this.setStatus("disconnected");
       this.emitDiagnostics();
       // Physical retirement releases session I/O and a pending dial. Start
       // every owned close before joining any of those dependent operations.
       const retirements = [
-        Promise.resolve().then(() => pipe?.close()),
+        ...this.retiringPipes,
         Promise.resolve().then(() => this.options.closeEndpoint()),
         ...sessions.map((session) => Promise.resolve().then(() => session.close())),
       ];
       const results = await Promise.allSettled(retirements);
       await this.connecting?.catch(() => undefined);
+      // A dial admitted before shutdown can hand back a late physical pipe.
+      // Successful retirements release themselves; failed ones stay owned.
+      const physicalResults = await Promise.allSettled([...this.retiringPipes]);
       this.diagnosticsListeners.clear();
       this.statusListeners.clear();
       this.reconnectListeners.clear();
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
+      const errors = [
+        ...new Set(
+          [...results, ...physicalResults].flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          )
+        ),
+      ];
       if (errors.length) throw new AggregateError(errors, "Iroh pipe cleanup failed");
     }));
   }
@@ -503,7 +519,7 @@ class ReconnectingPipe implements IrohClientPipe {
         const pipe = await this.options.dial();
         await pipe.ready();
         if (this.closed) {
-          await pipe.close();
+          await this.retirePipe(pipe);
           break;
         }
         const generation = ++this.generationValue;
@@ -537,7 +553,7 @@ class ReconnectingPipe implements IrohClientPipe {
           // other: keep the loop's backoff rather than announcing a connection
           // and immediately retracting it.
           connected.disposeObservers();
-          await pipe.close().catch(() => undefined);
+          await this.retirePipe(pipe).catch(() => undefined);
           const failure = new Error("physical Iroh connection closed before it was installed");
           this.options.onReconnectResult?.({
             attempt,
@@ -589,6 +605,10 @@ class ReconnectingPipe implements IrohClientPipe {
     this.connectedSince = null;
     if (heldForMs >= this.durableConnectionMs()) this.retryAttempts = 0;
     connected.disposeObservers();
+    // Retire the native generation before notifying logical observers. Those
+    // callbacks can synchronously close a session; they must not issue control
+    // writes on the generation this owner has already invalidated.
+    this.retirePipe(connected.pipe);
     this.emitDiagnostics();
     this.setStatus("connecting");
     this.emitReconnect({
@@ -600,8 +620,22 @@ class ReconnectingPipe implements IrohClientPipe {
       ...(this.retryAttempts === 0 ? { nextRetryInMs: 0 } : {}),
     });
     for (const session of this.sessions) session.invalidate(connected.generation);
-    void connected.pipe.close().catch(() => undefined);
     if (this.sessions.size > 0) void this.ensureConnected().catch(() => undefined);
+  }
+
+  private retirePipe(pipe: IrohClientPipe): Promise<void> {
+    let retirement: Promise<void>;
+    try {
+      retirement = pipe.close();
+    } catch (error) {
+      retirement = Promise.reject(error);
+    }
+    this.retiringPipes.add(retirement);
+    void retirement.then(
+      () => this.retiringPipes.delete(retirement),
+      () => undefined
+    );
+    return retirement;
   }
 
   private setStatus(status: RpcConnectionStatus): void {

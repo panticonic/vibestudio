@@ -126,6 +126,91 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it.each(["replace", "suspend", "close"] as const)(
+    "retires the physical generation before %s observers can close logical sessions",
+    async (operation) => {
+      const first = new FakePipe(7);
+      const owner = createReconnectingIrohClientPipe({
+        peerEndpointId: first.peerEndpointId,
+        dial: async () => first,
+        closeEndpoint: async () => {},
+      });
+      const session = owner.openSession({ getToken: () => "credential" });
+      await session.ready!();
+      const observed: RpcConnectionStatus[] = [];
+      const closes: Promise<void>[] = [];
+      const unsubscribe = owner.onStatusChange((status) => {
+        if (status === "connected") return;
+        observed.push(first.status());
+        closes.push(session.close());
+      });
+      try {
+        if (operation === "replace") owner.invalidateEndpointGeneration(7, "replaced");
+        else if (operation === "suspend") await owner.suspend();
+        else await owner.close();
+        expect(observed[0]).toBe("disconnected");
+      } finally {
+        unsubscribe();
+        await owner.close();
+        await Promise.all(closes);
+      }
+    }
+  );
+
+  it("joins a logical close started synchronously by its shutdown observer", async () => {
+    const pipe = new FakePipe();
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: pipe.peerEndpointId,
+      dial: async () => pipe,
+      closeEndpoint: async () => {},
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    await session.ready!();
+    let release!: () => void;
+    const logicalClose = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(pipe.sessions[0]!, "close").mockReturnValue(logicalClose);
+    const unsubscribe = owner.onStatusChange((status) => {
+      if (status === "disconnected") void session.close();
+    });
+    let finished = false;
+    const closing = owner.close().then(() => {
+      finished = true;
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+    } finally {
+      release();
+      unsubscribe();
+      await closing;
+    }
+    expect(finished).toBe(true);
+  });
+
+  it("retains the original failure of a replaced physical generation through shutdown", async () => {
+    const first = new FakePipe(7);
+    const second = new FakePipe(8);
+    const failure = new Error("Original native generation cleanup failure");
+    vi.spyOn(first, "close").mockRejectedValue(failure);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(first).mockResolvedValue(second),
+      closeEndpoint: async () => {},
+      now: steppingClock(10_000),
+    });
+    const session = owner.openSession({ getToken: () => "credential" });
+    try {
+      await session.ready!();
+      owner.invalidateEndpointGeneration(7, "replaced");
+      await eventually(() => expect(second.sessions).toHaveLength(1));
+      await expect(owner.close()).rejects.toMatchObject({ errors: [failure] });
+    } finally {
+      await Promise.allSettled([owner.close()]);
+    }
+  });
+
   it("retires the physical owner before joining session I/O and shares concurrent close", async () => {
     const pipe = new FakePipe();
     let finishIo!: () => void;

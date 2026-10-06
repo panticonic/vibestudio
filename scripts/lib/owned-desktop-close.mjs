@@ -20,4 +20,12 @@ export async function closeOwnedDesktop(app, owner) {
     throw original;
   }
   await owner.join();
+  const child = app.process();
+  if (child.exitCode !== 0) {
+    throw new Error(
+      child.exitCode !== null
+        ? `Desktop exited with code ${child.exitCode} after close`
+        : `Desktop exited with signal ${child.signalCode ?? "unknown"} after close`
+    );
+  }
 }
