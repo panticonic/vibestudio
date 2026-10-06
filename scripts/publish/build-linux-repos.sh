@@ -229,7 +229,7 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
    <section class="hero" aria-labelledby="page-title">
      <span class="kicker">Desktop downloads</span>
      <h1 id="page-title">Get Vibestudio.</h1>
-     <p class="lede">Download the desktop app or install with your package manager. Vibestudio checks for new releases and offers the update action that fits your installation.</p>
+     <p class="lede">Download the desktop app or install with your package manager.</p>
      <div class="actions"><a class="button primary" href="https://vibestudio.app/download/mac">Download for Mac</a><a class="button secondary" href="https://vibestudio.app/download/windows">Download for Windows</a></div>
      <p class="fine">Linux packages are <a href="#install-title">below</a>.</p>
    </section>
@@ -242,15 +242,11 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
          <p>The app isn’t notarized yet. If macOS blocks the first launch, choose Open Anyway in System Settings → Privacy &amp; Security.</p>
          <div class="step-label">Or install with Homebrew</div>
          <pre><code>brew install --cask panticonic/tap/vibestudio</code></pre>
-         <div class="step-label">Updates</div>
-         <p>Direct downloads offer a new DMG: quit Vibestudio, replace it in Applications, then reopen it. Homebrew installs offer Install update or Copy upgrade command.</p>
        </article>
        <article class="card">
          <div class="card-head"><div class="os-icon" aria-hidden="true">W</div><h2>Windows</h2></div>
          <p><a href="https://vibestudio.app/download/windows">Download the Windows installer</a> and run the .exe. The x64 app also runs on Windows 11 ARM through emulation.</p>
          <p>The installer isn’t code-signed yet, so SmartScreen may warn. For the official Vibestudio installer, choose More info → Run anyway if offered.</p>
-         <div class="step-label">Updates</div>
-         <p>The app offers to download the update, install it, and restart when you choose Update and restart.</p>
        </article>
      </div>
    </section>
