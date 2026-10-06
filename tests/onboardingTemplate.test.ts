@@ -50,7 +50,11 @@ describe("shipped Personal first-run workspace", () => {
       expect.objectContaining({
         source: "panels/chat",
         stateArgs: expect.objectContaining({
-          initialPrompt: "I just opened this workspace for the first time, help me get onboarded.",
+          seed: expect.objectContaining({
+            openingRequest:
+              "I just opened this workspace for the first time, help me get onboarded.",
+            messages: [expect.objectContaining({ content: expect.stringContaining("<Video") })],
+          }),
           systemPrompt: expect.stringContaining("Vibestudio onboarding assistant"),
         }),
       }),

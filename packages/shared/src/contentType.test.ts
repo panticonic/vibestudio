@@ -7,6 +7,7 @@ describe("contentTypeForPath", () => {
     ["assets/photo.avif", "image/avif"],
     ["assets/track.m4a", "audio/mp4"],
     ["assets/movie.webm", "video/webm"],
+    ["assets/captions.vtt", "text/vtt"],
     ["assets/font.woff2", "font/woff2"],
     ["assets/readme.md", "text/markdown; charset=utf-8"],
   ])("maps %s to %s", (filePath, contentType) => {

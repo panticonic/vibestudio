@@ -81,12 +81,20 @@ function configureWorkspaceSourceForApproval(
   // configured first turn disappears and the lazy chat correctly stays idle.
   const initialChat = config.initPanels?.find((panel) => panel.source === "panels/chat");
   if (!initialChat) throw new Error("Expected an initial chat panel in the workspace config");
-  const initialPrompt = initialChat.stateArgs?.["initialPrompt"];
+  const seed = initialChat.stateArgs?.["seed"] as
+    | { messages?: unknown[]; openingRequest?: string }
+    | undefined;
+  const initialPrompt = seed?.openingRequest;
   if (typeof initialPrompt !== "string" || initialPrompt.trim().length === 0) {
-    throw new Error("Expected the shipped initial chat panel to declare a non-empty initialPrompt");
+    throw new Error(
+      "Expected the shipped initial chat panel to declare a non-empty seed.openingRequest"
+    );
   }
   if (initialPromptOverride !== undefined) {
-    initialChat.stateArgs = { ...initialChat.stateArgs, initialPrompt: initialPromptOverride };
+    initialChat.stateArgs = {
+      ...initialChat.stateArgs,
+      seed: { ...seed, openingRequest: initialPromptOverride },
+    };
   }
   fsSync.writeFileSync(configPath, YAML.stringify(config), "utf8");
   return initialPromptOverride ?? initialPrompt;
@@ -1356,7 +1364,8 @@ test.describe("Desktop Startup Approvals", () => {
       const onboardingPanel = (await getPanelTree(testApp)).find(
         (panel) =>
           panel.snapshot?.source === "panels/chat" &&
-          panel.snapshot.stateArgs?.["initialPrompt"] === configuredInitialPrompt
+          (panel.snapshot.stateArgs?.["seed"] as { openingRequest?: string } | undefined)
+            ?.openingRequest === configuredInitialPrompt
       );
       if (!onboardingPanel) throw new Error("The automatic onboarding panel disappeared");
       await expect

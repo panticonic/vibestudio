@@ -214,14 +214,14 @@ export async function readOwnedOnboardingFromPanel() {
   const agentId = agents[0].participantId;
   const events = replay.logEvents.map((event) => event.payload);
   const userInputs = events.filter(
-    (event) => event?.kind === "message.completed" && event.actor?.kind === "user"
+    (event) => event?.kind === "message.completed" && event.payload?.role === "user"
   );
   const prompt = (event) =>
     event.payload.blocks
       ?.filter((block) => block.type === "text")
       .map((block) => block.content)
       .join(String.fromCharCode(10)) ?? "";
-  if (userInputs.length !== 1 || prompt(userInputs[0]) !== args.initialPrompt)
+  if (userInputs.length !== 1 || prompt(userInputs[0]) !== args.seed?.openingRequest)
     throw new Error("Onboarding review is not bound to its original user input");
   const debug = await rpc.call(agentId, "getDebugState", [channelId]);
   const inspection = debug.conversations[channelId];

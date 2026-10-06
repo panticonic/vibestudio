@@ -36,6 +36,7 @@ export const ASSET_URL_EXTENSIONS: readonly string[] = [
   ".mp4",
   ".m4v",
   ".webm",
+  ".vtt",
   ".ogv",
   ".mov",
   ".avi",

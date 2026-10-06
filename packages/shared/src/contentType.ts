@@ -70,6 +70,8 @@ export function contentTypeForPath(filePath: string): string {
     case ".mp4":
     case ".m4v":
       return "video/mp4";
+    case ".vtt":
+      return "text/vtt";
     case ".webm":
       return "video/webm";
     case ".ogv":

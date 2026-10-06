@@ -327,12 +327,12 @@ it("reads the exact public canonical source and actual native task without a mod
     {
       kind: "message.completed",
       actor: { kind: "user", id: "user:original-user" },
-      payload: { blocks: [{ type: "text", content: prompt }] },
+      payload: { role: "user", blocks: [{ type: "text", content: prompt }] },
     },
     start,
   ];
   vi.stubGlobal("window", {
-    __vibestudioStateArgs: { channelName: "onboarding", initialPrompt: prompt },
+    __vibestudioStateArgs: { channelName: "onboarding", seed: { openingRequest: prompt } },
   });
   vi.stubGlobal("__vibestudioRequireAsync__", async (name: string) => {
     expect(name).toBe("@workspace/runtime");
@@ -370,7 +370,7 @@ it("reads the exact public canonical source and actual native task without a mod
   events.push({
     kind: "message.completed",
     actor: { kind: "user", id: "different-user" },
-    payload: { blocks: [{ type: "text", content: prompt }] },
+    payload: { role: "user", blocks: [{ type: "text", content: prompt }] },
   });
   await expect(read()).rejects.toThrow("original user input");
 });

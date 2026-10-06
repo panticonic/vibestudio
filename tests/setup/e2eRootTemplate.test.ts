@@ -105,7 +105,7 @@ it("derives explicit Personal and ordinary project roots from canonical template
       const file = path.join(checkout, "meta/vibestudio.yml");
       const config = YAML.parse(fs.readFileSync(file, "utf8"));
       expect(config.initPanels[0].source).toBe("panels/chat");
-      config.initPanels[0].stateArgs = { initialPrompt: "Preserve the opening turn" };
+      config.initPanels[0].stateArgs = { seed: { openingRequest: "Preserve the opening turn" } };
       fs.writeFileSync(file, YAML.stringify(config));
     },
   });
@@ -130,7 +130,7 @@ it("derives explicit Personal and ordinary project roots from canonical template
     )
   );
   expect(runtime.initPanels).toEqual([
-    { source: "panels/chat", stateArgs: { initialPrompt: "Preserve the opening turn" } },
+    { source: "panels/chat", stateArgs: { seed: { openingRequest: "Preserve the opening turn" } } },
   ]);
 
   const projectDerived = await deriveE2eRootTemplate({
