@@ -277,11 +277,19 @@ it.each(["complete", "cancel"] as const)(
       observations.push(...retained.diagnostics);
       await peerClosed.promise;
       if (mode === "complete") {
-        expect(observations).toContainEqual({
-          milestone: "provider_terminal",
-          providerEvent: "response.completed",
-          providerEvents: 5,
-        });
+        expect(observations).toContainEqual(
+          expect.objectContaining({
+            milestone: "provider_terminal",
+            providerEvent: "response.completed",
+            providerEvents: 5,
+            providerOutput: expect.objectContaining({
+              messages: 1,
+              textCharacters: 15,
+              toolCalls: 0,
+            }),
+            providerText: expect.objectContaining({ characters: 15, deltas: 1 }),
+          })
+        );
         expect(
           observations.some(
             (event) =>

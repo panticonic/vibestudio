@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("smoke remote-server root invite selection", () => {
-  it("retains the provider profile across a private server restart", async () => {
+  it("isolates the account profile and retains it across a private server restart", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-smoke-profile-"));
     tempDirs.push(root);
     const profile = path.join(root, "profile");
@@ -49,9 +49,14 @@ describe("smoke remote-server root invite selection", () => {
         import path from 'node:path';
         import { getCentralDataPath, getProfileDataPath } from '@vibestudio/env-paths';
         const instance = getCentralDataPath();
-        fs.mkdirSync(instance, { recursive: true });
-        if (${write}) fs.writeFileSync(path.join(instance, 'retained-device.txt'), 'original device');
-        console.log(JSON.stringify({ profile: getProfileDataPath(), instance,
+        const profile = getProfileDataPath();
+        fs.mkdirSync(profile, { recursive: true });
+        if (${write}) {
+          fs.writeFileSync(path.join(instance, 'retained-device.txt'), 'original device');
+          fs.writeFileSync(path.join(profile, 'test-provider-config.txt'), 'isolated provider');
+        }
+        console.log(JSON.stringify({ profile, instance,
+          retainedProvider: fs.readFileSync(path.join(profile, 'test-provider-config.txt'), 'utf8'),
           retainedDevice: fs.readFileSync(path.join(instance, 'retained-device.txt'), 'utf8'),
           inheritedWorkspace: process.env.VIBESTUDIO_WORKSPACE ?? null }));
       `,
@@ -60,10 +65,13 @@ describe("smoke remote-server root invite selection", () => {
         )
       );
     const first = observe(true);
-    expect(first).toEqual({
-      profile: path.join(profile, "vibestudio"),
+    expect(path.relative(instance, first.profile)).not.toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(first.profile).not.toBe(instance);
+    expect(first.profile).not.toBe(path.join(profile, "vibestudio"));
+    expect(first).toMatchObject({
       instance,
       retainedDevice: "original device",
+      retainedProvider: "isolated provider",
       inheritedWorkspace: null,
     });
     expect(observe(false)).toEqual(first);

@@ -17,7 +17,10 @@ import {
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { RemoteRpcError, RpcBoundaryError } from "@vibestudio/rpc";
 import type { ServiceContext, ServiceHandler } from "@vibestudio/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  preparedAuthorityState,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
@@ -578,6 +581,13 @@ describe("ServiceDispatcher", () => {
       methods: {
         readFile: fsMethods.readFile,
         glob: fsMethods.glob,
+      },
+      // This receiver records normalized tuples; it performs no filesystem
+      // access. Its shell-only invocation still owns the canonical prepared
+      // state required by the real fs schemas.
+      authorityPreparation: {
+        "fs.files.readFile": (_ctx, args) => preparedAuthorityState([], { args, accesses: [] }),
+        "fs.files.glob": (_ctx, args) => preparedAuthorityState([], { args, accesses: [] }),
       },
       handler: async (_ctx, method, args) => {
         seen.set(`fs.${method}`, args);

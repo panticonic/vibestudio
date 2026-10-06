@@ -4,21 +4,35 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { storageCommands } from "./storageCommands.js";
+import {
+  getCentralDataPath,
+  getProfileDataPath,
+  getSharedDerivedDataPath,
+} from "@vibestudio/env-paths";
+import { createRemoteSmokeServerEnvironment } from "../../scripts/cli/lib/smoke-remote-server.mjs";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, statfsSync: vi.fn(actual.statfsSync) };
 });
 
-const originalXdg = process.env["XDG_CONFIG_HOME"];
-const originalInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
+const profileEnvironmentKeys = [
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "VIBESTUDIO_INSTANCE_ROOT",
+  "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR",
+] as const;
+const originalEnvironment = new Map(profileEnvironmentKeys.map((key) => [key, process.env[key]]));
 const roots: string[] = [];
 
 afterEach(() => {
-  if (originalXdg === undefined) delete process.env["XDG_CONFIG_HOME"];
-  else process.env["XDG_CONFIG_HOME"] = originalXdg;
-  if (originalInstanceRoot === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
-  else process.env["VIBESTUDIO_INSTANCE_ROOT"] = originalInstanceRoot;
+  for (const [key, value] of originalEnvironment) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -34,18 +48,24 @@ interface ReportedRoot {
 }
 
 /**
- * Redirect every storage root into one disposable tree and populate the given
- * profile-relative paths.
+ * Populate named shared, instance, or profile storage roots in one disposable account.
  */
 function storageFixture(...populate: string[]): { testRoot: string; resolve(at: string): string } {
   const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-storage-cli-"));
   roots.push(testRoot);
-  process.env["XDG_CONFIG_HOME"] = path.join(testRoot, "xdg");
-  process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(testRoot, "instance");
-  const resolve = (at: string): string =>
-    at.startsWith("instance/")
-      ? path.join(testRoot, "instance", at.slice("instance/".length))
-      : path.join(testRoot, "xdg", "vibestudio", at);
+  const environment = createRemoteSmokeServerEnvironment(
+    process.env,
+    path.join(testRoot, "instance"),
+    path.join(testRoot, "shared")
+  );
+  for (const key of profileEnvironmentKeys) process.env[key] = environment[key];
+  const resolve = (at: string): string => {
+    if (at.startsWith("instance/"))
+      return path.join(getCentralDataPath(), at.slice("instance/".length));
+    if (at.startsWith("shared/"))
+      return path.join(getSharedDerivedDataPath(), at.slice("shared/".length));
+    return path.join(getProfileDataPath(), at);
+  };
   for (const at of populate) {
     const entry = path.join(resolve(at), "entry");
     fs.mkdirSync(entry, { recursive: true });
@@ -67,7 +87,7 @@ function lastJson(log: ReturnType<typeof vi.spyOn>): { roots: ReportedRoot[] } {
 describe("storage commands", () => {
   it("collects pool-only links while keeping live build files and reports a dry run", async () => {
     const { resolve, testRoot } = storageFixture();
-    const pool = resolve("derived-cache/build-artifacts");
+    const pool = resolve("shared/build-artifacts");
     const target = path.join(testRoot, "build", "bundle.js");
     await writePooledArtifact(pool, target, Buffer.from("immutable payload"));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -89,18 +109,8 @@ describe("storage commands", () => {
     // This case covers the size ceiling, independently of the machine's free-disk pressure.
     const disk = fs.statfsSync(os.tmpdir());
     vi.spyOn(fs, "statfsSync").mockReturnValue({ ...disk, bavail: 1024 * 1024 * 1024 });
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-storage-cli-"));
-    roots.push(testRoot);
-    process.env["XDG_CONFIG_HOME"] = path.join(testRoot, "xdg");
-    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(testRoot, "instance");
-    const external = path.join(
-      testRoot,
-      "xdg",
-      "vibestudio",
-      "derived-cache",
-      "external-deps",
-      "old"
-    );
+    const { resolve } = storageFixture();
+    const external = resolve("shared/external-deps/old");
     fs.mkdirSync(external, { recursive: true });
     fs.writeFileSync(path.join(external, "payload"), Buffer.alloc(64 * 1024));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -119,12 +129,12 @@ describe("storage commands", () => {
 
   it("never offers an offline-only root to prune", async () => {
     const { resolve } = storageFixture(
-      "derived-cache/external-deps",
+      "shared/external-deps",
       "instance/build-cache",
-      "derived-cache/npm-cache",
-      "derived-cache/npm-registry-downloads",
+      "shared/npm-cache",
+      "shared/npm-registry-downloads",
       "instance/transport-cache",
-      "derived-cache/build-artifacts",
+      "shared/build-artifacts",
       "instance/cas",
       "npm-cache"
     );
@@ -142,10 +152,10 @@ describe("storage commands", () => {
       expect.arrayContaining(["shared external dependencies", "selected instance build cache"])
     );
     for (const offline of [
-      "derived-cache/npm-cache",
-      "derived-cache/npm-registry-downloads",
+      "shared/npm-cache",
+      "shared/npm-registry-downloads",
       "instance/transport-cache",
-      "derived-cache/build-artifacts",
+      "shared/build-artifacts",
       "instance/cas",
       "npm-cache",
     ]) {
@@ -155,9 +165,9 @@ describe("storage commands", () => {
 
   it("still accounts for offline-only roots in status", async () => {
     storageFixture(
-      "derived-cache/external-deps",
+      "shared/external-deps",
       "instance/cas",
-      "derived-cache/npm-registry-downloads",
+      "shared/npm-registry-downloads",
       "instance/transport-cache"
     );
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -185,7 +195,7 @@ describe("storage commands", () => {
   it.each(["0.1", "2048", "not-a-number"])(
     "rejects --max-gib %s as a usage error without touching the cache",
     async (maxGib) => {
-      const { resolve } = storageFixture("derived-cache/external-deps");
+      const { resolve } = storageFixture("shared/external-deps");
       vi.spyOn(console, "log").mockImplementation(() => {});
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -198,12 +208,12 @@ describe("storage commands", () => {
         error: "--max-gib must be a number from 0.25 to 1024",
         exitCode: 2,
       });
-      expect(fs.existsSync(path.join(resolve("derived-cache/external-deps"), "entry"))).toBe(true);
+      expect(fs.existsSync(path.join(resolve("shared/external-deps"), "entry"))).toBe(true);
     }
   );
 
   it("accepts the documented --max-gib bounds", async () => {
-    storageFixture("derived-cache/external-deps");
+    storageFixture("shared/external-deps");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
     for (const maxGib of ["0.25", "1024"]) {

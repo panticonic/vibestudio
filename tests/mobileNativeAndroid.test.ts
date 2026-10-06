@@ -72,6 +72,7 @@ describe("host Android native primitive", () => {
       [
         "assembleInternal",
         "--no-daemon",
+        "--stacktrace",
         "--max-workers=2",
         "-Pkotlin.compiler.execution.strategy=in-process",
         "--rerun-tasks",

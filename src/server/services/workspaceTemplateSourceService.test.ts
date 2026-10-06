@@ -184,7 +184,11 @@ describe("workspaceTemplateSource", () => {
       localRegistry: () => null,
     });
     const ctx = { caller: createVerifiedCaller("shell:user-1", "shell") };
-    const pin = { url: "https://example.invalid/source.git", ref: "main", commit: "a".repeat(40) };
+    const pin = {
+      url: "https://example.invalid/source.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+    };
     await expect(service.handler(ctx, "readEpoch", [pin])).resolves.toBe(foreignEpoch);
     await expect(service.handler(ctx, "inspectExact", [pin])).rejects.toThrow();
     await expect(
