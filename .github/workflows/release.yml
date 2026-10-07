@@ -5,7 +5,8 @@ name: Release
 # has a separate manual `pnpm publish:server-npm` path for hosts no native
 # package covers.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
-#     dnf repositories on GitHub Pages (needs build-resources icons and LINUX_SIGNING_KEY)
+#     dnf repositories on GitHub Pages after this workflow succeeds
+#     (needs build-resources icons and LINUX_SIGNING_KEY)
 #   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
 #   - vars.RELEASE_MAC   = 'true'  → DMG, signed and notarized when all five Apple secrets
 #     are set and ad-hoc signed otherwise
@@ -217,19 +218,6 @@ jobs:
             release/*.rpm
             release/*.pkg.tar.zst
             release/SHA256SUMS-linux
-
-  publish-linux-repos:
-    name: Publish signed apt and dnf repositories
-    needs: publish-release
-    if: ${{ vars.RELEASE_LINUX == 'true' }}
-    uses: ./.github/workflows/linux-repositories.yml
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    with:
-      release-tag: ${{ github.ref_name }}
-    secrets: inherit
 
   mac-dmg:
     name: Build, sign, and notarize macOS DMG
