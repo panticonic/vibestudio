@@ -1,6 +1,6 @@
 import { envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { EventEmitter } from "node:events";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { EventEmitter, once } from "node:events";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -369,6 +369,62 @@ describe("HttpRpcHandler", () => {
     await pending;
 
     expect(observedAbort).toBe(true);
+  });
+
+  it("closes an unfinished HTTP response after its request body has completed", async () => {
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const handler = new HttpRpcHandler(
+      deps({
+        handleRequest: async () => {
+          enter();
+          await held;
+          return null;
+        },
+      })
+    );
+    let incoming: IncomingMessage | undefined;
+    let outgoing: ServerResponse | undefined;
+    let bodyClosed: Promise<unknown[]> | undefined;
+    let handled: Promise<void> | undefined;
+    const server = createServer((req, res) => {
+      incoming = req;
+      outgoing = res;
+      bodyClosed = once(req, "close");
+      handled = handler.handle(req, res);
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as { port: number }).port;
+    const caller = new AbortController();
+    const result = fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: "POST",
+      body: JSON.stringify(rpcEnvelope()),
+      signal: caller.signal,
+    })
+      .then(async (res) => ({ body: await res.text() }))
+      .catch((error: unknown) => ({ error }));
+    try {
+      await entered;
+      await bodyClosed;
+      expect(incoming?.complete).toBe(true);
+      expect(outgoing?.writableEnded).toBe(false);
+
+      handler.stop("owning transport retired");
+
+      expect(outgoing?.destroyed).toBe(true);
+      expect(await result).toHaveProperty("error");
+    } finally {
+      caller.abort();
+      release();
+      await Promise.all([handled, result]);
+      const closed = once(server, "close");
+      server.close();
+      server.closeAllConnections();
+      await closed;
+    }
   });
 });
 

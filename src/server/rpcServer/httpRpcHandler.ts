@@ -91,24 +91,19 @@ export class HttpRpcHandler {
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     this.activeBodies.add(req);
     this.activeResponses.add(res);
-    const releaseTransport = (): void => {
-      this.activeBodies.delete(req);
-      this.activeResponses.delete(res);
-    };
-    req.once("close", releaseTransport);
-    res.once("close", releaseTransport);
+    // IncomingMessage closes when its body completes, while its response
+    // can still be waiting on an RPC. Each transport resource keeps its own
+    // ownership until its authoritative completion or destruction event.
+    req.once("close", () => this.activeBodies.delete(req));
+    res.once("finish", () => this.activeResponses.delete(res));
+    res.once("close", () => this.activeResponses.delete(res));
     if (req.method === "POST" && req.url === "/rpc/stream") {
-      try {
-        await this.deps.handleStreamingRequest(req, res);
-      } finally {
-        releaseTransport();
-      }
+      await this.deps.handleStreamingRequest(req, res);
       return;
     }
     if (req.method !== "POST" || req.url !== "/rpc") {
       res.writeHead(404);
       res.end();
-      releaseTransport();
       return;
     }
 
@@ -118,7 +113,6 @@ export class HttpRpcHandler {
     if (!admission.ok) {
       writeJson(res, admission.status, admission.body);
       req.resume();
-      releaseTransport();
       return;
     }
 
@@ -135,7 +129,6 @@ export class HttpRpcHandler {
             "VIBESTUDIO_RPC_MAX_BODY_BYTES)",
         });
         req.destroy();
-        releaseTransport();
         return;
       }
       chunks.push(bytes);
@@ -146,7 +139,6 @@ export class HttpRpcHandler {
       envelope = JSON.parse(Buffer.concat(chunks).toString()) as RpcEnvelope;
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
-      releaseTransport();
       return;
     }
 
@@ -158,12 +150,10 @@ export class HttpRpcHandler {
       typeof envelope.message.type !== "string"
     ) {
       writeJson(res, 400, { error: "Expected an RpcEnvelope body with a message" });
-      releaseTransport();
       return;
     }
     if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
       writeJson(res, 403, { error: WORKSPACE_RPC_NOT_ADMITTED, code: "EACCES" });
-      releaseTransport();
       return;
     }
     // Caller fields are self-reported until replaced by transport admission.
@@ -181,7 +171,6 @@ export class HttpRpcHandler {
       } catch (error) {
         writeJson(res, 200, { error: error instanceof Error ? error.message : String(error) });
       }
-      releaseTransport();
       return;
     }
 
@@ -196,13 +185,11 @@ export class HttpRpcHandler {
         // exists.
         writeJson(res, 409, { error: "RPC request is not active" });
       }
-      releaseTransport();
       return;
     }
 
     if (message.type !== "request") {
       writeJson(res, 400, { error: `Unsupported /rpc message type: ${message.type}` });
-      releaseTransport();
       return;
     }
 
@@ -269,7 +256,6 @@ export class HttpRpcHandler {
       if (this.activeRequests.get(requestKey) === abort) {
         this.activeRequests.delete(requestKey);
       }
-      releaseTransport();
     }
   }
 }
