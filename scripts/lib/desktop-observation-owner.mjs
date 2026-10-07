@@ -1,25 +1,37 @@
 /** Own original Electron observations until they settle or their actual app closes. */
 export function createDesktopObservationOwner() {
   let sealed = false;
-  const pending = new Set();
+  const pending = new Map();
+  const recent = [];
+  let pendingAtRetirement = [];
+  const settle = (operation, status) => {
+    const observation = pending.get(operation);
+    pending.delete(operation);
+    recent.push({ ...observation, status, settledAt: new Date().toISOString() });
+    if (recent.length > 20) recent.shift();
+  };
   return {
-    observe(read) {
+    observe(read, label = "Electron observation") {
       if (sealed) throw new Error("Desktop observation owner is stopping");
       const operation = Promise.resolve().then(read);
-      pending.add(operation);
+      pending.set(operation, { label, startedAt: new Date().toISOString() });
       void operation.then(
-        () => pending.delete(operation),
-        () => pending.delete(operation)
+        () => settle(operation, "fulfilled"),
+        () => settle(operation, "rejected")
       );
       return operation;
     },
     seal() {
+      if (!sealed) pendingAtRetirement = [...pending.values()];
       sealed = true;
+    },
+    snapshot() {
+      return { sealed, pending: [...pending.values()], pendingAtRetirement, recent: [...recent] };
     },
     async join() {
       // The app owner closes the real target first, settling every original read.
       // Read failures belong to their callers, rather than becoming cleanup debt.
-      await Promise.allSettled([...pending]);
+      await Promise.allSettled([...pending.keys()]);
     },
   };
 }

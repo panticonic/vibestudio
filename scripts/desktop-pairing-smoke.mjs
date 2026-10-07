@@ -312,7 +312,7 @@ async function runBrowserImportApprovalAcceptance(app, workspaceId, deadline) {
 function evaluateElectron(app, pageFunction, arg, label) {
   const owner = desktopObservationOwners.get(app);
   if (!owner) throw new Error(`Desktop observation lost its app owner while ${label}`);
-  return owner.observe(() => app.evaluate(pageFunction, arg));
+  return owner.observe(() => app.evaluate(pageFunction, arg), label);
 }
 
 /**
@@ -1153,6 +1153,15 @@ async function getHostViewDebugInfo(app) {
 
 const desktopAssetFailures = new WeakMap();
 const desktopObservedPanels = new WeakMap();
+const desktopObservedReadiness = new WeakMap();
+
+function retainPanelReadiness(app, phase, observation) {
+  const previous = desktopObservedReadiness.get(app);
+  const current = { phase, observation };
+  if (JSON.stringify(previous?.state) === JSON.stringify(current)) return;
+  desktopObservedReadiness.set(app, { observedAt: new Date().toISOString(), state: current });
+  console.log(`[desktop-smoke] Native panel readiness: ${JSON.stringify(current)}`);
+}
 
 async function captureDesktopFailureDiagnostics(app, failure) {
   const reads = [
@@ -1254,6 +1263,8 @@ async function captureDesktopFailureDiagnostics(app, failure) {
     failure: failure instanceof Error ? failure.message : String(failure),
     assetFailures: desktopAssetFailures.get(app) ?? [],
     lastPanelObservation: desktopObservedPanels.get(app) ?? null,
+    lastNativeReadiness: desktopObservedReadiness.get(app) ?? null,
+    observationOwnership: desktopObservationOwners.get(app)?.snapshot() ?? null,
   };
   observations.forEach((observation, index) => {
     packet[names[index]] =
@@ -2045,6 +2056,7 @@ async function waitForSystemNewPanel(app, timeoutMs) {
       continue;
     }
 
+    retainPanelReadiness(app, "System New", latest);
     if (latest.initializationFailure) {
       throw new Error(
         `Desktop panel initialization failed: ${JSON.stringify(latest.initializationFailure)}`
@@ -2185,6 +2197,7 @@ async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
       continue;
     }
     latest = observation;
+    retainPanelReadiness(app, "created panel", latest);
     if (latest.initializationFailure) {
       throw new Error(
         `New panel initialization failed: ${JSON.stringify(latest.initializationFailure)}`

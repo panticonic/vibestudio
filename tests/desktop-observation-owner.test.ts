@@ -13,9 +13,12 @@ it("retains the original observation until real target closure settles it", asyn
   const original = new Promise<never>((_, reject) => {
     closeTarget = reject;
   });
-  const read = owner.observe(() => original);
+  const read = owner.observe(() => original, "reading created panel readiness");
   let joined = false;
   owner.seal();
+  expect(owner.snapshot().pendingAtRetirement).toEqual([
+    { label: "reading created panel readiness", startedAt: expect.any(String) },
+  ]);
   const join = owner.join().then(() => {
     joined = true;
   });
@@ -27,6 +30,11 @@ it("retains the original observation until real target closure settles it", asyn
   await expect(read).rejects.toBe(targetClosed);
   await join;
   expect(joined).toBe(true);
+  expect(owner.snapshot()).toMatchObject({
+    pending: [],
+    pendingAtRetirement: [{ label: "reading created panel readiness" }],
+    recent: [{ label: "reading created panel readiness", status: "rejected" }],
+  });
 });
 
 it("propagates an original observation failure without inventing cleanup debt", async () => {
