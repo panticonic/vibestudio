@@ -337,7 +337,7 @@ jobs:
             mkdir -p test-results/desktop-pairing-smoke
             sudo tcpdump -i lo0 -n -l -tttt 'tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0' > test-results/desktop-pairing-smoke/transport-diagnostics.log 2>&1 &
             capture_pid=$!
-            trap 'sudo kill -INT "$capture_pid"; wait "$capture_pid" || true' EXIT
+            trap 'sudo kill -TERM "$capture_pid"; wait "$capture_pid" || true' EXIT
           fi
           node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
 

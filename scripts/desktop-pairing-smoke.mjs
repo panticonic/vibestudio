@@ -1462,6 +1462,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 configuredPrompt: args.seed?.openingRequest === initialPrompt,
                 configuredSystemPrompt: typeof args.systemPrompt === "string" &&
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
+                deliveryError: document.querySelector('[data-testid="pending-delivery-queue"] [role="alert"]')?.textContent ?? null,
                 openingRequestReady: [...document.querySelectorAll('[data-message-role="player"]')]
                   .some((message) => message.textContent.includes(initialPrompt)),
                 introductoryVideoReady: document.body.innerText.includes("Load video: An introduction to Vibestudio and a live demo"),
@@ -1501,6 +1502,8 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
         }
         let history;
         if (expectedSource === "panels/chat") {
+          if (rendered.deliveryError)
+            throw new Error(`Initial chat delivery failed: ${rendered.deliveryError}`);
           if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
           // A fresh account has no model credential. Its next actionable step
