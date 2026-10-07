@@ -11,6 +11,40 @@ describe("Gateway lifecycle", () => {
     gateway = null;
   });
 
+  it("retains a completed loader connection until its owner retires it", async () => {
+    gateway = new Gateway({
+      externalHost: "127.0.0.1",
+      tokenManager: {} as never,
+      getWorkerHost: () =>
+        ({
+          getLoaderSecret: () => "fixture-loader",
+          getDoVersion: () => "fixture-version",
+        }) as never,
+    });
+    const port = await gateway.start(0);
+    const socket = createConnection(port, "127.0.0.1");
+    await once(socket, "connect");
+    const request = async () => {
+      const received = once(socket, "data");
+      socket.write(
+        "GET /_doversion/source/Class HTTP/1.1\r\nHost: localhost\r\nX-Vibestudio-Loader-Secret: fixture-loader\r\n\r\n"
+      );
+      const [data] = await received;
+      expect(data.toString()).toContain("200 OK");
+      expect(data.toString()).toContain('"version":"fixture-version"');
+    };
+    await request();
+    // Cross Node's default five-second keep-alive expiry and its one-second
+    // buffer. A slow workerd consumer must retain this completed connection
+    // until it closes it or the owning gateway stops.
+    await new Promise((resolve) => setTimeout(resolve, 7_000));
+    expect(socket.destroyed).toBe(false);
+    await request();
+    const closed = once(socket, "close");
+    await gateway.stop();
+    await closed;
+  }, 15_000);
+
   it("owns and closes an idle connection during stop", async () => {
     gateway = new Gateway({
       externalHost: "127.0.0.1",

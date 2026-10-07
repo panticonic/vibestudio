@@ -530,6 +530,11 @@ export class Gateway {
     // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
     // reach is the Iroh pipe, co-located reach is loopback WS.
     const server = createServer(requestHandler);
+    // Workerd pools loader/RPC connections and can be busy when an idle
+    // socket expires. Reusing that socket then loses the next invocation.
+    // Gateway connections belong to their client and this gateway generation;
+    // stop() explicitly closes them instead of an elapsed idle interval.
+    server.keepAliveTimeout = 0;
     this.server = server;
 
     // `server.close()` stops new connections but deliberately leaves upgraded
