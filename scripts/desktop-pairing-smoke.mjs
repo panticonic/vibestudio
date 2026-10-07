@@ -1462,8 +1462,8 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 configuredPrompt: args.seed?.openingRequest === initialPrompt,
                 configuredSystemPrompt: typeof args.systemPrompt === "string" &&
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
-                openingRequestReady: Boolean(document.querySelector('[data-testid="pending-delivery-queue"]')
-                  ?.textContent.includes(initialPrompt)),
+                openingRequestReady: [...document.querySelectorAll('[data-message-role="player"]')]
+                  .some((message) => message.textContent.includes(initialPrompt)),
                 introductoryVideoReady: document.body.innerText.includes("Load video: An introduction to Vibestudio and a live demo"),
                 credentialSetupReady: Boolean(connect?.querySelector("button:not([disabled])"))
               };
@@ -1560,7 +1560,8 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
           ...(history
             ? { history }
             : {
-                submittedPrompt: rendered.submittedPrompt,
+                openingRequestReady: rendered.openingRequestReady,
+                introductoryVideoReady: rendered.introductoryVideoReady,
                 credentialSetupReady: rendered.credentialSetupReady,
               }),
           screenshotPath,
