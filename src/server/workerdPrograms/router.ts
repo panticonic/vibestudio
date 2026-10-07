@@ -29,7 +29,11 @@ async function fetchDurableObject(stub: DurableObjectStub, request: Request): Pr
   } catch (error) {
     // Native HTTP can close without a response for a disconnected service
     // binding. Preserve its original failure in the owning runtime's log.
-    console.error("Durable Object ingress failed", new URL(request.url).pathname, error);
+    console.error(
+      "Durable Object ingress failed",
+      new URL(request.url).pathname,
+      error instanceof Error ? (error.stack ?? error.message) : error
+    );
     throw error;
   }
 }

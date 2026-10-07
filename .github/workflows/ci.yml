@@ -341,6 +341,15 @@ jobs:
           fi
           node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
 
+      - name: Retain native HTTP connection evidence
+        if: ${{ !cancelled() && runner.os == 'macOS' && (steps.desktop_smoke.outcome == 'success' || steps.desktop_smoke.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-http-connections-${{ matrix.target }}-${{ matrix.runner }}
+          path: test-results/desktop-pairing-smoke/transport-diagnostics.log
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Retain desktop onboarding failure evidence
         if: ${{ !cancelled() && steps.desktop_smoke.outcome == 'failure' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -348,7 +357,6 @@ jobs:
           name: desktop-onboarding-diagnostics-${{ matrix.target }}-${{ matrix.runner }}
           path: |
             test-results/desktop-pairing-smoke/*diagnostics-*.json
-            test-results/desktop-pairing-smoke/transport-diagnostics.log
             test-results/desktop-pairing-smoke/desktop-*.png
           if-no-files-found: warn
           retention-days: 3

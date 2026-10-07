@@ -21,6 +21,19 @@ interface LoadedFacetClass {
   class: DurableObjectClass;
 }
 
+async function fetchLoader(gateway: Fetcher, request: Request): Promise<Response> {
+  try {
+    return await gateway.fetch(request);
+  } catch (error) {
+    console.error(
+      "Durable Object loader request failed",
+      new URL(request.url).pathname,
+      error instanceof Error ? (error.stack ?? error.message) : error
+    );
+    throw error;
+  }
+}
+
 type EgressExports = Cloudflare.Exports & {
   EgressGateway(options: { props: EgressProps }): Fetcher;
 };
@@ -73,7 +86,8 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
 
     const promise = (async (): Promise<LoadedFacetClass> => {
       const identity = `${args.source}:${args.className}`;
-      const codeResponse = await this.env.GATEWAY.fetch(
+      const codeResponse = await fetchLoader(
+        this.env.GATEWAY,
         new Request(
           `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
             `?objectKey=${encodeURIComponent(args.userKey)}`,
@@ -165,7 +179,8 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     const identity = `${source}:${className}`;
     const egressIdentity = `do:${identity}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
-    const versionResponse = await this.env.GATEWAY.fetch(
+    const versionResponse = await fetchLoader(
+      this.env.GATEWAY,
       new Request(
         `http://gateway/_doversion/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
           `?objectKey=${encodeURIComponent(userKey)}`,
@@ -217,6 +232,13 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
           headers: { "Retry-After": "1" },
         });
       }
+      console.error(
+        "Durable Object facet request failed",
+        identity,
+        userKey,
+        innerRest.join("/"),
+        error instanceof Error ? (error.stack ?? error.message) : error
+      );
       throw error;
     }
   }
