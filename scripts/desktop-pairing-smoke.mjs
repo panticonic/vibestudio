@@ -1459,11 +1459,12 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
               return {
                 source: window.__vibestudioSourceRepo,
                 text: document.body.innerText,
-                configuredPrompt: args.initialPrompt === initialPrompt,
+                configuredPrompt: args.seed?.openingRequest === initialPrompt,
                 configuredSystemPrompt: typeof args.systemPrompt === "string" &&
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
-                submittedPrompt: [...document.querySelectorAll('[data-message-role="player"]')]
-                  .some((message) => message.textContent.includes(initialPrompt)),
+                openingRequestReady: Boolean(document.querySelector('[data-testid="pending-delivery-queue"]')
+                  ?.textContent.includes(initialPrompt)),
+                introductoryVideoReady: document.body.innerText.includes("Load video: An introduction to Vibestudio and a live demo"),
                 credentialSetupReady: Boolean(connect?.querySelector("button:not([disabled])"))
               };
             })()`);
@@ -1486,7 +1487,8 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
           source: rendered.source,
           configuredPrompt: rendered.configuredPrompt,
           configuredSystemPrompt: rendered.configuredSystemPrompt,
-          submittedPrompt: rendered.submittedPrompt,
+          openingRequestReady: rendered.openingRequestReady,
+          introductoryVideoReady: rendered.introductoryVideoReady,
           credentialSetupReady: rendered.credentialSetupReady,
         };
         if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
@@ -1503,7 +1505,11 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
           // A fresh account has no model credential. Its next actionable step
           // must be visible without requiring an AI turn to complete first.
-          if (!rendered.submittedPrompt || !rendered.credentialSetupReady) {
+          if (
+            !rendered.openingRequestReady ||
+            !rendered.introductoryVideoReady ||
+            !rendered.credentialSetupReady
+          ) {
             await sleep(500);
             continue;
           }
