@@ -187,6 +187,9 @@ export async function collectStartupHostReuseFindings(appRoot, userlandRoot) {
     const source = typeof entry === "string" ? entry : entry?.source;
     if (typeof source === "string") sources.add(source);
   }
+  for (const entry of Object.values(config?.defaultAutomations ?? {})) {
+    if (typeof entry?.source === "string") sources.add(entry.source);
+  }
 
   const { discoverPackageGraph } = await import("../src/server/buildV2/packageGraph.js");
   const {

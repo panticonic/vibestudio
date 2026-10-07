@@ -78,6 +78,7 @@ describe("collectStartupHostReuseFindings", () => {
       fs.mkdirSync(path.join(base, "meta"), { recursive: true });
       fs.mkdirSync(path.join(base, "apps", "shell"), { recursive: true });
       fs.mkdirSync(path.join(base, "panels", "chat"), { recursive: true });
+      fs.mkdirSync(path.join(base, "workers", "agent-worker"), { recursive: true });
       fs.writeFileSync(
         path.join(base, "meta", "vibestudio.yml"),
         [
@@ -86,6 +87,9 @@ describe("collectStartupHostReuseFindings", () => {
           "    app: apps/shell",
           "initPanels:",
           "  - source: panels/chat",
+          "defaultAutomations:",
+          "  welcome:",
+          "    source: workers/agent-worker",
           "",
         ].join("\n")
       );
@@ -102,6 +106,13 @@ describe("collectStartupHostReuseFindings", () => {
         JSON.stringify({ name: "@workspace-panels/chat", dependencies: { zod: "^3.25.76" } })
       );
       fs.writeFileSync(
+        path.join(base, "workers", "agent-worker", "package.json"),
+        JSON.stringify({
+          name: "@workspace-workers/agent-worker",
+          dependencies: { "@sinclair/typebox": "^0.27.12" },
+        })
+      );
+      fs.writeFileSync(
         path.join(host, "package.json"),
         JSON.stringify({ dependencies: { react: "^19.0.0" } })
       );
@@ -113,11 +124,23 @@ describe("collectStartupHostReuseFindings", () => {
           incompatible: [],
           policies: [],
         },
+        {
+          unitPath: "workers/agent-worker",
+          missing: ["@sinclair/typebox@^0.27.12"],
+          incompatible: [],
+          policies: [],
+        },
       ]);
 
       fs.writeFileSync(
         path.join(host, "package.json"),
-        JSON.stringify({ dependencies: { react: "^19.0.0", zod: "^3.25.76" } })
+        JSON.stringify({
+          dependencies: {
+            react: "^19.0.0",
+            zod: "^3.25.76",
+            "@sinclair/typebox": "^0.27.12",
+          },
+        })
       );
       await expect(collectStartupHostReuseFindings(host, base)).resolves.toEqual([]);
     } finally {
