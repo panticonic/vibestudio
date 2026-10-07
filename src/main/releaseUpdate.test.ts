@@ -30,7 +30,7 @@ describe("release discovery", () => {
 });
 
 describe("update delivery", () => {
-  const upgrade = linuxUpgradeCommandFor("deb")!;
+  const upgrade = linuxUpgradeCommandFor({ manager: "deb", name: "vibestudio" })!;
 
   const base = {
     packaged: true,
@@ -84,7 +84,10 @@ describe("update delivery", () => {
 
   it("runs each package manager as root without a nested privilege prefix", () => {
     for (const owner of ["deb", "rpm", "pacman"] as const) {
-      const command = linuxUpgradeCommandFor(owner)!;
+      const command = linuxUpgradeCommandFor({
+        manager: owner,
+        name: owner === "rpm" ? "Vibestudio" : "vibestudio",
+      })!;
       expect(command.display).toContain("sudo");
       expect(command.argv.join(" ")).not.toContain("sudo");
       // polkit collects the only consent available, so the manager must not
@@ -92,6 +95,12 @@ describe("update delivery", () => {
       expect(command.argv.join(" ")).toMatch(/-y|--noconfirm/u);
     }
     expect(linuxUpgradeCommandFor(null)).toBeNull();
+  });
+
+  it("targets the installed RPM identity without changing its case", () => {
+    const command = linuxUpgradeCommandFor({ manager: "rpm", name: "Vibestudio" })!;
+    expect(command.argv).toEqual(["dnf", "upgrade", "--refresh", "-y", "Vibestudio"]);
+    expect(command.display).toBe("sudo dnf upgrade --refresh 'Vibestudio'");
   });
 });
 
@@ -109,7 +118,7 @@ function harness(
     packaged: true,
     prepareInstall: async () => {},
     platform: "linux",
-    linuxUpgrade: () => linuxUpgradeCommandFor("deb"),
+    linuxUpgrade: () => linuxUpgradeCommandFor({ manager: "deb", name: "vibestudio" }),
     canElevate: () => true,
     runCommand: async () => ({ code: 0, stderr: "" }),
     installedVersion: async () => "0.2.0",
@@ -191,7 +200,9 @@ describe("release update controller", () => {
       "desktop-release-update",
       "desktop-release-update-copy-command"
     );
-    expect(writeClipboard).toHaveBeenCalledWith(linuxUpgradeCommandFor("deb")!.display);
+    expect(writeClipboard).toHaveBeenCalledWith(
+      linuxUpgradeCommandFor({ manager: "deb", name: "vibestudio" })!.display
+    );
     expect(runCommand).not.toHaveBeenCalled();
     controller!.stop();
   });
@@ -273,7 +284,7 @@ describe("release update controller", () => {
     await controller!.checkNow("startup");
 
     const shown = emitted.find((entry) => entry.event === "notification:show");
-    expect(String(shown?.payload["message"])).toContain("apt install --only-upgrade vibestudio");
+    expect(String(shown?.payload["message"])).toContain("apt install --only-upgrade 'vibestudio'");
   });
 
   it("asks for a restart after the package manager succeeds", async () => {

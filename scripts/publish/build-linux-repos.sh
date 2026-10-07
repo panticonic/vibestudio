@@ -277,7 +277,7 @@ gpgcheck=1
 repo_gpgcheck=1
 gpgkey=$BASE_URL/gpg.key
 REPO
-sudo dnf install vibestudio</code></pre>
+sudo dnf install Vibestudio</code></pre>
        </article>
      </div>
      <aside class="arch"><strong>Arch Linux</strong><p>Download the Arch package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>

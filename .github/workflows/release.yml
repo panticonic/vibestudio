@@ -64,7 +64,7 @@ jobs:
             ```sh
             sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
             sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
-            sudo dnf install vibestudio
+            sudo dnf install Vibestudio
             ```
 
             **macOS** — [download the DMG](https://vibestudio.app/download/mac) (Apple Silicon, macOS 14+)

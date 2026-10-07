@@ -95,7 +95,7 @@ sudo apt update && sudo apt install vibestudio
 ```bash
 sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
 sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
-sudo dnf install vibestudio
+sudo dnf install Vibestudio
 ```
 
 **Windows**: run the `.exe` installer from the

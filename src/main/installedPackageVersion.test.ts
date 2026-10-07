@@ -23,7 +23,11 @@ describe("installed package version", () => {
     ["brew", "vibestudio 0.2.0\n", "0.2.0"],
   ] as const)("reads the installed version from %s", async (owner, output, expected) => {
     const child = query();
-    const version = installedPackageVersion(owner);
+    const version = installedPackageVersion(
+      owner === "brew"
+        ? { manager: "brew", name: "vibestudio", executable: "/opt/homebrew/bin/brew" }
+        : { manager: owner, name: owner === "rpm" ? "Vibestudio" : "vibestudio" }
+    );
     child.stdout.write(output);
     child.emit("close", 0);
     expect(await version).toBe(expected);
@@ -31,15 +35,27 @@ describe("installed package version", () => {
 
   it("preserves database failures instead of declaring success", async () => {
     const child = query();
-    const version = installedPackageVersion("rpm");
+    const version = installedPackageVersion({ manager: "rpm", name: "Vibestudio" });
     child.stderr.write("package vibestudio is not installed");
     child.emit("close", 1);
     await expect(version).rejects.toThrow("package vibestudio is not installed");
   });
 
+  it("queries the exact installed RPM identity", async () => {
+    const child = query();
+    const version = installedPackageVersion({ manager: "rpm", name: "Vibestudio" });
+    expect(vi.mocked(spawn).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "rpm",
+      ["-q", "--qf", "%{VERSION}", "Vibestudio"],
+    ]);
+    child.stdout.write("0.1.78");
+    child.emit("close", 0);
+    expect(await version).toBe("0.1.78");
+  });
+
   it("propagates the original launch failure", async () => {
     const child = query();
-    const version = installedPackageVersion("deb");
+    const version = installedPackageVersion({ manager: "deb", name: "vibestudio" });
     const error = new Error("dpkg-query could not be launched");
     child.emit("error", error);
     await expect(version).rejects.toBe(error);

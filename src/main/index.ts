@@ -42,6 +42,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { hasDeveloperIdSignature } from "@vibestudio/credential-client/macCodeSignature";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
 import { macCaskUpgrade } from "./macCaskUpgrade.js";
+import { detectLinuxPackageOwner } from "./linuxPackageOwner.js";
 import { installedPackageVersion } from "./installedPackageVersion.js";
 import {
   createReleaseUpdateController,
@@ -464,35 +465,6 @@ function finishPresentedStartup(): void {
   }
 
   deferredStartupWork?.();
-}
-
-/**
- * Which package manager owns this installation's own executable.
- *
- * Asked of the package databases rather than inferred from the distribution: a
- * host can carry several of these tools, and only the one that recorded our
- * files can upgrade them. Anything unexpected — a tarball, a checkout, a
- * container with no package database — answers null, and the updater then
- * offers no command rather than a wrong one.
- */
-function detectLinuxPackageOwner(executable: string): "deb" | "rpm" | "pacman" | null {
-  if (process.platform !== "linux") return null;
-  const probes: ReadonlyArray<{ owner: "deb" | "rpm" | "pacman"; argv: readonly string[] }> = [
-    { owner: "deb", argv: ["dpkg", "-S", executable] },
-    { owner: "rpm", argv: ["rpm", "-qf", executable] },
-    { owner: "pacman", argv: ["pacman", "-Qo", executable] },
-  ];
-  for (const probe of probes) {
-    const [command, ...args] = probe.argv;
-    if (!command) continue;
-    try {
-      const result = spawnSync(command, args, { timeout: 5_000, stdio: "ignore" });
-      if (result.status === 0) return probe.owner;
-    } catch {
-      // A missing tool is an answer, not an error: this host is not that kind.
-    }
-  }
-  return null;
 }
 
 /** The Homebrew upgrade for the installed cask, when brew is reachable. */
@@ -1893,7 +1865,9 @@ app.on("ready", async () => {
     installedVersion: async () => {
       if (process.platform === "darwin") {
         const brew = brewCaskUpgrade()?.argv[0];
-        return brew ? installedPackageVersion("brew", brew) : null;
+        return brew
+          ? installedPackageVersion({ manager: "brew", name: "vibestudio", executable: brew })
+          : null;
       }
       const owner = detectLinuxPackageOwner(app.getPath("exe"));
       return owner ? installedPackageVersion(owner) : null;

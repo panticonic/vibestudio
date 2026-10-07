@@ -1,17 +1,29 @@
+import type { LinuxPackageOwner } from "./linuxPackageOwner.js";
 import { spawn } from "node:child_process";
 
 /** Query the package database after upgrading, rather than trusting exit zero. */
 export function installedPackageVersion(
-  owner: "deb" | "rpm" | "pacman" | "brew",
-  brew = "/opt/homebrew/bin/brew"
+  owner:
+    | LinuxPackageOwner
+    | {
+        manager: "brew";
+        name: string;
+        executable: string;
+      }
 ): Promise<string | null> {
   const queries = {
-    deb: ["dpkg-query", "-W", "-f=${Version}", "vibestudio"],
-    rpm: ["rpm", "-q", "--qf", "%{VERSION}", "vibestudio"],
-    pacman: ["pacman", "-Q", "vibestudio"],
-    brew: [brew, "list", "--versions", "--cask", "vibestudio"],
+    deb: ["dpkg-query", "-W", "-f=${Version}", owner.name],
+    rpm: ["rpm", "-q", "--qf", "%{VERSION}", owner.name],
+    pacman: ["pacman", "-Q", owner.name],
+    brew: [
+      owner.manager === "brew" ? owner.executable : "",
+      "list",
+      "--versions",
+      "--cask",
+      owner.name,
+    ],
   };
-  const [command, ...args] = queries[owner];
+  const [command, ...args] = queries[owner.manager];
   if (!command) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -35,7 +47,9 @@ export function installedPackageVersion(
         );
         return;
       }
-      const version = output.trim().replace(/^vibestudio\s+/u, "");
+      const value = output.trim();
+      const prefix = `${owner.name} `;
+      const version = value.startsWith(prefix) ? value.slice(prefix.length).trim() : value;
       resolve(version || null);
     });
   });

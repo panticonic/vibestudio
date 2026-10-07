@@ -1,3 +1,4 @@
+import type { LinuxPackageOwner } from "./linuxPackageOwner.js";
 import { clipboard } from "electron";
 import semver from "semver";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -121,24 +122,24 @@ export interface ReleaseUpdateControllerDeps {
  * there is to collect, and a hidden apt question would hang a GUI action with
  * nothing to answer it. `display` keeps the `sudo` form a person would type.
  */
-export function linuxUpgradeCommandFor(
-  owner: "deb" | "rpm" | "pacman" | null
-): LinuxUpgrade | null {
-  switch (owner) {
+export function linuxUpgradeCommandFor(owner: LinuxPackageOwner | null): LinuxUpgrade | null {
+  if (!owner) return null;
+  const name = `'${owner.name.replaceAll("'", "'\\''")}'`;
+  switch (owner.manager) {
     case "deb":
       return {
-        display: "sudo apt update && sudo apt install --only-upgrade vibestudio",
-        argv: ["sh", "-lc", "apt-get update && apt-get install --only-upgrade -y vibestudio"],
+        display: `sudo apt update && sudo apt install --only-upgrade ${name}`,
+        argv: ["sh", "-lc", `apt-get update && apt-get install --only-upgrade -y ${name}`],
       };
     case "rpm":
       return {
-        display: "sudo dnf upgrade --refresh vibestudio",
-        argv: ["sh", "-lc", "dnf upgrade --refresh -y vibestudio"],
+        display: `sudo dnf upgrade --refresh ${name}`,
+        argv: ["dnf", "upgrade", "--refresh", "-y", owner.name],
       };
     case "pacman":
       return {
-        display: "sudo pacman -Syu vibestudio",
-        argv: ["sh", "-lc", "pacman -Syu --noconfirm vibestudio"],
+        display: `sudo pacman -Syu ${name}`,
+        argv: ["pacman", "-Syu", "--noconfirm", owner.name],
       };
     default:
       return null;
