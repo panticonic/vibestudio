@@ -330,7 +330,16 @@ jobs:
         id: desktop_smoke
         if: ${{ !cancelled() && steps.desktop_templates.outcome == 'success' }}
         shell: bash
-        run: node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
+        run: |
+          # Retain transport metadata for intermittent native HTTP disconnects.
+          # No packet payloads, headers, or credentials are captured.
+          if [ "${{ runner.os }}" = macOS ]; then
+            mkdir -p test-results/desktop-pairing-smoke
+            sudo tcpdump -i lo0 -n -l -tttt 'tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0' > test-results/desktop-pairing-smoke/transport-diagnostics.log 2>&1 &
+            capture_pid=$!
+            trap 'sudo kill -INT "$capture_pid"; wait "$capture_pid" || true' EXIT
+          fi
+          node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
 
       - name: Retain desktop onboarding failure evidence
         if: ${{ !cancelled() && steps.desktop_smoke.outcome == 'failure' }}
@@ -339,6 +348,7 @@ jobs:
           name: desktop-onboarding-diagnostics-${{ matrix.target }}-${{ matrix.runner }}
           path: |
             test-results/desktop-pairing-smoke/*diagnostics-*.json
+            test-results/desktop-pairing-smoke/transport-diagnostics.log
             test-results/desktop-pairing-smoke/desktop-*.png
           if-no-files-found: warn
           retention-days: 3

@@ -23,6 +23,17 @@ function isDurableObjectNamespace(
   );
 }
 
+async function fetchDurableObject(stub: DurableObjectStub, request: Request): Promise<Response> {
+  try {
+    return await stub.fetch(request);
+  } catch (error) {
+    // Native HTTP can close without a response for a disconnected service
+    // binding. Preserve its original failure in the owning runtime's log.
+    console.error("Durable Object ingress failed", new URL(request.url).pathname, error);
+    throw error;
+  }
+}
+
 const router: ExportedHandler<RouterEnv> = {
   async fetch(request, env): Promise<Response> {
     const expectedAuth = `Bearer ${env.WORKERD_GATEWAY_TOKEN}`;
@@ -97,7 +108,7 @@ const router: ExportedHandler<RouterEnv> = {
           url.origin
         );
         doUrl.search = url.search;
-        return stub.fetch(new Request(doUrl, strippedRequest));
+        return fetchDurableObject(stub, new Request(doUrl, strippedRequest));
       }
       return new Response(`DO class not found for route: ${parts.slice(1).join("/")}`, {
         status: 404,
@@ -119,7 +130,7 @@ const router: ExportedHandler<RouterEnv> = {
         url.origin
       );
       doUrl.search = url.search;
-      return stub.fetch(new Request(doUrl, strippedRequest));
+      return fetchDurableObject(stub, new Request(doUrl, strippedRequest));
     }
 
     // All non-DO traffic reaches the static worker host, which parses parts[0]
