@@ -17,6 +17,9 @@ on:
       - .github/workflows/linux-repositories.yml
       - scripts/publish/build-linux-repos.sh
       - scripts/publish/build-apt-indices.sh
+      - scripts/publish/verify-rpm-signatures.sh
+      - scripts/publish/sign-linux-installers.sh
+      - scripts/publish/test-linux-repos.sh
 
 permissions: {}
 
@@ -38,6 +41,7 @@ jobs:
           persist-credentials: false
 
       - name: Download published Linux installers
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.release-tag }}
@@ -53,6 +57,7 @@ jobs:
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release \
             --pattern '*.deb' --pattern '*.rpm' --pattern '*.pkg.tar.zst' --pattern SHA256SUMS-linux
           printf 'Publishing repositories for %s\n' "$tag"
+          printf 'assets_url=https://github.com/%s/releases/download/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Verify published installer checksums
         working-directory: release
@@ -62,6 +67,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y apt-utils dpkg-dev createrepo-c rpm
+
+      - name: Verify repository publication contracts
+        run: bash scripts/publish/test-linux-repos.sh
 
       - name: Import the package signing key
         env:
@@ -77,7 +85,7 @@ jobs:
       - name: Build signed apt and dnf repositories
         env:
           SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
-        run: bash scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}"
+        run: bash scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}" "${{ steps.release.outputs.assets_url }}"
 
       - name: Upload the repository site
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

@@ -191,6 +191,23 @@ jobs:
         working-directory: release
         run: sha256sum --check SHA256SUMS-linux
 
+      - name: Checkout package publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: publisher
+
+      - name: Sign the canonical RPM installers
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+          SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y rpm
+          test -n "$LINUX_SIGNING_KEY"
+          printf '%s' "$LINUX_SIGNING_KEY" | gpg --batch --import
+          bash publisher/scripts/publish/sign-linux-installers.sh release
+
       - name: Attach Linux installers to the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:

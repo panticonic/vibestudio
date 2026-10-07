@@ -16,6 +16,7 @@ set -euo pipefail
 RELEASE_DIR=${1:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 OUTPUT_DIR=${2:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 BASE_URL=${3:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
+PACKAGE_BASE_URL=${4:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url> <release-assets-url>}
 SIGNING_KEY=${SIGNING_KEY:-packages@vibestudio.app}
 SUITE=${SUITE:-stable}
 COMPONENT=main
@@ -88,15 +89,14 @@ done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.rpm' -print0)
 
 if [ "$rpm_count" -gt 0 ]; then
   require createrepo_c
-  # Sign the packages themselves as well as the index: dnf verifies package
-  # signatures independently of repository metadata.
-  if command -v rpm >/dev/null 2>&1; then
-    rpm --define "_gpg_name $SIGNING_KEY" --addsign "$RPM_ROOT"/*.rpm >/dev/null
-    log "signed $rpm_count rpm(s)"
-  fi
-  createrepo_c --quiet "$RPM_ROOT"
+  require rpm
+  bash "$SCRIPT_ROOT/scripts/publish/verify-rpm-signatures.sh" "$RPM_ROOT"
+  # DNF reads the signed index here and fetches the exact, already signed release
+  # assets. Hosting a second copy would exceed GitHub Pages' 1 GB site limit.
+  createrepo_c --quiet --baseurl "${PACKAGE_BASE_URL%/}/" "$RPM_ROOT"
   gpg --batch --yes --local-user "$SIGNING_KEY" \
     --detach-sign --armor "$RPM_ROOT/repodata/repomd.xml"
+  rm "$RPM_ROOT"/*.rpm
   log "signed dnf metadata"
 else
   log "no .rpm found; skipping the dnf repository"
@@ -289,3 +289,12 @@ sudo dnf install vibestudio</code></pre>
 HTML
 
 log "repositories written to $OUTPUT_DIR"
+
+# GitHub Pages permits at most 1 GB per published site.
+# https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
+site_bytes=$(find "$OUTPUT_DIR" -type f -printf '%s\n' | awk '{ total += $1 } END { printf "%.0f", total }')
+if [ "$site_bytes" -gt 1000000000 ]; then
+  log "site is $site_bytes bytes; exceeds GitHub Pages' 1 GB limit"
+  exit 1
+fi
+log "site size: $site_bytes bytes"
