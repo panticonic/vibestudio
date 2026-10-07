@@ -206,6 +206,40 @@ describe("runNpmInstall", () => {
     expect(readAttempts(fixture.installDir)).toHaveLength(1);
   });
 
+  it("retains the failed phase and bounded npm diagnostics before retiring private logs", async () => {
+    const fixture = createFakeNpmFixture();
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const restoreEnv = replaceEnv({
+      VIBESTUDIO_NPM_INSTALLER_TEST_ERROR: "npm error code E401: authentication required",
+      npmLog: "x".repeat(8_000) + " last registry operation",
+    });
+    try {
+      await expect(
+        runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot })
+      ).rejects.toMatchObject({
+        code: 1,
+        npmPhase: "resolve",
+        stderr: "npm error code E401: authentication required\n",
+      });
+    } finally {
+      restoreEnv();
+    }
+    const profiles = output.mock.calls.map(([line]) =>
+      JSON.parse(String(line).slice("[npm-install-profile] ".length))
+    );
+    expect(profiles[1]).toMatchObject({
+      phase: "resolve",
+      state: "failed",
+      code: 1,
+      timedOut: false,
+      stderr: "npm error code E401: authentication required\n",
+    });
+    expect(profiles[1].npmLogTail).toHaveLength(4_000);
+    expect(profiles[1].npmLogTail).toMatch(/ last registry operation$/);
+    const args = readAttempts(fixture.installDir)[0]!;
+    expect(fs.existsSync(args[args.indexOf("--logs-dir") + 1]!)).toBe(false);
+  });
+
   it("classifies registry package misses as dependency resolution failures", async () => {
     const fixture = createFakeNpmFixture();
     const restoreEnv = replaceEnv({
@@ -400,6 +434,11 @@ if ((control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE && attempts.length === 1) 
   process.exit(1);
 }
 if (control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR) {
+  if (control.npmLog) {
+    const logsDir = args[args.indexOf("--logs-dir") + 1];
+    fs.mkdirSync(logsDir, {recursive:true});
+    fs.writeFileSync(path.join(logsDir, "fixture-debug-0.log"), control.npmLog);
+  }
   process.stderr.write(control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR + "\\n");
   process.exit(1);
 }

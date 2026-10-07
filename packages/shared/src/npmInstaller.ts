@@ -141,11 +141,16 @@ async function runNpmInstallInSlot(
       installCacheDir: string,
       lockOnly = false
     ): Promise<void> => {
+      const phase = lockOnly ? "resolve" : command === "ci" ? "download" : "install";
+      const logsDir = path.join(stateRoot, "logs", randomUUID());
       const args = [
         npmCli,
         command,
         "--no-audit",
         "--no-fund",
+        "--timing",
+        "--logs-dir",
+        logsDir,
         // A closure is a declared set. Since npm 7 an unmet peer of a declared
         // package is installed on npm's own initiative at whatever version the
         // registry serves today, which puts a package in the tree that no
@@ -177,6 +182,8 @@ async function runNpmInstallInSlot(
       await assertNativePrerequisites({ installation, environment: launch.environment });
       resetInstall = false;
       await new Promise<void>((resolve, reject) => {
+        const startedAt = Date.now();
+        console.log(`[npm-install-profile] ${JSON.stringify({ phase, state: "started" })}`);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const child = execFile(
@@ -186,8 +193,24 @@ async function runNpmInstallInSlot(
             cwd: launch.cwd,
             env: launch.environment,
           },
-          (error) => {
+          (error, stdout, stderr) => {
             if (timeoutHandle) clearTimeout(timeoutHandle);
+            const profile = {
+              phase,
+              elapsedMs: Date.now() - startedAt,
+              state: error || timedOut ? "failed" : "completed",
+              ...(error || timedOut
+                ? {
+                    code: error?.code,
+                    signal: error?.signal,
+                    timedOut,
+                    stderr: stderr.slice(-4_000),
+                    npmLogTail: readNpmLogTail(logsDir),
+                  }
+                : {}),
+            };
+            console.log(`[npm-install-profile] ${JSON.stringify(profile)}`);
+            if (error) Object.assign(error, { stdout, stderr, npmPhase: phase });
             if (timedOut) {
               const timeoutError = error ?? new Error(`npm install timed out after ${timeout}ms`);
               Object.assign(timeoutError, { timedOut: true });
@@ -304,6 +327,25 @@ async function runNpmInstallInSlot(
     }
   } finally {
     nativeWorkspaceCleanup(options.appRoot)(utilityRoot);
+  }
+}
+
+function readNpmLogTail(logsDir: string): string {
+  try {
+    const log = fs.readdirSync(logsDir).find((name) => name.endsWith("-debug-0.log"));
+    if (!log) return "";
+    const file = fs.openSync(path.join(logsDir, log), "r");
+    try {
+      const size = fs.fstatSync(file).size;
+      const bytes = Buffer.alloc(Math.min(size, 4_000));
+      fs.readSync(file, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+      return bytes.toString("utf8");
+    } finally {
+      fs.closeSync(file);
+    }
+  } catch {
+    // Diagnostic collection must preserve the original process result.
+    return "";
   }
 }
 
