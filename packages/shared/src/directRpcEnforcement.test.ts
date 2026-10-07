@@ -390,6 +390,71 @@ describe("directRpcDenial", () => {
     ).toBeNull();
   });
 
+  it("admits committed host grants when the receiver clock precedes their audit timestamp", () => {
+    const host = `host:${"b".repeat(64)}` as const;
+    const audience = "do:vibestudio/internal:WorkspaceDO:ws";
+    const capability = "workspace.runtime-state.manage";
+    const effect = {
+      kind: "host-capability" as const,
+      capability,
+      resource: { kind: "receiver-object" as const },
+    };
+    const authorization = attestation({
+      audience,
+      method: "entityAdvanceExecution",
+      resourceKey: audience,
+      capability,
+      effect,
+      issuedAt: 101,
+      context: {
+        ...context,
+        authorizingOrigin: { kind: "host", principal: host },
+        host,
+        executingCode: null,
+      },
+      grants: [
+        {
+          subject: host,
+          capability,
+          resource: { kind: "exact", key: audience },
+          effect: "allow",
+          issuedBy: host,
+          createdAt: 101,
+          provenance: "reviewed-product-admission-v1",
+        },
+      ],
+    });
+    const input = {
+      kind: "call" as const,
+      method: "entityAdvanceExecution",
+      caller: null,
+      attestation: authorization,
+      declaration: {
+        website: { kind: "closed" as const, reason: "Internal runtime state" },
+        tier: "gated" as const,
+        principals: ["host" as const],
+        sensitivity: "write" as const,
+        effect,
+      },
+      audience,
+      resourceKey: audience,
+      capability,
+      now: 100,
+    };
+    expect(directRpcDenial(input)).toBeNull();
+    for (const state of [{ revokedAt: 100 }, { expiresAt: 100 }]) {
+      expect(
+        directRpcDenial({
+          ...input,
+          attestation: {
+            ...authorization,
+            grants: authorization.grants.map((grant) => ({ ...grant, ...state })),
+          },
+        })
+      ).toMatchObject({ code: "EACCES" });
+    }
+  });
+
   it("rejects a host effect stamp that differs from the sealed receiver declaration", () => {
     expect(
       directRpcDenial({

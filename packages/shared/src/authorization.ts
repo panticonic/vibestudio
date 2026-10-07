@@ -688,7 +688,8 @@ export function matchingAuthorityGrants(input: {
     (grant) =>
       input.subjects.has(grant.subject) &&
       capabilityPatternCovers(grant.capability, input.capability) &&
-      grant.createdAt <= now &&
+      // Creation records the committed grant's audit history, not a scheduled
+      // activation. Host and receiver clocks need not agree for it to apply.
       (grant.revokedAt === undefined || grant.revokedAt > now) &&
       (grant.expiresAt === undefined || grant.expiresAt > now) &&
       grantConstraintsMatch(
