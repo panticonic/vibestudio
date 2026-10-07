@@ -788,6 +788,55 @@ describe("WorkerdManager", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
+  it("leaves recovered retirement journals to the stopped generation collector", async () => {
+    const deps = createMockDeps();
+    const ref = {
+      source: "vibestudio/internal",
+      className: "EvalDO",
+      objectKey: "retired-before-restart",
+    };
+    const mgr = new WorkerdManager(deps);
+    type MaintenanceInternals = {
+      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
+      quiesceDurableObjectStorage(target: typeof ref): Promise<void>;
+      doMaintenanceRecovery: Promise<void>;
+    };
+    const failedCollection = vi
+      .spyOn(mgr as unknown as MaintenanceInternals, "destroyDurableObjectStorageFiles")
+      .mockRejectedValue(new Error("storage still owned"));
+    await mgr.destroyRetiredDOStorage(ref);
+    await expect(mgr.shutdown()).rejects.toThrow("shutdown failed");
+    expect(failedCollection).toHaveBeenCalledOnce();
+    failedCollection.mockRestore();
+
+    const quiesce = vi
+      .spyOn(
+        ProductWorkerdManager.prototype as unknown as MaintenanceInternals,
+        "quiesceDurableObjectStorage"
+      )
+      .mockResolvedValue(undefined);
+    const destroy = vi.spyOn(
+      ProductWorkerdManager.prototype as unknown as MaintenanceInternals,
+      "destroyDurableObjectStorageFiles"
+    );
+    const reopened = new WorkerdManager(deps);
+    let collectionCount = 0;
+    try {
+      await (reopened as unknown as MaintenanceInternals).doMaintenanceRecovery;
+      await expect(reopened.resetDOStorage(ref, "reset a retired object")).rejects.toThrow(
+        "belongs to the stopped generation collector"
+      );
+      expect(quiesce).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      await reopened.shutdown();
+      collectionCount = destroy.mock.calls.length;
+      quiesce.mockRestore();
+      destroy.mockRestore();
+    }
+    expect(collectionCount).toBe(1);
+  });
+
   it("binds the required process-owned egress secret", () => {
     const mgr = new WorkerdManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
 

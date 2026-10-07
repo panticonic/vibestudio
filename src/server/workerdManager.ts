@@ -734,8 +734,12 @@ export class WorkerdManager {
     const open = this.readOpenDurableObjectMaintenance();
     // Establish admission synchronously before any asynchronous recovery work.
     for (const row of open) void this.fenceDurableObjectMaintenance(row);
+    // Retirement belongs to the stopped generation collector. Recovering it
+    // here would race that collector with SQLite verification/replacement.
     this.doMaintenanceRecovery = Promise.all(
-      open.map((row) => this.resumeDurableObjectMaintenance(row))
+      open
+        .filter((row) => row.kind !== "destroy")
+        .map((row) => this.resumeDurableObjectMaintenance(row))
     )
       .then(() => undefined)
       .catch((error) => {
@@ -4187,6 +4191,11 @@ export class WorkerdManager {
   }
 
   private async resumeDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
+    if (row.kind === "destroy") {
+      throw new Error(
+        `Retired storage ${row.targetId} belongs to the stopped generation collector`
+      );
+    }
     const ref = { source: row.source, className: row.className, objectKey: row.objectKey };
     await this.fenceDurableObjectMaintenance(row);
     try {
@@ -4198,13 +4207,6 @@ export class WorkerdManager {
         await this.quiesceDurableObjectStorage(ref);
         this.updateDurableObjectMaintenance(row.operationId, "retired");
         row.step = "retired";
-      }
-      if (row.step === "retired") {
-        if (row.kind === "destroy") {
-          await this.destroyDurableObjectStorageFiles(ref);
-          this.acceptDurableObjectStorageReplacement(row);
-          row.step = "replaced";
-        }
       }
       if (row.step === "retired") {
         await this.copyDurableObjectStorageToBackup(
@@ -4597,9 +4599,9 @@ export class WorkerdManager {
     for (const result of schemaResults) {
       if (result.status === "rejected") failures.push(result.reason);
     }
-    // Internal-object destruction is a tombstone while the shared process is
-    // live. Once shutdown owns a stopped process, collect every tombstone and
-    // retain all failures rather than abandoning the rest of the sweep.
+    // stopWorkerd collected retirement journals after reaping the process.
+    // Clean up the remaining schema probe bookkeeping without recovering
+    // failed retirement through a second maintenance owner.
     if (!(this.process && this.process.exitCode === null)) {
       for (const [objectKey, probe] of this.schemaProbeBuilds) {
         await attempt(async () => {
@@ -4610,12 +4612,6 @@ export class WorkerdManager {
           });
           this.schemaProbeBuilds.delete(objectKey);
         });
-      }
-      const pendingDestructions = this.readOpenDurableObjectMaintenance().filter(
-        (row) => row.kind === "destroy"
-      );
-      for (const row of pendingDestructions) {
-        await attempt(() => this.resumeDurableObjectMaintenance(row));
       }
     }
 
