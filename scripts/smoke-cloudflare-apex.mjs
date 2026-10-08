@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 // Production smoke for the apex Vibestudio Worker.
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import * as path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 
 const DEFAULT_ORIGIN = "https://vibestudio.app";
 const BACKHAUL_TIMEOUT_MS = 10_000;
 
-try {
-  await main();
-} catch (error) {
-  console.error(
-    `[smoke:cloudflare:apex] ${error instanceof Error ? error.message : String(error)}`
-  );
-  process.exit(1);
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(
+      `[smoke:cloudflare:apex] ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  }
 }
 
 async function main() {
@@ -108,50 +112,144 @@ function normalizeOrigin(raw) {
   return url;
 }
 
-async function checkBackhaul(origin) {
+export async function checkBackhaul(origin) {
   const { publicKey, privateKey } = generateKeyPairSync("ec", {
     namedCurve: "prime256v1",
   });
   const publicKeyDer = publicKey.export({ type: "spki", format: "der" });
   const relayId = `rly_${createHash("sha256").update(publicKeyDer).digest("hex")}`;
-  const timestamp = String(Date.now());
-  const signature = sign("sha256", Buffer.from(`${relayId}\n${timestamp}`), {
-    key: privateKey,
-    dsaEncoding: "ieee-p1363",
-  }).toString("base64url");
-  const url = new URL(origin);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/backhaul";
-  url.search = new URLSearchParams({
-    relayId,
-    ts: timestamp,
-    key: publicKeyDer.toString("base64url"),
-    sig: signature,
-  }).toString();
-
   const subscriptionId = `smoke_${randomUUID().replaceAll("-", "")}`;
+  const backhaulUrl = () => {
+    const timestamp = String(Date.now());
+    const signature = sign("sha256", Buffer.from(`${relayId}\n${timestamp}`), {
+      key: privateKey,
+      dsaEncoding: "ieee-p1363",
+    }).toString("base64url");
+    const url = new URL(origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/backhaul";
+    url.search = new URLSearchParams({
+      relayId,
+      ts: timestamp,
+      key: publicKeyDer.toString("base64url"),
+      sig: signature,
+    }).toString();
+    return url;
+  };
+
+  let socket;
+  let registrationAttempted = false;
+  let unregistered = false;
+  let primaryError;
+  try {
+    socket = await openBackhaul(backhaulUrl());
+    registrationAttempted = true;
+    await exchangeBackhaulFrame(
+      socket,
+      { t: "register-webhook", subscriptionId },
+      "registered",
+      subscriptionId
+    );
+    await exchangeBackhaulFrame(
+      socket,
+      { t: "unregister-webhook", subscriptionId },
+      "unregistered",
+      subscriptionId
+    );
+    unregistered = true;
+  } catch (error) {
+    primaryError = error;
+    if (registrationAttempted && !unregistered) {
+      try {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          socket = await openBackhaul(backhaulUrl());
+        }
+        await exchangeBackhaulFrame(
+          socket,
+          { t: "unregister-webhook", subscriptionId },
+          "unregistered",
+          subscriptionId
+        );
+        unregistered = true;
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [primaryError, cleanupError],
+          `Backhaul probe failed and cleanup of ${subscriptionId} was not acknowledged`,
+          { cause: primaryError }
+        );
+      }
+    }
+    throw primaryError;
+  } finally {
+    if (socket) await retireBackhaulSocket(socket);
+  }
+}
+
+async function openBackhaul(url) {
+  const socket = new WebSocket(url);
+  try {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = setTimeout(
+        () => finish(new Error(`backhaul connect timed out after ${BACKHAUL_TIMEOUT_MS}ms`)),
+        BACKHAUL_TIMEOUT_MS
+      );
+      const cleanup = () => {
+        clearTimeout(timeout);
+        socket.off("open", onOpen);
+        socket.off("error", onError);
+        socket.off("close", onClose);
+        socket.off("unexpected-response", onUnexpectedResponse);
+      };
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve();
+      };
+      const onOpen = () => finish();
+      const onError = (error) => finish(error);
+      const onClose = (code, reason) =>
+        finish(new Error(`backhaul closed before connection was ready: ${code} ${String(reason)}`));
+      const onUnexpectedResponse = (_request, response) =>
+        finish(new Error(`backhaul upgrade failed: HTTP ${response.statusCode}`));
+      socket.once("open", onOpen);
+      socket.once("error", onError);
+      socket.once("close", onClose);
+      socket.once("unexpected-response", onUnexpectedResponse);
+    });
+    return socket;
+  } catch (error) {
+    await retireBackhaulSocket(socket);
+    throw error;
+  }
+}
+
+async function exchangeBackhaulFrame(socket, outbound, expected, subscriptionId) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    throw new Error(`backhaul is not open for ${outbound.t}`);
+  }
   await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    let done = false;
+    let settled = false;
     const timeout = setTimeout(
-      () => finish(new Error(`backhaul timed out after ${BACKHAUL_TIMEOUT_MS}ms`)),
+      () => finish(new Error(`backhaul ${outbound.t} timed out after ${BACKHAUL_TIMEOUT_MS}ms`)),
       BACKHAUL_TIMEOUT_MS
     );
-
-    const finish = (error) => {
-      if (done) return;
-      done = true;
+    const cleanup = () => {
       clearTimeout(timeout);
-      if (socket.readyState === WebSocket.OPEN) socket.close(1000, "smoke complete");
-      else if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (error) reject(error);
       else resolve();
     };
-
-    socket.on("open", () => {
-      socket.send(JSON.stringify({ t: "register-webhook", subscriptionId }));
-    });
-    socket.on("message", (raw) => {
+    const onMessage = (raw) => {
       let frame;
       try {
         frame = JSON.parse(String(raw));
@@ -159,26 +257,32 @@ async function checkBackhaul(origin) {
         finish(new Error("backhaul returned a non-JSON frame"));
         return;
       }
-      if (frame.t === "registered" && frame.kind === "webhook" && frame.id === subscriptionId) {
-        socket.send(JSON.stringify({ t: "unregister-webhook", subscriptionId }));
-        return;
-      }
-      if (frame.t === "unregistered" && frame.kind === "webhook" && frame.id === subscriptionId) {
+      if (frame.id !== subscriptionId) return;
+      if (frame.t === expected && frame.kind === "webhook") {
         finish();
         return;
       }
       if (frame.t === "register-rejected" || frame.t === "unregister-rejected") {
         finish(new Error(`backhaul ${frame.t}: ${String(frame.reason ?? "unknown")}`));
       }
-    });
-    socket.on("unexpected-response", (_request, response) => {
-      finish(new Error(`backhaul upgrade failed: HTTP ${response.statusCode}`));
-    });
-    socket.on("error", (error) => finish(error));
-    socket.on("close", (code, reason) => {
-      finish(new Error(`backhaul closed before cleanup ack: ${code} ${String(reason)}`));
+    };
+    const onError = (error) => finish(error);
+    const onClose = (code, reason) =>
+      finish(new Error(`backhaul closed before ${expected} ack: ${code} ${String(reason)}`));
+    socket.on("message", onMessage);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    socket.send(JSON.stringify(outbound), (error) => {
+      if (error) finish(error);
     });
   });
+}
+
+async function retireBackhaulSocket(socket) {
+  if (socket.readyState === WebSocket.CLOSED) return;
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  socket.terminate();
+  await closed;
 }
 
 async function checkWellKnown(origin, expectAppLinks) {
