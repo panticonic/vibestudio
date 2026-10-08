@@ -140,11 +140,11 @@ export async function launchChromium(opts: {
           resolve(match[1]!);
         }
       };
-      const onExit = (code: number | null) => {
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
         cleanup();
         reject(
           new Error(
-            `Chromium exited (code ${code}) before reporting an endpoint:\n${stderr.slice(-2000)}`
+            `Chromium exited (code ${code}, signal ${signal ?? "none"}) before reporting an endpoint:\n${stderr.slice(-2000)}`
           )
         );
       };

@@ -78,6 +78,18 @@ describe("Chromium launch ownership", () => {
     expect(child.kill).not.toHaveBeenCalled();
     expect(fs.readdirSync(options.profileRoot)).toEqual([]);
   });
+  it("preserves the terminating signal when Chromium exits before publishing its endpoint", async () => {
+    const child = new Child();
+    spawn.mockReturnValue(child);
+    const launching = launchChromium(options).catch((error: Error) => error);
+    child.signalCode = "SIGTRAP";
+    child.emit("exit", null, "SIGTRAP");
+    child.emit("close", null, "SIGTRAP");
+    await expect(launching).resolves.toMatchObject({
+      message: expect.stringContaining("Chromium exited (code null, signal SIGTRAP)"),
+    });
+    expect(fs.readdirSync(options.profileRoot)).toEqual([]);
+  });
   it("preserves the native spawn error and still joins the failed child", async () => {
     const child = new Child();
     spawn.mockReturnValue(child);
