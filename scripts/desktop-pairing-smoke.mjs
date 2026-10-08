@@ -1476,7 +1476,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 deliveryError: document.querySelector('[data-testid="pending-delivery-queue"] [role="alert"]')?.textContent ?? null,
                 openingRequestReady: [...document.querySelectorAll('[data-message-role="player"]')]
                   .some((message) => message.textContent.includes(initialPrompt)),
-                introductoryVideoReady: document.body.innerText.includes("Load video: An introduction to Vibestudio and a live demo"),
+                introductoryVideoReady: Boolean(document.querySelector('iframe[title="An introduction to Vibestudio and a live demo"][src^="https://www.youtube-nocookie.com/embed/"]')),
                 credentialSetupReady: Boolean(connect?.querySelector("button:not([disabled])"))
               };
             })()`);
