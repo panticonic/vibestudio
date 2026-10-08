@@ -1489,9 +1489,12 @@ export const runtimeMethods = defineServiceMethods({
       rationale: "Bounded health and diagnostic read from one exact executable-unit driver.",
     },
     description: "Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here.",
-    args: z.tuple([
-      RuntimeSupervisionEntityKeySchema,
-      RuntimeSupervisionLogOptionsSchema.optional(),
+    args: z.union([
+      z.tuple([RuntimeSupervisionEntityKeySchema]),
+      z.tuple([
+        RuntimeSupervisionEntityKeySchema,
+        RuntimeSupervisionLogOptionsSchema.optional(),
+      ]),
     ]),
     returns: RuntimeSupervisionHealthSchema,
     authority: RUNTIME_AGENT_READ_POLICY,

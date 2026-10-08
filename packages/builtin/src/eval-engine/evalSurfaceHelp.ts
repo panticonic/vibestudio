@@ -211,6 +211,16 @@ function schemaType(schema: unknown, depth = 0): string {
     return `(${schemaType(value["items"], depth + 1)})[]`;
   }
   const properties = value["properties"];
+  const additionalProperties = value["additionalProperties"];
+  const hasAdditionalProperties =
+    additionalProperties === true ||
+    (additionalProperties !== null && typeof additionalProperties === "object");
+  if (
+    hasAdditionalProperties &&
+    (!properties || typeof properties !== "object")
+  ) {
+    return `Record<string, ${schemaType(additionalProperties, depth + 1)}>`;
+  }
   if (properties && typeof properties === "object") {
     const required = new Set(
       Array.isArray(value["required"]) ? (value["required"] as string[]) : []
@@ -219,6 +229,11 @@ function schemaType(schema: unknown, depth = 0): string {
       ([name, property]) =>
         `${name}${required.has(name) ? "" : "?"}: ${schemaType(property, depth + 1)}`
     );
+    if (hasAdditionalProperties) {
+      return fields.length > 0
+        ? `{ ${fields.join("; ")}; [key: string]: ${schemaType(additionalProperties, depth + 1)} }`
+        : `Record<string, ${schemaType(additionalProperties, depth + 1)}>`;
+    }
     return `{ ${fields.join("; ")} }`;
   }
   if (typeof value["$ref"] === "string") {
@@ -509,15 +524,45 @@ export async function describeEvalHelpName(serviceName: string, deps: {
         );
       }
     }
-    // A function/value runtime export (openPanel, getPanelHandle, callMain, …) —
-    // NOT an RPC service. Point to the docs instead of throwing "Unknown service".
+    // Runtime functions and opaque values carry canonical source signatures in
+    // the runtime surface catalog. Preserve those here instead of reducing all
+    // function exports to a generic docs link.
+    const canonical = portableExports[serviceName];
+    if (canonical?.kind === "callable") {
+      const method = await deps.docs.describe(
+        `service:${canonical.schemaRef}.${canonical.schemaMethod}`
+      );
+      if (method) {
+        const described = describeEvalMethod(serviceName, method);
+        return {
+          ...described,
+          surface: "injected-runtime-method",
+          ...(canonical.description
+            ? {
+                description: [canonical.description, described.description]
+                  .filter(Boolean)
+                  .join(" "),
+              }
+            : {}),
+          note: "Callable runtime export, described from its canonical service contract.",
+        };
+      }
+    }
     return {
       name: serviceName,
       surface: "injected-runtime",
       kind: typeof injected,
+      ...(canonical?.kind === "value" && canonical.signature
+        ? { signature: canonical.signature }
+        : {}),
+      ...(canonical?.description ? { description: canonical.description } : {}),
       note:
         `\`${serviceName}\` is a top-level runtime export from \`${deps.runtimeModuleName}\` (a ` +
-        `${typeof injected}) — call it directly, it is not an RPC service. See its signature ` +
+        `${typeof injected}) — call it directly, it is not an RPC service. ` +
+        (canonical?.kind === "value" && canonical.signature
+          ? `Its canonical signature is \`${canonical.signature}\`. `
+          : "") +
+        `See its signature ` +
         `in skills/sandbox/RUNTIME_API.md (panel APIs: skills/workspace-dev/PANEL_API.md). ` +
         `Use \`help('<name>')\` with a name from the \`services\` list for RPC services.`,
     };

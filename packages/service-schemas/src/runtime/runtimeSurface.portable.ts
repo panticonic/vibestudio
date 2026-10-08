@@ -628,7 +628,24 @@ export const PANEL_TREE_METHOD_CATALOG = {
     argumentNames: ["id", "source", "options"],
     argsSchema: {
       type: "array",
-      prefixItems: [{ type: "string" }, { type: "string" }, { type: "object" }],
+      prefixItems: [
+        { type: "string", description: "Exact panel slot id." },
+        { type: "string", description: "Workspace-relative source or browser URL." },
+        {
+          type: "object",
+          properties: {
+            contextId: { type: "string" },
+            env: { type: "object", additionalProperties: { type: "string" } },
+            ref: { type: "string" },
+            stateArgs: { type: "object", additionalProperties: true },
+            signal: {
+              type: "object",
+              description: "AbortSignal that cancels readiness observation after navigation commits.",
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
       minItems: 2,
       maxItems: 3,
     },
@@ -640,7 +657,20 @@ export const PANEL_TREE_METHOD_CATALOG = {
     argumentNames: ["id", "delta", "options"],
     argsSchema: {
       type: "array",
-      prefixItems: [{ type: "string" }, { enum: [-1, 1] }, { type: "object" }],
+      prefixItems: [
+        { type: "string", description: "Exact panel slot id." },
+        { enum: [-1, 1] },
+        {
+          type: "object",
+          properties: {
+            signal: {
+              type: "object",
+              description: "AbortSignal that cancels readiness observation.",
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
       minItems: 2,
       maxItems: 3,
     },

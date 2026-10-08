@@ -1,5 +1,9 @@
 import templatesRuntimeCatalog from "../../../service-schemas/src/runtime/generated/templatesRuntimeCatalog.json";
 import gitRuntimeCatalog from "../../../service-schemas/src/runtime/generated/gitRuntimeCatalog.json";
+import {
+  PANEL_TREE_METHOD_CATALOG,
+  portableExports,
+} from "../../../service-schemas/src/runtime/runtimeSurface.portable.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeEvalBindingSurface,
@@ -213,6 +217,37 @@ describe("describeEvalMethod", () => {
     expect(method.parameters?.[0]?.type).toContain("limit?: integer (>= 1, <= 50)");
     expect(method.parameters?.[0]?.type).toContain("ratio?: number (>= 10, > 2)");
   });
+  it("distinguishes closed object schemas from open dictionary schemas", () => {
+    const closed = describeEvalMethod("svc.closed", {
+      argsSchema: {
+        type: "array",
+        items: [
+          {
+            type: "object",
+            properties: { known: { type: "string" } },
+            additionalProperties: false,
+          },
+        ],
+      },
+    });
+    expect(closed.parameters?.[0]?.type).toBe("{ known?: string }");
+
+    const unknownDictionary = describeEvalMethod("svc.dictionary", {
+      argsSchema: {
+        type: "array",
+        items: [{ type: "object", additionalProperties: true }],
+      },
+    });
+    expect(unknownDictionary.parameters?.[0]?.type).toBe("Record<string, unknown>");
+
+    const stringDictionary = describeEvalMethod("svc.environment", {
+      argsSchema: {
+        type: "array",
+        items: [{ type: "object", additionalProperties: { type: "string" } }],
+      },
+    });
+    expect(stringDictionary.parameters?.[0]?.type).toBe("Record<string, string>");
+  });
   it("renders the real Git positional overloads without turning the argument list into an argument", () => {
     const method = describeEvalMethod("git.upstreamStatus", gitRuntimeCatalog.upstreamStatus);
     expect(method.call).toBe("await git.upstreamStatus()");
@@ -424,6 +459,46 @@ describe("runtime methods without argument schemas", () => {
 });
 
 describe("canonical injected runtime help", () => {
+  it("preserves canonical signatures and descriptions for top-level runtime functions", async () => {
+    const d = {
+      bindings: { openPanel: async () => ({ id: "panel-1" }) },
+      runtimeModuleName: "@workspace/runtime",
+      describeBinding: vi.fn(async () => null as unknown),
+      docs: {
+        describe: vi.fn(async () => null as unknown),
+        describeService: vi.fn(async () => null as unknown),
+      },
+    };
+    const canonical = portableExports["openPanel"];
+    const help = (await describeEvalHelpName("openPanel", d)) as Record<string, unknown>;
+    expect(canonical?.kind).toBe("value");
+    if (canonical?.kind !== "value") throw new Error("openPanel must have a value contract");
+    expect(help).toMatchObject({
+      name: "openPanel",
+      surface: "injected-runtime",
+      kind: "function",
+      signature: canonical.signature,
+      description: canonical.description,
+    });
+  });
+
+  it("projects declared option fields from canonical runtime method metadata", () => {
+    const navigate = describeEvalMethod(
+      "panelTree.navigate",
+      PANEL_TREE_METHOD_CATALOG.navigate
+    );
+    expect(navigate.parameters?.[2]?.type).toContain("contextId?: string");
+    expect(navigate.parameters?.[2]?.type).toContain("env?: Record<string, string>");
+    expect(navigate.parameters?.[2]?.type).toContain("stateArgs?: Record<string, unknown>");
+    expect(navigate.parameters?.[2]?.type).toContain("signal?: object");
+
+    const history = describeEvalMethod(
+      "panelTree.navigateHistory",
+      PANEL_TREE_METHOD_CATALOG.navigateHistory
+    );
+    expect(history.parameters?.[2]?.type).toContain("signal?: object");
+  });
+
   it("describes webhook helpers from their public client rather than wire-object arguments", () => {
     const surface = describeEvalBindingSurface(
       "webhooks",

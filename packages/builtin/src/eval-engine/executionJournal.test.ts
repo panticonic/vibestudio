@@ -470,6 +470,8 @@ describe("execution-owned native operation evidence", () => {
       facets: { activation: true, release: false, inspector: false } },
       state: "healthy", summary: "private diagnostic prose", logs: [{ identity, timestamp: 1, level: "info", message: "private log prose" }],
       errors: [], dropped: { entries: 0, errors: 0 }, capacity: { entries: 100, errors: 50 } };
+    owner.recordRuntimeHealth("runtime.supervision.health", [identity], health);
+    expect(owner.entries).toEqual([]);
     owner.recordRuntimeHealth("runtime.supervision.health", [identity, { limit: 8, errorLimit: 5 }], health);
     health.logs.length = 0;
     const wire = { entries: owner.entries };

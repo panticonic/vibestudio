@@ -48,6 +48,20 @@ describe("runtime creation options", () => {
   });
 });
 
+describe("runtime supervision health arguments", () => {
+  it("accepts exactly the omitted or supplied optional options argument", () => {
+    const identity = { kind: "extension" as const, entityId: "extension:one" };
+    const options = { limit: 8, errorLimit: 5 };
+    const args = runtimeMethods["supervision.health"].args;
+
+    expect(args.parse([identity])).toEqual([identity]);
+    expect(args.parse([identity, undefined])).toEqual([identity, undefined]);
+    expect(args.parse([identity, options])).toEqual([identity, options]);
+    expect(() => args.parse([])).toThrow();
+    expect(() => args.parse([identity, options, {}])).toThrow();
+  });
+});
+
 describe("RuntimeEntityHandleSchema", () => {
   it("preserves the execution authority selected by runtime.createEntity", () => {
     const handle = {
