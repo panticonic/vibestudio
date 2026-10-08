@@ -258,7 +258,7 @@ function vendorVibestudioPackages(pkgRoot) {
     if (name === "@vibestudio/extension-host") continue; // self-contained, vendored separately
     const base = name.slice("@vibestudio/".length);
     const dest = path.join(pkgRoot, "vendor", "@vibestudio", base);
-    copyTree(path.join(packagesDir, entry), dest, defaultSkip);
+    stagePublishedPackage(path.join(packagesDir, entry), dest);
     stagePackageDependencies(path.join(packagesDir, entry), dest);
     normalizeVendoredManifest(path.join(dest, "package.json"));
   }
@@ -345,9 +345,30 @@ export function stagePinnedRootDependencies(root) {
   for (const { name } of computePinnedRootDependencies()) {
     const source = installedPackageDirectory(name, repoRoot);
     const destination = path.join(root, "vendor", name);
-    copyTree(source, destination, defaultSkip);
+    stagePublishedPackage(source, destination);
     stagePackageDependencies(source, destination);
     normalizeVendoredManifest(path.join(destination, "package.json"));
+  }
+}
+
+/** Use npm's declared publication boundary for each vendored root package. */
+export function stagePublishedPackage(source, destination) {
+  const [publication] = JSON.parse(
+    execFileSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
+      cwd: source,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+  );
+  for (const { path: relative } of publication.files) {
+    const file = path.resolve(source, relative);
+    if (path.relative(source, file).startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Package publication escapes source: ${relative}`);
+    }
+    if (defaultSkip(path.basename(file), fs.statSync(file))) continue;
+    const target = path.join(destination, relative);
+    mkdirp(path.dirname(target));
+    fs.copyFileSync(file, target);
   }
 }
 

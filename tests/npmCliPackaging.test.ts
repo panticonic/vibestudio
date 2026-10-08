@@ -11,12 +11,43 @@ import {
   stageSpeechRuntime,
   stagePackageDependencies,
   stagePinnedRootDependencies,
+  stagePublishedPackage,
 } from "../scripts/build-server-npm-package.mjs";
 import { assertPhononRuntimeArtifacts } from "../scripts/phonon-runtime-artifacts.mjs";
 import { createRequire } from "node:module";
 import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
+  it("stages the declared published files and assets without development source", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-published-package-stage-"));
+    try {
+      const source = path.join(root, "source");
+      const destination = path.join(root, "staged");
+      for (const dir of ["dist", "src", "assets"])
+        mkdirSync(path.join(source, dir), { recursive: true });
+      writeFileSync(
+        path.join(source, "package.json"),
+        JSON.stringify({
+          name: "publication-fixture",
+          version: "1.0.0",
+          main: "dist/index.js",
+          files: ["dist", "assets"],
+        })
+      );
+      writeFileSync(path.join(source, "dist/index.js"), "module.exports = 42;");
+      writeFileSync(path.join(source, "src/index.ts"), "export const answer = 42;");
+      writeFileSync(path.join(source, "assets/icon.svg"), "<svg />");
+      writeFileSync(path.join(source, "README.md"), "Published package");
+      stagePublishedPackage(source, destination);
+      expect(createRequire(path.join(destination, "package.json"))(destination)).toBe(42);
+      expect(fs.readFileSync(path.join(destination, "assets/icon.svg"), "utf8")).toBe("<svg />");
+      expect(fs.existsSync(path.join(destination, "README.md"))).toBe(true);
+      expect(fs.existsSync(path.join(destination, "src"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("leaves mobile peers with their consumer while retaining owned dependencies", () => {
     const root = mkdtempSync(path.join(tmpdir(), "vibestudio-mobile-dependency-stage-"));
     try {
