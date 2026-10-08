@@ -2816,8 +2816,10 @@ async function main() {
     workspaceId,
     vcs: workspaceVcs,
   });
-  const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void =>
+  const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void => {
     replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });
+    eventService.emit("workspace:config-changed", {});
+  };
   protectedRefStore.onRefsChanged((publication) => {
     cachedAuthorityCapabilities = null;
     const repos = publication.changes

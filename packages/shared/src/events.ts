@@ -47,6 +47,7 @@ export type EventName =
   | "workspace:unit-log"
   | "workspace:revision-bumped"
   | "workspace:protected-refs-changed"
+  | "workspace:config-changed"
   | "credential:capture-request"
   | "server-log:append"
   | "presence:panel-active"
@@ -496,6 +497,7 @@ export interface EventPayloads {
   };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
   "workspace:protected-refs-changed": { repoPaths: string[] };
+  "workspace:config-changed": Record<string, never>;
   /**
    * The server asks the attached desktop shell to run an interactive session
    * credential capture (browser sign-in). The shell answers with
@@ -604,6 +606,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "eval:run-event",
   "workspace:revision-bumped",
   "workspace:protected-refs-changed",
+  "workspace:config-changed",
   "credential:capture-request",
   "server-log:append",
   "presence:panel-active",
