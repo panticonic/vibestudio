@@ -187,6 +187,100 @@ describe("preparePanelAccessAuthority", () => {
     );
   });
 
+  it.each(["openPanel", "replacePanel"] as const)(
+    "checks the destination of %s even when the caller controls the parent entity",
+    async (operation) => {
+      await expect(
+        preparePanelAccessAuthority(deps({ isEntityControlledBy: () => true }), ctx, operation, {
+          id: "owned-panel",
+          runtimeEntityId: "panel:owned",
+          contextId: "ctx-caller",
+          requestedContextId: "ctx-foreign",
+        })
+      ).resolves.toEqual([
+        expect.objectContaining({
+          resourceKey: contextBoundaryResourceKey("ctx-foreign", caller.runtime.id),
+        }),
+      ]);
+    }
+  );
+
+  it("uses the verified initiator for an extension's root slot and subsequent panel mutations", async () => {
+    const extension = createVerifiedCaller("extension:browser-data", "extension", {
+      callerId: "extension:browser-data",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "v1",
+    });
+    const controlsLifecycleContext = vi.fn(
+      async (id, origin, target) =>
+        id === caller.runtime.id && origin === "ctx-caller" && target === "ctx-imported"
+    );
+    const delegatedDeps = deps({
+      resolveCallerContext: async (id) => (id === caller.runtime.id ? "ctx-caller" : null),
+      controlsLifecycleContext,
+    });
+    for (const operation of ["openPanel", "updatePanelState", "close"] as const) {
+      await expect(
+        preparePanelAccessAuthority(
+          delegatedDeps,
+          { caller: extension, authorizingCaller: caller },
+          operation,
+          {
+            id: "imported-root",
+            contextId: "ctx-imported",
+            requestedContextId: "ctx-imported",
+          }
+        )
+      ).resolves.toEqual([]);
+    }
+    await expect(
+      preparePanelAccessAuthority(
+        delegatedDeps,
+        { caller: extension, authorizingCaller: caller },
+        "openPanel",
+        {
+          id: "foreign-parent",
+          requestedContextId: "ctx-foreign",
+        }
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        authorizingCaller: caller,
+        resourceKey: contextBoundaryResourceKey("ctx-foreign", caller.runtime.id),
+      }),
+    ]);
+    await expect(
+      preparePanelAccessAuthority(delegatedDeps, { caller: extension }, "openPanel", {
+        id: "workspace-root",
+        requestedContextId: "ctx-imported",
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        resourceKey: contextBoundaryResourceKey("ctx-imported", extension.runtime.id),
+      }),
+    ]);
+  });
+
+  it("does not infer an unbound extension's authority from the destination panel", async () => {
+    const extension = createVerifiedCaller("extension:unbound", "extension");
+    const resolveSubjectCaller = vi.fn(() => caller);
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ resolveSubjectCaller }),
+        { caller: extension },
+        "openPanel",
+        { id: "parent", runtimeEntityId: caller.runtime.id, requestedContextId: "ctx-target" }
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        authorizingCaller: extension,
+        resourceKey: contextBoundaryResourceKey("ctx-target", extension.runtime.id),
+      }),
+    ]);
+    expect(resolveSubjectCaller).not.toHaveBeenCalled();
+  });
+
   it("keeps a collection agent's same-context subtree operations prompt-free", async () => {
     const collectionAgent = createVerifiedCaller(
       "do:collection-conductor",

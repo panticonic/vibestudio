@@ -553,7 +553,7 @@ export const HOST_APPROVAL_COPY = {
     domainMismatch:
       "The sign-in site is different from the service's site. Make sure you recognize both.",
     contextBoundaryWarning:
-      "This can affect files and running work in a different part of your project.",
+      "This permission gives the requester access to the destination branch's files and running work.",
     forcePush: (
       remote: string,
       overwrites:

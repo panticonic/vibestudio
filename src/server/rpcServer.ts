@@ -813,6 +813,7 @@ export class RpcServer {
        */
       resolveProductBuiltinPreparedAuthority?: (input: {
         caller: VerifiedCaller;
+        authorizingCaller?: VerifiedCaller;
         source: string;
         className: string;
         objectKey: string;
@@ -4106,6 +4107,8 @@ export class RpcServer {
   private async directDOAuthorization(input: {
     initiatingWebsite?: import("@vibestudio/rpc").WebsiteAuthorityFact;
     caller: VerifiedCaller;
+    /** Host-retained initiator of deputy work; never taken from RPC arguments. */
+    authorizingCaller?: VerifiedCaller;
     ref: { source: string; className: string; objectKey: string };
     method: string;
     args: readonly unknown[];
@@ -4343,6 +4346,7 @@ export class RpcServer {
     const preparedSelections = preparedDeclaration
       ? await this.deps.resolveProductBuiltinPreparedAuthority?.({
           caller: input.caller,
+          ...(input.authorizingCaller ? { authorizingCaller: input.authorizingCaller } : {}),
           ...input.ref,
           method: input.method,
           args: input.args,
@@ -4803,6 +4807,7 @@ export class RpcServer {
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
+        authorizingCaller: relayCallerScope?.authorizingCaller,
         initiatingWebsite: relayCallerScope?.authorizingCaller.website,
         ref,
         method,
@@ -4951,6 +4956,7 @@ export class RpcServer {
         : undefined;
     const authorization = await this.directDOAuthorization({
       caller: invocationCaller,
+      authorizingCaller: relayCallerScope?.authorizingCaller,
       initiatingWebsite: relayCallerScope?.authorizingCaller.website,
       ref,
       method: request.method,

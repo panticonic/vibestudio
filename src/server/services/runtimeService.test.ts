@@ -36,6 +36,8 @@ import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
 import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 import { UnitSupervisor } from "./unitSupervisor.js";
 import { authoritySessionIdForCaller } from "./callerAuthoritySession.js";
+import { createPanelAccessPermissionDeps } from "./createPanelAccessPermissionDeps.js";
+import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
@@ -920,7 +922,9 @@ describe("runtimeService deferred panel activation", () => {
 
   it("attributes an extension reservation to its verified initiator and owns the new context from that initiator", async () => {
     const onContextCreated = vi.fn(async () => {});
-    const { service, instance } = await buildDeps({ onContextCreated });
+    const { service, instance, entityCache, contextFolders } = await buildDeps({
+      onContextCreated,
+    });
     const initiator = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
@@ -982,6 +986,34 @@ describe("runtimeService deferred panel activation", () => {
         },
       ])
     ).resolves.toEqual({ selections: [], payload: null });
+
+    // The first root slot already targets a materialized reservation context.
+    // Its authority must follow that reservation's real durable lifecycle edge,
+    // even though there is no parent slot to serve as an entity anchor.
+    const panelAccess = createPanelAccessPermissionDeps({
+      contextBoundary: { contextExists: (id) => contextFolders.existing.has(id) },
+      entityCache,
+      lifecycleContextStore: {
+        resolveRecord: async (id) => instance.entityResolve(id),
+        listContextEdgesByOwner: async (input) => instance.contextEdgeListByOwner(input),
+        listContextEdgesByChild: async (id) => instance.contextEdgeListByChild(id),
+      },
+      getAppHost: () => null,
+    });
+    for (const operation of ["openPanel", "updatePanelState", "close"] as const) {
+      await expect(
+        preparePanelAccessAuthority(
+          panelAccess,
+          { caller: extension, authorizingCaller: initiatingCaller },
+          operation,
+          {
+            id: "imported-root",
+            contextId: reserved.contextId,
+            requestedContextId: reserved.contextId,
+          }
+        )
+      ).resolves.toEqual([]);
+    }
   });
 
   it("carries a resident test policy into an implicit panel context even without an entity-backed owner context", async () => {

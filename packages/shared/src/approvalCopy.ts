@@ -1045,9 +1045,9 @@ const CAPABILITY_COPY_HANDLERS: Record<
   },
   "context.boundary"(approval) {
     const owner = approval.details?.find((d) => d.label === "Owner")?.value;
-    const target =
-      approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-    const subject = owner ? `the workspace branch owned by ${owner}` : `workspace branch ${target}`;
+    const subject = owner
+      ? `the workspace branch owned by ${owner}`
+      : "another existing workspace branch";
     const fallbackTitle = contextBoundaryFallbackTitle(
       approval.operation?.verb ?? approval.title,
       subject

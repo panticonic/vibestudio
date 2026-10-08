@@ -79,6 +79,11 @@ describe("prepareContextBoundarySelection", () => {
     );
     expect(selected?.challenge.title).toBe("Launch background process in another workspace branch");
     expect(selected?.challenge.description).toContain("start a background process");
+    expect(selected?.challenge.description).not.toContain("ctx-b");
+    expect(selected?.challenge.details).toContainEqual({
+      label: "Workspace branch",
+      value: "ctx-b",
+    });
   });
 
   it("uses a hierarchical key covered by the manifest context prefix", () => {

@@ -3,7 +3,11 @@ import {
   isOpenPanelOperation,
   panelAccessSeverityForTarget,
 } from "@vibestudio/shared/panelAccessPolicy";
-import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiator,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ApprovalTargetIdentity } from "@vibestudio/shared/approvals";
@@ -155,12 +159,16 @@ export async function preparePanelAccessAuthority(
   op: PanelAccessOperation,
   target: PanelAccessPermissionTarget
 ): Promise<PreparedAuthoritySelection[]> {
-  if (isOpenPanelOperation(op) || isInteractiveChrome(ctx.caller, deps)) {
-    return [];
-  }
-  const isAgentCaller = ctx.caller.runtime.kind === "agent";
-  let subjectCaller = ctx.caller;
-  if (!ctx.caller.code && !isAgentCaller) {
+  if (isOpenPanelOperation(op)) return [];
+  // Extensions execute delegated work, but the verified initiator owns the
+  // contexts reserved for it. Match runtime reservation's ownership principal
+  // rather than treating the extension's shared runtime as that owner.
+  let subjectCaller = ctx.caller.runtime.kind === "extension" ? verifiedInitiator(ctx) : ctx.caller;
+  if (isInteractiveChrome(subjectCaller, deps)) return [];
+  const isAgentCaller = subjectCaller.runtime.kind === "agent";
+  const isHostCaller =
+    subjectCaller.runtime.kind === "server" || subjectCaller.runtime.kind === "shell";
+  if (!subjectCaller.code && isHostCaller && subjectCaller === ctx.caller) {
     const anchorId = anchorEntityId(target);
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
     // Host-mediated panel operations inherit a concrete panel's code identity
@@ -170,6 +178,7 @@ export async function preparePanelAccessAuthority(
     if (anchor) subjectCaller = anchor;
   }
   if (
+    !isContextChangingOp(op) &&
     target.runtimeEntityId &&
     deps.isEntityControlledBy?.(target.runtimeEntityId, subjectCaller.runtime.id)
   ) {
@@ -178,7 +187,7 @@ export async function preparePanelAccessAuthority(
   const targetContextId = destinationContextId(deps, op, target);
   if (targetContextId == null) return [];
   const originContextId = isAgentCaller
-    ? (ctx.caller.agentBinding?.contextId ?? null)
+    ? (subjectCaller.agentBinding?.contextId ?? null)
     : await deps.resolveCallerContext(subjectCaller.runtime.id);
   if (
     await deps.controlsLifecycleContext(subjectCaller.runtime.id, originContextId, targetContextId)

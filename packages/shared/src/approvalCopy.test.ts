@@ -447,7 +447,8 @@ describe("approvalCopy", () => {
       category: "Permission request",
       title: "Retire runtime entity in another context",
       summaryIncludes: "stops a runtime entity",
-      warning: "This can affect files and running work in a different part of your project.",
+      warning:
+        "This permission gives the requester access to the destination branch's files and running work.",
     },
     {
       name: "context boundary create do",
@@ -471,7 +472,8 @@ describe("approvalCopy", () => {
       category: "Permission request",
       title: "Launch background process in another workspace branch",
       summaryIncludes: "files and anything running",
-      warning: "This can affect files and running work in a different part of your project.",
+      warning:
+        "This permission gives the requester access to the destination branch's files and running work.",
     },
   ];
 
@@ -584,7 +586,23 @@ describe("approvalCopy", () => {
     });
 
     expect(copy.warning).toBe(
-      "This can affect files and running work in a different part of your project."
+      "This permission gives the requester access to the destination branch's files and running work."
+    );
+  });
+
+  it("keeps opaque context coordinates out of the explanation while stating the permission scope", () => {
+    const copy = getApprovalCopy({
+      ...base,
+      kind: "capability",
+      capability: "context.boundary",
+      title: "Open panel in another workspace branch",
+      resource: { type: "context", label: "Workspace branch", value: "ctx-opaque" },
+      details: [{ label: "Workspace branch", value: "ctx-opaque" }],
+    });
+    expect(copy.summary).toContain("another existing workspace branch");
+    expect(copy.summary).not.toContain("ctx-opaque");
+    expect(copy.warning).toBe(
+      "This permission gives the requester access to the destination branch's files and running work."
     );
   });
 

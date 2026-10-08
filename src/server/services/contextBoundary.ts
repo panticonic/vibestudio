@@ -72,14 +72,10 @@ function lowerFirst(value: string): string {
   return value.length === 0 ? value : `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
 }
 
-function contextDescription(
-  ownerLabel: string | undefined,
-  targetContextId: string,
-  _focus: "file-access" | "existing-state"
-): string {
+function contextDescription(ownerLabel: string | undefined): string {
   return ownerLabel
     ? `the workspace branch owned by ${ownerLabel}`
-    : `workspace branch ${targetContextId}`;
+    : "another existing workspace branch";
 }
 
 function genericActionLabel(actionLabel: string): string {
@@ -161,18 +157,11 @@ function promptTitle(action: ContextBoundaryAction): string {
   }
 }
 
-function promptDescription(
-  action: ContextBoundaryAction,
-  ownerLabel: string | undefined,
-  targetContextId: string
-): string {
+function promptDescription(action: ContextBoundaryAction, ownerLabel: string | undefined): string {
   const actionLabel = cleanActionLabel(action.verb);
-  const description = accessDescription(
-    actionLabel,
-    contextDescription(ownerLabel, targetContextId, "file-access")
-  );
+  const description = accessDescription(actionLabel, contextDescription(ownerLabel));
   if (description) return description;
-  const target = contextDescription(ownerLabel, targetContextId, "existing-state");
+  const target = contextDescription(ownerLabel);
   switch (actionLabel) {
     case "Retire entity":
       return `This stops a runtime entity in ${target}. That context belongs to another agent or panel. It does not delete worker, panel, or app source files.`;
@@ -246,7 +235,7 @@ export function prepareContextBoundarySelection(
     authorizingCaller: subjectCaller,
     challenge: {
       title: promptTitle(action),
-      description: promptDescription(action, ownerLabel, targetContextId),
+      description: promptDescription(action, ownerLabel),
       ...(action.severity ? { severity: action.severity } : {}),
       deniedReason: `${action.verb} denied: ${target} is another existing workspace branch`,
       dedupKey: `context-boundary:${subjectId}:${targetContextId}`,

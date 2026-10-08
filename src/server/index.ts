@@ -1806,7 +1806,7 @@ async function main() {
       const owner =
         active.find((e) => e.kind === "panel") ?? active.find((e) => e.kind === "app") ?? active[0];
       if (!owner) return undefined;
-      return owner.source.repoPath ?? owner.id;
+      return entityTitleProjection.get(owner.id) ?? owner.source.repoPath;
     },
   };
 
@@ -5150,6 +5150,7 @@ async function main() {
         isSystemTestInstance: () => systemTestInstance,
         resolveProductBuiltinPreparedAuthority: async ({
           caller,
+          authorizingCaller,
           source,
           className,
           objectKey,
@@ -5269,7 +5270,7 @@ async function main() {
               hasAppCapability: (callerId, capability) =>
                 appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
             },
-            { caller },
+            { caller, authorizingCaller },
             contextBoundary.operation,
             {
               ...panelAccessTargetFromDetail(slotId, detail),

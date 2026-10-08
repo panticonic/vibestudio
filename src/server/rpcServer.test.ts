@@ -260,6 +260,7 @@ type TestRpcServer = {
   ): Promise<unknown>;
   directDOAuthorization(input: {
     caller: ReturnType<typeof createVerifiedCaller>;
+    authorizingCaller?: ReturnType<typeof createVerifiedCaller>;
     ref: { source: string; className: string; objectKey: string };
     method: string;
     args: readonly unknown[];
@@ -3035,6 +3036,38 @@ describe("RpcServer relay behavior", () => {
           resourceKey: "context/ctx-b/requester/panel%3Anav-a",
         }),
       })
+    );
+  });
+
+  it("retains an extension's verified initiator at the direct builtin preparation boundary", async () => {
+    const resolveProductBuiltinPreparedAuthority = vi.fn(() => []);
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [],
+      resolveProductBuiltinPreparedAuthority,
+    });
+    const extension = createVerifiedCaller("extension:browser-data", "extension", {
+      callerId: "extension:browser-data",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "ev-importer",
+      executionDigest: "a".repeat(64),
+      requested: [],
+    });
+    const initiator = createVerifiedCaller("panel:import", "panel", {
+      callerId: "panel:import",
+      callerKind: "panel",
+      repoPath: "about/browser-import-inspector",
+      effectiveVersion: "ev-import",
+    });
+    await testServer(server).directDOAuthorization({
+      caller: extension,
+      authorizingCaller: initiator,
+      ref: { source: "vibestudio/internal", className: "WorkspaceDO", objectKey: "workspace" },
+      method: "slotMove",
+      args: ["slot-a", "slot-b"],
+    });
+    expect(resolveProductBuiltinPreparedAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: extension, authorizingCaller: initiator })
     );
   });
 
