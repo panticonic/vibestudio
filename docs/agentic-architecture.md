@@ -28,7 +28,7 @@ Panel          Channel DO             Host driver             Agent vessel / GAD
 - **Channel DO** — workspace-authored service. Forkable
   history, `this.sql`-backed message storage, participant roster, ephemeral and
   persisted message routing. Enforces participant handle uniqueness so the
-  channel-tools extension can use bare method names without collision.
+  channel method tools can be named after the owning participant's handle.
 - **Agent vessel DO** —
   `workspace/packages/agentic-do/src/agent-vessel.ts`. Owns folded loop state
   per subscribed channel and executes host-held inbox/effect claims. The pure
@@ -112,16 +112,18 @@ Location: `workspace/packages/runtime/src/worker/durable-base.ts`
 DurableObjectBase.
 Location: `workspace/packages/agentic-do/src/agent-vessel.ts`
 
-### Customization hooks (Pi-native)
+### Customization hooks
 
-| Hook                          | Default                                                                      | Purpose                                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-6-sol"` | Default model id in `provider:model` format; subscription config can override per channel |
-| `getDefaultThinkingLevel()`   | `"medium"`                                                                   | Default Pi thinking level; state/config can override per channel                          |
-| `getApprovalLevel(channelId)` | `2` (full auto)                                                              | 0 = ask all, 1 = auto safe tools, 2 = full auto                                           |
-| `shouldProcess(event)`        | Panel messages only                                                          | Filter incoming channel events                                                            |
-| `buildTurnInput(event)`       | Extract content                                                              | Transform to TurnInput                                                                    |
-| `getParticipantInfo()`        | Generic agent                                                                | Channel identity + advertised methods                                                     |
+| Hook                           | Default (`AgentVesselBase` → `AgentWorkerBase`)                                         | Purpose                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `getDefaultModel()`            | `AgentWorkerBase`: `DEFAULT_AGENT_MODEL_REF` (`packages/model-catalog/src/catalog.ts`)  | Default model id in `provider:model` format; subscription config can override per channel |
+| `getDefaultThinkingLevel()`    | `"medium"`                                                                              | Default thinking level; state/config can override per channel                             |
+| `getDefaultApprovalLevel()`    | `2`                                                                                     | Stored approval UX setting (see Approval)                                                 |
+| `getDefaultRespondPolicy()`    | vessel `"mentioned-or-followup"`; `AgentWorkerBase` `"all"`                             | Which channel messages start a turn                                                       |
+| `getDefaultRespondFrom()`      | `[]`                                                                                    | Participants the respond policy is restricted to                                          |
+| `shouldProcess(event)`         | Completed agentic messages from other participants                                      | Filter incoming channel events                                                            |
+| `buildTurnInput(event)`        | Concatenated text blocks                                                                | Transform to turn input                                                                   |
+| `getParticipantInfo()`         | abstract                                                                                | Channel identity + advertised methods                                                     |
 
 The final prompt is composed from the Vibestudio base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
@@ -158,66 +160,71 @@ registration details.
 
 ## Hermetic sandbox
 
-The worker constructs `DefaultResourceLoader` with explicit opt-outs — there
-is no auto-discovery, extensions are wired inline by `PiRunner`:
+The worker does not use Pi's auto-discovery. The workspace prompt
+(`workspace/meta/AGENTS.md`) and skill index are read via the `workspace.*`
+RPC service (`workspace/packages/harness/src/resource-loader.ts`) and composed
+into the system prompt; there are no Pi extension factories. Every tool the
+agent sees is a `ToolRegistration` built by the worker for the channel.
 
-```typescript
-new DefaultResourceLoader({
-  cwd: contextFolderPath,
-  agentDir: piAgentDir,            // Vibestudio-managed sandbox dir
-  noExtensions: true,
-  noSkills: true,
-  noPromptTemplates: true,
-  noThemes: true,
-  additionalSkillPaths: [/* workspace skill paths resolved via workspace RPC */],
-  extensionFactories: [
-    vibestudioApprovalGateFactory(...),
-    vibestudioChannelToolsFactory(...),
-    vibestudioAskUserFactory(...),
-  ],
-})
-```
+## Agent tools on a channel
 
-The workspace prompt (`workspace/meta/AGENTS.md`) and skill index are read via
-the `workspace.*` RPC service and composed by `PiRunner` — not via Pi's
-skill/extension auto-discovery.
+`AgentWorkerBase` (`workspace/packages/agentic-do/src/agent-worker-base.ts`)
+assembles the tool list per channel from the roster snapshot captured for that
+turn:
 
-API keys are bridged via `AuthStorage.setRuntimeApiKey(provider, key)` —
-priority #1 in Pi's auth resolution chain, ahead of any file-based auth.
+- **Peer methods** — `createNativeChannelMethodTools`
+  (`workspace/packages/agentic-do/src/native-channel-method-tools.ts`, called
+  through `AgentVesselBase.createAdvertisedChannelTools` in `agent-vessel.ts`)
+  turns every method a roster participant advertises with a `parameters` schema
+  (`captureChannelMethodOffers` in `workspace/packages/pubsub/src/method-offers.ts`)
+  into a real tool. A method offered by one participant keeps its name; the
+  same method with an identical schema from several participants is one tool
+  with a required `target_participant` selector; differing offers, or names
+  that collide with local tools, become `<method>_<handle>`. Each tool keeps
+  the exact offering participant ids, so a later roster change cannot
+  redirect an in-flight call.
+- **`ask_user`** — `createAskUserTool` (only when a human is askable) calls
+  `executeNativeAskUser` in `agent-vessel.ts`, which builds a `feedback_form`
+  (select/multiSelect options, or one string field) and sends it to the
+  captured human (`kind: "user"`) participants, or to the one named by `to`
+  (`@handle` or participant id; an unknown target fails rather than
+  broadcasting).
 
-## Vibestudio Pi extensions
+## Panel-provided UI tools
 
-Three extension factories supplied inline by the worker (closure-bound, not
-Pi-package-portable). Live in `workspace/packages/harness/src/extensions/`:
+The chat panel advertises its own methods, which agents see as tools through
+the mechanism above: `inline_ui`, `load_action_bar`, `inspect_card`,
+`client_eval` (`workspace/packages/agentic-chat/hooks/useAgenticChat.ts`) and
+`feedback_form` / `feedback_custom`
+(`hooks/features/useChatFeedback.ts`). Model-facing guidance lives in
+`workspace/skills/visualize` and `workspace/skills/sandbox`.
 
-- **`approval-gate.ts`** — `pi.on("tool_call", ...)` reads the approval level
-  via a closure-bound getter. The worker can mutate the approval level
-  mid-conversation; the extension picks it up on the next tool call.
-- **`channel-tools.ts`** — Registers each channel participant's advertised
-  methods as a Pi tool with the participant's bare method name. Tool names
-  are deduped via the channel's enforced handle uniqueness. Reconciles on
-  `session_start` and `turn_start`.
-- **`ask-user.ts`** — Single `ask_user` tool that routes to a feedback_form
-  on the channel via the worker callback.
+When an inline UI, action bar, or card fails to render or rejects its props,
+`UiFeedbackReporter` (`agentic-chat/components/UiFeedbackReporter.tsx`)
+publishes a `ui.feedback` event to the authoring participant, deduplicated by
+`occurrenceKey`. `FeedbackIngest` (`agentic-do/src/feedback-ingest.ts`) stores
+it as a note that is drained into that agent's next turn input.
 
-The `VibestudioExtensionUIContext` class
-(`workspace/packages/harness/src/vibestudio-extension-context.ts`) implements Pi's
-`ExtensionUIContext`. Each UI primitive (`select`, `confirm`, `input`,
-`notify`, `setStatus`, etc.) routes through worker-supplied callbacks that
-turn the request into a channel `feedback_form`, ephemeral notify, or
-metadata-update event.
+## Approval
 
-## Continuation plumbing
+Real permission prompts are host-issued cards for sensitive operations
+(out-of-band app approvals). The per-agent `approvalLevel` (0 ask all, 1 auto
+safe, 2 full auto; `agentic-do/src/agent-config.ts`, `setApprovalLevel`) is
+stored as a UX setting and read by the chat UI
+(`workspace/packages/tool-ui/src/hooks/useToolApproval.ts`); the agent worker
+does not gate individual tool calls on it.
 
-Tool callMethod and UI feedback_form awaits use a `pending_calls` SQL table
-plus an in-memory `pendingResolvers` Map. When the worker dispatches a call
-via `channel.callMethod(callerId, targetId, callId, method, args)`, it stores
-a continuation and awaits a Promise. When the channel persists and broadcasts
-the corresponding `method-result` event, the worker observes that same channel
-event and resolves (or rejects) the Promise.
+## Channel method continuation
 
-This is the bridge between Pi's synchronous-await tool API and the channel's
-asynchronous fire-and-forget call/result protocol.
+Calling a peer method (including `ask_user`'s `feedback_form`) is a durable
+receipt, not an in-memory promise. `native-channel-method.ts` records a
+`vibestudio.channel-method-admission` document with the immutable request and
+the call ids, sends it with `ChannelClient.callMethod`, and settles only when
+the matching `agentic` channel event for that invocation is read back from the
+canonical channel log (`nativeChannelMethodReceiptKey` is a routing hint, never
+result authority). Outcomes are `invocation.completed`, `failed`, `cancelled`
+or `abandoned`; cancellation goes through `cancelCall`. There is no
+`pending_calls` table or `pendingResolvers` map.
 
 ## Workspace layout
 
@@ -235,23 +242,17 @@ workspace/
     └── ...
 ```
 
-Extensions are Vibestudio-only and live in `workspace/packages/harness/src/extensions/`
-as TypeScript modules supplied inline (closure-bound to the worker). There
-is no workspace-level extensions directory — chat behavior is intrinsically
-Vibestudio-bound.
-
 ## Package map
 
 | Package                      | Location                              | Contents                                                                                      |
 | ---------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `VibestudioExtensionUIContext`, three extension factories, channel boundary types |
+| Workspace agent runtime      | `workspace/packages/harness/`         | Resource loader, system prompt, standard tools, channel boundary types                        |
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                  |
 | `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                              |
-| `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                        |
+| `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentVesselBase, AgentWorkerBase, ChannelClient, SubscriptionManager                        |
 | `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                          |
 | `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                               |
-| `@workspace/agentic-session` | `workspace/packages/agentic-session/` | HeadlessSession (Pi-native programmatic interface)                                            |
-| Workers                      | `workspace/workers/`                  | AiChatWorker, TestAgentWorker (both extend AgentWorkerBase)                                   |
+| Workers                      | `workspace/workers/`                  | e.g. `agent-worker`, `silent-agent-worker`                                                    |
 
 ## Further reading
 

@@ -1,8 +1,7 @@
 # Pi-Native Vibestudio: Deep Dive
 
 > ⚠️ **Session-persistence detail predates the Unified Log rework.** The
-> in-process rationale, extension model, and PiRunner lifecycle below still
-> hold, but `pi_sessions`/JSONL-resume detail is historical — persistence is
+> in-process rationale below still holds, but `pi_sessions`/JSONL-resume detail is historical — persistence is
 > migrating to the unified log model (`docs/stage0-unified-log-spec.md`,
 > `docs/ws1-agent-loop-spec.md`); the specs win where they disagree.
 
@@ -25,12 +24,12 @@ Pi's `AgentSession` could run inside the worker DO directly:
 - Pi has no workerd-incompatible deps in its core path
 - Pi's `AgentSession` owns its own state (messages, sessions, branching,
   compaction, retries) — no DO-side state machine needed
-- Pi's extension API is rich enough to handle approval gates, channel-tools
-  routing, and ask_user via inline factory functions
+- Channel tools and ask_user can be supplied as worker-built tool
+  registrations (see `docs/agentic-architecture.md`, "Agent tools on a channel")
 
 The harness child layer became unnecessary substrate. Phase 3 of this
 rearchitecture deleted ~9000 lines of harness/transport/adapter/worker-state
-code and replaced it with one PiRunner per channel.
+code and replaced it with an in-process Pi session (now the pi-durable `Harness`).
 
 ## Workspace layout
 
@@ -53,136 +52,53 @@ workspace/
 Workers access these files through the workspace RPC client, not through
 a filesystem copy.
 
-## The three Vibestudio extensions
+## Agent tools (no Pi extensions)
 
-All three live in `workspace/packages/harness/src/extensions/` as TypeScript modules
-that export factory functions. The worker supplies them inline via
-`extensionFactories` on `DefaultResourceLoader` — they are closure-bound to
-the worker and not Pi-package-portable.
+The earlier design wired approval gating, channel-tool routing, and `ask_user`
+as Pi extension factories plus a `VibestudioExtensionUIContext`; none of that
+exists now. The worker builds `ToolRegistration`s directly
+(`workspace/packages/agentic-do/src/agent-worker-base.ts`):
 
-### 1. approval-gate.ts
+- **Channel method tools** — `native-channel-method-tools.ts` turns each roster
+  participant's advertised methods (`workspace/packages/pubsub/src/method-offers.ts`)
+  into tools. A method offered once keeps its name; an identical schema offered
+  by several participants becomes one tool with a required `target_participant`
+  parameter; differing offers or local-name collisions become
+  `<method>_<handle>`. Invocation is bound to the original offering
+  participant ids.
+- **`ask_user`** — `createAskUserTool` / `executeNativeAskUser`
+  (`agent-vessel.ts`) send a `feedback_form` to the channel's human
+  participants (or the one in `to`) and return the answer.
+- **Panel UI tools** — `inline_ui`, `load_action_bar`, `feedback_form`,
+  `feedback_custom`, `client_eval`, `inspect_card` are methods advertised by
+  the chat panel (`agentic-chat/hooks/useAgenticChat.ts`,
+  `hooks/features/useChatFeedback.ts`). Render failures are reported back as
+  `ui.feedback` events (`UiFeedbackReporter.tsx`, `agentic-do/src/feedback-ingest.ts`).
+  Model guidance: `workspace/skills/visualize`, `workspace/skills/sandbox`.
+- **Approval** — permission cards come from the host for sensitive
+  operations. `approvalLevel` is a stored per-agent UX setting
+  (`agentic-do/src/agent-config.ts`) used by the chat UI; the worker has no
+  per-tool-call approval gate.
 
-```typescript
-export function createApprovalGateExtension(deps: ApprovalGateDeps): ExtensionFactory {
-  return (pi) => {
-    pi.on("tool_call", async (event, ctx) => {
-      const level = deps.getApprovalLevel();
-      if (level === 2) return undefined; // full auto
-      if (level === 1 && deps.safeToolNames.has(event.toolName)) return undefined;
-      if (!ctx.hasUI) return { block: true, reason: "no UI for approval" };
-      const allowed = await ctx.ui.confirm("Allow tool call?", `Tool: ${event.toolName}`);
-      return allowed ? undefined : { block: true, reason: "User denied" };
-    });
-  };
-}
-```
+## Agent session
 
-The approval level is read **lazily on every tool call** via the
-`getApprovalLevel` closure. The worker can mutate the level mid-conversation
-just by calling `runner.setApprovalLevel(newLevel)` — no extension reload.
-
-### 2. channel-tools.ts
-
-Registers each channel participant's advertised methods as Pi tools with
-**bare method names** (no participant-specific method prefix). Tool name
-collisions are prevented at the channel level: `channel-do.ts` rejects any
-subscribe whose participant handle is already in use by another participant.
-
-The extension reconciles on `session_start` and `turn_start`. Tools are
-registered idempotently (Pi's `registerTool` is `Map.set` under the hood);
-removed tools stay registered but are hidden from the LLM via
-`pi.setActiveTools` excluding them from the active set.
-
-The execute function is **closure-captured** with the worker's `callMethod`
-callback:
-
-```typescript
-execute: async (_toolCallId, params, signal) => {
-  const current = deps.getRoster().find((m) => m.name === captured.name);
-  if (!current) return { content: [...], isError: true }; // tool removed mid-turn
-  const result = await deps.callMethod(current.participantHandle, captured.name, params, signal);
-  return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }], details: undefined };
-}
-```
-
-This only works because Pi runs in-process inside the worker — the closure
-reaches back into the worker's channel client. Standalone Pi cannot use this
-extension and that's by design.
-
-### 3. ask-user.ts
-
-Single `ask_user` tool that routes to a feedback_form on the channel via the
-worker's `askUser` callback. Used when the LLM needs free-text input from the
-user that's not available via any other tool.
-
-## VibestudioExtensionUIContext
-
-Pi's `ExtensionUIContext` interface has primitives like `select`, `confirm`,
-`input`, `notify`, `setStatus`, `setWidget` — designed for a TUI. Vibestudio
-implements them all (`workspace/packages/harness/src/vibestudio-extension-context.ts`)
-by routing to worker callbacks that send channel events:
-
-| Pi UI primitive             | Vibestudio channel mapping                               |
-| --------------------------- | ------------------------------------------------------ |
-| `select(title, options)`    | `feedback_form` with segmented field, await result     |
-| `confirm(title, message)`   | `feedback_form` with yes/no buttons, await result      |
-| `input(title, placeholder)` | `feedback_form` with textarea, await result            |
-| `editor(title, prefill)`    | `feedback_form` with multi-line textarea, await result |
-| `notify(message, type)`     | Ephemeral message with `contentType: "notify:<type>"`  |
-| `setStatus(key, text)`      | Ephemeral with `contentType: "vibestudio-ext-status"`    |
-| `setWidget(key, content)`   | Ephemeral with `contentType: "vibestudio-ext-widget"`    |
-| `setHeader/Footer/Title`    | No-op (TUI-only)                                       |
-| `custom(factory)`           | Throws (TUI-only)                                      |
-| Theme accessors             | Stub returns (TUI-only)                                |
-
-The await primitives (`select`, `confirm`, `input`, `editor`) use the same
-continuation Promise plumbing as `callMethod`: send a `channel.callMethod`
-to a panel participant with the call id, store a continuation, await the
-result via the persisted `method-result` channel event.
-
-## PiRunner
-
-`workspace/packages/harness/src/pi-runner.ts` is the worker's wrapper around Pi's
-`createAgentSession`. Lifecycle:
-
-1. **Init**: build `AuthStorage`, push API keys via `setRuntimeApiKey`,
-   resolve the model via `resolveModelToPi("provider:model")`, build a
-   `SessionManager` (open existing JSONL or create new), build a hermetic
-   `DefaultResourceLoader` with the three extension factories, call
-   `createAgentSession`, bind the UI context.
-2. **Subscribe**: forward Pi `AgentSessionEvent` to listeners.
-3. **Run a turn**: `session.prompt(content, { images })`. While streaming,
-   subsequent user messages can `steer` the agent.
-4. **Fork**: `session.fork(entryId)` calls `sessionManager.createBranchedSession`
-   internally and switches to the new file. The cloned worker boots a fresh
-   PiRunner with `resumeSessionFile` pointing at the new path.
-5. **Dispose**: `session.dispose()` releases listeners.
+There is no `PiRunner`. The agent loop runs on `@panticonic/pi-durable`'s
+`Harness`, opened per agent Durable Object by `openPlatformAgentSession`
+(`workspace/packages/agentic-do/src/native-agent-session.ts`). That function
+checks the host-loaded image against the active platform owner, registers an
+alarm-source incarnation, and binds the session to its execution owner. The
+owner class is `NativeAgentOwner` (`native-agent-owner.ts`); the agent classes
+are `AgentVesselBase` (`agent-vessel.ts`) and `AgentWorkerBase`
+(`agent-worker-base.ts`). Model transport is in `native-model-*.ts`.
 
 ## How fork works
 
-A panel forks at a specific message. The chat panel calls
-`worker.canFork()` then `worker.postClone(parentObjectKey, newChannelId, oldChannelId, forkPointMessageId)`.
-
-The cloned worker:
-
-1. Inherits the parent's Durable Object SQL storage via cloneDO
-2. Migrates the parent's `pi_sessions` row from `oldChannelId` to `newChannelId`
-3. Resubscribes to the new channel
-4. On the next user message, lazily constructs a fresh `PiRunner` with
-   `resumeSessionFile = parentSessionFile` (or a forked one if the user
-   asked to branch from a specific entry — handled via Pi's `fork()` call)
-
-## How to add a new extension
-
-1. Create a new file in `workspace/packages/harness/src/extensions/` exporting a
-   factory function: `export function createMyExtension(deps): ExtensionFactory`
-2. Add the dependency interface (closure-bound callbacks the worker provides)
-3. Inside the factory, use `pi.on(eventType, handler)`, `pi.registerTool(...)`,
-   etc. to wire up your behavior
-4. Add an entry in `PiRunner.init()` constructing your factory with the
-   appropriate worker callbacks
-5. If you need new UI primitives, add callbacks to `VibestudioUIBridgeCallbacks`
-   and wire them in `AgentWorkerBase.buildUICallbacks`
+`canFork(channelId)` (`agent-vessel.ts`) only requires a subscription for that
+channel. Conversation state moves through the knowledge export/import pair
+`exportChannelKnowledge` / `importChannelKnowledge` on `AgentVesselBase`, which
+use `native-channel-knowledge.ts`; the original agent settings and domain
+configuration travel with it. Subagents are launched through
+`native-child-launch.ts`.
 
 ## How to add a new skill
 
@@ -200,26 +116,17 @@ The cloned worker:
    via the `workspace.*` RPC service; Pi includes the repo path in the generated
    skill index.
 
-## How to debug Pi events at the worker boundary
+## How to debug an agent turn
 
-The `PiRunner.subscribe(listener)` API gives you raw Pi events:
-
-```typescript
-runner.subscribe((event) => {
-  console.log("[debug]", event.type, event);
-});
-```
-
-`PiRunner` maps Pi lifecycle events into durable `agentic.trajectory.v1` events
-and publishes selected events to the channel log. To inspect the transcript
-flow, trace `PiRunner.handleMessageStart`, `handleMessageUpdate`,
-`handleMessageEnd`, and `appendTrajectoryEvents`, or attach a second listener
-via `runner.subscribe()`.
+Agent progress is recorded as durable `agentic.trajectory.v1` channel events
+(`@workspace/agentic-protocol`). To inspect a turn, read those events on the
+channel; failed turns are summarised by `native-failure-diagnostic.ts`, and
+model-call evidence by `native-model-evidence.ts`.
 
 ## Where State Lives
 
-Pi session state is owned by Pi's `AgentSession` and persisted by the worker
-DO. Vibestudio framework state uses internal Durable Objects:
+Agent session state is owned by the pi-durable `Harness` and persisted in the
+agent DO's storage. Vibestudio framework state uses internal Durable Objects:
 
 - `EvalDO` for per-owner sandbox-eval REPL scopes (behind the `eval` service).
 - `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).
