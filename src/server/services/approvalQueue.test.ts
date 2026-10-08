@@ -1094,6 +1094,44 @@ describe("approvalQueue", () => {
     });
   });
 
+  it("keeps provider method selection actionable after an invalid submission", async () => {
+    const { queue } = createQueue();
+    const promise = queue.requestCredentialInput({
+      kind: "credential-input",
+      callerId: "panel-1",
+      callerKind: "panel",
+      requestedByUserId: "test-user",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      title: "Claude",
+      credentialLabel: "Claude",
+      audience: [{ url: "https://api.anthropic.com", match: "origin" }],
+      injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+      accountIdentity: { providerUserId: "anthropic" },
+      scopes: [],
+      fields: [
+        {
+          name: "value",
+          label: "Login method",
+          type: "select",
+          required: true,
+          options: [
+            { id: "browser", label: "Browser" },
+            { id: "copy_code", label: "Copy code" },
+          ],
+        },
+      ],
+    });
+    const id = queue.listPending()[0]!.approvalId;
+    await expect(queue.submitCredentialInput(id, { value: "Copy code" })).rejects.toThrow(
+      "Choose a valid option"
+    );
+    expect(queue.listPending()[0]!.approvalId).toBe(id);
+    await queue.submitCredentialInput(id, { value: "copy_code" });
+    await expect(promise).resolves.toEqual({ decision: "submit", values: { value: "copy_code" } });
+    expect(queue.listPending()).toEqual([]);
+  });
+
   it("does not deduplicate credential input approvals", async () => {
     const { queue } = createQueue();
     const request = {

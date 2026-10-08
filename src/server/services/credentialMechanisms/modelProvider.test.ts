@@ -5,7 +5,7 @@ import { CredentialLifecycle } from "../credentialLifecycle";
 
 afterEach(() => vi.unstubAllGlobals());
 
-it.each(["github-copilot", "kimi-coding", "meta", "xai"])(
+it.each(["anthropic", "github-copilot", "kimi-coding", "meta", "xai"])(
   "renews %s through Pi while keeping session material private",
   async (providerId) => {
     const token =

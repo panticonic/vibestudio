@@ -1,68 +1,69 @@
 {
-  "scope": "Published Pi fork libraries and agent chat affordance repair; broader installed product acceptance remains separate",
-  "version": "0.99.2-vibestudio.12",
+  "scope": "Pi 1.1.0 library upgrade and native Claude subscription login; actual account authorization requires completing browser sign-in",
+  "version": "1.1.0-vibestudio.1",
   "repository": "https://github.com/werg/pi-harness",
-  "sourceCommit": "e23f8fd3fa5f05690be40bb88c26a4f10c79f7f6",
-  "sourceTag": "vibestudio-pi-0.99.2-vibestudio.12",
+  "sourceCommit": "cd69c79f930c8f1a756338d1b39f166d0a45ae30",
+  "sourceTag": "vibestudio-pi-1.1.0-vibestudio.1",
   "upstreamCommit": "0f8740bb65638180403a225ad7ec4d0cc1f8dedf",
-  "reviewedUpstreamRelease": "d78dc83d633229d12f8b79631384c4c2717c399f",
-  "reviewedUpstreamMain": "5b6c792b424e73edefbfa558b901bcd64788dad2",
-  "sourceInputDigest": "275e43cf4ef84a570d34572e14942901d8c1f5b94aef8b4d124cf2049e8a15c1",
+  "reviewedUpstreamRelease": "abe508e1b89912adde45528136c3221eb69acdd7",
+  "reviewedUpstreamMain": "ce950d78f424dcaf9f5d6a03ce80ab141130eb1d",
+  "sourceInputDigest": "2b54274ed9c0722870d42709dbd2ec652069587d686c603e33d75b6d1fde102a",
   "packages": [
     {
       "name": "@panticonic/pi-telemetry",
-      "version": "0.99.2-vibestudio.12",
-      "integrity": "sha512-Zt3STBtrd2azl85NOO6MbYsnyC4rRXVV7kIumrfvfKJ4jUrng3HdzYPKfLvqgy2aPIXAT0xqzYBHzHgMBIEnKQ==",
-      "sha256": "c38266f807830779ab6e7a96138f0d754441f066ba2bdafdd1408c24337e9f86",
+      "version": "1.1.0-vibestudio.1",
+      "integrity": "sha512-IF5PcKneAUHmljZonQC2f2X3XiHDXLxnqLYhDH3JqRxEP/ZaY6DopTA+45Z+lAwA4x65kScuFOIRkjCuTtuc/g==",
+      "sha256": "9f4b3247fa93118ad5f20cbf74e3ada0e8afe02a5a846d0eaf85c8545529c173",
       "dependencies": {}
     },
     {
       "name": "@panticonic/pi-chord",
-      "version": "0.99.2-vibestudio.12",
-      "integrity": "sha512-EpdWkdTMcfrLfZ+yktoSog88QBFCeYKbPS9tJpI89NnE91RdAPb5b4WgdvYP2tUblh0x5rdCM8hKNEHyoAiiUw==",
-      "sha256": "f694a2976245ee6920ba5aad0455ea6e74c1c1c5b0fbf283a6e5337e356d9552",
+      "version": "1.1.0-vibestudio.1",
+      "integrity": "sha512-uhauUZkzqzpy7z7rsRE+9zYfHcYmGxUE30INYW7nftFL4OyV19rTFwZh03s3h00mKlxnEeoEgjlCd2JX1auZIA==",
+      "sha256": "d3c21175e6fce71b317360a92bf6419494381d31141b12fa7a94b1eaa4675fec",
       "dependencies": {
         "esbuild": "0.28.2"
       }
     },
     {
       "name": "@panticonic/pi-ai",
-      "version": "0.99.2-vibestudio.12",
-      "integrity": "sha512-TGWW08d5/Yy0I/HfXGEMfI5MkPm/MNs/tjeNs9odRWW0XYlwRiAvbvcn2TDwIMme9SiYO3ZAJz0eg04opkDlCw==",
-      "sha256": "b570f64697b8db5371d260776776fcd7d68e294b67e85cfb73b5435c4ea1e9cd",
+      "version": "1.1.0-vibestudio.1",
+      "integrity": "sha512-uiXXWUxqznj54X3EfFaLuRu118vG+YHYPRz9esPYgkL2/w5mzS7vCZ/6IUsoM0ylwsQaswnkErj9pYrhEgrDPQ==",
+      "sha256": "f312019a23b89beb5eaef769f0e01e5042f1109f4bf47cf5cd4991c909768878",
       "dependencies": {
-        "openai": "7.19.0",
-        "typebox": "1.3.27",
-        "partial-json": "0.1.7",
-        "@google/genai": "2.21.0",
-        "http-proxy-agent": "9.1.0",
         "@anthropic-ai/sdk": "0.129.0",
-        "https-proxy-agent": "9.1.0",
-        "@panticonic/pi-telemetry": "0.99.2-vibestudio.12",
+        "@aws-sdk/client-bedrock-runtime": "3.1127.0",
+        "@panticonic/pi-telemetry": "1.1.0-vibestudio.1",
+        "@google/genai": "2.21.0",
         "@smithy/node-http-handler": "4.12.1",
-        "@aws-sdk/client-bedrock-runtime": "3.1127.0"
+        "http-proxy-agent": "9.1.0",
+        "https-proxy-agent": "9.1.0",
+        "openai": "7.19.0",
+        "partial-json": "0.1.7",
+        "typebox": "1.3.27"
       }
     },
     {
       "name": "@panticonic/pi-durable",
-      "version": "0.99.2-vibestudio.12",
-      "integrity": "sha512-76pn17A3X1Ft5Bnt2yOeS5W5iNVLYMRCzaIs7qhT4qDFs+KXh812LpFvflG/8dXHs/3xRiC1MxWJj95VC45TaA==",
-      "sha256": "ee63ff557a233d3d1f202721e3a018d21f62cfa6cb7e0feba1c66a1152b3dc68",
+      "version": "1.1.0-vibestudio.1",
+      "integrity": "sha512-DeJeplqG0bJUvLPu98UrxQoUae5j8Wy6oxw3EO5xJbeJW2UVjN1s+GAN8OEBI0WVV7ptIrlLy1NNcHUVQ1jpNQ==",
+      "sha256": "ed215969274de89e93710f56bddd5a6b9fcf74185abfe91f419131a1eeba36df",
       "dependencies": {
+        "@panticonic/pi-chord": "1.1.0-vibestudio.1",
+        "@panticonic/pi-ai": "1.1.0-vibestudio.1",
         "diff": "8.0.4",
-        "typebox": "1.3.27",
-        "@panticonic/pi-ai": "0.99.2-vibestudio.12",
-        "@panticonic/pi-chord": "0.99.2-vibestudio.12"
+        "typebox": "1.3.27"
       }
     }
   ],
   "verification": {
     "registryMetadataAndBytes": true,
     "ordinaryRegistryInstall": true,
-    "harnessFocusedTests": 359,
-    "basePackedReleaseTests": 86,
-    "baseRegistryPublicationTests": 32,
-    "compositionTypechecks": ["base", "personal", "system"],
+    "forkFocusedTests": 838,
+    "basePackedReleaseTests": 878,
+    "systemPackedReleaseTests": 46,
+    "hostProviderTests": 100,
+    "compositionTypechecks": ["base", "personal", "system", "news", "google-workspace", "examples"],
     "hostTypecheck": true,
     "templateCheckoutHygiene": true
   },

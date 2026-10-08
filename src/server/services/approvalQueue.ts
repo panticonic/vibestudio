@@ -1588,6 +1588,15 @@ export function createApprovalQueue(deps: {
     const entry = entriesById.get(approvalId);
     if (!entry || entry.approval.kind !== expectedKind) return;
 
+    for (const field of entry.approval.fields) {
+      if (
+        field.type === "select" &&
+        !field.options.some((option) => option.id === values[field.name])
+      ) {
+        throw new Error(`Choose a valid option for ${field.label}`);
+      }
+    }
+
     // Route through the single settle coordinator so a submit also snapshots +
     // broadcasts `shell-approval:resolved` and records provenance (WP5 §6).
     await settle(entry, { decision: "submit", granted: true, resolver }, (e) =>

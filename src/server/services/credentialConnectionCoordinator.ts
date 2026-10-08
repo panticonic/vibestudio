@@ -1154,15 +1154,12 @@ export function createCredentialConnectionCoordinator(
                 {
                   name: "value",
                   label: prompt.message,
-                  type: prompt.type === "secret" ? "secret" : "text",
-                  required: false,
                   ...(prompt.type === "select"
-                    ? {
-                        description: prompt.options
-                          .map((option) => `${option.id}: ${option.label}`)
-                          .join("\n"),
-                      }
-                    : {}),
+                    ? { type: "select" as const, required: true, options: prompt.options }
+                    : {
+                        type: prompt.type === "secret" ? ("secret" as const) : ("text" as const),
+                        required: false,
+                      }),
                 },
               ],
             }),

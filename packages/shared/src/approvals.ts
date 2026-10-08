@@ -14,7 +14,7 @@ import type { ServiceBindingFact } from "./authority/unitInstallReview.js";
 import type { WorkspaceServiceReviewFact } from "./authority/unitInstallReview.js";
 
 export type ApprovalDecision = ApprovalDecisionId;
-export type ApprovalConfigFieldType = "text" | "secret";
+export type ApprovalConfigFieldType = "text" | "secret" | "select";
 export type ApprovalDetailFormat = "plain" | "markdown" | "code" | "tree";
 
 // Multi-line fields (summary, detail values) legitimately carry "\n" for
@@ -596,13 +596,15 @@ export interface PendingUnitInstallReviewApproval extends PendingApprovalBase {
  * review, JIT approval, and Permissions; charter mechanics stay typed side
  * sections rather than becoming a second permission language.
  */
-export interface PendingClientConfigField {
+export type PendingClientConfigField = {
   name: string;
   label: string;
-  type: ApprovalConfigFieldType;
   required: boolean;
   description?: string;
-}
+} & (
+  | { type: "text" | "secret" }
+  | { type: "select"; options: readonly { id: string; label: string; description?: string }[] }
+);
 
 export interface PendingClientConfigApproval extends PendingApprovalBase {
   kind: "client-config";

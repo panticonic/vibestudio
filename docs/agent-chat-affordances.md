@@ -24,15 +24,18 @@ the original terminal supplies status and summary. Owner identifiers and authori
 session nonces are excluded from this projection. Delivery uses the existing
 ordered, durable channel-publication tasks.
 
-The Base and dependent templates pin the coherent `0.99.2-vibestudio.12` harness
-libraries. This release also integrates upstream library changes through 1.0.3
-and commit `5b6c792b`: OAuth refresh cancellation, Azure Foundry deployments,
+The Base and dependent templates pin the coherent `1.1.0-vibestudio.1` harness
+libraries. The current release integrates upstream library changes through 1.1.0
+and commit `ce950d78`, including the earlier OAuth refresh cancellation, Azure Foundry deployments,
 HTTP/2 stream retry, bounded filesystem and shell reads, filesystem watches, and
 configurable progress intervals. Azure's provider identity is now `azure`; the
 `azure-openai-responses` API identity is unchanged. The host credential policy
 and template fixtures use the canonical provider identity.
 
-Source is tagged `vibestudio-pi-0.99.2-vibestudio.12` in the maintained fork.
+Native Claude OAuth and the latest integration are documented in
+`docs/claude-pi-upgrade.md`.
+
+Source is tagged `vibestudio-pi-1.1.0-vibestudio.1` in the maintained fork.
 The registry verification receipt is `docs/durable-pi-package-release.json`.
 Validate a packed package release before publication from the host checkout:
 

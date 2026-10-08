@@ -83,14 +83,14 @@ importers:
         specifier: workspace:*
         version: link:packages/builtin
       '@panticonic/pi-ai':
-        specifier: 0.99.2-vibestudio.12
-        version: 0.99.2-vibestudio.12(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.1.0-vibestudio.1
+        version: 1.1.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@panticonic/pi-chord':
-        specifier: 0.99.2-vibestudio.12
-        version: 0.99.2-vibestudio.12
+        specifier: 1.1.0-vibestudio.1
+        version: 1.1.0-vibestudio.1
       '@panticonic/pi-durable':
-        specifier: 0.99.2-vibestudio.12
-        version: 0.99.2-vibestudio.12(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.1.0-vibestudio.1
+        version: 1.1.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
@@ -3339,21 +3339,21 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@panticonic/pi-ai@0.99.2-vibestudio.12':
-    resolution: {integrity: sha512-TGWW08d5/Yy0I/HfXGEMfI5MkPm/MNs/tjeNs9odRWW0XYlwRiAvbvcn2TDwIMme9SiYO3ZAJz0eg04opkDlCw==}
+  '@panticonic/pi-ai@1.1.0-vibestudio.1':
+    resolution: {integrity: sha512-uiXXWUxqznj54X3EfFaLuRu118vG+YHYPRz9esPYgkL2/w5mzS7vCZ/6IUsoM0ylwsQaswnkErj9pYrhEgrDPQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@panticonic/pi-chord@0.99.2-vibestudio.12':
-    resolution: {integrity: sha512-EpdWkdTMcfrLfZ+yktoSog88QBFCeYKbPS9tJpI89NnE91RdAPb5b4WgdvYP2tUblh0x5rdCM8hKNEHyoAiiUw==}
+  '@panticonic/pi-chord@1.1.0-vibestudio.1':
+    resolution: {integrity: sha512-uhauUZkzqzpy7z7rsRE+9zYfHcYmGxUE30INYW7nftFL4OyV19rTFwZh03s3h00mKlxnEeoEgjlCd2JX1auZIA==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-durable@0.99.2-vibestudio.12':
-    resolution: {integrity: sha512-76pn17A3X1Ft5Bnt2yOeS5W5iNVLYMRCzaIs7qhT4qDFs+KXh812LpFvflG/8dXHs/3xRiC1MxWJj95VC45TaA==}
+  '@panticonic/pi-durable@1.1.0-vibestudio.1':
+    resolution: {integrity: sha512-DeJeplqG0bJUvLPu98UrxQoUae5j8Wy6oxw3EO5xJbeJW2UVjN1s+GAN8OEBI0WVV7ptIrlLy1NNcHUVQ1jpNQ==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-telemetry@0.99.2-vibestudio.12':
-    resolution: {integrity: sha512-Zt3STBtrd2azl85NOO6MbYsnyC4rRXVV7kIumrfvfKJ4jUrng3HdzYPKfLvqgy2aPIXAT0xqzYBHzHgMBIEnKQ==}
+  '@panticonic/pi-telemetry@1.1.0-vibestudio.1':
+    resolution: {integrity: sha512-IF5PcKneAUHmljZonQC2f2X3XiHDXLxnqLYhDH3JqRxEP/ZaY6DopTA+45Z+lAwA4x65kScuFOIRkjCuTtuc/g==}
     engines: {node: '>=22.19.0'}
 
   '@peculiar/asn1-schema@2.8.0':
@@ -12081,12 +12081,12 @@ snapshots:
   '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz':
     optional: true
 
-  '@panticonic/pi-ai@0.99.2-vibestudio.12(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-ai@1.1.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
       '@google/genai': 2.21.0
-      '@panticonic/pi-telemetry': 0.99.2-vibestudio.12
+      '@panticonic/pi-telemetry': 1.1.0-vibestudio.1
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
@@ -12106,14 +12106,14 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-chord@0.99.2-vibestudio.12':
+  '@panticonic/pi-chord@1.1.0-vibestudio.1':
     dependencies:
       esbuild: 0.28.2
 
-  '@panticonic/pi-durable@0.99.2-vibestudio.12(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-durable@1.1.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
-      '@panticonic/pi-ai': 0.99.2-vibestudio.12(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
-      '@panticonic/pi-chord': 0.99.2-vibestudio.12
+      '@panticonic/pi-ai': 1.1.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+      '@panticonic/pi-chord': 1.1.0-vibestudio.1
       diff: 8.0.4
       typebox: 1.3.27
     transitivePeerDependencies:
@@ -12129,7 +12129,7 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-telemetry@0.99.2-vibestudio.12': {}
+  '@panticonic/pi-telemetry@1.1.0-vibestudio.1': {}
 
   '@peculiar/asn1-schema@2.8.0':
     dependencies:

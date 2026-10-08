@@ -42,26 +42,15 @@ describe("model quick-connect eligibility", () => {
 describe("Claude connection methods", () => {
   it("defaults to subscription OAuth and records its request authentication method", () => {
     const request = toCredentialConnectRequest("anthropic")!;
-    expect(request.flow).toMatchObject({
-      type: "oauth2-auth-code-pkce",
-      authorizeUrl: "https://claude.ai/oauth/authorize",
-      tokenRequestEncoding: "json",
-      extraTokenParams: { state: "{state}" },
-      persistRefreshToken: true,
-    });
-    expect(request.redirect).toEqual({
-      type: "loopback",
-      host: "localhost",
-      port: 53692,
-      callbackPath: "/callback",
-    });
+    expect(request.flow).toEqual({ type: "model-provider-oauth", providerId: "anthropic" });
+    expect(request.redirect).toBeUndefined();
     expect(request.credential).toMatchObject({
       metadata: { modelProviderId: "anthropic", modelAuthMethod: "subscription" },
       injection: { name: "Authorization", valueTemplate: "Bearer {token}" },
     });
     expect(
       toCredentialConnectRequest("anthropic", { browser: "external" })?.redirect
-    ).not.toHaveProperty("type");
+    ).toBeUndefined();
   });
 
   it("retains API-key setup as an explicit choice and rejects unknown methods", () => {
@@ -104,8 +93,13 @@ it("scopes configurable providers to the account and endpoint supplied by the us
     })
   ).toThrow();
   expect(() =>
-    toCredentialConnectRequest("azure-openai-responses", {
+    toCredentialConnectRequest("azure", {
       configuration: { ENDPOINT: "http://insecure.example" },
     })
   ).toThrow();
+  expect(
+    toCredentialConnectRequest("azure", {
+      configuration: { ENDPOINT: "https://resource.openai.azure.com/openai/v1" },
+    })?.credential.metadata
+  ).toMatchObject({ modelProviderId: "azure" });
 });

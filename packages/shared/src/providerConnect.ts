@@ -174,26 +174,7 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
         credentialLabel: "Claude subscription",
         credentialAudience: [{ url: "https://api.anthropic.com", match: "origin" }],
         injection: { ...BEARER_INJECTION, stripIncoming: ["authorization", "x-api-key"] },
-        redirectPolicy: "loopback-required",
-        redirect: { type: "loopback", host: "localhost", port: 53692, callbackPath: "/callback" },
-        flow: {
-          type: "oauth2-auth-code-pkce",
-          authorizeUrl: "https://claude.ai/oauth/authorize",
-          tokenUrl: "https://platform.claude.com/v1/oauth/token",
-          clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-          scopes: [
-            "org:create_api_key",
-            "user:profile",
-            "user:inference",
-            "user:sessions:claude_code",
-            "user:mcp_servers",
-            "user:file_upload",
-          ],
-          extraAuthorizeParams: { code: "true" },
-          tokenRequestEncoding: "json",
-          extraTokenParams: { state: "{state}" },
-          persistRefreshToken: true,
-        },
+        flow: { type: "model-provider-oauth", providerId: "anthropic" },
       },
       apiKeyMethod({
         providerId: "anthropic",
@@ -275,7 +256,7 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
 
 const CONFIGURED_PROVIDERS = [
   {
-    id: "azure-openai-responses",
+    id: "azure",
     label: "Azure OpenAI API key",
     header: "api-key",
     bases: [""],
