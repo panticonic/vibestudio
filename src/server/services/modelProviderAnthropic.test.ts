@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { ConnectCredentialParamsSchema } from "@vibestudio/service-schemas/credentials";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { toCredentialConnectRequest } from "@vibestudio/shared/providerConnect";
 import { createApprovalQueue } from "./approvalQueue";
 import {
@@ -88,6 +89,7 @@ function fixture(
 }
 
 it("uses native Claude copy-code PKCE and keeps renewable provider state private", async () => {
+  const wireApprovals: unknown[] = [];
   const fetchToken = vi.fn<typeof fetch>(
     async () =>
       new Response(
@@ -102,6 +104,7 @@ it("uses native Claude copy-code PKCE and keeps renewable provider state private
   const f = fixture((queue) => {
     const pending = queue.listPending()[0];
     if (pending?.kind !== "credential-input") return;
+    wireApprovals.push(JSON.parse(JSON.stringify(pending)));
     const field = pending.fields[0]!;
     if (field.type === "select") {
       expect(field.options.map((option) => option.id)).toEqual(["browser", "copy_code"]);
@@ -112,6 +115,7 @@ it("uses native Claude copy-code PKCE and keeps renewable provider state private
       });
   });
   const result = await f.connect();
+  expect(shellApprovalMethods.listPending.returns.parse(wireApprovals)).toEqual(wireApprovals);
   const url = f.url();
   expect(url.origin + url.pathname).toBe("https://claude.ai/oauth/authorize");
   expect(url.searchParams.get("code")).toBe("true");

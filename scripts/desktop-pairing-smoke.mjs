@@ -664,6 +664,9 @@ async function installDesktopDiagnostics(app) {
             ...base(),
             sourceId: String(event.sourceId ?? ""),
             lineNumber: Number(event.lineNumber ?? 0),
+            frameUrl: event.frame && !event.frame.detached ? event.frame.url : "",
+            isMainFrame:
+              event.frame && !event.frame.detached ? event.frame === contents.mainFrame : undefined,
           });
         });
         contents.on(

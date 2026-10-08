@@ -5,6 +5,9 @@ export interface DesktopSmokeDiagnostic {
   url: string;
   sourceId: string;
   timestamp: number;
+  frameUrl?: string;
+  isMainFrame?: boolean;
+  lineNumber?: number;
 }
 
 export function isUnexpectedDesktopDiagnostic(diagnostic: DesktopSmokeDiagnostic): boolean;

@@ -28,6 +28,14 @@ describe("published npm dependency surface", () => {
     }).toEqual(publicRuntimeDependencies);
   });
 
+  it("ships patched Git bytes instead of asking npm to resolve the unpatched package", () => {
+    expect(computePinnedRootDependencies()).toContainEqual({
+      name: "isomorphic-git",
+      version: rootPackage.dependencies["isomorphic-git"],
+    });
+    expect(computeHostDependencies()).not.toHaveProperty("isomorphic-git");
+  });
+
   it("never publishes Electron, which belongs to the natively packaged desktop", () => {
     expect(computeHostDependencies()).not.toHaveProperty("electron");
     expect(rootPackage.devDependencies.electron).toBeTruthy();

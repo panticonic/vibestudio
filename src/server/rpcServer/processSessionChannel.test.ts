@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
+import { envelopeFromMessage } from "@vibestudio/rpc";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { ProcessSessionChannel } from "./processSessionChannel.js";
 
@@ -17,6 +18,46 @@ function fixture() {
 }
 
 describe("process RPC session retirement", () => {
+  it("holds stream delivery until the process pipe write completes and propagates its failure", async () => {
+    const { proc, channel } = fixture();
+    const envelope = envelopeFromMessage({
+      selfId: "extension:test",
+      from: "extension:test",
+      target: "main",
+      callerKind: "extension",
+      message: {
+        type: "stream-request",
+        requestId: "git-pack",
+        fromId: "extension:test",
+        method: "credentials.proxyGitHttp",
+        args: [],
+      },
+    });
+    let deliver!: () => void;
+    proc.postMessage.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        deliver = resolve;
+      })
+    );
+    let settled = false;
+    const pending = channel
+      .sendStreamFrame(envelope, { kind: "chunk", bytes: new Uint8Array([1, 2, 3]) })
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    deliver();
+    await pending;
+    expect(settled).toBe(true);
+    const failure = new Error("process pipe closed");
+    proc.postMessage.mockRejectedValueOnce(failure);
+    await expect(channel.sendStreamFrame(envelope, { kind: "end", bytesIn: 3 })).rejects.toBe(
+      failure
+    );
+    channel.close();
+  });
+
   it("retires on IPC disconnect without waiting for guest exit", () => {
     const { proc, channel } = fixture();
     const closed = vi.fn();

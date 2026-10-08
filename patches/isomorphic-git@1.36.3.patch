@@ -1,0 +1,236 @@
+diff --git a/index.cjs b/index.cjs
+index 1427f0d6bb5bda6e78f08881ba9dc30e97872e2d..0e9c9ba620f2d241e5301ae31d67b88ff5858d6d 100644
+--- a/index.cjs
++++ b/index.cjs
+@@ -3144,51 +3144,81 @@ class GitPackIndex {
+       o.crc = crc;
+     }
+ 
+-    // We don't have the hashes yet. But we can generate them using the .readSlice function!
++    // REF_DELTA bases can occur later in the pack. Resolve the dependency
++    // graph before consulting other packs; never silently omit an object.
++    class PackDependency {
++      constructor(oid) { this.oid = oid; }
++    }
++    const externalObjects = new Map();
++    const waiting = new Map();
++    const ready = offsetArray.slice();
+     const p = new GitPackIndex({
+-      pack: Promise.resolve(pack),
+-      packfileSha,
+-      crcs,
+-      hashes,
+-      offsets,
+-      getExternalRefDelta,
++      pack: Promise.resolve(pack), packfileSha, crcs, hashes, offsets,
++      getExternalRefDelta: async oid => {
++        if (externalObjects.has(oid)) return externalObjects.get(oid)
++        throw new PackDependency(oid)
++      },
+     });
+-
+-    // Resolve deltas and compute the oids
+-    lastPercent = null;
++    let cursor = 0;
+     let count = 0;
+-    const objectsByDepth = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+-    for (let offset in offsetToObject) {
+-      offset = Number(offset);
+-      const percent = Math.floor((count * 100) / totalObjectCount);
+-      if (percent !== lastPercent) {
+-        if (onProgress) {
+-          await onProgress({
+-            phase: 'Resolving deltas',
+-            loaded: count,
+-            total: totalObjectCount,
+-          });
++    lastPercent = null;
++    while (cursor < ready.length || waiting.size) {
++      if (cursor === ready.length) {
++        // Only bases absent from this pack may require an external lookup
++        // (thin packs). Propagate that lookup's original failure.
++        let missingBase;
++        for (const [oid, dependents] of waiting) {
++          if (!getExternalRefDelta) {
++            throw new InternalError(`Could not read object ${oid} from packfile`)
++          }
++          try {
++            externalObjects.set(oid, await getExternalRefDelta(oid));
++          } catch (error) {
++            if (!(error instanceof NotFoundError)) throw error
++            // This hash may belong to another unresolved object in this pack.
++            missingBase = missingBase || error;
++            continue
++          }
++          ready.push(...dependents);
++          waiting.delete(oid);
++          break
+         }
+-      }
+-      count++;
+-      lastPercent = percent;
++        if (cursor === ready.length) throw missingBase
+ 
++      }
++      const offset = ready[cursor++];
+       const o = offsetToObject[offset];
+       if (o.oid) continue
++      let resolved;
+       try {
+         p.readDepth = 0;
+         p.externalReadDepth = 0;
+-        const { type, object } = await p.readSlice({ start: offset });
+-        objectsByDepth[p.readDepth] += 1;
+-        const oid = await shasum(GitObject.wrap({ type, object }));
+-        o.oid = oid;
+-        hashes.push(oid);
+-        offsets.set(oid, offset);
+-        crcs[oid] = o.crc;
+-      } catch (err) {
++        resolved = await p.readSlice({ start: offset });
++      } catch (error) {
++        if (!(error instanceof PackDependency)) throw error
++        const dependents = waiting.get(error.oid) || new Set();
++        dependents.add(offset);
++        waiting.set(error.oid, dependents);
+         continue
+       }
++      const oid = await shasum(GitObject.wrap(resolved));
++      o.oid = oid;
++      hashes.push(oid);
++      offsets.set(oid, offset);
++      crcs[oid] = o.crc;
++      count++;
++      const dependents = waiting.get(oid);
++      if (dependents) {
++        ready.push(...dependents);
++        waiting.delete(oid);
++      }
++      const percent = Math.floor((count * 100) / totalObjectCount);
++      if (percent !== lastPercent && onProgress) {
++        await onProgress({ phase: 'Resolving deltas', loaded: count, total: totalObjectCount });
++      }
++      lastPercent = percent;
+     }
++    p.getExternalRefDelta = getExternalRefDelta;
+ 
+     hashes.sort();
+     return p
+diff --git a/index.js b/index.js
+index cc837e41581f6e24f76d3d31a38ebbb986ec04bc..c5ab3ee715b458319c2c6fac501a4575798ffffa 100644
+--- a/index.js
++++ b/index.js
+@@ -3138,51 +3138,81 @@ class GitPackIndex {
+       o.crc = crc;
+     }
+ 
+-    // We don't have the hashes yet. But we can generate them using the .readSlice function!
++    // REF_DELTA bases can occur later in the pack. Resolve the dependency
++    // graph before consulting other packs; never silently omit an object.
++    class PackDependency {
++      constructor(oid) { this.oid = oid; }
++    }
++    const externalObjects = new Map();
++    const waiting = new Map();
++    const ready = offsetArray.slice();
+     const p = new GitPackIndex({
+-      pack: Promise.resolve(pack),
+-      packfileSha,
+-      crcs,
+-      hashes,
+-      offsets,
+-      getExternalRefDelta,
++      pack: Promise.resolve(pack), packfileSha, crcs, hashes, offsets,
++      getExternalRefDelta: async oid => {
++        if (externalObjects.has(oid)) return externalObjects.get(oid)
++        throw new PackDependency(oid)
++      },
+     });
+-
+-    // Resolve deltas and compute the oids
+-    lastPercent = null;
++    let cursor = 0;
+     let count = 0;
+-    const objectsByDepth = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+-    for (let offset in offsetToObject) {
+-      offset = Number(offset);
+-      const percent = Math.floor((count * 100) / totalObjectCount);
+-      if (percent !== lastPercent) {
+-        if (onProgress) {
+-          await onProgress({
+-            phase: 'Resolving deltas',
+-            loaded: count,
+-            total: totalObjectCount,
+-          });
++    lastPercent = null;
++    while (cursor < ready.length || waiting.size) {
++      if (cursor === ready.length) {
++        // Only bases absent from this pack may require an external lookup
++        // (thin packs). Propagate that lookup's original failure.
++        let missingBase;
++        for (const [oid, dependents] of waiting) {
++          if (!getExternalRefDelta) {
++            throw new InternalError(`Could not read object ${oid} from packfile`)
++          }
++          try {
++            externalObjects.set(oid, await getExternalRefDelta(oid));
++          } catch (error) {
++            if (!(error instanceof NotFoundError)) throw error
++            // This hash may belong to another unresolved object in this pack.
++            missingBase = missingBase || error;
++            continue
++          }
++          ready.push(...dependents);
++          waiting.delete(oid);
++          break
+         }
+-      }
+-      count++;
+-      lastPercent = percent;
++        if (cursor === ready.length) throw missingBase
+ 
++      }
++      const offset = ready[cursor++];
+       const o = offsetToObject[offset];
+       if (o.oid) continue
++      let resolved;
+       try {
+         p.readDepth = 0;
+         p.externalReadDepth = 0;
+-        const { type, object } = await p.readSlice({ start: offset });
+-        objectsByDepth[p.readDepth] += 1;
+-        const oid = await shasum(GitObject.wrap({ type, object }));
+-        o.oid = oid;
+-        hashes.push(oid);
+-        offsets.set(oid, offset);
+-        crcs[oid] = o.crc;
+-      } catch (err) {
++        resolved = await p.readSlice({ start: offset });
++      } catch (error) {
++        if (!(error instanceof PackDependency)) throw error
++        const dependents = waiting.get(error.oid) || new Set();
++        dependents.add(offset);
++        waiting.set(error.oid, dependents);
+         continue
+       }
++      const oid = await shasum(GitObject.wrap(resolved));
++      o.oid = oid;
++      hashes.push(oid);
++      offsets.set(oid, offset);
++      crcs[oid] = o.crc;
++      count++;
++      const dependents = waiting.get(oid);
++      if (dependents) {
++        ready.push(...dependents);
++        waiting.delete(oid);
++      }
++      const percent = Math.floor((count * 100) / totalObjectCount);
++      if (percent !== lastPercent && onProgress) {
++        await onProgress({ phase: 'Resolving deltas', loaded: count, total: totalObjectCount });
++      }
++      lastPercent = percent;
+     }
++    p.getExternalRefDelta = getExternalRefDelta;
+ 
+     hashes.sort();
+     return p

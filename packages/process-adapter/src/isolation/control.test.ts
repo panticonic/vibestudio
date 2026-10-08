@@ -1,8 +1,26 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { readControl } from "./control.js";
+import { readControl, writeControl } from "./control.js";
 
 describe("workspace process control framing", () => {
+  it("settles a delivery only when the bounded process pipe accepts it", async () => {
+    const stream = new PassThrough({ highWaterMark: 32 });
+    let settled = false;
+    const delivered = new Promise<void>((resolve, reject) => {
+      writeControl(stream, { value: "x".repeat(1024) }, (error) => {
+        settled = true;
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    stream.resume();
+    await delivered;
+    expect(settled).toBe(true);
+    stream.destroy();
+  });
+
   it("handles fragmented and coalesced messages and reports clean EOF once", async () => {
     const stream = new PassThrough();
     const received = vi.fn();

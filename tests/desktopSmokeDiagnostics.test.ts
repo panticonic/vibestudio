@@ -19,6 +19,32 @@ function diagnostic(overrides: Partial<DesktopSmokeDiagnostic> = {}): DesktopSmo
 }
 
 describe("desktop pairing smoke diagnostics", () => {
+  it("retains cross-origin embed diagnostics without attributing them to the app", () => {
+    const embed = diagnostic({
+      frameUrl: "https://media.example/player",
+      isMainFrame: false,
+    });
+    expect(unexpectedDesktopDiagnostics([embed])).toEqual([]);
+    expect(formatDesktopDiagnostics([embed])).toContain("in https://media.example/player");
+  });
+
+  it("keeps app-owned, unidentified, and opaque frame warnings actionable", () => {
+    for (const frame of [
+      { frameUrl: "http://127.0.0.1:41771/panel", isMainFrame: false },
+      { frameUrl: "https://media.example/player", isMainFrame: true },
+      { frameUrl: "https://media.example/player" },
+      { frameUrl: "about:blank", isMainFrame: false },
+      { frameUrl: "", isMainFrame: false },
+    ]) {
+      expect(isUnexpectedDesktopDiagnostic(diagnostic({ ...frame, level: "error" }))).toBe(true);
+    }
+    expect(
+      isUnexpectedDesktopDiagnostic(
+        diagnostic({ isMainFrame: true, sourceId: "https://cdn.example/app.js" })
+      )
+    ).toBe(true);
+  });
+
   it("fails the smoke on shell event subscription warnings", () => {
     const failure = diagnostic({
       message: "[useShellEvent] watch open-settings failed: RemoteRpcError: Unknown event",

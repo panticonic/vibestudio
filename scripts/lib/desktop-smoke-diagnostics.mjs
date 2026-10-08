@@ -22,6 +22,19 @@ export function isUnexpectedDesktopDiagnostic(diagnostic) {
   }
   if (diagnostic.type !== "console") return true;
   if (!ACTIONABLE_CONSOLE_LEVELS.has(diagnostic.level)) return false;
+  // Attribute console output to its emitting document. A cross-origin embed
+  // owns its console; a CDN script executing in our document still belongs to us.
+  // Missing or opaque frame identity remains actionable.
+  if (
+    diagnostic.isMainFrame === false &&
+    URL.canParse(diagnostic.frameUrl) &&
+    URL.canParse(diagnostic.url)
+  ) {
+    const frameOrigin = new URL(diagnostic.frameUrl).origin;
+    const documentOrigin = new URL(diagnostic.url).origin;
+    if (frameOrigin !== "null" && documentOrigin !== "null" && frameOrigin !== documentOrigin)
+      return false;
+  }
   return !BENIGN_RENDERER_CONSOLE_MESSAGES.some((pattern) => pattern.test(diagnostic.message));
 }
 
@@ -32,7 +45,8 @@ export function unexpectedDesktopDiagnostics(diagnostics) {
 export function formatDesktopDiagnostics(diagnostics) {
   return diagnostics
     .map((diagnostic) => {
-      const location = diagnostic.url || diagnostic.sourceId || "unknown renderer";
+      const location =
+        diagnostic.frameUrl || diagnostic.url || diagnostic.sourceId || "unknown renderer";
       const level = diagnostic.type === "console" ? `/${diagnostic.level}` : "";
       // The document URL names the renderer; the source names the code. For an
       // uncaught rejection they differ, and only the second is actionable, so a

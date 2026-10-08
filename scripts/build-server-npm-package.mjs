@@ -150,7 +150,14 @@ async function stageServer(nativeArtifacts) {
       vibestudio: "scripts/vibestudio-cli-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "scripts", "build-resources", "native/node/distribution.json", ".nvmrc"],
+    files: [
+      "dist",
+      "vendor",
+      "scripts",
+      "build-resources",
+      "native/node/distribution.json",
+      ".nvmrc",
+    ],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies(),
@@ -163,16 +170,23 @@ export async function stageSpeechRuntime(root) {
   await assertPhononRuntimeArtifacts(repoRoot);
   const destination = path.join(root, "dist/phonon");
   mkdirp(destination);
-  fs.cpSync(path.join(repoRoot, "dist/phonon", PHONON_VENDOR_ID), path.join(destination, PHONON_VENDOR_ID), {
-    recursive: true,
-    mode: fs.constants.COPYFILE_FICLONE,
-  });
+  fs.cpSync(
+    path.join(repoRoot, "dist/phonon", PHONON_VENDOR_ID),
+    path.join(destination, PHONON_VENDOR_ID),
+    {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    }
+  );
   copyFile("dist/phonon/runtime.json", path.join(destination, "runtime.json"));
   await assertPhononRuntimeArtifacts(root);
 }
 
 export function stageNodeRuntimeInstaller(root) {
-  copyFile("scripts/node-runtime-artifacts.mjs", path.join(root, "scripts/node-runtime-artifacts.mjs"));
+  copyFile(
+    "scripts/node-runtime-artifacts.mjs",
+    path.join(root, "scripts/node-runtime-artifacts.mjs")
+  );
   copyFile("native/node/distribution.json", path.join(root, "native/node/distribution.json"));
   copyFile(".nvmrc", path.join(root, ".nvmrc"));
 }
@@ -266,17 +280,28 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
   for (const [name, range] of Object.entries(declarations)) {
     if (range.startsWith("workspace:")) continue;
     const rootRange = rootPkg.optionalDependencies?.[name] ?? rootPkg.dependencies?.[name];
-    if (rootRange && semver.validRange(rootRange) && semver.validRange(range) &&
-      semver.subset(rootRange, range)) continue;
+    if (
+      rootRange &&
+      semver.validRange(rootRange) &&
+      semver.validRange(range) &&
+      semver.subset(rootRange, range)
+    )
+      continue;
     const ancestor = ancestors.get(name);
-    if (ancestor && semver.validRange(range) &&
-      semver.satisfies(readJson(path.join(ancestor, "package.json")).version, range)) continue;
-    const candidates = (require.resolve.paths(`${name}/package.json`) ?? [])
-      .map((directory) => path.join(directory, name));
-    const found = candidates.find((directory) => fs.existsSync(path.join(directory, "package.json")));
+    if (
+      ancestor &&
+      semver.validRange(range) &&
+      semver.satisfies(readJson(path.join(ancestor, "package.json")).version, range)
+    )
+      continue;
+    const candidates = (require.resolve.paths(`${name}/package.json`) ?? []).map((directory) =>
+      path.join(directory, name)
+    );
+    const found = candidates.find((directory) =>
+      fs.existsSync(path.join(directory, "package.json"))
+    );
     if (!found) {
-      if (name in (pkg.optionalDependencies ?? {}))
-        continue;
+      if (name in (pkg.optionalDependencies ?? {})) continue;
       throw new Error(`Missing installed runtime dependency: ${pkg.name} -> ${name}`);
     }
     const directory = fs.realpathSync(found);
@@ -298,17 +323,22 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
   }
 }
 
-/** Root optional pins override upstream native distributions. Their declaring
- * package must ship with its installed graph, rather than let npm re-resolve
- * the upstream declarations and hide a repaired binding in a sibling slot. */
+/** Patched packages and packages with pinned optional bindings must ship their
+ * installed graph. Registry resolution cannot reproduce these repaired bytes. */
 export function computePinnedRootDependencies() {
-  return Object.entries(rootPkg.dependencies ?? {}).filter(([name, range]) => {
-    if (range.startsWith("workspace:")) return false;
-    const pkg = readJson(path.join(installedPackageDirectory(name, repoRoot), "package.json"));
-    return Object.entries(pkg.optionalDependencies ?? {}).some(([dependency, specifier]) =>
-      rootPkg.optionalDependencies?.[dependency] && rootPkg.optionalDependencies[dependency] !== specifier
-    );
-  }).map(([name, version]) => ({ name, version }));
+  return Object.entries(rootPkg.dependencies ?? {})
+    .filter(([name, range]) => {
+      if (range.startsWith("workspace:")) return false;
+      const pkg = readJson(path.join(installedPackageDirectory(name, repoRoot), "package.json"));
+      if (Object.hasOwn(rootPkg.pnpm?.patchedDependencies ?? {}, `${name}@${pkg.version}`))
+        return true;
+      return Object.entries(pkg.optionalDependencies ?? {}).some(
+        ([dependency, specifier]) =>
+          rootPkg.optionalDependencies?.[dependency] &&
+          rootPkg.optionalDependencies[dependency] !== specifier
+      );
+    })
+    .map(([name, version]) => ({ name, version }));
 }
 
 export function stagePinnedRootDependencies(root) {

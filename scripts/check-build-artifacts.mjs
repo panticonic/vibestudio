@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { applicationSourceMaps, NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
+import {
+  applicationSourceMaps,
+  NODE_ESM_COMPAT_BANNER,
+  SERVER_ESM_BANNER,
+} from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 import { assertNodeRuntimeArtifacts, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
@@ -314,6 +318,7 @@ function runExecutableSmoke(smoke) {
     cwd: repoRoot,
     encoding: "utf8",
   });
+  if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(
       `${smoke.path} failed its executable smoke (exit ${result.status}):\n${result.stderr || result.stdout}`

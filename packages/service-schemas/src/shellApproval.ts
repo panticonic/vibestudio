@@ -14,6 +14,7 @@ import type {
   DiffReviewEntry,
   PendingApproval,
   PendingApprovalBase,
+  PendingClientConfigField,
   PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
 import type {
@@ -675,15 +676,32 @@ export const invocationSnapshotSchema = z
     at: z.number(),
   })
   .strict() satisfies z.ZodType<InvocationSnapshot>;
-const approvalInputFieldSchema = z
-  .object({
-    name: z.string(),
-    label: z.string(),
-    type: z.enum(["text", "secret"]),
-    required: z.boolean(),
-    description: z.string().optional(),
-  })
-  .strict();
+const approvalInputFieldShape = {
+  name: z.string(),
+  label: z.string(),
+  required: z.boolean(),
+  description: z.string().optional(),
+};
+const approvalInputFieldSchema = z.discriminatedUnion("type", [
+  z.object({ ...approvalInputFieldShape, type: z.enum(["text", "secret"]) }).strict(),
+  z
+    .object({
+      ...approvalInputFieldShape,
+      type: z.literal("select"),
+      options: z
+        .array(
+          z
+            .object({
+              id: z.string().min(1),
+              label: z.string(),
+              description: z.string().optional(),
+            })
+            .strict()
+        )
+        .min(1),
+    })
+    .strict(),
+]) satisfies z.ZodType<PendingClientConfigField>;
 
 export const pendingApprovalSchema = z.discriminatedUnion("kind", [
   z

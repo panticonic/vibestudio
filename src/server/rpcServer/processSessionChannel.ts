@@ -101,7 +101,8 @@ export class ProcessSessionChannel implements RpcSessionChannel {
       return;
     }
     try {
-      this.process.postMessage(raw);
+      const delivery = this.process.postMessage(raw);
+      if (delivery) void delivery.catch(this.failed);
     } catch (error) {
       this.events.emit("transportError", error);
       this.close(1011, "RPC process delivery failed");
@@ -115,7 +116,12 @@ export class ProcessSessionChannel implements RpcSessionChannel {
     frame: StreamFrame,
     responder?: AuthenticatedCaller
   ): Promise<void> {
-    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
+    if (!this.open) throw new Error("Native process session closed");
+    const raw = JSON.stringify(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
+    if (Buffer.byteLength(raw) > RPC_WEBSOCKET_MAX_PAYLOAD_BYTES) {
+      throw new Error("RPC process response exceeds limit");
+    }
+    await this.process.postMessage(raw);
   }
   close(code = 1000, reason = "RPC process session closed"): void {
     if (!this.open) return;

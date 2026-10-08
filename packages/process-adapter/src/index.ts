@@ -25,7 +25,8 @@ const requireOptional = createRequire(process.execPath);
  * stdio capture, and process control.
  */
 export interface ProcessAdapter {
-  postMessage(msg: unknown): void;
+  /** Async carriers settle after delivery to the process pipe, preserving backpressure. */
+  postMessage(msg: unknown): void | Promise<void>;
   on(event: "message", handler: (msg: unknown) => void): this;
   on(event: "exit", handler: (code: number | null) => void): this;
   on(event: "spawn", handler: () => void): this;

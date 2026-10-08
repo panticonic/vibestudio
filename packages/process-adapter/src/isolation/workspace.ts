@@ -40,7 +40,8 @@ class WorkspaceCommand extends EventEmitter implements ProcessAdapter {
   constructor(
     readonly id: string,
     private readonly send: (message: unknown) => boolean,
-    private readonly pendingBytes: () => number
+    private readonly pendingBytes: () => number,
+    private readonly deliver: (message: unknown) => Promise<void>
   ) {
     super();
   }
@@ -49,8 +50,16 @@ class WorkspaceCommand extends EventEmitter implements ProcessAdapter {
     return this.pendingBytes();
   }
 
-  postMessage(value: unknown): void {
-    if (!this.exited) this.send({ type: "message", id: this.id, value });
+  postMessage(value: unknown): Promise<void> {
+    const delivery = this.exited
+      ? Promise.reject(new IsolationError("Workspace command has exited"))
+      : this.deliver({ type: "message", id: this.id, value });
+    // Synchronous callers observe transport failure through the adapter event;
+    // streaming callers also await the exact write's completion.
+    void delivery.catch((error) => {
+      if (this.listenerCount("error")) this.emit("error", error);
+    });
+    return delivery;
   }
 
   kill(): boolean {
@@ -258,7 +267,19 @@ export class WorkspaceRuntime {
     const command = new WorkspaceCommand(
       id,
       (message) => this.send(message),
-      () => this.child.stdin.writableLength
+      () => this.child.stdin.writableLength,
+      (message) =>
+        new Promise<void>((resolve, reject) => {
+          if (this.launcherExited || this.sessionRetired) {
+            reject(new IsolationError("Workspace control session retired"));
+            return;
+          }
+          try {
+            writeControl(this.child.stdin, message, (error) => (error ? reject(error) : resolve()));
+          } catch (error) {
+            reject(error);
+          }
+        })
     );
     this.commands.set(id, command);
     // The base environment is closed. Caller-supplied values are command data

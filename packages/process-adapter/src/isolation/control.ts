@@ -7,13 +7,17 @@ import type { Readable, Writable } from "node:stream";
 const MAX_FRAME = 40 * 1024 * 1024;
 const MAX_PENDING = 64 * 1024 * 1024;
 
-export function writeControl(stream: Writable, value: unknown): void {
+export function writeControl(
+  stream: Writable,
+  value: unknown,
+  delivered?: (error?: Error | null) => void
+): void {
   const frame = Buffer.from(JSON.stringify(value) + "\n");
   if (frame.length > MAX_FRAME || stream.writableLength + frame.length > MAX_PENDING) {
     throw new Error("Workspace process control buffer limit exceeded");
   }
   if (stream.destroyed || !stream.writable) throw new Error("Workspace control channel is closed");
-  stream.write(frame);
+  stream.write(frame, delivered);
 }
 
 export function readControl(
@@ -44,10 +48,7 @@ export function readControl(
         // Grow geometrically rather than copying the entire partial frame on
         // each chunk. A guest controls fragmentation as well as frame size.
         if (nextLength > pending.length) {
-          const capacity = Math.min(
-            MAX_FRAME,
-            Math.max(nextLength, pending.length * 2, 64 * 1024)
-          );
+          const capacity = Math.min(MAX_FRAME, Math.max(nextLength, pending.length * 2, 64 * 1024));
           const next = Buffer.allocUnsafe(capacity);
           pending.copy(next, 0, 0, length);
           pending = next;
@@ -72,9 +73,7 @@ export function readControl(
   stream.on("error", reject);
   stream.on("end", () => {
     reject(
-      new Error(
-        length ? "Truncated workspace control frame" : "Workspace control channel closed"
-      )
+      new Error(length ? "Truncated workspace control frame" : "Workspace control channel closed")
     );
   });
 }

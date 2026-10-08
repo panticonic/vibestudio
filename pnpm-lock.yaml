@@ -29,6 +29,9 @@ patchedDependencies:
   '@react-native-firebase/messaging@23.8.8':
     hash: 0bae9da8492dfa88b73e36505b1e0c197aa0456317fb58f53904c7ff1df9167e
     path: patches/@react-native-firebase__messaging@23.8.8.patch
+  isomorphic-git@1.36.3:
+    hash: 00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8
+    path: patches/isomorphic-git@1.36.3.patch
   react-native-tcp-socket@6.4.1:
     hash: 3419de9bf5c49768f1b92d3c596bf9c1fa202f60cd5bcc029f157b93b17ce131
     path: patches/react-native-tcp-socket.patch
@@ -291,7 +294,7 @@ importers:
         version: 7.0.5
       isomorphic-git:
         specifier: ^1.36.3
-        version: 1.36.3
+        version: 1.36.3(patch_hash=00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8)
       jotai:
         specifier: ^2.17.0
         version: 2.17.0(@babel/core@7.29.7)(@babel/template@8.0.0)(@types/react@19.2.10)(react@19.0.0)
@@ -891,7 +894,7 @@ importers:
         version: 8.0.4
       isomorphic-git:
         specifier: ^1.36.3
-        version: 1.36.3
+        version: 1.36.3(patch_hash=00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8)
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -16373,7 +16376,7 @@ snapshots:
 
   isexe@4.0.0: {}
 
-  isomorphic-git@1.36.3:
+  isomorphic-git@1.36.3(patch_hash=00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8):
     dependencies:
       async-lock: 1.4.1
       clean-git-ref: 2.0.1
