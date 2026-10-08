@@ -837,14 +837,16 @@ export function createDesktopWorkspaceRuntime(deps: {
           createDesktopEventsService({
             eventService,
             snapshots: {
-              "panel-tree-invalidated": () => latestTree,
-              "server-connection-changed": () => latestConnection,
+              "panel-tree-invalidated": () => (latestTree ? [latestTree] : []),
+              "server-connection-changed": () => (latestConnection ? [latestConnection] : []),
+              "panel-local-presentation-changed": () =>
+                controller.orchestrator.getLocalPresentationSnapshots(),
             },
             onWatchOpened: (events, context) => {
               const manager = window.viewManager;
               if (!manager) throw new Error("Desktop window is closed");
               requireAppCapability(context, manager, "panel-hosting", "Desktop server events");
-              return watch.retainMany(events);
+              return watch.retainAll(events, context.signal);
             },
           })
         );
@@ -948,6 +950,8 @@ export function createDesktopWorkspaceRuntime(deps: {
           "panel-tree-invalidated",
           "panel-presentation-changed",
           "panel:runtimeLeaseChanged",
+          "panel:executionActivated",
+          "panel:executionFailed",
           "shell-approval:pending-changed",
           "external-open:open",
           "browser-panel:open",

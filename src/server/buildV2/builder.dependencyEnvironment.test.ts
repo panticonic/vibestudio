@@ -19,6 +19,43 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it.each([true, false])(
+    "preserves guarded missing requires in owned dependencies (guarded=%s)",
+    async (guarded) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-guarded-dependency-"));
+      try {
+        const modules = path.join(root, "node_modules");
+        writePackage(modules, "owner", "owned");
+        fs.writeFileSync(
+          path.join(modules, "owner", "index.js"),
+          guarded
+            ? 'export function run() { try { return require("missing-vibestudio-optional-helper"); } catch { return "optional helper absent"; } }'
+            : 'export function run() { return require("missing-vibestudio-optional-helper"); }'
+        );
+        const entry = path.join(root, "entry.js");
+        fs.writeFileSync(entry, 'export { run } from "owner";');
+        const build = esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "cjs",
+          platform: "node",
+          write: false,
+          logLevel: "silent",
+          plugins: [createDependencyEnvironmentResolvePlugin([modules])],
+        });
+        if (guarded) {
+          const output = (await build).outputFiles[0]!.text;
+          const module = { exports: {} as { run: () => string } };
+          new Function("require", "module", output)(() => {
+            throw new Error("module not found");
+          }, module);
+          expect(module.exports.run()).toBe("optional helper absent");
+        } else await expect(build).rejects.toThrow("Could not resolve");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
   it("preserves prefix-only Node built-ins without admitting unknown Node modules", async () => {
     const options: esbuild.BuildOptions = {
       bundle: true,

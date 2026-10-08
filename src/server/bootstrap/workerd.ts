@@ -53,8 +53,6 @@ export interface WorkerdBootstrapDeps {
     | "reconcileProviderDefinitions"
     | "reconcileReceiverClasses"
   >;
-  /** Validate the sealed checkout before semantic initialization can begin. */
-  assertBootstrapSnapshotUnchanged(): Promise<void>;
   /**
    * Join a registered image identity to its current host-owned execution
    * session and context policy. Egress is long-lived, so these facts must be
@@ -382,7 +380,6 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         },
         singletonRegistry: deps.workspaceDeclarations.singletons,
       });
-      await deps.assertBootstrapSnapshotUnchanged();
       return manager;
     },
   });

@@ -7,7 +7,7 @@ import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelSlotId, type PanelEntityId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -716,6 +716,18 @@ describe("PanelManager", () => {
       aboutResult.source
     );
     expect(mem.state.slots.size).toBe(2);
+  });
+
+  it("distinguishes absent panels from failed durable reads", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const slotId = asPanelSlotId("panel:tree/missing");
+    await expect(manager.getPanel(slotId)).resolves.toBeNull();
+    const failure = new Error("durable panel query failed");
+    vi.spyOn(deps.workspaceState, "getPanelDetail").mockRejectedValue(failure);
+    await expect(manager.getPanel(slotId)).rejects.toBe(failure);
+    await expect(manager.refreshPanel(slotId)).rejects.toBe(failure);
   });
 
   it("projects one root when concurrent first reads resolve together", async () => {

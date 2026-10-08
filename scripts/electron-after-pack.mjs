@@ -1,4 +1,5 @@
 import { afterPack as checkElectronPackageBoundary } from "./check-electron-package-boundary.mjs";
+import { prebuildReleaseUserland } from "./prebuild-release-userland.mjs";
 import adhocSignMac from "./electron-adhoc-sign-mac.mjs";
 
 /**
@@ -8,6 +9,8 @@ import adhocSignMac from "./electron-adhoc-sign-mac.mjs";
 export async function afterPack(context) {
   // Reject a bundle that reintroduces the in-tree workspace or a Base source
   // projection before anything downstream trusts its contents.
+  await checkElectronPackageBoundary(context);
+  await prebuildReleaseUserland(context);
   await checkElectronPackageBoundary(context);
   // Sign last: an ad-hoc signature seals exactly the bundle the check approved.
   await adhocSignMac(context);

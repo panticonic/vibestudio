@@ -980,6 +980,62 @@ describe("PanelOrchestrator local presentation", () => {
     });
   });
 
+  it("publishes native-slot hydration failures through the presentation owner", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const { orchestrator, shellCore, panelView } = createOrchestrator(registry);
+    const slotId = "panel:tree/failed-query";
+    const failure = new Error("durable panel query failed");
+    let rejectRead!: (error: Error) => void;
+    shellCore.getPanel.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRead = reject;
+        })
+    );
+    orchestrator.onNativeSlotDeclared(slotId);
+    await vi.waitFor(() => expect(shellCore.getPanel).toHaveBeenCalledOnce());
+    expect(orchestrator.getLocalPresentation(slotId).presentation).toMatchObject({
+      state: "loading",
+      stage: "resolving",
+    });
+    rejectRead(failure);
+    await vi.waitFor(() =>
+      expect(orchestrator.getLocalPresentation(slotId).presentation).toMatchObject({
+        state: "failed",
+        stage: "resolving",
+        message: failure.message,
+      })
+    );
+    expect(orchestrator.getLocalPresentationSnapshots()).toContainEqual(
+      orchestrator.getLocalPresentation(slotId)
+    );
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    orchestrator.onNativeSlotDeclared(slotId);
+    await Promise.resolve();
+    expect(shellCore.getPanel).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a rejected renderer boot probe instead of waiting indefinitely", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/failed-boot-probe");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const failure = new Error("renderer boot probe failed");
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getBootObservation: vi.fn().mockRejectedValue(failure),
+    });
+    let loaded = false;
+    panelView.createViewForPanel.mockImplementation(async () => {
+      loaded = true;
+    });
+    panelView.hasView.mockImplementation(() => loaded);
+    await orchestrator.ensureLoaded(panel.id);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "failed",
+      stage: "booting",
+      message: failure.message,
+    });
+  });
+
   it("hydrates a query-first panel when its native slot is declared", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/native-slot-before-projection");
@@ -1427,9 +1483,6 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("presents a wanted slot once the transport comes back, with nobody asking again", async () => {
-    // The half that made the difference in the field: nothing tells this host
-    // when a dropped transport returns, and nothing was calling ensureLoaded a
-    // second time, so a slot that failed while focused stayed failed.
     vi.useFakeTimers();
     try {
       const registry = new PanelRegistry({
@@ -1460,7 +1513,8 @@ describe("PanelOrchestrator.focusPanel", () => {
 
       const attemptsWhileDown = panelView.createViewForPanel.mock.calls.length;
       transportDown = false;
-      await vi.advanceTimersByTimeAsync(5_000);
+      await orchestrator.recoverRuntimeClientRegistration();
+      await vi.advanceTimersByTimeAsync(0);
 
       // Re-driven without a second ensureLoaded, and no longer failed. Reaching
       // "ready" needs the renderer's boot and slot handshake, which this
@@ -1473,10 +1527,38 @@ describe("PanelOrchestrator.focusPanel", () => {
     }
   });
 
-  it("stops re-driving a slot that keeps failing the same way", async () => {
-    // Retryable says another attempt could succeed, not that it will. Without a
-    // bound, a cause that looks transient every time is retried for the life of
-    // the process.
+  it("recovers demand when the old navigation reports failure after registration recovers", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/recovery-race", [], { artifacts: { buildState: "ready" } });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    let rejectOldNavigation!: (error: unknown) => void;
+    const oldNavigation = new Promise<void>((_resolve, reject) => {
+      rejectOldNavigation = reject;
+    });
+    panelView.createViewForPanel.mockImplementationOnce(() => oldNavigation);
+    const loading = orchestrator.ensureLoaded(panel.id);
+    try {
+      await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalledOnce());
+      await orchestrator.recoverRuntimeClientRegistration();
+      expect(panelView.createViewForPanel).toHaveBeenCalledOnce();
+      rejectOldNavigation(
+        Object.assign(new Error("Previous transport disconnected"), {
+          code: SESSION_CONNECTION_LOST_CODE,
+          errorKind: "transport",
+        })
+      );
+      await loading;
+      await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2));
+      expect(orchestrator.getLocalPresentation(panel.id).presentation.state).not.toBe("failed");
+    } finally {
+      rejectOldNavigation(new Error("test cleanup"));
+      await Promise.allSettled([loading]);
+      await orchestrator.unregisterRuntimeClient();
+    }
+  });
+
+  it("does not re-drive transport failures merely because time passes", async () => {
     vi.useFakeTimers();
     try {
       const registry = new PanelRegistry({
@@ -1497,9 +1579,7 @@ describe("PanelOrchestrator.focusPanel", () => {
       await orchestrator.ensureLoaded(panel.id);
       await vi.advanceTimersByTimeAsync(120_000);
 
-      // One ask plus a bounded number of convergence passes, not one per second
-      // for as long as the process lives.
-      expect(panelView.createViewForPanel.mock.calls.length).toBeLessThanOrEqual(13);
+      expect(panelView.createViewForPanel).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

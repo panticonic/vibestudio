@@ -1,3 +1,4 @@
+import { UnitValidationStore } from "./unitValidationStore.js";
 import type { BuildBundleResult } from "@vibestudio/service-schemas/build";
 import { conditionsForLibraryTarget, conditionsForRuntimeUnit } from "./moduleConditions.js";
 import { serviceAuthorityDigest } from "../services/unitAdmissionStore.js";
@@ -39,6 +40,7 @@ import {
   computeBuildKey,
   setBuildRootConfig,
   getRootDependencyFingerprintInfo,
+  type RootDependencyFingerprintInfo,
   type ContentHashMap,
   type ChangeSet,
   type EffectiveVersionMap,
@@ -271,6 +273,8 @@ export interface BuildSystemRootOptions {
    * materialized candidate explicitly.
    */
   dependencyWorkspaceRoot: string;
+  /** Dependency evidence captured by the host generation and shared by its build systems. */
+  dependencyFingerprint?: RootDependencyFingerprintInfo;
   /**
    * Host-owned registries whose durable records resolve immutable build keys.
    * Collection is intentionally late-bound so the build system can start
@@ -1271,6 +1275,7 @@ export async function initBuildSystemV2(
   await setBuildRootConfig({
     appRoot: rootOptions.appRoot,
     workspaceRoot: rootOptions.dependencyWorkspaceRoot,
+    fingerprint: rootOptions.dependencyFingerprint,
   });
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
@@ -1280,7 +1285,9 @@ export async function initBuildSystemV2(
     rootOptions.runNativeJob,
     rootOptions.ensureBuildProvider
   );
+  buildStore.configureReleaseBuilds(rootOptions.appRoot);
   const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
+  const unitValidationStore = new UnitValidationStore();
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
     workspaceId: source.workspaceId,
@@ -1730,8 +1737,7 @@ export async function initBuildSystemV2(
     graphAtView: PackageGraph,
     viewStateHash: string,
     moduleConditions: readonly string[],
-    built: BuildResult | null,
-    onProgress?: (progress: BuildReportProgress) => void
+    built: BuildResult | null
   ): Promise<{ diagnostics: BuildDiagnostic[]; reusable: boolean }> => {
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
@@ -1743,7 +1749,6 @@ export async function initBuildSystemV2(
     // The same source root gives esbuild failure paths workspace coordinates
     // instead of cache/temp checkout paths.
     try {
-      onProgress?.({ repoPath: node.relativePath, phase: "typechecking" });
       const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
         internalDeps,
         viewStateHash,
@@ -1820,6 +1825,7 @@ export async function initBuildSystemV2(
               }),
         });
         diagnostics = [...diagnostics, ...tsc];
+        reusable &&= !tsc.some((diagnostic) => diagnostic.source === "infrastructure");
       } finally {
         dependencyEnvironment.release();
       }
@@ -2000,13 +2006,19 @@ export async function initBuildSystemV2(
       const key = JSON.stringify(conditions);
       let validation = validations.get(key);
       if (!validation) {
-        validation = await validateUnitSource(
-          node,
-          view.graph,
-          viewStateHash,
-          conditions,
-          outcome.built,
-          onProgress
+        onProgress?.({ repoPath: node.relativePath, phase: "typechecking" });
+        validation = await unitValidationStore.validate(
+          {
+            workspaceId: source.workspaceId,
+            stateHash: viewStateHash,
+            unitName: node.name,
+            compilerRecipe: computeBuildKey(node.name, ev, sourcemapForNode(node)),
+            artifact:
+              outcome.built?.metadata.execution?.executionDigest ?? outcome.built?.buildKey ?? null,
+            moduleConditions: conditions,
+            authorityEpoch,
+          },
+          () => validateUnitSource(node, view.graph, viewStateHash, conditions, outcome.built)
         );
         validations.set(key, validation);
       }

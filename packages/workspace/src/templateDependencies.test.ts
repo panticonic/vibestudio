@@ -30,6 +30,34 @@ function resolver(
 }
 
 describe("resolveTemplateDependencies", () => {
+  it("locks requested transitive release layers without introducing unused templates", async () => {
+    const io = resolver({ [shared]: commitB }, { [shared]: [{ url: base }] });
+    const { layers } = await resolveTemplateDependencies({
+      sourcePins: [
+        { url: base, ref: "refs/tags/v1.0.0", commit: commitA },
+        { url: "git+https://example.test/unused.git", ref: "refs/tags/v1.0.0", commit: commitB },
+      ],
+      root: { label: "workspace", dependencies: [{ url: shared }] },
+      ...io,
+    });
+    expect(layers.map((layer) => layer.url)).toEqual([base, shared]);
+    expect(layers[0]).toMatchObject({ commit: commitA, ref: "refs/tags/v1.0.0", pinned: true });
+    expect(io.resolveTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a declared commit that conflicts with the release composition", async () => {
+    const io = resolver({});
+    await expect(
+      resolveTemplateDependencies({
+        sourcePins: [{ url: base, ref: "refs/tags/v1.0.0", commit: commitA }],
+        root: { label: "workspace", dependencies: [{ url: base, commit: commitB }] },
+        ...io,
+      })
+    ).rejects.toThrow(/may carry only one exact commit/u);
+    expect(io.resolveTrack).not.toHaveBeenCalled();
+    expect(io.readDependencies).not.toHaveBeenCalled();
+  });
+
   it("resolves a floating dependency to whatever its ref names now", async () => {
     const io = resolver({ [base]: commitA });
     const { layers } = await resolveTemplateDependencies({

@@ -888,6 +888,14 @@ export function createDependencyEnvironmentResolvePlugin(
         ) {
           return { path: args.path, external: true };
         }
+        if (resolved.errors.length > 0 && ownedResolveDir === args.resolveDir) {
+          // The original import carries esbuild's try/catch optionality;
+          // returning plugin errors would discard it. Native resolution has
+          // exactly the authoritative directory we just tried, so letting it
+          // report the miss preserves guarded requires without admitting a
+          // different dependency environment. Unguarded imports still fail.
+          return null;
+        }
         if (resolved.errors.length > 0 || resolved.external || resolved.namespace !== "file") {
           return resolved;
         }

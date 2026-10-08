@@ -54,6 +54,7 @@ export class EventsClient {
   private serverEpoch: string | null = null;
   private readonly lastSequenceByEvent = new Map<EventName, number>();
   private readonly refreshQueue = new Map<string, Promise<unknown>>();
+  private watchAdmission: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelayMs = 250;
 
@@ -87,9 +88,7 @@ export class EventsClient {
   }
 
   async subscribe(event: EventName): Promise<void> {
-    if (this.subscriptions.has(event)) return;
-    this.subscriptions.add(event);
-    await this.queueRefresh();
+    await this.subscribeAll([event]);
   }
 
   async subscribeAll(events: Iterable<EventName>): Promise<void> {
@@ -100,6 +99,7 @@ export class EventsClient {
       changed = true;
     }
     if (changed) await this.queueRefresh();
+    else await this.watchAdmission;
   }
 
   async unsubscribe(event: EventName): Promise<void> {
@@ -149,9 +149,11 @@ export class EventsClient {
         : [];
     for (const watch of retiring) watch.controller.abort();
     const refresh = serializeByKey(this.refreshQueue, "events-watch", () => this.refresh());
-    return Promise.all([refresh, ...retiring.map((watch) => watch.terminal.catch(() => {}))]).then(
-      () => undefined
-    );
+    this.watchAdmission = Promise.all([
+      refresh,
+      ...retiring.map((watch) => watch.terminal.catch(() => {})),
+    ]).then(() => undefined);
+    return this.watchAdmission;
   }
 
   private async refresh(): Promise<void> {

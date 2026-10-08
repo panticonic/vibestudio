@@ -120,6 +120,8 @@ function storedArtifact(
 
 function makeHarness(
   opts: {
+    root?: string;
+    isAdmitted?: AppHostDeps["isAdmitted"];
     seeded?: boolean;
     invalidManifest?: boolean;
     approvalDecision?: "accepted" | "deny";
@@ -133,7 +135,7 @@ function makeHarness(
     ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
   } = {}
 ) {
-  const root = tempRoot();
+  const root = opts.root ?? tempRoot();
   const workspacePath = path.join(root, "source");
   const appPath = path.join(workspacePath, "apps", "shell");
   fs.mkdirSync(path.join(workspacePath, "meta"), { recursive: true });
@@ -306,6 +308,7 @@ function makeHarness(
     workspaceId: "ws",
     isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
     buildSystem,
+    isAdmitted: opts.isAdmitted,
     eventService: eventService as never,
     approvalQueue,
     approvalCoordinator,
@@ -3203,5 +3206,109 @@ describe("AppHost", () => {
         error: expect.stringContaining("pure-thin"),
       })
     );
+  });
+  it("recovers a persisted building row by owning its approved preparation", async () => {
+    const first = makeHarness();
+    first.host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const review = await first.host.reviewDeclared();
+    first.host.acceptPreapprovedTrust(review.identityKeys);
+    installApp(first.host, first.graphNode);
+    first.host.registry.patch(first.graphNode.name, {
+      status: "building",
+      activeBundleKey: null,
+      activeEv: null,
+    });
+    await first.host.shutdown();
+
+    const restored = makeHarness({ root: first.root });
+    restored.host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    expect(restored.host.registry.get(restored.graphNode.name)?.status).toBe("building");
+    await expect(restored.host.ensureActivated(restored.graphNode.name)).resolves.toBe("ready");
+    expect(restored.buildSystem.getBuild).toHaveBeenCalledTimes(1);
+    expect(restored.approvalQueue.request).not.toHaveBeenCalled();
+    expect(restored.host.registry.get(restored.graphNode.name)).toMatchObject({
+      status: "running",
+      activeBundleKey: "app-key",
+    });
+    await restored.host.shutdown();
+  });
+
+  it("restores an existing immutable release without source authority resolution or rebuilding", async () => {
+    const { host, graphNode, buildSystem, approvalQueue } = makeHarness();
+    installApp(host, graphNode);
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    host.registry.patch(graphNode.name, { status: "building" });
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.resolveBuildUnitIdentity).not.toHaveBeenCalled();
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    await host.shutdown();
+  });
+
+  it("coalesces activation callers and joins their owned build on shutdown", async () => {
+    const { host, graphNode, buildSystem } = makeHarness();
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    host.acceptPreapprovedTrust((await host.reviewDeclared()).identityKeys);
+    const built = await buildSystem.getBuild();
+    buildSystem.getBuild.mockClear();
+    let finish!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    buildSystem.getBuild.mockImplementation(async () => {
+      started();
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return built;
+    });
+    const a = host.ensureActivated(graphNode.name);
+    const b = host.ensureActivated(graphNode.name);
+    expect(a).toBe(b);
+    await startedPromise;
+    let stopped = false;
+    const shutdown = host.shutdown().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    await expect(host.ensureActivated(graphNode.name)).rejects.toThrow("retiring");
+    finish();
+    await expect(a).resolves.toBe("ready");
+    await shutdown;
+    expect(buildSystem.getBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates the original preparation failure to every activation caller", async () => {
+    const { host, graphNode, buildSystem } = makeHarness();
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    host.acceptPreapprovedTrust((await host.reviewDeclared()).identityKeys);
+    const failure = new Error("disk could not read the app source");
+    buildSystem.getBuild.mockRejectedValue(failure);
+    const a = host.ensureActivated(graphNode.name);
+    const b = host.ensureActivated(graphNode.name);
+    await expect(a).rejects.toBe(failure);
+    await expect(b).rejects.toBe(failure);
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      status: "error",
+      lastError: failure.message,
+    });
+    await host.shutdown();
+  });
+
+  it("opens a fresh app while its permission review remains unresolved", async () => {
+    const { host, graphNode, buildSystem, approvalQueue } = makeHarness({
+      isAdmitted: () => false,
+    });
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const review = await host.reviewDeclared();
+    expect(review.units).toHaveLength(1);
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
+    expect(buildSystem.getBuild).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(host.registry.get(graphNode.name)?.status).toBe("running");
+    expect((await host.reviewDeclared()).units).toHaveLength(1);
+    await host.shutdown();
   });
 });

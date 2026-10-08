@@ -373,113 +373,30 @@ describe("rpcClient", () => {
     });
   });
 
-  it("routes a paired local workspace through the hub-authenticated loopback endpoint", async () => {
-    localTransportMocks.resolve.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:46247",
-    });
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL) => {
-        requests.push(String(url));
-        if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({
-              shellToken: "loopback-token",
-              callerId: `shell:${PAIRED_CREDS.deviceId}`,
-              deviceId: PAIRED_CREDS.deviceId,
-              label: "CLI test device",
-              serverId: PAIRED_CREDS.serverId,
-              serverBootId: `boot_${"C".repeat(24)}`,
-              workspaceId: PAIRED_CREDS.workspaceId,
-            })
-          );
-        }
-        if (String(url) === "http://127.0.0.1:46247/rpc") {
-          return new Response(
-            rpcResult({
-              workspace: "dev",
-              workspaceId: PAIRED_CREDS.workspaceId,
-              running: true,
-              serverUrl: "http://127.0.0.1:46247/_workspace/dev",
-              workspaceReach: PAIRED_CREDS.workspacePairing,
-              serverId: PAIRED_CREDS.serverId,
-              serverBootId: `boot_${"C".repeat(24)}`,
-            })
-          );
-        }
-        return new Response(rpcResult({ workspace: "dev" }));
-      })
-    );
-
-    const client = new RpcClient(PAIRED_CREDS);
-    await expect(client.call("auth.getConnectionInfo", [])).resolves.toEqual({ workspace: "dev" });
-
-    expect(localTransportMocks.resolve).toHaveBeenCalledOnce();
-    expect(requests).toEqual([
-      "http://127.0.0.1:46247/_r/s/auth/refresh-shell",
-      "http://127.0.0.1:46247/rpc",
-      "http://127.0.0.1:46247/_workspace/dev/_r/s/auth/refresh-shell",
-      "http://127.0.0.1:46247/_workspace/dev/rpc",
-    ]);
-    expect(irohMocks.ctor).not.toHaveBeenCalled();
-  });
-
-  it("opens sibling transports from one resolved workspace route", async () => {
-    localTransportMocks.resolve.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:46247",
-    });
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL) => {
-        requests.push(String(url));
-        if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            refreshShellResult("loopback-token", `shell:${PAIRED_CREDS.deviceId}`)
-          );
-        }
-        if (String(url) === "http://127.0.0.1:46247/rpc") {
-          return new Response(
-            rpcResult({
-              workspace: "dev",
-              workspaceId: PAIRED_CREDS.workspaceId,
-              running: true,
-              serverUrl: "http://127.0.0.1:46247/_workspace/dev",
-              workspaceReach: PAIRED_CREDS.workspacePairing,
-              serverId: PAIRED_CREDS.serverId,
-              serverBootId: `boot_${"C".repeat(24)}`,
-            })
-          );
-        }
-        return new Response(rpcResult({ workspace: "dev" }));
-      })
-    );
-
+  it("preserves Iroh device binding when the same hub is locally discoverable", async () => {
+    localTransportMocks.resolve.mockResolvedValue({ serverUrl: "http://127.0.0.1:46247" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    irohMocks.call.mockResolvedValue({ workspace: "dev" });
     const primary = new RpcClient(PAIRED_CREDS);
+    const release = primary.retainConnection();
     const sibling = await primary.openSiblingConnection();
-    await primary.call("auth.getConnectionInfo", []);
+    await expect(primary.call("auth.getConnectionInfo", [])).resolves.toEqual({ workspace: "dev" });
     await sibling.call("auth.getConnectionInfo", []);
-
-    expect(localTransportMocks.resolve).toHaveBeenCalledOnce();
-    expect(requests.filter((url) => url === "http://127.0.0.1:46247/rpc")).toHaveLength(1);
-    expect(
-      requests.filter((url) => url === "http://127.0.0.1:46247/_workspace/dev/rpc")
-    ).toHaveLength(2);
-    expect(irohMocks.ctor).not.toHaveBeenCalled();
-  });
-
-  it("does not hide a rejected local workspace route behind a Iroh fallback", async () => {
-    localTransportMocks.resolve.mockRejectedValue(
-      new Error("The local hub routed the paired device to a different server or workspace")
+    expect(localTransportMocks.resolve).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(irohMocks.ctor).toHaveBeenCalledOnce();
+    expect(irohMocks.ctor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reach: PAIRED_CREDS.workspacePairing,
+        endpointSecret: Buffer.from(PAIRED_CREDS.endpointSecret, "base64url"),
+      })
     );
-
-    const client = new RpcClient(PAIRED_CREDS);
-    await expect(client.call("auth.getConnectionInfo", [])).rejects.toThrow(
-      "different server or workspace"
-    );
-    await expect(client.close()).resolves.toBeUndefined();
-    expect(irohMocks.ctor).not.toHaveBeenCalled();
+    await sibling.close();
+    expect(irohMocks.close).not.toHaveBeenCalled();
+    await release();
+    await primary.close();
+    expect(irohMocks.close).toHaveBeenCalledOnce();
   });
 
   it("connects an explicit Iroh endpoint without resolving a workspace", async () => {

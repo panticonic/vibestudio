@@ -16,19 +16,7 @@ import {
 } from "@vibestudio/shared/panel/panelLease";
 import type { PanelHttpServerLike, PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
-import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 
-/** How long to wait before looking again at a slot still owed a presentation. */
-const PRESENTATION_CONVERGENCE_DELAY_MS = 1_000;
-
-/**
- * How many convergence passes one slot gets before it is left alone.
- *
- * Retryable says another attempt could succeed, not that it will. Without a
- * bound, a cause that looks transient every time would be retried for the life
- * of the process.
- */
-const PRESENTATION_CONVERGENCE_ATTEMPT_LIMIT = 12;
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
@@ -97,7 +85,7 @@ interface PresentationAttempt {
   readonly token: object;
   readonly slotId: string;
   readonly attemptId: string;
-  readonly targetKey: string;
+  targetKey: string;
   status: "active" | "ready" | "unavailable" | "failed" | "cancelled";
   stage: PanelPresentationStage;
   completion: Promise<PresentationAttemptResult>;
@@ -155,28 +143,6 @@ export class PanelPresentationController {
    * presentation.
    */
   private readonly presentationDemand = new Set<string>();
-  /**
-   * Convergence passes spent on a slot since it last became ready.
-   *
-   * A cause classified as retryable is not a promise that it will pass, so
-   * this bounds the loop: a slot that keeps failing the same way stops being
-   * re-driven instead of being retried until the process ends.
-   */
-  private readonly convergenceAttemptsBySlot = new Map<string, number>();
-  private converging = false;
-  /**
-   * Closes the loop between what is wanted and what is presented.
-   *
-   * A retryable failure records a condition that was expected to pass, and
-   * this host is not told when it does — the transport recovering is not an
-   * event that arrives here. So the level check is the mechanism: ask again
-   * on a steady cadence until the slot is presented or has run out of tries.
-   */
-  private readonly presentationConvergence = new AsyncStateConvergenceLoop<number>(
-    () => this.convergePresentationDemand(),
-    (owed) => owed > 0,
-    PRESENTATION_CONVERGENCE_DELAY_MS
-  );
   private readonly bootEvidenceBySlot = new Map<
     string,
     { webContentsId: number; observation: PanelBootObservation }
@@ -255,6 +221,10 @@ export class PanelPresentationController {
         presentation: { state: "idle", slotId: panelId },
       }
     );
+  }
+
+  getPresentationSnapshots(): PanelPresentationSnapshot[] {
+    return [...this.presentationBySlot.values()];
   }
 
   private publish(presentation: PanelPresentation): PanelPresentationSnapshot {
@@ -343,56 +313,6 @@ export class PanelPresentationController {
             : "cancelled";
     this.publish(presentation);
     attempt.resolve(presentation);
-    if (presentation.state === "ready") this.convergenceAttemptsBySlot.delete(panelId);
-    if (presentation.state === "failed" && presentation.retryable) {
-      this.requestPresentationConvergence();
-    }
-  }
-
-  /**
-   * Ask for another convergence pass over slots that are owed a presentation.
-   *
-   * Never from inside a pass. The loop replays a request made while it is
-   * running with no delay at all, so a pass that re-settles a failure would
-   * ask itself to run again immediately and spin. Within a pass the loop's own
-   * level check owns the next attempt, at its own cadence.
-   */
-  private requestPresentationConvergence(): void {
-    if (this.converging) return;
-    this.presentationConvergence.request();
-  }
-
-  /**
-   * Re-drive every slot that is wanted, has failed, and could go differently.
-   *
-   * Returns how many are still owed one, which is what tells the loop whether
-   * to look again — the transport coming back is not an event this host sees,
-   * so the level check is what closes the gap.
-   */
-  private async convergePresentationDemand(): Promise<number> {
-    this.converging = true;
-    try {
-      for (const slotId of [...this.presentationDemand]) {
-        if (!this.isRetryableFailure(slotId)) continue;
-        const attempts = this.convergenceAttemptsBySlot.get(slotId) ?? 0;
-        if (attempts >= PRESENTATION_CONVERGENCE_ATTEMPT_LIMIT) continue;
-        this.convergenceAttemptsBySlot.set(slotId, attempts + 1);
-        await this.present(slotId).catch((error: unknown) => {
-          log.warn(
-            `[presentationConvergence] ${slotId} failed again: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        });
-      }
-      return [...this.presentationDemand].filter(
-        (slotId) =>
-          this.isRetryableFailure(slotId) &&
-          (this.convergenceAttemptsBySlot.get(slotId) ?? 0) < PRESENTATION_CONVERGENCE_ATTEMPT_LIMIT
-      ).length;
-    } finally {
-      this.converging = false;
-    }
   }
 
   private isRetryableFailure(slotId: string): boolean {
@@ -560,6 +480,23 @@ export class PanelPresentationController {
       .catch(() => undefined)
       .then(() => this.panelRuntime.registerClient(this.registration));
     await this.registrationPromise;
+    // Registration recovery is authoritative evidence that a new transport
+    // generation is available. Re-drive demand once; a failed attempt remains
+    // visible until a later recovery, lease transition, or explicit user action.
+    for (const slotId of this.presentationDemand) {
+      const previousProgress = this.progressBySlot.get(slotId);
+      void (async () => {
+        // The old generation may report its disconnect after the new
+        // registration succeeds. Observe that operation's terminal result
+        // before deciding whether this demand needs a new attempt.
+        await previousProgress?.catch(() => undefined);
+        if (this.presentationDemand.has(slotId) && this.isRetryableFailure(slotId)) {
+          await this.present(slotId);
+        }
+      })().catch((error) => {
+        log.warn(`[recoverClientRegistration] ${slotId}: ${String(error)}`);
+      });
+    }
   }
 
   async unregisterClient(): Promise<void> {
@@ -836,12 +773,11 @@ export class PanelPresentationController {
     // Asking is what establishes demand, whatever this call goes on to answer.
     this.presentationDemand.add(panelId);
     let panel = this.deps.registry.getPanel(panelId);
-    if (!panel && !ownedLease) panel = await this.hydrateAddressedPanel(panelId);
     const connectionId =
       ownedLease?.connectionId ?? this.connectionBySlot.get(panelId)?.connectionId;
     const targetKey = panel
       ? this.targetKeyFor(panel, ownedLease?.runtimeEntityId, connectionId)
-      : `${ownedLease!.runtimeEntityId}|${connectionId ?? "unassigned"}|unhydrated`;
+      : `${ownedLease?.runtimeEntityId ?? "unresolved"}|${connectionId ?? "unassigned"}|unhydrated`;
     const currentAttempt = this.attemptBySlot.get(panelId);
     const currentSnapshot = this.getPresentation(panelId).presentation;
     if (!force && currentAttempt?.status === "active" && currentAttempt.targetKey === targetKey) {
@@ -909,8 +845,18 @@ export class PanelPresentationController {
     reuseOwnedLease = false
   ): Promise<void> {
     try {
-      this.setAttemptStage(attempt, "leasing");
       let currentSnapshot = snapshot;
+      if (!currentSnapshot && !reuseOwnedLease) {
+        const panel = await this.hydrateAddressedPanel(attempt.slotId);
+        if (!this.isCurrent(attempt.slotId, attempt)) return;
+        attempt.targetKey = this.targetKeyFor(
+          panel,
+          undefined,
+          this.connectionBySlot.get(attempt.slotId)?.connectionId
+        );
+        currentSnapshot = getCurrentSnapshot(panel);
+      }
+      this.setAttemptStage(attempt, "leasing");
       if (reuseOwnedLease) {
         await this.deps.shellCore.refreshPanel(asPanelSlotId(attempt.slotId));
         if (!this.isCurrent(attempt.slotId, attempt)) return;
@@ -951,9 +897,7 @@ export class PanelPresentationController {
           this.publishReadyIfAttached(attempt.slotId, attempt);
           return;
         }
-        const boot = await this.deps.cdpHost
-          .getBootObservation(attempt.slotId)
-          .catch(() => ({ kind: "unavailable" as const }));
+        const boot = await this.deps.cdpHost.getBootObservation(attempt.slotId);
         if (!this.isCurrent(attempt.slotId, attempt)) return;
         if (boot.kind === "observed" && typeof contents?.id === "number") {
           this.handlePanelBoot(attempt.slotId, contents.id, boot.observation);
@@ -1521,7 +1465,6 @@ export class PanelPresentationController {
   unloadPanel(panelId: string, transition: "lease-transfer" | "unload" = "unload"): void {
     // Nothing is owed a presentation it was asked to drop.
     this.presentationDemand.delete(panelId);
-    this.convergenceAttemptsBySlot.delete(panelId);
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
     this.releaseLocalPanelRuntime(panelId, transition);

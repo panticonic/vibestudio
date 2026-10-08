@@ -132,6 +132,26 @@ describe("WorkspaceRootTemplateBootstrap", () => {
       { path: "extensions/templates/README.md", text: "unit documentation" },
     ]);
 
+  it("publishes the acquired template content independently of mutable projection bytes", async () => {
+    const fx = fixture(seededSnapshot());
+    await fx.bootstrap.prepareSource();
+    const first = await fx.bootstrap.prepareBootstrapState();
+    const acquisitions = fx.acquire.mock.calls.length;
+    fs.writeFileSync(
+      path.join(fx.sourcePath, "extensions/templates/index.ts"),
+      "changed projection"
+    );
+    expect(await fx.bootstrap.prepareBootstrapState()).toBe(first);
+    expect(fx.acquire).toHaveBeenCalledTimes(acquisitions);
+    const nodeBytes = fx.blobs.get(first.slice("state:".length));
+    expect(nodeBytes).toBeDefined();
+    expect(sha256Hex(nodeBytes!)).toBe(first.slice("state:".length));
+    const sourceDigest = sha256Hex(new TextEncoder().encode("export {};"));
+    expect(
+      [...fx.blobs.values()].some((bytes) => new TextDecoder().decode(bytes).includes(sourceDigest))
+    ).toBe(true);
+  });
+
   it("records what a designated template shipped, so units need no signature", async () => {
     const fx = fixture(seededSnapshot(), { designation: () => ({ vouchesWholeTree: false }) });
 
@@ -469,6 +489,34 @@ describe("composeDeclaredTemplateLayers", () => {
       },
     ]);
   }
+
+  it("composes a default release from its exact source pins without resolving floating dependencies", async () => {
+    const pin = {
+      url: "git+https://example.test/system.git",
+      ref: "refs/tags/v1.0.0",
+      commit: "a".repeat(40),
+    };
+    const base = { url: dependencyUrl, ref: "refs/tags/v1.0.0", commit: baseCommit };
+    const resolveTrack = vi.fn(async () => ({ ref: "refs/tags/v2.0.0", commit: baseCommit }));
+    const acquire = vi.fn(async () => baseLayer());
+    const input = {
+      pin,
+      root: dependentRoot(),
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      releaseTemplates: [pin, base],
+      acquire,
+      resolveTrack,
+    };
+    const composed = await composeDeclaredTemplateLayers(input);
+    expect(resolveTrack).not.toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledWith(base);
+    expect(composed.layers[0]).toMatchObject(base);
+    await composeDeclaredTemplateLayers({ ...input, purpose: "author" });
+    expect(resolveTrack).toHaveBeenCalledOnce();
+    resolveTrack.mockClear();
+    await composeDeclaredTemplateLayers({ ...input, pin: { ...pin, commit: "c".repeat(40) } });
+    expect(resolveTrack).toHaveBeenCalledOnce();
+  });
 
   it.each([undefined, "use", "author"] as const)(
     "composes dependency ownership with purpose %s",

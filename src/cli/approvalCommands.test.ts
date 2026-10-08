@@ -242,7 +242,7 @@ describe("approval watch ownership", () => {
         watchId,
         userId: "alice",
         events: topics,
-        snapshots: { "shell-approval:pending-changed": () => ({ pending: [capability] }) },
+        snapshots: { "shell-approval:pending-changed": () => [{ pending: [capability] }] },
         onClosed: () => {
           released = true;
         },

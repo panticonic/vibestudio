@@ -184,6 +184,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.runtime.getPresentation(panelId);
   }
 
+  getLocalPresentationSnapshots(): PanelPresentationSnapshot[] {
+    return this.runtime.getPresentationSnapshots();
+  }
+
   onNativeSlotDeclared(panelId: string): void {
     this.runtime.onNativeSlotDeclared(panelId);
   }

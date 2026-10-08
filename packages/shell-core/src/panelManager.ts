@@ -783,20 +783,12 @@ export class PanelManager {
   }
 
   async getPanel(slotId: PanelSlotId): Promise<Panel | null> {
-    try {
-      return await this.requireStoredPanel(slotId);
-    } catch {
-      return null;
-    }
+    return this.readStoredPanel(slotId);
   }
 
   /** Refresh one bounded runtime projection from durable query state. */
   async refreshPanel(slotId: PanelSlotId): Promise<Panel | null> {
-    try {
-      return await this.requireStoredPanel(slotId, true);
-    } catch {
-      return null;
-    }
+    return this.readStoredPanel(slotId, true);
   }
 
   onStateArgsChanged(
@@ -1632,66 +1624,71 @@ export class PanelManager {
     this.registry.updateIconDecoration(panelId, metadata);
   }
 
-  private async requireStoredPanel(slotId: PanelSlotId, forceRefresh = false): Promise<Panel> {
+  private async requireStoredPanel(slotId: PanelSlotId): Promise<Panel> {
+    const panel = await this.readStoredPanel(slotId);
+    if (!panel) throw new Error(`Panel not found: ${slotId}`);
+    return panel;
+  }
+
+  private async readStoredPanel(slotId: PanelSlotId, forceRefresh = false): Promise<Panel | null> {
     let panel = this.registry.getPanel(slotId) ?? null;
     if (!panel || forceRefresh) {
       const detail = await this.workspaceState.getPanelDetail(slotId);
-      if (detail) {
-        // Another bounded refresh may have projected this slot while the
-        // durable detail read was in flight. Reconcile against the registry
-        // again before insertion so concurrent first reads cannot prepend the
-        // same root twice.
-        panel = this.registry.getPanel(slotId) ?? panel;
-        const snapshot = this.snapshotFromHistoryRow(detail.currentHistory);
-        const entity = detail.entity;
-        const source = entity.source;
-        const isBrowser = snapshot.source.startsWith("browser:");
-        const preservesMaterializedView =
-          panel?.runtimeEntityId === detail.slot.current_entity_id &&
-          panel?.buildKey === (entity.activeBuildKey ?? null) &&
-          panel?.executionDigest === (entity.activeExecutionDigest ?? null);
-        const projected: Panel = {
-          id: slotId,
-          title:
-            normalizePanelTitle(detail.slot.current_entity_title) ??
-            this.titleFor(slotId, snapshot.source),
-          runtimeEntityId: detail.slot.current_entity_id,
-          effectiveVersion: source.effectiveVersion,
-          buildKey: entity.activeBuildKey ?? null,
-          executionDigest: entity.activeExecutionDigest ?? null,
-          authorityRequests: entity.activeAuthority?.requests,
-          ...(detail.slot.owner_user_id ? { owner: detail.slot.owner_user_id } : {}),
-          children: [],
-          snapshot,
-          history: { entries: [snapshot], index: 0 },
-          artifacts:
-            preservesMaterializedView && panel
-              ? panel.artifacts
-              : entity.status === "preparing"
-                ? { buildState: "pending", buildProgress: "Preparing panel runtime..." }
-                : isBrowser
-                  ? { buildState: "ready", htmlPath: snapshot.source.slice("browser:".length) }
-                  : { buildState: "building", buildProgress: "Loading panel runtime..." },
-          navigation: {
-            canGoBack: (detail.slot.current_history_cursor ?? 0) > 0,
-            canGoForward:
-              (detail.slot.current_history_cursor ?? 0) <
-              Math.max(0, (detail.slot.history_count ?? 1) - 1),
-          },
-        };
-        if (panel) {
-          const children = panel.children;
-          Object.assign(panel, projected);
-          panel.children = children;
-        } else {
-          panel = projected;
-          this.registry.addPanel(panel, null, { addAsRoot: true });
-        }
-        this.currentEntityBySlot.set(slotId, detail.entity.id as PanelEntityId);
-        this.currentEntitySourceBySlot.set(slotId, detail.entity.source);
+      if (!detail) return null;
+      // Another bounded refresh may have projected this slot while the
+      // durable detail read was in flight. Reconcile against the registry
+      // again before insertion so concurrent first reads cannot prepend the
+      // same root twice.
+      panel = this.registry.getPanel(slotId) ?? panel;
+      const snapshot = this.snapshotFromHistoryRow(detail.currentHistory);
+      const entity = detail.entity;
+      const source = entity.source;
+      const isBrowser = snapshot.source.startsWith("browser:");
+      const preservesMaterializedView =
+        panel?.runtimeEntityId === detail.slot.current_entity_id &&
+        panel?.buildKey === (entity.activeBuildKey ?? null) &&
+        panel?.executionDigest === (entity.activeExecutionDigest ?? null);
+      const projected: Panel = {
+        id: slotId,
+        title:
+          normalizePanelTitle(detail.slot.current_entity_title) ??
+          this.titleFor(slotId, snapshot.source),
+        runtimeEntityId: detail.slot.current_entity_id,
+        effectiveVersion: source.effectiveVersion,
+        buildKey: entity.activeBuildKey ?? null,
+        executionDigest: entity.activeExecutionDigest ?? null,
+        authorityRequests: entity.activeAuthority?.requests,
+        ...(detail.slot.owner_user_id ? { owner: detail.slot.owner_user_id } : {}),
+        children: [],
+        snapshot,
+        history: { entries: [snapshot], index: 0 },
+        artifacts:
+          preservesMaterializedView && panel
+            ? panel.artifacts
+            : entity.status === "preparing"
+              ? { buildState: "pending", buildProgress: "Preparing panel runtime..." }
+              : isBrowser
+                ? { buildState: "ready", htmlPath: snapshot.source.slice("browser:".length) }
+                : { buildState: "building", buildProgress: "Loading panel runtime..." },
+        navigation: {
+          canGoBack: (detail.slot.current_history_cursor ?? 0) > 0,
+          canGoForward:
+            (detail.slot.current_history_cursor ?? 0) <
+            Math.max(0, (detail.slot.history_count ?? 1) - 1),
+        },
+      };
+      if (panel) {
+        const children = panel.children;
+        Object.assign(panel, projected);
+        panel.children = children;
+      } else {
+        panel = projected;
+        this.registry.addPanel(panel, null, { addAsRoot: true });
       }
+      this.currentEntityBySlot.set(slotId, detail.entity.id as PanelEntityId);
+      this.currentEntitySourceBySlot.set(slotId, detail.entity.source);
     }
-    if (!panel) throw new Error(`Panel not found: ${slotId}`);
+    if (!panel) return null;
     this.touchRuntimePanel(slotId);
     this.refreshPanelDecoration(slotId);
     return panel;

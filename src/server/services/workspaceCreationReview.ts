@@ -53,6 +53,13 @@ export class WorkspaceCreationReviewStore {
     return this.state?.pending === true;
   }
 
+  /** Only initialization can create a review obligation. Restoring an existing
+   * workspace must not run discovery to infer a new one. */
+  async prepareReview<T>(prepare: () => Promise<T>): Promise<T | undefined> {
+    if (!this.isPending()) return undefined;
+    return prepare();
+  }
+
   rootTemplate(): CreationReviewFile["rootTemplate"] {
     return this.state?.rootTemplate;
   }

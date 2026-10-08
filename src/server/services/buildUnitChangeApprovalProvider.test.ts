@@ -75,6 +75,27 @@ function approvalStore() {
   };
 }
 
+function creationBuildSystem(identities: BuildUnitIdentityResolution[]) {
+  return {
+    getGraph: () => ({
+      allNodes: () =>
+        identities.map((identity) => ({
+          kind: identity.kind,
+          relativePath: identity.unitPath,
+        })),
+    }),
+    resolveBuildUnits: vi.fn(async (repoPaths: string[]) =>
+      repoPaths.map(
+        (repoPath) => identities.find((identity) => identity.unitPath === repoPath) ?? null
+      )
+    ),
+    resolveBuildUnitIdentity: vi.fn(
+      async (repoPath: string) =>
+        identities.find((identity) => identity.unitPath === repoPath) ?? null
+    ),
+  };
+}
+
 describe("createBuildUnitChangeApprovalProvider", () => {
   it("composes a new provider and consumer before rendering receiver-owned authority", async () => {
     const capability = "userland:workers/task-store/tasks.delete#*";
@@ -460,8 +481,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     const store = approvalStore();
     store.has.mockImplementation((candidate) => candidate.effectiveVersion === "ev-panel");
     const provider = createBuildUnitChangeApprovalProvider({
-      getBuildSystem: () =>
-        ({ listBuildUnitIdentities: vi.fn(async () => [panel, worker]) }) as never,
+      getBuildSystem: () => creationBuildSystem([panel, worker]) as never,
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -492,11 +512,9 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     store.latestAdmittedVersion.mockImplementation(() => "ev-from-a-previous-release");
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () =>
-        ({
-          listBuildUnitIdentities: vi.fn(async () => [
-            identity({ stateHash: state, effectiveVersion: "ev-panel" }),
-          ]),
-        }) as never,
+        creationBuildSystem([
+          identity({ stateHash: state, effectiveVersion: "ev-panel" }),
+        ]) as never,
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -523,11 +541,9 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     );
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () =>
-        ({
-          listBuildUnitIdentities: vi.fn(async () => [
-            identity({ stateHash: state, effectiveVersion: "ev-panel" }),
-          ]),
-        }) as never,
+        creationBuildSystem([
+          identity({ stateHash: state, effectiveVersion: "ev-panel" }),
+        ]) as never,
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,

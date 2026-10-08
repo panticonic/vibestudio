@@ -29,6 +29,9 @@ patchedDependencies:
   '@react-native-firebase/messaging@23.8.8':
     hash: 0bae9da8492dfa88b73e36505b1e0c197aa0456317fb58f53904c7ff1df9167e
     path: patches/@react-native-firebase__messaging@23.8.8.patch
+  app-builder-lib@26.15.3:
+    hash: 435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504
+    path: patches/app-builder-lib@26.15.3.patch
   isomorphic-git@1.36.3:
     hash: 00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8
     path: patches/isomorphic-git@1.36.3.patch
@@ -14187,7 +14190,7 @@ snapshots:
 
   anynum@1.0.1: {}
 
-  app-builder-lib@26.15.3(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3):
+  app-builder-lib@26.15.3(patch_hash=435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504)(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3):
     dependencies:
       '@electron/asar': 3.4.1
       '@electron/fuses': 1.8.0
@@ -15173,7 +15176,7 @@ snapshots:
 
   dmg-builder@26.15.3(electron-builder-squirrel-windows@26.15.3):
     dependencies:
-      app-builder-lib: 26.15.3(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
+      app-builder-lib: 26.15.3(patch_hash=435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504)(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
       builder-util: 26.15.3
       fs-extra: 10.1.0
       js-yaml: 4.3.2
@@ -15264,7 +15267,7 @@ snapshots:
 
   electron-builder-squirrel-windows@26.15.3(dmg-builder@26.15.3):
     dependencies:
-      app-builder-lib: 26.15.3(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
+      app-builder-lib: 26.15.3(patch_hash=435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504)(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
       builder-util: 26.15.3
       electron-winstaller: 5.4.0
     transitivePeerDependencies:
@@ -15273,7 +15276,7 @@ snapshots:
 
   electron-builder@26.15.3(electron-builder-squirrel-windows@26.15.3):
     dependencies:
-      app-builder-lib: 26.15.3(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
+      app-builder-lib: 26.15.3(patch_hash=435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504)(dmg-builder@26.15.3)(electron-builder-squirrel-windows@26.15.3)
       builder-util: 26.15.3
       builder-util-runtime: 9.7.0
       chalk: 4.1.2

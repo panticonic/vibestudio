@@ -81,6 +81,30 @@ describe("system-test startup preparation", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
+  it("does not mistake a permission-dependent model check for failure while creation review is preparing", async () => {
+    let reads = 0;
+    const prepared = await settleSystemTestStartup(
+      async () => {
+        reads++;
+        return reads === 1
+          ? {
+              ok: false,
+              checks: [{ name: "model", ok: false, detail: "permission review pending" }],
+            }
+          : { ok: true, checks: [{ name: "model", ok: true, detail: "ready" }] };
+      },
+      {
+        getWorkspaceCreationReviewState: async () =>
+          reads === 0 ? { status: "preparing" } : { status: "resolved" },
+        listPending: async () => [],
+        resolveInstallReview: async () => {},
+      },
+      { pollMs: 0 }
+    );
+    expect(prepared.doctor.ok).toBe(true);
+    expect(prepared.startupApprovals.creationReviewStatus).toBe("resolved");
+  });
+
   it("keeps approving startup batches and waits while their extensions reconcile", async () => {
     const pending: Array<{
       kind: "unit-install-review";
@@ -137,6 +161,7 @@ describe("system-test startup preparation", () => {
     expect(prepared.startupApprovals).toEqual({
       approvedReviewIds: ["approval:late"],
       approvedPartCount: 1,
+      creationReviewStatus: "not-required",
     });
     expect(resolved).toEqual(["approval:late"]);
   });

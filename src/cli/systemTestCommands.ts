@@ -1052,7 +1052,11 @@ export async function settleSystemTestStartup(
   options: { deadlineMs?: number; pollMs?: number; onStatus?: (status: string) => void } = {}
 ): Promise<{
   doctor: SystemTestDoctorResult;
-  startupApprovals: { approvedReviewIds: string[]; approvedPartCount: number };
+  startupApprovals: {
+    approvedReviewIds: string[];
+    approvedPartCount: number;
+    creationReviewStatus: WorkspaceCreationReviewState["status"];
+  };
 }> {
   const deadline = options.deadlineMs === undefined ? null : Date.now() + options.deadlineMs;
   const pollMs = options.pollMs ?? 250;
@@ -1099,17 +1103,23 @@ export async function settleSystemTestStartup(
 
     const result = await readDoctor();
     const waitingForBuilds = doctorIsWaitingForApprovedBuilds(result, { allowMissing: true });
-    if (!result.ok && !waitingForBuilds) {
+    const reviewPreparationComplete =
+      reviewState.status === "not-required" || reviewState.status === "resolved";
+    if (
+      !result.ok &&
+      !waitingForBuilds &&
+      reviewPreparationComplete &&
+      startupReviews.length === 0
+    ) {
       return {
         doctor: result,
         startupApprovals: {
           approvedReviewIds: [...approved],
           approvedPartCount,
+          creationReviewStatus: reviewState.status,
         },
       };
     }
-    const reviewPreparationComplete =
-      reviewState.status === "not-required" || reviewState.status === "resolved";
     const status = `creation review: ${reviewState.status}; managed startup approvals: ${startupReviews.length}; unrelated approvals left untouched: ${unrelated.length}; ${
       result.ok
         ? "doctor ready"
@@ -1128,6 +1138,7 @@ export async function settleSystemTestStartup(
         startupApprovals: {
           approvedReviewIds: [...approved],
           approvedPartCount,
+          creationReviewStatus: reviewState.status,
         },
       };
     }

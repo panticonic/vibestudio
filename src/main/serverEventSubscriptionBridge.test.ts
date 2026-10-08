@@ -49,6 +49,47 @@ function makeFixture() {
 }
 
 describe("createServerEventSubscriptionBridge", () => {
+  it("cancels and joins upstream admission when its requesting operation is cancelled", async () => {
+    let transportSignal!: AbortSignal;
+    let admitted!: () => void;
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const bridge = createServerEventSubscriptionBridge({
+      getServerClient: () =>
+        ({
+          stream: async (
+            _service: string,
+            _method: string,
+            _args: unknown[],
+            options: { signal: AbortSignal }
+          ) => {
+            transportSignal = options.signal;
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  options.signal.addEventListener("abort", () => controller.close(), {
+                    once: true,
+                  });
+                  admitted();
+                },
+              })
+            );
+          },
+        }) as never,
+      onEvent: vi.fn(),
+    });
+    const owner = new AbortController();
+    const cause = new Error("request cancelled");
+    const opening = bridge.retainAll(["panel-tree-invalidated"], owner.signal);
+    const rejected = expect(opening).rejects.toBe(cause);
+    await admission;
+    owner.abort(cause);
+    await rejected;
+    expect(transportSignal.aborted).toBe(true);
+    await bridge.close();
+  });
+
   it("folds a batch of retained topics into one response watch", async () => {
     const fixture = makeFixture();
     const release = await fixture.bridge.retainAll([
@@ -69,8 +110,8 @@ describe("createServerEventSubscriptionBridge", () => {
 
   it("reference-counts a topic and releases it with the last local watch", async () => {
     const fixture = makeFixture();
-    const releaseOne = fixture.bridge.retain("panel-tree-invalidated");
-    const releaseTwo = fixture.bridge.retain("panel-tree-invalidated");
+    const releaseOne = await fixture.bridge.retainAll(["panel-tree-invalidated"]);
+    const releaseTwo = await fixture.bridge.retainAll(["panel-tree-invalidated"]);
     await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(1));
 
     releaseOne();

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { Console } from "node:console";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import * as fs from "node:fs";
@@ -1244,6 +1245,12 @@ export function installBrokenPipeHandler(
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // stdout belongs to command results (including binary and JSON output).
+  // Library diagnostics must not corrupt that machine-readable channel.
+  const diagnostics = new Console({ stdout: process.stderr, stderr: process.stderr });
+  console.info = diagnostics.info.bind(diagnostics);
+  console.debug = diagnostics.debug.bind(diagnostics);
+
   // Unix consumers such as `head` may intentionally close a pipe before a
   // large JSON response finishes. Treat that as successful consumption rather
   // than crashing with an unhandled stdout/stderr EPIPE.

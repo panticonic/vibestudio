@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceCreationReviewStore } from "./workspaceCreationReview.js";
 
 let root: string;
@@ -46,5 +46,21 @@ describe("WorkspaceCreationReviewStore", () => {
     store.markPending({ url: "https://example.invalid/other", ref: null, version: null });
 
     expect(store.rootTemplate()?.url).toBe("https://github.com/acme/studio");
+  });
+  it("does no authority or unit discovery on existing cold starts", async () => {
+    const discover = vi.fn(async () => ({ units: ["panel"] }));
+    const existing = new WorkspaceCreationReviewStore({ statePath: root });
+    await expect(existing.prepareReview(discover)).resolves.toBeUndefined();
+    expect(discover).not.toHaveBeenCalled();
+
+    existing.markPending();
+    const pendingRestart = new WorkspaceCreationReviewStore({ statePath: root });
+    await expect(pendingRestart.prepareReview(discover)).resolves.toEqual({ units: ["panel"] });
+    expect(discover).toHaveBeenCalledTimes(1);
+    pendingRestart.resolve();
+    await expect(
+      new WorkspaceCreationReviewStore({ statePath: root }).prepareReview(discover)
+    ).resolves.toBeUndefined();
+    expect(discover).toHaveBeenCalledTimes(1);
   });
 });

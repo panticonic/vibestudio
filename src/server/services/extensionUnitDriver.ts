@@ -112,13 +112,6 @@ export function createExtensionUnitDriver(
           .listWorkspaceUnits()
           .find((candidate) => candidate.name === releaseId || candidate.source === releaseId);
         if (!row) return { status: "unavailable", reason: `Unknown extension: ${releaseId}` };
-        if (row.status === "pending-approval") return { status: "approval-required" };
-        if (row.status === "building") {
-          return { status: "preparing", reason: `${row.name} is building` };
-        }
-        if (row.status === "error" && !row.activeBundleKey) {
-          return { status: "unavailable", reason: row.lastError ?? `${row.name} failed` };
-        }
         await host().ensureActivated(row.name);
         const entity = describeRow(requireRow(row.name));
         return { status: "ready", entity };

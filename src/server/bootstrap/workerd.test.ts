@@ -63,7 +63,6 @@ describe("workerd bootstrap policy", () => {
       workspaceId: "workspace-1",
       workspaceDeclarations: inert as WorkerdBootstrapDeps["workspaceDeclarations"],
       userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
-      assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
@@ -101,7 +100,6 @@ describe("workerd bootstrap policy", () => {
 
   it("attaches the exact workspace provider after general workerd startup", async () => {
     const services: ManagedService[] = [];
-    const assertBootstrapSnapshotUnchanged = vi.fn(async () => undefined);
     const manager = { bindWorkspaceProvider: vi.fn() };
     const workerNode = {
       kind: "worker",
@@ -126,7 +124,6 @@ describe("workerd bootstrap policy", () => {
         singletons: inert,
       } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
       userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
-      assertBootstrapSnapshotUnchanged,
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
@@ -155,7 +152,6 @@ describe("workerd bootstrap policy", () => {
     ).resolves.toBe(manager);
 
     expect(manager.bindWorkspaceProvider).toHaveBeenCalledOnce();
-    expect(assertBootstrapSnapshotUnchanged).toHaveBeenCalledOnce();
     const provider = manager.bindWorkspaceProvider.mock.calls[0]?.[0];
     expect(provider.getManifestRoutes("workers/source")).toEqual([
       { source: "workers/source", pattern: "/source/*" },
@@ -215,7 +211,6 @@ describe("workerd bootstrap policy", () => {
       } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
       userlandResourceHandles:
         userlandResourceHandles as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
-      assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: routeRegistry as unknown as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",

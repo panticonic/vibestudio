@@ -8,6 +8,7 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 import {
   artifactFilePath,
   collectRetention,
+  configureReleaseBuilds,
   get,
   getByExecution,
   getOrHydrate,
@@ -27,6 +28,7 @@ import {
 } from "./buildStore.js";
 
 beforeEach(() => {
+  configureReleaseBuilds(process.cwd());
   setBuildExecutionIdentityContext({
     serviceAuthorityForSource: async () =>
       "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
@@ -104,6 +106,45 @@ describe("build artifact helpers", () => {
     } finally {
       if (previous === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
       else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previous;
+    }
+  });
+
+  it("hydrates installed release bytes into a workspace-owned record without mutating the release", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-release-build-"));
+    const key = "e".repeat(64);
+    const producerState = `state:${"a".repeat(64)}`;
+    const consumerState = `state:${"b".repeat(64)}`;
+    try {
+      setUserDataPath(path.join(root, "producer"));
+      const produced = await put(
+        key,
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey: key,
+          ev: "c".repeat(64),
+          sourcePath: "workers/a",
+          sourceStateHash: producerState,
+        }
+      );
+      const installed = path.join(root, "installation", "userland-builds", key);
+      fs.mkdirSync(path.dirname(installed), { recursive: true });
+      fs.cpSync(produced.dir, installed, { recursive: true });
+      const metadataBefore = fs.readFileSync(path.join(installed, "metadata.json"), "utf8");
+      setUserDataPath(path.join(root, "consumer"));
+      configureReleaseBuilds(path.join(root, "installation"));
+      const hydrated = await getOrHydrate(key, consumerState);
+      expect(hydrated?.metadata.sourceStateHash).toBe(consumerState);
+      expect(hydrated?.dir).toBe(path.join(root, "consumer", "builds", key));
+      expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+      expect(fs.readFileSync(path.join(installed, "metadata.json"), "utf8")).toBe(metadataBefore);
+      await expect(getOrHydrate("f".repeat(64), consumerState)).resolves.toBeNull();
+      fs.writeFileSync(path.join(installed, "worker.js"), "truncated");
+      setUserDataPath(path.join(root, "second-consumer"));
+      await expect(getOrHydrate(key, consumerState)).resolves.toBeNull();
+    } finally {
+      configureReleaseBuilds(process.cwd());
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

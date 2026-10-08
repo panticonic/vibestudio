@@ -59,7 +59,7 @@ export function readTemplateRelease(appRoot: string): ParsedTemplateRelease {
   throw new Error("This host build has no exact workspace template release pointer");
 }
 
-/** Default templates are exact source pins; their manifests declare dependencies. */
+/** Default roots and their designated dependency layers compose from this exact release pin set. */
 export function readDefaultWorkspaceTemplates(
   appRoot: string,
   environment: NodeJS.ProcessEnv = process.env

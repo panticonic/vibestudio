@@ -285,32 +285,80 @@ describe("PanelExecutionReconciler", () => {
     await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(false);
   });
 
-  it("retries a transient activation failure without another slot event", async () => {
+  it("retains the original activation failure without rebuilding on observation or acquisition", async () => {
     vi.useFakeTimers();
     try {
-      const activate = vi
-        .fn<() => Promise<RuntimeEntityHandle>>()
-        .mockRejectedValueOnce(new Error("build cache warming"))
-        .mockResolvedValue(activeHandle);
-      const onError = vi.fn();
-      const reconciler = new PanelExecutionReconciler({
-        getDetail: async () => detail,
-        resolveSlotByEntity: async () => detail.slot.slot_id,
-        listPreparingPanels: async () => [entity],
-        activate,
-        onError,
-        retryDelayMs: () => 10,
-      });
+      const failure = new Error("No matching export: createMdxComponents");
+      const { reconciler, activate, onError } = harness();
+      activate.mockRejectedValue(failure);
 
-      await reconciler.recoverPreparingPanels();
-      expect(activate).toHaveBeenCalledTimes(1);
-      expect(onError).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(10);
-      expect(activate).toHaveBeenCalledTimes(2);
+      await expect(reconciler.recoverPreparingPanels()).rejects.toBe(failure);
+      await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).rejects.toBe(
+        failure
+      );
+      await expect(reconciler.recoverPreparingPanels()).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(activate).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, detail.slot.slot_id, entity.id);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("settles a failed seed before any viewer attaches and retains the diagnostic for late observation", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const failure = new Error("No matching export: createMdxComponents");
+    const reconciler = new PanelExecutionReconciler({
+      getDetail: async () => detail,
+      resolveSlotByEntity: async () => detail.slot.slot_id,
+      listPreparingPanels: async () => [entity],
+      activate: async () => {
+        throw failure;
+      },
+      onError: (error, slotId, entityId) => {
+        const attempt = coordinator.ensureAttemptForSlot(slotId, entityId);
+        coordinator.setBuildState(slotId, { state: "failed" });
+        coordinator.reportAttemptPhase(attempt.attemptId, {
+          phase: "failed",
+          reporter: "build",
+          failure: { stage: "build", code: "compile_failed", message: (error as Error).message },
+        });
+      },
+    });
+    await expect(reconciler.recoverPreparingPanels()).rejects.toBe(failure);
+    coordinator.registerClient({
+      clientSessionId: "late-viewer",
+      label: "Viewer",
+      platform: "desktop",
+    });
+    const observation = coordinator.observeSlotLifecycle(detail.slot.slot_id);
+    expect(observation.build?.state).toBe("failed");
+    expect(observation.attempt).toMatchObject({
+      phase: "failed",
+      failure: { stage: "build", code: "compile_failed", message: failure.message },
+    });
+    await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).rejects.toBe(failure);
+  });
+
+  it("allows a new execution intent after a failed intent is replaced", async () => {
+    const { reconciler, activate } = harness();
+    activate.mockRejectedValueOnce(new Error("broken source"));
+    await expect(reconciler.recoverPreparingPanels()).rejects.toThrow("broken source");
+    reconciler.observe({
+      kind: "current-entity",
+      slotId: detail.slot.slot_id,
+      previousEntityId: entity.id,
+      currentEntityId: "panel:replacement",
+      presentation: "awaiting-execution",
+      desiredExecution: {
+        source: entity.source.repoPath,
+        key: "replacement",
+        contextId: entity.contextId,
+        stateArgs: {},
+      },
+    });
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(2));
+    expect(activate).toHaveBeenLastCalledWith(expect.objectContaining({ key: "replacement" }));
   });
 
   it("ignores executable presentation changes", async () => {

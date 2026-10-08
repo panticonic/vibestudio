@@ -575,6 +575,14 @@ export const buildPerformanceProfileSchema = z
       .object({
         elapsedMs: z.number().nonnegative(),
         cacheState: z.enum(["built-during-profile", "preexisting", "unknown"]),
+        phases: z
+          .object({
+            bundlingMs: z.number().nonnegative(),
+            validationMs: z.number().nonnegative(),
+            otherMs: z.number().nonnegative(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     verifiedCacheRun: z

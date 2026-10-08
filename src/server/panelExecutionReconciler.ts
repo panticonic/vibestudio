@@ -12,7 +12,6 @@ export interface PanelExecutionReconcilerDeps {
   listPreparingPanels(): Promise<EntityRecord[]>;
   activate(spec: RuntimeCodePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
   onError(error: unknown, slotId: string, entityId: string): void;
-  retryDelayMs?(attempt: number): number;
 }
 
 /**
@@ -23,14 +22,22 @@ export interface PanelExecutionReconcilerDeps {
  * the slot. Replaying a change or the startup sweep is therefore safe.
  */
 export class PanelExecutionReconciler {
-  private readonly inFlight = new Map<string, Promise<void>>();
-  private readonly retryAttempts = new Map<string, number>();
-  private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // A failed execution remains owned until its slot is replaced or closed.
+  // Re-observing the same intent joins its original outcome, not another build.
+  private readonly executions = new Map<string, { entityId: string; promise: Promise<void> }>();
 
   constructor(private readonly deps: PanelExecutionReconcilerDeps) {}
 
   observe(change?: SlotStateChange): void {
-    if (change?.kind !== "current-entity" || change.presentation !== "awaiting-execution") return;
+    if (change?.kind === "closed") {
+      for (const slotId of change.slotIds) this.executions.delete(slotId);
+      return;
+    }
+    if (change?.kind !== "current-entity") return;
+    if (this.executions.get(change.slotId)?.entityId !== change.currentEntityId) {
+      this.executions.delete(change.slotId);
+    }
+    if (change.presentation !== "awaiting-execution") return;
     void this.resume(
       change.slotId,
       change.currentEntityId,
@@ -50,17 +57,27 @@ export class PanelExecutionReconciler {
             stateArgs: change.desiredExecution.stateArgs,
           }
         : undefined
-    );
+    ).catch(() => {
+      // The activation owner has published the failure; event delivery has no caller.
+    });
   }
 
   async recoverPreparingPanels(): Promise<void> {
     const preparing = await this.deps.listPreparingPanels();
-    await Promise.all(
+    const outcomes = await Promise.allSettled(
       preparing.map(async (entity) => {
         const slotId = await this.deps.resolveSlotByEntity(entity.id);
         if (slotId) await this.resume(slotId, entity.id);
       })
     );
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+    if (failures.length === 1) throw failures[0]!.reason;
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        "Panel recovery failed"
+      );
+    }
   }
 
   /**
@@ -88,8 +105,8 @@ export class PanelExecutionReconciler {
     entityId: string,
     desiredSpec?: RuntimeCodePanelEntityCreateSpec
   ): Promise<void> {
-    const existing = this.inFlight.get(entityId);
-    if (existing) return existing;
+    const existing = this.executions.get(slotId);
+    if (existing?.entityId === entityId) return existing.promise;
     const startedAt = performance.now();
     console.info(
       `[PanelExecution] Activating ${entityId} for ${slotId} (${desiredSpec ? "committed handoff" : "durable recovery"})`
@@ -97,37 +114,24 @@ export class PanelExecutionReconciler {
     let failed = false;
     const work = this.activateCurrent(slotId, entityId, desiredSpec)
       .then(() => {
-        this.retryAttempts.delete(entityId);
         console.info(
           `[PanelExecution] Activated ${entityId} for ${slotId} in ${Math.round(performance.now() - startedAt)}ms`
         );
       })
       .catch((error) => {
         failed = true;
-        this.deps.onError(error, slotId, entityId);
+        if (this.executions.get(slotId)?.promise === work) {
+          this.deps.onError(error, slotId, entityId);
+        }
+        throw error;
       })
       .finally(() => {
-        if (this.inFlight.get(entityId) !== work) return;
-        this.inFlight.delete(entityId);
-        if (failed) this.scheduleRetry(slotId, entityId);
+        if (!failed && this.executions.get(slotId)?.promise === work) {
+          this.executions.delete(slotId);
+        }
       });
-    this.inFlight.set(entityId, work);
+    this.executions.set(slotId, { entityId, promise: work });
     return work;
-  }
-
-  private scheduleRetry(slotId: string, entityId: string): void {
-    if (this.retryTimers.has(entityId)) return;
-    const attempt = (this.retryAttempts.get(entityId) ?? 0) + 1;
-    this.retryAttempts.set(entityId, attempt);
-    const delay =
-      this.deps.retryDelayMs?.(attempt) ?? Math.min(30_000, 250 * 2 ** Math.min(attempt - 1, 7));
-    const timer = setTimeout(() => {
-      if (this.retryTimers.get(entityId) !== timer) return;
-      this.retryTimers.delete(entityId);
-      void this.resume(slotId, entityId);
-    }, delay);
-    timer.unref?.();
-    this.retryTimers.set(entityId, timer);
   }
 
   private async activateCurrent(

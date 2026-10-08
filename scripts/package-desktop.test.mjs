@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { excludedNativePackages, packageDesktop } from "./package-desktop.mjs";
 import { getNodeModuleFileMatcher } from "app-builder-lib/out/fileMatcher.js";
+import { PnpmNodeModulesCollector } from "app-builder-lib/out/node-module-collector/pnpmNodeModulesCollector.js";
 
 const roots = [];
 function fixture() {
@@ -69,11 +70,38 @@ test("selects the glibc runtime required by desktop Linux", () => {
   assert.ok(!excluded.includes("@native/runtime-glibc"));
 });
 
+test("collects exact nested versions from a hoisted pnpm installation", async () => {
+  const root = fixture();
+  for (const [relative, version] of [
+    ["entities", "8.1.0"],
+    ["htmlparser2/node_modules/entities", "7.0.1"],
+  ]) {
+    const directory = path.join(root, "node_modules", relative);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "package.json"),
+      JSON.stringify({ name: "entities", version })
+    );
+  }
+  const collector = new PnpmNodeModulesCollector(root, null);
+  collector.isHoisted = { value: Promise.resolve(true) };
+  // pnpm reports a virtual-store coordinate even though nodeLinker is hoisted.
+  const reported = path.join(root, "node_modules/.pnpm/entities@7.0.1/node_modules/entities");
+  const selected = await collector.locateFromDepOrRoot("entities", reported, "7.0.1");
+  assert.equal(
+    selected.packageDir,
+    path.join(root, "node_modules/htmlparser2/node_modules/entities")
+  );
+  assert.equal(selected.packageJson.version, "7.0.1");
+  assert.equal(await collector.locateFromDepOrRoot("entities", reported, "6.0.0"), null);
+});
+
 test("promotes final installers and retires each joined staging tree", async () => {
   const root = fixture();
   const seen = [];
   const outputs = await packageDesktop("linux", {
     appRoot: root,
+    arch: "x64",
     runBuild: async ({ config: configPath, targets }) => {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const arch = [...targets.values()][0].keys().next().value;
@@ -84,13 +112,9 @@ test("promotes final installers and retires each joined staging tree", async () 
       return [installer];
     },
   });
-  assert.equal(outputs.length, 2);
+  assert.equal(outputs.length, 1);
   assert.ok(seen[0][0].includes("arm64"));
-  assert.ok(seen[1][0].includes("linux-64"));
-  assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), [
-    "installer-1.deb",
-    "installer-3.deb",
-  ]);
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["installer-1.deb"]);
 });
 
 test("retires failed packaging scratch while preserving inherited release products", async () => {

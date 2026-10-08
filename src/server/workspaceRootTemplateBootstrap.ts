@@ -31,6 +31,7 @@ import {
   type ResolvedTemplateDependency,
 } from "@vibestudio/workspace/templateDependencies";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type {
   WorkspaceCreationDescriptor,
   WorkspaceTemplatePin,
@@ -63,6 +64,8 @@ export interface ComposedTemplateLayer {
 }
 
 export interface ComposeDeclaredTemplateLayersInput {
+  /** Exact pins composing the default host release; custom roots retain their declared tracks. */
+  releaseTemplates?: readonly WorkspaceTemplatePin[];
   pin: WorkspaceTemplatePin;
   purpose?: "use" | "author";
   /** The already-acquired snapshot of `pin` itself. */
@@ -140,6 +143,11 @@ export async function composeDeclaredTemplateLayers(
   };
   const resolved = await resolveTemplateDependencies({
     root: { label: pin.url, dependencies: rootManifest.dependencies },
+    sourcePins:
+      purpose === "use" &&
+      input.releaseTemplates?.some((source) => sameWorkspaceTemplatePin(source, pin))
+        ? input.releaseTemplates
+        : undefined,
     resolveTrack,
     readDependencies: async (layer) => (await acquireLayer(layer)).manifest.dependencies,
   });
@@ -279,6 +287,7 @@ export interface WorkspaceRootTemplateBootstrapDeps {
    * template records host-build units, so a third-party template cannot claim
    * any of its units ship with Vibestudio.
    */
+  releaseTemplates?: readonly WorkspaceTemplatePin[];
   designation?(pin: WorkspaceTemplatePin): { vouchesWholeTree: boolean } | null;
   /**
    * Resolve what a dependency's track selects right now. Required only once a
@@ -427,6 +436,29 @@ export class WorkspaceRootTemplateBootstrap {
     return this.preparedInitialization;
   }
 
+  /** Publish the already acquired byte identities once, without rescanning the
+   * mutable source projection. Existing workspaces recover protected main. */
+  async prepareBootstrapState(): Promise<string> {
+    await this.prepareInitialization();
+    const snapshot = this.acquiredSnapshot;
+    if (!snapshot) throw new Error("Root template acquisition produced no source snapshot");
+    const encoded = repositoryContentTree(snapshot.files);
+    for (const node of encoded.nodes) {
+      const stored = await this.deps.sink.put(new TextEncoder().encode(node.canonicalText));
+      const expected = node.treeHash;
+      if (stored.digest !== treeHashDigest(expected)) {
+        throw new Error("Content sink changed the bootstrap publication identity");
+      }
+    }
+    const state = await this.deps.sink.put(
+      new TextEncoder().encode(encoded.stateNode.canonicalText)
+    );
+    if (state.digest !== treeHashDigest(encoded.stateHash)) {
+      throw new Error("Content sink changed the bootstrap publication identity");
+    }
+    return encoded.stateHash;
+  }
+
   /**
    * Lay any templates this one is built on underneath it, and merge what they
    * declare into the one manifest the composed workspace runs on.
@@ -441,6 +473,7 @@ export class WorkspaceRootTemplateBootstrap {
       pin,
       root,
       purpose: this.readDescriptor().purpose ?? "use",
+      releaseTemplates: this.deps.releaseTemplates,
       expectedSystemEpoch: this.deps.expectedSystemEpoch,
       acquire: (layerPin) => this.deps.acquire(layerPin),
       resolveTrack: async (address) => {

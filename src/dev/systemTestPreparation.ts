@@ -76,10 +76,8 @@ export function assertSystemTestPreparationResult(
     !Array.isArray(result["startupApprovals"])
       ? (result["startupApprovals"] as Record<string, unknown>)
       : null;
-  const approvedPartCount = startupApprovals?.["approvedPartCount"];
-  if (typeof approvedPartCount !== "number" || approvedPartCount < 1) {
-    throw new Error(
-      "fresh managed workspace reached readiness without exercising its startup approval review"
-    );
+  const reviewStatus = startupApprovals?.["creationReviewStatus"];
+  if (reviewStatus !== "resolved" && reviewStatus !== "not-required") {
+    throw new Error("managed workspace preparation has no completed creation-review receipt");
   }
 }

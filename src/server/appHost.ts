@@ -389,6 +389,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private readonly loggedUnauthorizedPanelHostingSources = new Set<string>();
   private lastDeclared: WorkspaceAppDeclaration[] = [];
   private lastDevStatusDiagnosticKey: string | null = null;
+  private readonly activationFlights = new Map<string, Promise<"ready">>();
+  private retiring = false;
 
   constructor(private readonly deps: AppHostDeps) {
     this.registry = new UnitRegistry<AppRegistryEntry>({
@@ -636,6 +638,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async shutdown(): Promise<void> {
+    this.retiring = true;
+    await Promise.allSettled(this.activationFlights.values());
     await this.terminal.shutdown();
   }
 
@@ -1065,6 +1069,47 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.emitAvailable(entry, { lifecycleType: "available" }, build);
   }
 
+  /** Ensure the declared release has an owned preparation and activation.
+   * Registry status survives process death; it never proves a flight exists. */
+  ensureActivated(sourceOrName: string): Promise<"ready"> {
+    if (this.retiring) return Promise.reject(new Error("App host is retiring"));
+    this.assertAppHosting();
+    const node = this.findAppNode(sourceOrName);
+    const pending = this.activationFlights.get(node.name);
+    if (pending) return pending;
+    const flight = Promise.resolve()
+      .then(async () => {
+        await this.unitHost.whenDeclarationsStaged();
+        await this.unitHost.whenApplied(node.name);
+        const entry = this.findRegistryEntry(node.name);
+        const declared = this.lastDeclared.find(
+          (item) => normalizeRepoPath(item.source) === normalizeRepoPath(node.relativePath)
+        );
+        if (!declared) throw new Error(`App is not declared: ${node.relativePath}`);
+        // A ready immutable release (including an explicitly selected rollback)
+        // can be activated directly. Interrupted preparation must be reproduced
+        // through the ordinary build owner, regardless of saved status.
+        if (
+          !entry ||
+          !isCapabilityActiveStatus(entry.status) ||
+          !entry.activeBundleKey ||
+          !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+        ) {
+          // Permission review owns grants separately from deterministic preparation.
+          // Starting a window must not resolve that review or wait on its decision.
+          await this.applyDeclared(node, declared);
+        }
+        await this.activateRelease(node.name);
+        return "ready" as const;
+      })
+      .finally(() => {
+        if (this.activationFlights.get(node.name) === flight)
+          this.activationFlights.delete(node.name);
+      });
+    this.activationFlights.set(node.name, flight);
+    return flight;
+  }
+
   async activateRelease(sourceOrName: string): Promise<void> {
     let prepared = this.findRegistryEntry(sourceOrName);
     if (!prepared) throw new Error(`Unknown app: ${sourceOrName}`);
@@ -1081,7 +1126,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         // child can recover its durable registry before bootstrap cleanup has
         // settled the artifact store, so declaration reconciliation alone is
         // not sufficient: recover the exact approved declaration here too.
-        await this.reconcileHostTargetDeclaration(prepared.target, declared);
+        await this.applyDeclared(this.findAppNode(declared.source), declared);
         prepared = this.findRegistryEntry(sourceOrName);
         build = prepared?.activeBundleKey
           ? this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey)
@@ -1420,7 +1465,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * Compile and validate the selected Electron host artifact without admitting
    * or activating workspace code. Server readiness uses this operation so the
    * first desktop client never becomes the build scheduler; the normal launch
-   * path still owns the trust decision and executable-principal transition.
+   * path owns the executable-principal transition; permission review owns grants.
    */
   async prepareElectronArtifact(source?: string | null): Promise<ElectronHostReadiness> {
     await this.unitHost.whenDeclarationsStaged();

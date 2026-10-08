@@ -367,7 +367,14 @@ describe("build service extension diagnostics", () => {
       version: 1,
       source: "extensions/example",
       ref: "ctx:feature",
-      firstRun: { cacheState: "preexisting" },
+      firstRun: {
+        cacheState: "preexisting",
+        phases: {
+          bundlingMs: expect.any(Number),
+          validationMs: expect.any(Number),
+          otherMs: expect.any(Number),
+        },
+      },
       verifiedCacheRun: { sameBuildKeys: true },
       targets: [
         {
@@ -380,6 +387,40 @@ describe("build service extension diagnostics", () => {
     });
     expect(JSON.stringify(profile)).not.toContain("export const example");
     expect(buildSystem.getBuildReport).toHaveBeenCalledTimes(2);
+  });
+
+  it("attributes report time to compilation, validation and source preparation", async () => {
+    const buildSystem = makeBuildSystem();
+    const report = await buildSystem.getBuildReport("extensions/example");
+    vi.mocked(buildSystem.getBuildReport).mockImplementationOnce(async (_unit, _ref, progress) => {
+      progress?.({ repoPath: "extensions/example", phase: "bundling" });
+      progress?.({ repoPath: "extensions/example", phase: "typechecking" });
+      return report;
+    });
+    const clock = vi.spyOn(performance, "now");
+    clock
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(5)
+      .mockReturnValueOnce(12)
+      .mockReturnValueOnce(32);
+    try {
+      const service = createBuildService({
+        buildSystem,
+        listUnits: () => [],
+        getCallerContextId: () => null,
+      });
+      const profile = (await service.handler(
+        { caller: createVerifiedCaller("shell", "shell") },
+        "getPerformanceProfile",
+        ["extensions/example", undefined, { verifyCache: false }]
+      )) as BuildPerformanceProfileWire;
+      expect(profile.firstRun).toMatchObject({
+        elapsedMs: 32,
+        phases: { otherMs: 5, bundlingMs: 7, validationMs: 20 },
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("resolves panel metadata by its public workspace source path", async () => {

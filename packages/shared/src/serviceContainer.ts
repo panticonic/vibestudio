@@ -39,6 +39,11 @@ export class ServiceContainer {
   private startOrder: string[] = [];
   private started = false;
   private startupReport: ServiceStartupReport | null = null;
+  private startupFlight: Promise<void> | null = null;
+  private readonly startupTasks = new Set<Promise<void>>();
+  private startupStartedAt: number | null = null;
+  private readonly startupTimings = new Map<string, ServiceStartupTiming>();
+  private retiring = false;
   private dispatcher: ServiceDispatcher | null;
 
   constructor(dispatcher?: ServiceDispatcher) {
@@ -85,14 +90,45 @@ export class ServiceContainer {
    * If a dispatcher was provided, services with getServiceDefinition() have
    * their RPC definitions registered after start().
    */
-  async startAll(): Promise<void> {
-    if (this.started) {
-      throw new Error("Container is already started");
-    }
+  startAll(): Promise<void> {
+    return this.startRequired([...this.services.keys()]);
+  }
 
-    const order = this.topologicalSort();
-    const containerStartedAt = performance.now();
-    const timings = new Map<string, ServiceStartupTiming>();
+  /** Start only the dependency closure demanded by this readiness boundary.
+   * Later demand extends the same lifecycle; it does not restart ready services. */
+  startRequired(names: readonly string[]): Promise<void> {
+    if (this.retiring) return Promise.reject(new Error("Service container is retiring"));
+    if (this.startupFlight)
+      return Promise.reject(new Error("Service startup is already in progress"));
+    const flight = this.startSelected(names);
+    this.startupFlight = flight;
+    void flight
+      .finally(() => {
+        if (this.startupFlight === flight) this.startupFlight = null;
+      })
+      .catch(() => {});
+    return flight;
+  }
+
+  private async startSelected(names: readonly string[]): Promise<void> {
+    const allOrder = this.topologicalSort();
+    const required = new Set<string>();
+    const include = (name: string) => {
+      if (required.has(name)) return;
+      const service = this.services.get(name);
+      if (!service) throw new Error(`Missing service: "${name}"`);
+      required.add(name);
+      for (const dependency of service.dependencies ?? []) include(dependency);
+      for (const dependency of service.optionalDependencies ?? []) {
+        if (this.services.has(dependency)) include(dependency);
+      }
+    };
+    names.forEach(include);
+    const order = allOrder.filter((name) => required.has(name) && !this.instances.has(name));
+    if (order.length === 0) return;
+    this.started = true;
+    const containerStartedAt = (this.startupStartedAt ??= performance.now());
+    const timings = this.startupTimings;
     const started = new Set<string>();
     const activeWatchdogs = new Set<ReturnType<typeof setInterval>>();
     let startupAborted = false;
@@ -196,6 +232,7 @@ export class ServiceContainer {
     const startPromises = new Map<string, Promise<void>>();
     let firstError: unknown = null;
     const startService = (name: string): Promise<void> => {
+      if (this.instances.has(name)) return Promise.resolve();
       const existing = startPromises.get(name);
       if (existing) return existing;
       const service = this.services.get(name)!;
@@ -216,6 +253,8 @@ export class ServiceContainer {
       // Fail-fast below abandons still-pending siblings; their eventual
       // rejections must not surface as unhandled.
       void promise.catch(() => {});
+      this.startupTasks.add(promise);
+      void promise.finally(() => this.startupTasks.delete(promise)).catch(() => {});
       startPromises.set(name, promise);
       return promise;
     };
@@ -226,9 +265,9 @@ export class ServiceContainer {
       // `startupAborted` and stop themselves inside startOne.
       await Promise.all(order.map(startService));
 
-      this.startOrder = order;
+      this.startOrder = allOrder.filter((name) => this.instances.has(name));
       this.started = true;
-      const criticalLeaf = order.reduce<string | null>((latest, name) => {
+      const criticalLeaf = this.startOrder.reduce<string | null>((latest, name) => {
         if (latest === null) return name;
         return (timings.get(name)?.completionMs ?? 0) > (timings.get(latest)?.completionMs ?? 0)
           ? name
@@ -242,7 +281,7 @@ export class ServiceContainer {
       this.startupReport = {
         totalDurationMs: performance.now() - containerStartedAt,
         criticalPath,
-        services: order.map((name) => {
+        services: this.startOrder.map((name) => {
           const timing = timings.get(name);
           if (!timing) {
             throw new Error(`Missing startup timing for completed service "${name}"`);
@@ -250,10 +289,9 @@ export class ServiceContainer {
           return timing;
         }),
       };
-      log.info(`All ${order.length} services started`);
+      log.info(`${this.startOrder.length} services ready`);
     } catch (error) {
       startupAborted = true;
-      this.startupReport = null;
       const thrown = firstError ?? error;
       for (const watchdog of activeWatchdogs) clearInterval(watchdog);
       activeWatchdogs.clear();
@@ -262,7 +300,11 @@ export class ServiceContainer {
       for (const name of startedInOrder.reverse()) {
         await stopStartedInstance(name, this.instances.get(name));
       }
-      this.instances.clear();
+      for (const name of startedInOrder) {
+        this.instances.delete(name);
+        timings.delete(name);
+      }
+      this.startOrder = allOrder.filter((name) => this.instances.has(name));
       throw thrown;
     }
   }
@@ -271,6 +313,11 @@ export class ServiceContainer {
    * Stop all services in reverse dependency order.
    */
   async stopAll(): Promise<void> {
+    this.retiring = true;
+    await Promise.allSettled([
+      ...(this.startupFlight ? [this.startupFlight] : []),
+      ...this.startupTasks,
+    ]);
     if (!this.started) return;
 
     log.info(`Stopping ${this.startOrder.length} services...`);

@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { collectInstalledRuntimeReadRoots, getInstalledSpeechRuntime } from "./runtimePaths.js";
+import {
+  collectInstalledRuntimeReadRoots,
+  getInstalledSpeechRuntime,
+  getExistingAppNodeModulesRoots,
+} from "./runtimePaths.js";
 
 const fixtures: string[] = [];
 afterEach(() => {
@@ -29,6 +33,16 @@ it("resolves an immutable installed speech coordinate and rejects path traversal
   });
   writeFileSync(pointer, JSON.stringify({ version: 1, vendor: "../outside", code }));
   expect(() => getInstalledSpeechRuntime(appRoot)).toThrow(/coordinate/);
+});
+
+it("uses one physical dependency realm even when Electron exposes an ASAR alias", () => {
+  const root = fixture();
+  const appRoot = path.join(root, "app.asar");
+  for (const directory of ["app.asar/node_modules", "app.asar.unpacked/node_modules"])
+    mkdirSync(path.join(root, directory), { recursive: true });
+  expect(getExistingAppNodeModulesRoots(appRoot)).toEqual([
+    path.join(root, "app.asar.unpacked/node_modules"),
+  ]);
 });
 
 describe("installed runtime directory admission", () => {

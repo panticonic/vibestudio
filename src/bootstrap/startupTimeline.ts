@@ -2,16 +2,11 @@ import type {
   StartupConnectionProgress,
   StartupConnectionPhaseId,
 } from "../startupConnectionProgress.js";
+import type { HostLaunchProgress } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 type BootstrapPhaseState = "pending" | "active" | "complete" | "blocked" | "failed" | "skipped";
 
 export interface BootstrapTimelinePhase {
-  id:
-    | StartupConnectionPhaseId
-    | "review-trust"
-    | "start-units"
-    | "build-app"
-    | "activate-target"
-    | "connected";
+  id: StartupConnectionPhaseId | HostLaunchProgress["phase"];
   label: string;
   state: BootstrapPhaseState;
   detail?: string;
@@ -46,14 +41,20 @@ export function connectionTimeline(
 
 export function startupTimeline(
   progress: StartupConnectionProgress | null | undefined,
-  currentState: "active" | "failed" | "complete" = "active"
+  currentState: "active" | "failed" | "complete" = "active",
+  launchProgress?: readonly HostLaunchProgress[]
 ): BootstrapTimelinePhase[] {
+  const labels: Record<HostLaunchProgress["phase"], string> = {
+    "resolve-target": "Find desktop app",
+    "start-units": "Start required services",
+    "prepare-app": "Prepare desktop app",
+  };
   return [
-    ...connectionTimeline(progress, currentState),
-    { id: "review-trust", label: "Review trust", state: "pending" },
-    { id: "start-units", label: "Start privileged units", state: "pending" },
-    { id: "build-app", label: "Build desktop app", state: "pending" },
-    { id: "activate-target", label: "Activate desktop", state: "pending" },
-    { id: "connected", label: "Connected", state: "pending" },
+    ...connectionTimeline(progress, launchProgress ? "complete" : currentState),
+    ...(launchProgress ?? []).map(({ phase, ...step }) => ({
+      id: phase,
+      label: labels[phase],
+      ...step,
+    })),
   ];
 }

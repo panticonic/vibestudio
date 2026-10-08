@@ -90,6 +90,8 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 function makeHost(
   overrides: {
     initialDeclarationsStaged?: Promise<void>;
+    isAdmitted?: ExtensionHostDeps["isAdmitted"];
+    resolveUnitOrigins?: ExtensionHostDeps["resolveUnitOrigins"];
     approvalDecision?: "accepted" | "deny";
     openUnitReviewFor?: ExtensionHostDeps["openUnitReviewFor"];
     activeEv?: string | null;
@@ -1531,6 +1533,49 @@ describe("ExtensionHost reconcileDeclared", () => {
 });
 
 describe("ExtensionHost activation", () => {
+  it("prepares sealed method authority on demand while permission review remains owed", async () => {
+    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
+      installed: false,
+      activationEvents: ["onInvoke"],
+      isAdmitted: () => false,
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    host.setDeclared(declare(extensionNode.name));
+    const prepare =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject({
+      payload: { effect: "open" },
+    });
+    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(start).not.toHaveBeenCalled();
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect((await host.reviewDeclared(declare(extensionNode.name))).units).toHaveLength(1);
+  });
+
+  it("derives declaration readiness from live ownership instead of persisted approval status", () => {
+    const { host, extensionNode, buildSystem } = makeHost({
+      status: "pending-approval",
+      activeBundleKey: null,
+    });
+    host.setDeclared(declare(extensionNode.name));
+    expect(host.registry.get(extensionNode.name)?.status).toBe("available");
+    expect(buildSystem.resolveBuildUnitIdentity).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+  });
+
+  it("prepares a fresh declared extension without resolving its permission review", async () => {
+    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({ installed: false });
+    let running = false;
+    vi.spyOn(host.processes, "isRunning").mockImplementation(() => running);
+    const start = vi.spyOn(host.processes, "start").mockImplementation(async () => {
+      running = true;
+    });
+    host.setDeclared(declare(extensionNode.name));
+    await host.ensureActivated(extensionNode.name);
+    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
 
   it("does not launch a foreign exact extension after its origin review is denied", async () => {
     const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
@@ -1663,6 +1708,71 @@ describe("ExtensionHost activation", () => {
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await expect(host.activate(extensionNode.name)).rejects.toMatchObject({
+      code: "EACCES",
+      errorData: {
+        authorityFailure: { reasonCode: "approval-required" },
+      },
+    });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("preserves the exact open launch review through invocation readiness", async () => {
+    const { host, extensionNode } = makeHost({
+      isAdmitted: () => false,
+      openUnitReviewFor: () => ({ approvalId: "review-1", title: "Start this workspace?" }),
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(host.invoke(panelCtx(), extensionNode.name, "confirm", [])).rejects.toMatchObject({
+      code: "EREVIEWPENDING",
+      errorKind: "access",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "review-pending",
+          remediation: {
+            kind: "resolve-open-review",
+            review: { approvalId: "review-1", title: "Start this workspace?" },
+          },
+        },
+      },
+    });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("joins an interrupted build and starts concurrent consumers only once", async () => {
+    const { host, buildSystem, extensionNode } = makeHost({
+      status: "building",
+      activeBundleKey: null,
+    });
+    host.setDeclared(declare(extensionNode.name));
+    let running = false;
+    vi.spyOn(host.processes, "isRunning").mockImplementation(() => running);
+    const start = vi.spyOn(host.processes, "start").mockImplementation(async () => {
+      running = true;
+    });
+    await Promise.all([
+      host.ensureActivated(extensionNode.name),
+      host.ensureActivated(extensionNode.name),
+    ]);
+    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("propagates the original interrupted-build failure and clears stale building status", async () => {
+    const { host, buildSystem, extensionNode } = makeHost({
+      status: "building",
+      activeBundleKey: null,
+    });
+    host.setDeclared(declare(extensionNode.name));
+    const failure = new Error("extension source unavailable");
+    buildSystem.getBuild.mockRejectedValueOnce(failure);
+    await expect(host.ensureActivated(extensionNode.name)).rejects.toBe(failure);
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      status: "error",
+      lastError: failure.message,
+    });
+  });
+
   ledgerTest("execution.extension", async () => {
     const { host, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
@@ -2103,32 +2213,38 @@ describe("ExtensionHost activation", () => {
   });
 
   it("prepares authority only after the requested approved extension finishes its queued build", async () => {
-    const { host, extensionNode, buildSystem } = makeHost({
-      status: "building",
-      activeBundleKey: null,
+    const { host, extensionNode, buildSystem } = makeHost({ installed: false });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    const originalGetBuild = buildSystem.getBuild.getMockImplementation()!;
+    const candidate = await originalGetBuild();
+    const build = declarationCompletion();
+    const buildRequested = declarationCompletion();
+    buildSystem.getBuild.mockImplementation(async () => {
+      buildRequested.resolve();
+      await build.promise;
+      return candidate;
     });
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    await buildRequested.promise;
+
     const prepare =
       host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
-    let settled = false;
     const preparation = Promise.resolve(
       prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
     );
-    void preparation.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      }
+    const outcome = preparation.then(
+      () => "resolved",
+      () => "rejected"
     );
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-    expect(buildSystem.getBuildByKey).not.toHaveBeenCalled();
-    host.registry.patch(extensionNode.name, { activeBundleKey: "bundle-key", status: "available" });
+    await Promise.resolve();
+    await expect(Promise.race([outcome, Promise.resolve("still-pending")])).resolves.toBe(
+      "still-pending"
+    );
+    build.resolve();
     await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
   });
 
-  it("materializes an on-invoke target when queued declaration application defers its build", async () => {
+  it("prepares an on-invoke target after declaration application deferred its build", async () => {
     const { host, extensionNode, buildSystem } = makeHost({
       installed: false,
       activationEvents: ["onInvoke"],
@@ -2136,16 +2252,11 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
-    host.registry.patch(extensionNode.name, { status: "building" });
     const prepare =
       host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
-    const preparation = Promise.resolve(
+    await expect(
       prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
-    );
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    host.registry.patch(extensionNode.name, { status: "available" });
-    await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
+    ).resolves.toMatchObject({ payload: { effect: "open" } });
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "interactive",
     });

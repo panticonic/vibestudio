@@ -141,7 +141,7 @@ describe("events.watch", () => {
 
   it("emits state snapshots after the watch ACK", async () => {
     const events = new EventService();
-    const provideSnapshot = vi.fn((_ctx: ServiceContext) => snapshot);
+    const provideSnapshot = vi.fn((_ctx: ServiceContext) => [snapshot]);
     const service = createEventsServiceDefinition(events, {
       snapshots: { [EVENT]: provideSnapshot },
     });
@@ -154,6 +154,24 @@ describe("events.watch", () => {
       value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 0 },
     });
     expect(provideSnapshot).toHaveBeenCalledWith(ctx);
+    await watch.records.return();
+  });
+
+  it("replays every held outcome on one watched topic", async () => {
+    const events = new EventService();
+    const first = { ...snapshot, revision: 2 };
+    const second = { ...snapshot, revision: 3 };
+    const service = createEventsServiceDefinition(events, {
+      snapshots: { [EVENT]: () => [first, second] },
+    });
+    const watch = await open(service, context("do:test:multiple", "request:multiple"));
+    await watch.records.next();
+    await expect(watch.records.next()).resolves.toMatchObject({
+      value: { kind: "snapshot", payload: first },
+    });
+    await expect(watch.records.next()).resolves.toMatchObject({
+      value: { kind: "snapshot", payload: second },
+    });
     await watch.records.return();
   });
 
@@ -192,7 +210,7 @@ describe("events.watch", () => {
       snapshots: {
         [EVENT]: () => {
           events.emit(EVENT, duringSnapshot);
-          return snapshot;
+          return [snapshot];
         },
       },
     });

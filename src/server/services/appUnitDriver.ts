@@ -112,17 +112,8 @@ export function createAppUnitDriver(input: {
     },
     activation: {
       activate: async (_ctx, releaseId) => {
-        const row = rowFor(releaseId);
-        if (!row) return { status: "unavailable", reason: `Unknown app: ${releaseId}` };
-        if (row.status === "pending-approval") return { status: "approval-required" };
-        if (row.status === "building") {
-          return { status: "preparing", reason: `${row.name} is building` };
-        }
-        if (!row.activeBundleKey) {
-          return { status: "unavailable", reason: row.lastError ?? `${row.name} has no build` };
-        }
-        await host().activateRelease(row.name);
-        return { status: "ready", entity: requireDescription(row.name) };
+        await host().ensureActivated(releaseId);
+        return { status: "ready", entity: requireDescription(releaseId) };
       },
       prepare: async (_ctx, releaseId, ref) => {
         const prepared = await host().prepareRelease(releaseId, ref);

@@ -81,6 +81,23 @@ describe("EventsClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it("joins the same admission failure for concurrent subscribers", async () => {
+    const failure = new Error("upstream event admission failed");
+    let rejectAdmission!: (error: Error) => void;
+    const opening = new Promise<Response>((_resolve, reject) => {
+      rejectAdmission = reject;
+    });
+    const rpc = { stream: vi.fn(() => opening) };
+    const events = new EventsClient(rpc);
+    const first = events.subscribe("panel-tree-invalidated");
+    const second = events.subscribe("panel-tree-invalidated");
+    const checks = [expect(first).rejects.toBe(failure), expect(second).rejects.toBe(failure)];
+    await vi.waitFor(() => expect(rpc.stream).toHaveBeenCalledOnce());
+    rejectAdmission(failure);
+    await Promise.all(checks);
+    await events.unsubscribeAll();
+  });
+
   it("cancels and joins a watch that is still waiting for its acknowledgement", async () => {
     let signal!: AbortSignal;
     let response!: ReadableStreamDefaultController<Uint8Array>;
@@ -386,6 +403,31 @@ describe("EventsClient", () => {
     });
 
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    await client.unsubscribeAll();
+  });
+
+  it("replays multiple held panel outcomes on the same topic after recovery", async () => {
+    const listener = vi.fn();
+    client.on("panel-local-presentation-changed", listener);
+    await client.subscribe("panel-local-presentation-changed");
+    for (const index of [0, 1]) {
+      if (index) await client.recover();
+      for (const slotId of ["panel:tree/a", "panel:tree/b"]) {
+        fixture.emit(index, {
+          kind: "snapshot",
+          event: "panel-local-presentation-changed",
+          sequence: 5,
+          payload: { revision: 5, presentation: { state: "idle", slotId } },
+        });
+      }
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes((index + 1) * 2));
+    }
+    expect(listener.mock.calls.map(([payload]) => payload.presentation.slotId)).toEqual([
+      "panel:tree/a",
+      "panel:tree/b",
+      "panel:tree/a",
+      "panel:tree/b",
+    ]);
     await client.unsubscribeAll();
   });
 

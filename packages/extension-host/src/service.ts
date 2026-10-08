@@ -366,7 +366,6 @@ export interface ExtensionHostDeps {
 }
 
 export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
-  private readonly deferredBuildIdentityKeys = new Map<string, string>();
   readonly registry: UnitRegistry<RegistryEntry>;
   readonly processes: ExtensionProcessManager;
   private readonly extensionTrustResolver: UnitTrustResolver<RegistryEntry>;
@@ -511,7 +510,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
       removeUndeclared: async (entry) => {
         await this.processes.stop(entry.name);
-        this.deferredBuildIdentityKeys.delete(entry.name);
         this.unregisterBuildProvidersFor(entry.name);
       },
       emitRemoved: (entry) => {
@@ -601,6 +599,35 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         );
       });
     });
+  }
+
+  /** Record authoritative declarations without reviewing or building their authority. */
+  setDeclared(declared: Array<{ source: string; ref: string }>): void {
+    this.lastDeclared = declared.map((entry) => ({ ...entry }));
+    for (const declaration of this.lastDeclared) {
+      const node = this.findExtensionNode(declaration.source);
+      const existing = this.registry.get(node.name);
+      // A saved status is not a live operation or a permission decision.
+      // Declaration availability and the actual activation owner determine readiness.
+      this.registry.upsert({
+        ...(existing ?? this.pendingEntryFor(node, declaration, false)),
+        status: this.processes.isRunning(node.name)
+          ? "running"
+          : this.activationTails.has(node.name)
+            ? "building"
+            : existing?.lastError
+              ? "error"
+              : "available",
+      });
+    }
+  }
+
+  /** Opportunistically prepare eager extensions; explicit activation shares this owner. */
+  async warmDeclared(): Promise<void> {
+    for (const declaration of this.lastDeclared) {
+      const node = this.findExtensionNode(declaration.source);
+      if (this.activatesEagerly(node)) await this.ensureActivated(node.name);
+    }
   }
 
   /**
@@ -698,12 +725,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         validateBeforeActivateCurrent: () =>
           this.validateExtensionManifestAtPath(node.path, node.name),
         needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
-        deferBuild: (_node, declaration) => {
-          if (this.activatesEagerly(node)) return false;
-          const identity = this.unitHost.trustForDeclaration(node, declaration);
-          this.deferredBuildIdentityKeys.set(node.name, identity.identityKey);
-          return true;
-        },
+        deferBuild: () => !this.activatesEagerly(node),
         buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref, "background"),
         activateCurrent: async () => {
           if (this.activatesEagerly(node)) {
@@ -782,6 +804,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
   async shutdown(): Promise<void> {
     this.shutdownSignal.abort(new Error("Extension host shut down before declaration readiness"));
+    await Promise.allSettled(this.activationTails.values());
     await this.processes.shutdown();
   }
 
@@ -1601,34 +1624,22 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  /**
-   * Materialize one approved `onInvoke` extension at the operation boundary
-   * that needs its sealed method metadata. Declaration reconciliation owns
-   * trust; this method only turns that already-approved identity into bytes.
-   */
+  /** Prepare only the declared target demanded by this invocation. Permission
+   * preparation consumes its sealed methods; grant decisions remain separate. */
   private async prepareTargetBuild(nameOrProvider: string): Promise<void> {
     const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
     const entry = this.resolveInvocationEntry(requestedName);
-    if (!entry || this.hasAvailableApprovedBuild(entry) || entry.status !== "available") return;
-    const node = this.findExtensionNode(entry.name);
-    const declaration = this.lastDeclared.find((candidate) => {
-      try {
-        return this.findExtensionNode(candidate.source).name === node.name;
-      } catch {
-        return false;
-      }
-    });
-    if (!declaration) return;
-    const trust = this.unitHost.trustForDeclaration(node, declaration);
+    if (!entry || this.hasAvailableApprovedBuild(entry) || entry.status === "error") return;
     if (
-      trust.decision === "needs-approval" &&
-      this.deferredBuildIdentityKeys.get(node.name) !== trust.identityKey
-    ) {
+      !this.lastDeclared.some(
+        (declaration) => this.findExtensionNode(declaration.source).name === entry.name
+      )
+    )
       return;
-    }
-
-    await this.buildAndActivate(node.name, declaration.ref, "interactive");
-    this.deferredBuildIdentityKeys.delete(node.name);
+    const declaration = this.lastDeclared.find(
+      (item) => this.findExtensionNode(item.source).name === entry.name
+    )!;
+    await this.buildAndActivate(entry.name, declaration.ref, "interactive");
   }
 
   /** Resolve the exact declared artifact for static authority inspection without
@@ -1650,6 +1661,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       const active = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey!);
       if (active) return { entry, build: active };
     }
+    entry = this.resolveInvocationEntry(requestedName);
     const node = entry ? this.findExtensionNode(entry.name) : this.findExtensionNode(requestedName);
     const declaration = this.lastDeclared.find((item) => {
       try {
@@ -2379,12 +2391,39 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async ensureActivated(name: string): Promise<void> {
+    this.shutdownSignal.signal.throwIfAborted();
     await this.runActivationExclusive(name, async () => {
       // Recheck inside the serialized operation. Multiple consumers can all
       // observe an idle target before the first queued activation starts; a
       // pre-queue check would make each one restart the child in turn.
       if (this.processes.isRunning(name)) return;
-      await this.activateOnce(name);
+      let entry = this.registry.get(name);
+      if (
+        !entry?.activeBundleKey ||
+        !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      ) {
+        const node = this.findExtensionNode(name);
+        const declaration = this.lastDeclared.find(
+          (item) => this.findExtensionNode(item.source).name === node.name
+        );
+        if (!declaration) throw new Error(`Extension is not declared: ${node.relativePath}`);
+        if (!entry) {
+          entry = this.pendingEntryFor(node, declaration, true);
+          this.registry.upsert(entry);
+        }
+        try {
+          await this.buildAndActivateOnce(name, declaration.ref, "interactive");
+          if (this.activatesEagerly(node)) return;
+        } catch (error) {
+          if (error instanceof ServiceAccessError) throw error;
+          this.registry.patch(name, {
+            status: "error",
+            lastError: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      }
+      if (!this.processes.isRunning(name)) await this.activateOnce(name);
     });
   }
 

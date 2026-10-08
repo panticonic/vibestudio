@@ -16,6 +16,7 @@ import {
   computeBuildKey,
   setBuildRootConfig,
   getRootDependencyFingerprintInfo,
+  computeRootDependencyFingerprint,
   loadPersistedEvState,
   persistEvState,
   type ContentHashMap,
@@ -275,6 +276,32 @@ describe("effectiveVersion", () => {
   });
 
   describe("root-dependency fingerprint (build-key hermeticity)", () => {
+    it("fingerprints the same physical SDK from Electron's ASAR and native Node coordinates", async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-installed-sdk-"));
+      try {
+        const physical = path.join(root, "app.asar.unpacked");
+        fs.mkdirSync(path.join(physical, "node_modules/dependency"), { recursive: true });
+        fs.mkdirSync(path.join(physical, "packages/sdk"), { recursive: true });
+        fs.writeFileSync(path.join(physical, "package.json"), '{"name":"installed"}');
+        fs.writeFileSync(path.join(physical, "packages/sdk/package.json"), '{"name":"sdk"}');
+        fs.writeFileSync(path.join(physical, "packages/sdk/index.js"), "export const sdk = 1;");
+        fs.writeFileSync(
+          path.join(physical, "node_modules/dependency/package.json"),
+          '{"name":"dependency","version":"1"}'
+        );
+        const virtual = path.join(root, "app.asar");
+        fs.mkdirSync(path.join(virtual, "node_modules"), { recursive: true });
+        fs.writeFileSync(path.join(virtual, "package.json"), '{"name":"virtual alias"}');
+        const node = await computeRootDependencyFingerprint(physical);
+        const electron = await computeRootDependencyFingerprint(virtual);
+        expect(electron.value).toBe(node.value);
+        fs.writeFileSync(path.join(physical, "packages/sdk/index.js"), "export const sdk = 2;");
+        expect((await computeRootDependencyFingerprint(virtual)).value).not.toBe(electron.value);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     const previousAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
     let root: string;
 
@@ -358,6 +385,24 @@ describe("effectiveVersion", () => {
 
       await setBuildRootConfig({ appRoot: dirB });
       expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(keyA);
+    });
+
+    it("shares one captured dependency environment across bootstrap and steady construction", async () => {
+      const appRoot = path.join(root, "shared-host");
+      writeRootFiles(appRoot, '{"name":"host"}', "lock\n", "ws\n");
+      const fingerprint = await computeRootDependencyFingerprint(appRoot);
+      await setBuildRootConfig({ appRoot, fingerprint });
+      const bootstrapKey = computeBuildKey("unit-a", "ev1", true);
+      await setBuildRootConfig({ appRoot, fingerprint });
+      expect(getRootDependencyFingerprintInfo()).toBe(fingerprint);
+      expect(computeBuildKey("unit-a", "ev1", true)).toBe(bootstrapKey);
+      await expect(
+        setBuildRootConfig({ appRoot, workspaceRoot: path.join(appRoot, "other"), fingerprint })
+      ).rejects.toThrow("different dependency environment");
+      // A subsequent host generation inspects its own dependency inputs.
+      fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host","changed":true}');
+      await setBuildRootConfig({ appRoot });
+      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(bootstrapKey);
     });
 
     it("folds nested workspace dependency/config files into the build key", async () => {

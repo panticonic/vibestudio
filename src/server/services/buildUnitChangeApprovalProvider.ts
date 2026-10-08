@@ -244,13 +244,35 @@ export function createBuildUnitChangeApprovalProvider(deps: {
     },
 
     async creationReview(): Promise<UnitChangeReview<ReviewedUnit>> {
-      const currentIdentities = await deps
-        .getBuildSystem()
-        .listBuildUnitIdentities(undefined, REVIEWED_RUNTIME_KINDS);
+      const buildSystem = deps.getBuildSystem();
+      // Admission is an inventory lookup. Resolve catalogs and dependency
+      // closures only for parts that actually owe a first review.
+      const unreviewed = buildSystem
+        .getGraph()
+        .allNodes()
+        .filter(
+          (node) =>
+            (node.kind === "panel" || node.kind === "worker") &&
+            deps.admissionStore.latestAdmittedVersion(node.relativePath) === null
+        );
+      const resolutions =
+        unreviewed.length === 0
+          ? []
+          : await buildSystem.resolveBuildUnits(
+              unreviewed.map((node) => node.relativePath),
+              "main"
+            );
+      const currentIdentities = await Promise.all(
+        resolutions.map((resolution) => {
+          if (!resolution) throw new Error("Creation review source disappeared during resolution");
+          return buildSystem.resolveBuildUnitIdentity(resolution.unitPath, resolution.stateHash);
+        })
+      );
       const units: ReviewedUnit[] = [];
       const identityKeys: string[] = [];
       const identityKeysByRepo = new Map<string, string>();
       for (const candidate of currentIdentities) {
+        if (!candidate) throw new Error("Creation review source disappeared during resolution");
         // A part this workspace has NEVER reviewed, at any version.
         //
         // Deliberately not "unadmitted at this exact version". An effective

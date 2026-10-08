@@ -35,6 +35,86 @@ function createService(
 }
 
 describe("ServiceContainer", () => {
+  it("opens the required dependency closure while unrelated services remain unstarted", async () => {
+    const container = new ServiceContainer();
+    const core = createService("core");
+    const desktop = createService("desktop", ["core"]);
+    const deferred = createService("maintenance", ["core"]);
+    container.registerManaged(core);
+    container.registerManaged(desktop);
+    container.registerManaged(deferred);
+    await container.startRequired(["desktop"]);
+    expect(container.has("desktop")).toBe(true);
+    expect(deferred.start).not.toHaveBeenCalled();
+    await container.startAll();
+    expect(core.start).toHaveBeenCalledOnce();
+    expect(desktop.start).toHaveBeenCalledOnce();
+    expect(deferred.start).toHaveBeenCalledOnce();
+    await container.stopAll();
+  });
+
+  it("keeps ready critical services when a later background service fails", async () => {
+    const container = new ServiceContainer();
+    const core = createService("core");
+    const failure = new Error("maintenance failed");
+    container.registerManaged(core);
+    container.registerManaged({
+      name: "maintenance",
+      dependencies: ["core"],
+      start: async () => {
+        throw failure;
+      },
+    });
+    await container.startRequired(["core"]);
+    const report = container.getStartupReport();
+    await expect(container.startAll()).rejects.toBe(failure);
+    expect(container.has("core")).toBe(true);
+    expect(core.stop).not.toHaveBeenCalled();
+    expect(container.getStartupReport()).toBe(report);
+    await container.stopAll();
+    expect(core.stop).toHaveBeenCalledOnce();
+  });
+
+  it("joins an owned background start before stopping in reverse dependency order", async () => {
+    const container = new ServiceContainer();
+    const stops: string[] = [];
+    const core = createService("core", [], "core", {
+      onStop: () => {
+        stops.push("core");
+      },
+    });
+    let release!: () => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    container.registerManaged(core);
+    container.registerManaged({
+      name: "background",
+      dependencies: ["core"],
+      start: async () => {
+        began();
+        await held;
+        return "background";
+      },
+      stop: async () => {
+        stops.push("background");
+      },
+    });
+    await container.startRequired(["core"]);
+    const startup = container.startAll();
+    await started;
+    const shutdown = container.stopAll();
+    expect(stops).toEqual([]);
+    release();
+    await Promise.all([startup, shutdown]);
+    expect(stops).toEqual(["background", "core"]);
+    await expect(container.startAll()).rejects.toThrow("retiring");
+  });
+
   it("starts services in dependency order", async () => {
     const container = new ServiceContainer();
     const order: string[] = [];

@@ -3,7 +3,16 @@ import {
   nodeRuntimeTarget,
   assertNodeRuntimeArtifacts,
 } from "./node-runtime-artifacts.mjs";
-import { copyFileSync, chmodSync, mkdirSync, statSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  chmodSync,
+  mkdirSync,
+  statSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Arch } from "electron-builder";
@@ -31,6 +40,19 @@ function electronNativeArtifacts(context) {
   return assertNativeIsolationArtifacts(appRoot, artifactRoot, [target]);
 }
 
+/** Publish a complete native payload without overwriting an inode a live host executes. */
+export function publishNativeArtifact(source, destination, executable) {
+  mkdirSync(path.dirname(destination), { recursive: true });
+  const temporary = `${destination}.${randomUUID()}.tmp`;
+  try {
+    copyFileSync(source, temporary);
+    if (executable) chmodSync(temporary, 0o755);
+    renameSync(temporary, destination);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
 export default async function stageElectronNativeIsolation(context) {
   if (typeof Arch[context.arch] !== "string")
     throw new Error("Unknown Electron packaging architecture");
@@ -53,9 +75,11 @@ export default async function stageElectronNativeIsolation(context) {
   for (const { source, artifact } of electronNativeArtifacts(context)) {
     const appRoot = context.packager.projectDir;
     const destination = path.join(appRoot, artifact);
-    mkdirSync(path.dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
-    if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) chmodSync(destination, 0o755);
+    publishNativeArtifact(
+      source,
+      destination,
+      !artifact.endsWith(".json") && !artifact.endsWith(".exe")
+    );
   }
 }
 

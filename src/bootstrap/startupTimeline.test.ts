@@ -50,4 +50,19 @@ describe("startup timeline", () => {
       state: "active",
     });
   });
+  it("completes connection before showing only observed app launch work", () => {
+    const progress = startupConnectionProgress(
+      LOCAL_STARTUP_CONNECTION_PHASES,
+      "prepare-workspace-session"
+    );
+    const timeline = startupTimeline(progress, "active", [
+      { phase: "resolve-target", state: "complete" },
+      { phase: "prepare-app", state: "blocked" },
+    ]);
+    expect(timeline.slice(0, 3).every((step) => step.state === "complete")).toBe(true);
+    expect(timeline.slice(3)).toEqual([
+      { id: "resolve-target", label: "Find desktop app", state: "complete" },
+      { id: "prepare-app", label: "Prepare desktop app", state: "blocked" },
+    ]);
+  });
 });

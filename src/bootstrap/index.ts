@@ -16,6 +16,7 @@ import {
 import {
   HostLaunchClient,
   type HostLaunchResult,
+  type HostLaunchProgress,
 } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 import { appendLaunchGateFacts, appendSources } from "./launchGateDom.js";
@@ -99,9 +100,14 @@ function getRpc(): RpcClient {
 }
 
 let hostLaunchClient: HostLaunchClient | null = null;
+const launchProgress = new Map<HostLaunchProgress["phase"], HostLaunchProgress>();
 function getHostLaunchClient(): HostLaunchClient {
-  hostLaunchClient ??= new HostLaunchClient((service, method, args) =>
-    getRpc().call("main", `${service}.${method}`, args)
+  hostLaunchClient ??= new HostLaunchClient(
+    (service, method, args) => getRpc().call("main", `${service}.${method}`, args),
+    (progress) => {
+      launchProgress.set(progress.phase, progress);
+      render();
+    }
   );
   return hostLaunchClient;
 }
@@ -116,10 +122,6 @@ const decidingApprovalIds = new Set<string>();
 const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
 let startupWaitBeganAt = 0;
-/**
- * Startup fails on host *silence*, not on elapsed time — see the module for
- * why a slow-but-progressing startup must be allowed to finish.
- */
 
 function scheduleRefresh(): void {
   launchRefreshLoop.request();
@@ -335,7 +337,7 @@ function render(): void {
       setHeader("Starting", "Starting workspace", emptyLaunchText);
       appendLaunchTimeline(
         approvalsContainer,
-        startupTimeline(connectionState?.startupProgress, "complete")
+        startupTimeline(connectionState?.startupProgress, "complete", [...launchProgress.values()])
       );
       return;
     }
@@ -343,10 +345,7 @@ function render(): void {
     setHeader(header.eyebrow, header.title, header.copy, header.tone ?? "normal");
     appendLaunchTimeline(
       approvalsContainer,
-      startupTimeline(
-        connectionState?.startupProgress,
-        launchResult.status === "ready" ? "complete" : undefined
-      )
+      startupTimeline(connectionState?.startupProgress, "complete", [...launchProgress.values()])
     );
     if (pending.length === 0) {
       return;
@@ -395,7 +394,14 @@ function renderLaunchError(title: string, detail: string): void {
   setHeader("Cannot start", title, detail, "error");
   approvalsContainer.className = "launch-body";
   approvalsContainer.replaceChildren();
-  appendLaunchTimeline(approvalsContainer, startupTimeline(null, "failed"));
+  appendLaunchTimeline(
+    approvalsContainer,
+    startupTimeline(
+      connectionState?.startupProgress,
+      "failed",
+      launchProgress.size > 0 ? [...launchProgress.values()] : undefined
+    )
+  );
 }
 
 type LaunchRefreshResult = HostLaunchResult["status"] | "error";
@@ -996,7 +1002,7 @@ async function pollConnectedBootstrapState(
   isCurrent: () => boolean
 ): Promise<BootstrapConnectionPollResult> {
   if (!isCurrent() || startupWaitDone) return "terminal";
-  const state = await getBootstrapStateWithTimeout();
+  const state = await getBootstrapState();
   // A replaced attempt may complete its old IPC read after the new attempt has
   // begun. It must not render or schedule from that stale result.
   if (!isCurrent() || startupWaitDone) return "terminal";
@@ -1016,12 +1022,9 @@ function subscribeToBootstrapStatePush(): void {
   });
 }
 
-async function getBootstrapStateWithTimeout(): Promise<unknown> {
+async function getBootstrapState(): Promise<unknown> {
   if (!bootstrapApi) return null;
-  return await Promise.race([
-    bootstrapApi.getState().catch(() => null),
-    new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 5_000)),
-  ]);
+  return bootstrapApi.getState();
 }
 
 async function startLaunchGate(): Promise<void> {
@@ -1033,7 +1036,8 @@ async function startLaunchGate(): Promise<void> {
 
 async function init(): Promise<void> {
   subscribeToBootstrapStatePush();
-  const state = await getBootstrapStateWithTimeout();
+  const state = await getBootstrapState();
+  if (isBootstrapConnectionState(state)) connectionState = state;
   if (isBootstrapConnectionState(state) && state.mode === "choose-connection") {
     renderConnectionChooser(state);
     return;

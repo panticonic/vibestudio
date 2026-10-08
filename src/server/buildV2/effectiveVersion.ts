@@ -32,7 +32,10 @@ import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
 import { getUserDataPath } from "@vibestudio/env-paths";
-import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
+import {
+  getPhysicalAppPath,
+  getExistingAppNodeModulesRoots,
+} from "@vibestudio/shared/runtimePaths";
 import { panelEntryProtocolFingerprint } from "./panelEntryProtocol.js";
 
 // ---------------------------------------------------------------------------
@@ -241,7 +244,8 @@ export async function persistEvState(state: Omit<PersistedEvState, "version">): 
  */
 // "33": workspace execution metadata seals the complete service admission identity.
 // "34": module registries distinguish owned exports from missing and inherited entries.
-const BUILD_CACHE_VERSION = "34";
+// "35": owned dependency resolution preserves esbuild's guarded optional imports.
+const BUILD_CACHE_VERSION = "35";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
@@ -276,6 +280,7 @@ export interface RootDependencyFingerprintFile {
 export interface RootDependencyFingerprintInfo {
   /** Resolved app root the fingerprint was computed against. */
   root: string;
+  workspaceRoot: string | null;
   /** The root is always an explicit construction input. */
   rootSource: "injected";
   /** Full SHA-256 fingerprint folded into computeBuildKey. */
@@ -302,13 +307,25 @@ let rootConfigGeneration = 0;
  * tests).
  */
 export async function setBuildRootConfig(
-  config: { appRoot: string; workspaceRoot?: string } | null
+  config: {
+    appRoot: string;
+    workspaceRoot?: string;
+    fingerprint?: RootDependencyFingerprintInfo;
+  } | null
 ): Promise<void> {
   const generation = ++rootConfigGeneration;
   injectedAppRoot = config?.appRoot ?? null;
   preparedRootFingerprint = null;
   if (!config) return;
-  const info = await computeRootDependencyFingerprint(config.appRoot, config.workspaceRoot);
+  const info =
+    config.fingerprint ??
+    (await computeRootDependencyFingerprint(config.appRoot, config.workspaceRoot));
+  if (
+    path.resolve(info.root) !== path.resolve(config.appRoot) ||
+    info.workspaceRoot !== (config.workspaceRoot ? path.resolve(config.workspaceRoot) : null)
+  ) {
+    throw new Error("Dependency fingerprint belongs to a different dependency environment");
+  }
   if (generation !== rootConfigGeneration) return;
   preparedRootFingerprint = info;
   logRootDependencyFingerprint(info);
@@ -523,7 +540,7 @@ function dependencyFingerprintInputs(
   return inputs;
 }
 
-async function computeRootDependencyFingerprint(
+export async function computeRootDependencyFingerprint(
   root: string,
   workspaceRoot?: string
 ): Promise<RootDependencyFingerprintInfo> {
@@ -531,14 +548,15 @@ async function computeRootDependencyFingerprint(
 
   const hash = crypto.createHash("sha256");
   // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v6\0");
+  hash.update("root-deps-v7\0");
 
+  const physicalRoot = getPhysicalAppPath(root, "");
   const [localPackages, installedDependencies] = await Promise.all([
-    localPackageFingerprintInputs(root),
+    localPackageFingerprintInputs(physicalRoot),
     installedDependencyFingerprintInputs(root),
   ]);
   const files: RootDependencyFingerprintFile[] = [];
-  for (const input of dependencyFingerprintInputs(root, workspaceRoot)) {
+  for (const input of dependencyFingerprintInputs(physicalRoot, workspaceRoot)) {
     const file = input.file;
     const filePath = input.path;
     hash.update(file);
@@ -576,6 +594,7 @@ async function computeRootDependencyFingerprint(
 
   const info: RootDependencyFingerprintInfo = {
     root,
+    workspaceRoot: workspaceRoot ? path.resolve(workspaceRoot) : null,
     rootSource: source,
     value: hash.digest("hex"),
     files,

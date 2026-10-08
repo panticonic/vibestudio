@@ -1,4 +1,7 @@
-import type { WorkspaceTemplateDependency } from "@vibestudio/workspace-contracts/types";
+import type {
+  WorkspaceTemplateDependency,
+  WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
 import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 
 /**
@@ -54,6 +57,8 @@ interface Constraint {
 }
 
 export interface ResolveTemplateDependenciesInput {
+  /** Exact source coordinates supplied by a release composition. Only requested layers participate. */
+  sourcePins?: readonly WorkspaceTemplatePin[];
   /** The workspace or template whose dependencies these are. */
   root: { label: string; dependencies: readonly WorkspaceTemplateDependency[] };
   /** Read one resolved template's own dependency declarations. */
@@ -75,6 +80,15 @@ export interface ResolveTemplateDependenciesInput {
 export async function resolveTemplateDependencies(
   input: ResolveTemplateDependenciesInput
 ): Promise<TemplateDependencyGraph> {
+  const sourcePins = new Map<string, WorkspaceTemplatePin>();
+  for (const pin of input.sourcePins ?? []) {
+    const url = normalizeTemplateGitUrl(pin.url);
+    const commit = pin.commit.toLowerCase();
+    const existing = sourcePins.get(url);
+    if (existing && existing.commit !== commit)
+      throw new Error(`Release composition pins ${url} to both ${existing.commit} and ${commit}`);
+    sourcePins.set(url, { ...pin, url, commit });
+  }
   const constraints = new Map<string, Constraint>();
   const resolved = new Map<string, ResolvedTemplateDependency>();
   const edges = new Map<string, string[]>();
@@ -87,7 +101,12 @@ export async function resolveTemplateDependencies(
     }
     let constraint = constraints.get(url);
     if (!constraint) {
-      constraint = { tracks: new Set(), commits: new Set(), requestedBy: [] };
+      const sourcePin = sourcePins.get(url);
+      constraint = {
+        tracks: new Set(),
+        commits: new Set(sourcePin ? [sourcePin.commit] : []),
+        requestedBy: sourcePin ? ["host release"] : [],
+      };
       constraints.set(url, constraint);
       queue.push(url);
     }
@@ -152,7 +171,7 @@ export async function resolveTemplateDependencies(
     // A pin already names the commit, so nothing asks the remote what the track
     // selects today — that is the whole point of pinning one.
     const selected = pinned
-      ? { ref: track, commit: pinned }
+      ? { ref: sourcePins.get(url)?.ref ?? track, commit: pinned }
       : await input.resolveTrack({ url, track, ...credential });
     const layer: ResolvedTemplateDependency = {
       url,

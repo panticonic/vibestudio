@@ -90,7 +90,10 @@ import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import { hostDesignatedTemplateUrls } from "@vibestudio/workspace/templateRelease";
+import {
+  hostDesignatedTemplateUrls,
+  readDefaultWorkspaceTemplates,
+} from "@vibestudio/workspace/templateRelease";
 import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
@@ -1219,14 +1222,7 @@ async function main() {
    * version and manifest digest, so a boot that changes neither is a no-op.
    */
   const admitSeedTrustedUnits = (units: readonly ReviewedUnit[]): void => {
-    if (units.length === 0) {
-      // Loud, because the shell depends on this: with no seeded unit admitted,
-      // `apps/shell` is gated on a review only `apps/shell` can present.
-      console.warn(
-        "[Units] No host-build units verified a seed record; their admission will not be recorded"
-      );
-      return;
-    }
+    if (units.length === 0) return;
     const unadmitted = units.filter(
       (unit) => !unit.ev || !unitAdmissionStore.hasVersion(unit.source.repo, unit.ev)
     );
@@ -1468,7 +1464,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, mirrorWorktreeTree, putBootstrapBytes } =
+  const { collectTreeReachableDigests, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -1580,6 +1576,7 @@ async function main() {
   };
   const designatedTemplateUrls = hostDesignatedTemplateUrls(appRoot);
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
+    releaseTemplates: Object.values(readDefaultWorkspaceTemplates(appRoot)),
     workspaceId,
     statePath,
     sourcePath: workspacePath,
@@ -1607,8 +1604,20 @@ async function main() {
   // dependencies. The workspace root itself is not a Node package.
   const buildDependencyWorkspaceRoot = workspacePath;
   const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
+  const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
+  const bootstrapStateHash =
+    restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
+  const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
+  const bootstrapManifest = await readFileAtTree(
+    layout.blobsDir,
+    bootstrapStateHash,
+    "meta/vibestudio.yml"
+  );
+  if (!bootstrapManifest) throw new Error("Workspace publication has no manifest");
+  const bootstrapManifestBytes = await getBytes(layout.blobsDir, bootstrapManifest.contentHash);
+  if (!bootstrapManifestBytes) throw new Error("Workspace manifest content is unavailable");
   const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
-    fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf8"),
+    Buffer.from(bootstrapManifestBytes).toString("utf8"),
     workspaceId
   );
   replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
@@ -1852,13 +1861,8 @@ async function main() {
       hostTargetStaging.delete(target);
     }
   };
-  /**
-   * Startup extension reconciliation, which runs in the background and stages
-   * approvals of its own. The startup gate cannot be published until it has
-   * settled AND the app branch has staged, or whichever staged last is left in
-   * a batch nothing will ever publish.
-   */
-  let startupExtensionStaging: Promise<void> | null = null;
+  // Optional artifact warming shares the explicit activation owner.
+  let startupExtensionWarming: Promise<void> | null = null;
   let reconcileDefaultAutomations: () => Promise<void> = async () => {};
   let startupElectronArtifactPreparation: Promise<
     import("./appHost.js").ElectronHostReadiness
@@ -1871,6 +1875,14 @@ async function main() {
     trigger: "startup" | "meta-change"
   ): Promise<void> => {
     const reconcile = async (): Promise<void> => {
+      // Declaration ownership precedes optional review preparation. Desktop
+      // launch can demand its exact target while the fresh-workspace review is built.
+      if (trigger === "startup") {
+        appHostForGateway?.setDeclared(resolveDeclaredApps(nextConfig), { trigger });
+        extensionHostForGateway?.setDeclared(runtimeExtensionDeclarations(nextConfig));
+        resolveInitialExtensionDeclarations();
+      }
+
       const tasks: Array<Promise<void>> = [];
       if (extensionHostForGateway) {
         const extensionHost = extensionHostForGateway;
@@ -1893,7 +1905,9 @@ async function main() {
             // this is the only thing that records their admission — and the
             // shell needs it before it can render any review at all.
             admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(reviewed));
-            const review = await extensionHost.reviewDeclared(reviewed);
+            const review = workspaceCreationReview.isPending()
+              ? await extensionHost.reviewDeclared(reviewed)
+              : { units: [], identityKeys: [] };
             if (review.units.length > 0) {
               tasks.push(
                 enqueueLaunchGateReview({
@@ -1913,50 +1927,25 @@ async function main() {
               );
             }
 
-            // Planning is the authority transaction that makes reconciliation
-            // eligible to classify these exact builds as trusted. Start the
-            // background pass only after the ordinary review has been staged.
-            // Running both concurrently lets reconciliation see the old trust
-            // state and publish a second, stale launch review.
             await Promise.all(tasks);
           }
-          const reconcileAll = () =>
-            appliedExtensionDeclarations.apply(declarationFingerprint, () =>
-              extensionHost.reconcileDeclared(declared, {
-                trigger,
-                // Startup reconciliation is opportunistic background work.
-                // Keep one compiler busy without saturating the machine while
-                // the focused panel is building and booting.
-                ...(trigger === "startup"
-                  ? { maxConcurrentApplies: 1, waitFor: "staged" as const }
-                  : {}),
-              })
-            );
+
           if (trigger === "startup") {
-            // Reconciling stages further approvals of its own, so the gate is
-            // released once this settles — but releasing it HERE published a
-            // batch the app branch had not joined yet. Publication is owned by
-            // the one place that can see both branches finish; this only
-            // records what that place has to wait for.
-            startupExtensionStaging = Promise.resolve()
-              .then(() => {
-                const backgroundStartedAt = Date.now();
-                return reconcileAll().then(() => {
-                  resolveInitialExtensionDeclarations();
-                  console.info(
-                    `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
-                  );
-                });
-              })
-              .catch((err: unknown) => {
-                rejectInitialExtensionDeclarations(err);
-                console.warn("[Extensions] Failed to reconcile background workspace units:", err);
-              });
+            await appliedExtensionDeclarations.apply(declarationFingerprint, () =>
+              extensionHost.setDeclared(declared)
+            );
+            startupExtensionWarming = extensionHost.warmDeclared().catch((error: unknown) => {
+              console.warn("[StartupBackground] Extension warming failed:", error);
+            });
           } else {
             tasks.push(
-              reconcileAll().catch((err: unknown) =>
-                console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
-              )
+              appliedExtensionDeclarations
+                .apply(declarationFingerprint, () =>
+                  extensionHost.reconcileDeclared(declared, { trigger })
+                )
+                .catch((err: unknown) =>
+                  console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
+                )
             );
           }
         }
@@ -1981,7 +1970,9 @@ async function main() {
               appHost.setDeclared(declared, { trigger })
             );
             if (trigger === "startup") {
-              const review = await appHost.reviewDeclared(declared);
+              const review = workspaceCreationReview.isPending()
+                ? await appHost.reviewDeclared(declared)
+                : { units: [], identityKeys: [] };
               if (review.units.length > 0) {
                 tasks.push(
                   enqueueLaunchGateReview({
@@ -2002,8 +1993,7 @@ async function main() {
               }
               // Compiling a selected host artifact is not activation. Start
               // that deterministic cache fill as soon as declarations are
-              // known, while the ordinary launch review continues to govern
-              // whether workspace code may run. Remote-server readiness can
+              // known, while the visible review independently owns grants. Readiness can
               // await this exact promise before exposing a pairing link.
               startupElectronArtifactPreparation = appHost.prepareElectronArtifact();
               void startupElectronArtifactPreparation.catch((err: unknown) =>
@@ -2301,13 +2291,14 @@ async function main() {
    */
   let creationReviewUnits: ReadonlySet<string> | null = null;
   /** False once the review has resolved, or been found to owe nothing. */
-  let creationReviewOwed = true;
+  let creationReviewOwed = workspaceCreationReview.isPending();
   /**
    * Host-owned semantic startup state. `preparing` means startup can still
    * publish the creation review; every other state proves that preparation has
    * completed without inferring that fact from an empty queue or elapsed time.
    */
-  let workspaceCreationReviewState: WorkspaceCreationReviewState = { status: "preparing" };
+  let workspaceCreationReviewState: WorkspaceCreationReviewState =
+    workspaceCreationReview.isPending() ? { status: "preparing" } : { status: "not-required" };
   /**
    * Client apps and the extensions a host target requires are decided at the
    * launch gate, in a host-owned window, before the workspace UI exists (§7.6).
@@ -2448,21 +2439,25 @@ async function main() {
     },
   });
 
-  const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
-  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(workspaceId, workspacePath, {
-    putFile: (bytes) => putBootstrapBytes(layout.blobsDir, bytes),
-    putTree: async (files, stateHash) => {
-      await mirrorWorktreeTree(layout.blobsDir, [...files], { expectStateHash: stateHash });
-    },
-  });
-  // Capture the source identity before any semantic service can publish into
-  // the live workspace projection. All later bootstrap references use this
-  // immutable value; they must not rediscover the mutable source directory.
-  const bootstrapSnapshot = await bootstrapWorkspaceSource.seal();
-  console.log(
-    `[Perf] workspace bootstrap snapshot sealed at ${Math.round(process.uptime() * 1000)}ms uptime`
+  const { computeRootDependencyFingerprint } = await import("./buildV2/effectiveVersion.js");
+  const dependencyFingerprint = await computeRootDependencyFingerprint(
+    appRoot,
+    buildDependencyWorkspaceRoot
   );
-  trustedBootstrapStateHash = bootstrapSnapshot.stateHash;
+  const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
+  const bootstrapSemanticState = restoredLaunch ? protectedRefStore.readMainSemanticState() : null;
+  if (restoredLaunch && !bootstrapSemanticState)
+    throw new Error("Workspace launch has no protected semantic main");
+  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(
+    workspaceId,
+    workspaceVcs,
+    bootstrapStateHash,
+    bootstrapSemanticState ?? { kind: "bootstrap-snapshot", snapshotHash: bootstrapStateHash }
+  );
+  console.log(
+    `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
+  trustedBootstrapStateHash = bootstrapStateHash;
   container.registerManaged({
     name: "bootstrapBuildSystem",
     dependencies: ["nativeWorkspace"],
@@ -2483,6 +2478,7 @@ async function main() {
           runNativeJob: (input) => nativeWorkspace.runJob(input),
           admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          dependencyFingerprint,
         }
       );
     },
@@ -2513,6 +2509,7 @@ async function main() {
           runNativeJob: (input) => nativeWorkspace.runJob(input),
           admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          dependencyFingerprint,
           workspaceAuthorityEnvironmentAt: async (stateHash) => {
             const { exactWorkspaceServiceBindings } =
               await import("./buildV2/userlandAuthority.js");
@@ -2891,6 +2888,8 @@ async function main() {
         workspaceCreationReview.markPending(
           pin ? { url: pin.url, ref: pin.ref, version: pin.ref } : undefined
         );
+        creationReviewOwed = true;
+        workspaceCreationReviewState = { status: "preparing" };
       },
       beginCandidateReview: (candidate) => {
         const runtimeKind = candidate.caller.runtime.kind;
@@ -3240,30 +3239,34 @@ async function main() {
         "shell-approval:pending-changed": (ctx) => {
           const owner = eventWatchOwner(ctx);
           const pending = approvalQueue.listPending();
-          return {
-            pending: isHostApprovalObserver(owner)
-              ? pending
-              : pending.filter(
-                  (approval) =>
-                    owner.userId &&
-                    approvalVisibleToUser(approval, owner.userId, approvalWorkspaceAccess)
-                ),
-          };
+          return [
+            {
+              pending: isHostApprovalObserver(owner)
+                ? pending
+                : pending.filter(
+                    (approval) =>
+                      owner.userId &&
+                      approvalVisibleToUser(approval, owner.userId, approvalWorkspaceAccess)
+                  ),
+            },
+          ];
         },
-        "apps:status": () => ({
-          snapshot: true,
-          apps:
-            appHostForGateway?.listWorkspaceUnits().map((entry) => ({
-              name: entry.name,
-              status: entry.status,
-              error: entry.lastError,
-              errorDetails: entry.lastErrorDetails ?? null,
-              buildKey: entry.activeBundleKey ?? null,
-              effectiveVersion: entry.activeEv ?? null,
-              canRollback: entry.canRollback,
-              target: entry.target,
-            })) ?? [],
-        }),
+        "apps:status": () => [
+          {
+            snapshot: true,
+            apps:
+              appHostForGateway?.listWorkspaceUnits().map((entry) => ({
+                name: entry.name,
+                status: entry.status,
+                error: entry.lastError,
+                errorDetails: entry.lastErrorDetails ?? null,
+                buildKey: entry.activeBundleKey ?? null,
+                effectiveVersion: entry.activeEv ?? null,
+                canRollback: entry.canRollback,
+                target: entry.target,
+              })) ?? [],
+          },
+        ],
       },
     })
   );
@@ -5021,6 +5024,20 @@ async function main() {
     },
     onError: (error, slotId, entityId) => {
       const message = error instanceof Error ? error.message : String(error);
+      // Hold the terminal outcome at the lifecycle owner so clients attaching
+      // after this event see the same failure rather than an endless spinner.
+      const attempt = panelRuntimeCoordinator.ensureAttemptForSlot(slotId, entityId);
+      panelRuntimeCoordinator.setBuildState(slotId, { state: "failed" });
+      panelRuntimeCoordinator.reportAttemptPhase(attempt.attemptId, {
+        phase: "failed",
+        reporter: "build",
+        failure: {
+          stage: "build",
+          code: "compile_failed",
+          message,
+          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+        },
+      });
       eventService.emit("panel:executionFailed", {
         panelId: slotId,
         runtimeEntityId: entityId,
@@ -6499,7 +6516,6 @@ async function main() {
     workspaceId,
     workspaceDeclarations: workspaceDecls,
     userlandResourceHandles,
-    assertBootstrapSnapshotUnchanged: () => bootstrapSnapshot.assertUnchanged(),
     routeRegistry,
     egressProxy,
     gatewayToken: workerdGatewayToken,
@@ -6601,7 +6617,7 @@ async function main() {
       className: semanticWorkspaceService.className,
       objectKey: semanticWorkspaceService.objectKey,
     },
-    bootstrapStateHash: bootstrapSnapshot.stateHash,
+    bootstrapStateHash: bootstrapStateHash,
     publishWorkspaceSourceEntity: async ({
       targetId,
       source,
@@ -7352,8 +7368,28 @@ async function main() {
     });
   }
 
-  // ── Start all services in dependency order ──
-  await container.startAll();
+  // Start the readiness dependency closure; extend the lifecycle in the background.
+  await container.startRequired([
+    "runtime",
+    "workspace-state",
+    "build",
+    "workspace",
+    "auth",
+    "shellApproval",
+    "appHost",
+    "extensionHost",
+    "panelHttpWiring",
+    "panelRuntime",
+    "approvalPushBridge",
+    "irohIngress",
+    "lifecycleDriver",
+    "alarmDriver",
+    "durableWorkDriver",
+  ]);
+  const optionalServiceStartup = container.startAll();
+  void optionalServiceStartup.catch((error) =>
+    console.error("[StartupBackground] Optional service startup failed:", error)
+  );
   console.log(
     `[Perf] workspace service container started at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -7415,15 +7451,11 @@ async function main() {
       manifest?.title ?? source,
     ]);
   }
-  await panelExecutionReconciler.recoverPreparingPanels();
 
   // The webhook + credential services are built now, so their refs are set:
   // start the backhaul (no-op when no relay is configured) and re-announce any
   // persisted relay-mode webhook subscriptions so the relay resumes routing.
   relayBackhaul.start();
-  await relayServices.webhook?.internal
-    .reannounceRelaySubscriptions()
-    .catch((err: unknown) => console.warn("[Server] relay subscription re-announce failed:", err));
 
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
@@ -7478,141 +7510,103 @@ async function main() {
   const dispatchWorkspaceDO = <T>(method: string, ...args: unknown[]) =>
     doDispatchForBootstrap.dispatch(workspaceDORefForBootstrap, method, ...args) as Promise<T>;
 
-  // Steps 1-3 (hydrate, incomplete-cleanup reconcile, GC safety sweep) are
-  // factored into `runStartupReconciliation` so both the boot path and tests
-  // can call them.
-  const bootstrapReconciliationStartedAt = Date.now();
-  const { runStartupReconciliation } = await import("./services/startupReconciliation.js");
-  const lifecycleDriver =
-    container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
-  const reconciliation = await runStartupReconciliation({
-    dispatchWorkspaceDO,
-    entityCache,
-    onRetire: cleanupRuntimeEntityRecord,
-    restoreRuntimes: async (records) => {
-      type RuntimeTarget = { source: string; className: string; objectKey: string };
-      const [lifecycle, alarms, durableWorkOwners] = await Promise.all([
-        dispatchWorkspaceDO<RuntimeTarget[]>("lifecycleListResumeTargets"),
-        dispatchWorkspaceDO<RuntimeTarget[]>("alarmListScheduled"),
-        dispatchWorkspaceDO<import("@vibestudio/shared/durableWork").DurableWorkReadyHint[]>(
-          "durableWorkOwnerList"
-        ),
-      ]);
-      const required = new Set(
-        [...lifecycle, ...alarms, ...durableWorkOwners.map((entry) => entry.owner)].map(
-          (target) => `${target.source}\0${target.className}\0${target.objectKey}`
-        )
-      );
-      const activeKeys = new Set(
-        records
-          .filter((record) => record.kind === "do" && record.className)
-          .map((record) => `${record.source.repoPath}\0${record.className}\0${record.key}`)
-      );
-      const missing = [...required].filter((key) => !activeKeys.has(key));
-      if (missing.length > 0) {
-        throw new Error(
-          `Persisted runtime work targets ${missing.length} unknown Durable Object incarnation(s)`
-        );
-      }
-      const durable = records.filter(
-        (record) =>
-          record.kind === "do" &&
-          record.className &&
-          required.has(`${record.source.repoPath}\0${record.className}\0${record.key}`)
-      );
-      await Promise.all(
-        durable.map((record) => durableObjectExecutionReadiness.materialize(record))
-      );
-    },
-    recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
-    logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
-  });
-  const durableReconciliationCompletedAt = Date.now();
-  // Approval presentation and delivery begin only after routing and exact runtime
-  // incarnation restoration; neither an early no-op nor an optional hint pays receipt debt.
-  acquisitionCoordinator.resumePending();
-  acquisitionCoordinator.resumeTargetRequests();
-  await acquisitionCoordinator.reprojectOwnerDelivery();
-  // Runtime creation primes restored panel entities after durable hydration.
-  // Manifest-declared initial panels use the same runtime-image/serving-cache
-  // path during startup preparation; neither path creates or activates a panel.
-  for (const record of entityCache.listActive()) {
-    if (record.kind === "panel" && record.activeBuildKey) {
-      void primePanelRuntimeImage(record.source.repoPath);
-    }
-  }
-  // Admit server-driven alarms only after every persisted runtime incarnation
-  // has reproduced its exact sealed class image and lifecycle recovery has run.
-  try {
-    container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver").start();
-  } catch (err) {
-    console.warn("[Bootstrap] alarm re-arm skipped:", err);
-  }
-  try {
-    const durableWorkDriver =
-      container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
-        "durableWorkDriver"
-      );
-    durableWorkDriver.start();
-    void durableWorkDriver.recoverNow();
-  } catch (err) {
-    console.warn("[Bootstrap] durable work recovery skipped:", err);
-  }
-  const runtimeRecoveryStartedAt = Date.now();
-
-  // Re-register bootstrap entries that don't have DO rows.
-  entityCache.registerBootstrap({ id: "server", kind: "server" });
-  entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
-  if (reconciliation.incompleteCleanupIds.length > 0) {
-    console.log(
-      `[Bootstrap] Reconciled ${reconciliation.incompleteCleanupIds.length} incomplete cleanup(s): ${reconciliation.incompleteCleanupIds.join(
-        ", "
-      )}`
-    );
-  }
-
-  // 4. No optional singleton is compiled from the bootstrap snapshot. VCS
-  // durability has already promoted the one bootstrap source provider to
-  // semantic main, so unreferenced bootstrap builds can leave the steady-state
-  // store before its first content-GC epoch.
-  const protectedBuildKeys = new Set(
-    entityCache
-      .listActive()
-      .map((record) => record.activeBuildKey)
-      .filter((key): key is string => typeof key === "string")
-  );
-  const discardedBootstrapBuilds = await buildStoreForPublication.discardBootstrapBuilds(
-    bootstrapSnapshot.stateHash,
-    protectedBuildKeys
-  );
-  if (discardedBootstrapBuilds > 0) {
-    console.log(
-      `[BuildV2] Discarded ${discardedBootstrapBuilds} transitional bootstrap build${discardedBootstrapBuilds === 1 ? "" : "s"}`
-    );
-  }
-  const bootstrapBuildDiscardCompletedAt = Date.now();
-
-  // 5. Start cleanup reaper to retry partial-failed hooks.
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");
   const cleanupReaper = createCleanupReaper({
     doDispatch: doDispatchForBootstrap,
     workspaceDORef: workspaceDORefForBootstrap,
-    onRetire: async (record) => {
-      await cleanupRuntimeEntityRecord(record);
-    },
+    onRetire: cleanupRuntimeEntityRecord,
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
-  cleanupReaper.start();
-  const bootstrapReconciliationCompletedAt = Date.now();
-  console.info("[StartupBootstrap] Reconciliation barrier", {
-    durableReconciliationMs: durableReconciliationCompletedAt - bootstrapReconciliationStartedAt,
-    runtimeRecoveryMs: runtimeRecoveryStartedAt - durableReconciliationCompletedAt,
-    bootstrapBuildDiscardMs: bootstrapBuildDiscardCompletedAt - runtimeRecoveryStartedAt,
-    cleanupReaperMs: bootstrapReconciliationCompletedAt - bootstrapBuildDiscardCompletedAt,
-    totalMs: bootstrapReconciliationCompletedAt - bootstrapReconciliationStartedAt,
-  });
-  console.log(
-    `[Perf] workspace reconciliation complete at ${Math.round(process.uptime() * 1000)}ms uptime`
+  // Recovery owns persisted work; each DO invocation independently restores its
+  // exact incarnation. Neither general recovery nor maintenance owns desktop readiness.
+  const startupBackgroundLifetime = new AbortController();
+  const runtimeRecovery = (async () => {
+    await relayServices.webhook?.internal
+      .reannounceRelaySubscriptions()
+      .catch((err: unknown) =>
+        console.warn("[Server] relay subscription re-announce failed:", err)
+      );
+    startupBackgroundLifetime.signal.throwIfAborted();
+    // Steps 1-3 (hydrate, incomplete-cleanup reconcile, GC safety sweep) are
+    // factored into `runStartupReconciliation` so both the boot path and tests
+    // can call them.
+    const bootstrapReconciliationStartedAt = Date.now();
+    const { runStartupReconciliation } = await import("./services/startupReconciliation.js");
+    const lifecycleDriver =
+      container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
+    const reconciliation = await runStartupReconciliation({
+      dispatchWorkspaceDO,
+      entityCache,
+      onRetire: cleanupRuntimeEntityRecord,
+      recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
+      logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
+    });
+    startupBackgroundLifetime.signal.throwIfAborted();
+    const durableReconciliationCompletedAt = Date.now();
+    // Reproject pending asks once durable routing metadata is available.
+    acquisitionCoordinator.resumePending();
+    acquisitionCoordinator.resumeTargetRequests();
+    await acquisitionCoordinator.reprojectOwnerDelivery();
+    startupBackgroundLifetime.signal.throwIfAborted();
+    await panelExecutionReconciler.recoverPreparingPanels().catch((error: unknown) => {
+      // Each failed panel has its own terminal observation. Its build failure
+      // must not prevent recovery of unrelated runtime work.
+      console.warn("[StartupBackground] Panel execution recovery failed:", error);
+    });
+    startupBackgroundLifetime.signal.throwIfAborted();
+    // Runtime creation primes restored panel entities after durable hydration.
+    // Manifest-declared initial panels use the same runtime-image/serving-cache
+    // path during startup preparation; neither path creates or activates a panel.
+    for (const record of entityCache.listActive()) {
+      if (record.kind === "panel" && record.activeBuildKey) {
+        void primePanelRuntimeImage(record.source.repoPath);
+      }
+    }
+    // Recovery schedules existing alarms; each invocation restores only its own image.
+    try {
+      container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver").start();
+    } catch (err) {
+      console.warn("[Bootstrap] alarm re-arm skipped:", err);
+    }
+    try {
+      const durableWorkDriver =
+        container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
+          "durableWorkDriver"
+        );
+      durableWorkDriver.start();
+      void durableWorkDriver.recoverNow();
+    } catch (err) {
+      console.warn("[Bootstrap] durable work recovery skipped:", err);
+    }
+    const runtimeRecoveryStartedAt = Date.now();
+
+    // Re-register bootstrap entries that don't have DO rows.
+    entityCache.registerBootstrap({ id: "server", kind: "server" });
+    entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
+    if (reconciliation.incompleteCleanupIds.length > 0) {
+      console.log(
+        `[Bootstrap] Reconciled ${reconciliation.incompleteCleanupIds.length} incomplete cleanup(s): ${reconciliation.incompleteCleanupIds.join(
+          ", "
+        )}`
+      );
+    }
+
+    // Artifact retention belongs to build/execution leases. A startup snapshot
+    // sweep cannot distinguish a pending publication from an unused artifact.
+    cleanupReaper.start();
+    const bootstrapReconciliationCompletedAt = Date.now();
+    console.info("[StartupBootstrap] Reconciliation barrier", {
+      durableReconciliationMs: durableReconciliationCompletedAt - bootstrapReconciliationStartedAt,
+      runtimeRecoveryMs: runtimeRecoveryStartedAt - durableReconciliationCompletedAt,
+      cleanupReaperMs: bootstrapReconciliationCompletedAt - runtimeRecoveryStartedAt,
+      totalMs: bootstrapReconciliationCompletedAt - bootstrapReconciliationStartedAt,
+    });
+    console.log(
+      `[Perf] workspace reconciliation complete at ${Math.round(process.uptime() * 1000)}ms uptime`
+    );
+  })();
+  void runtimeRecovery.catch((error) =>
+    console.error("[StartupBackground] Runtime recovery failed:", error)
   );
 
   /**
@@ -7626,21 +7620,17 @@ async function main() {
    * these parts with one recoverable `review-pending` rather than a prompt per
    * method, so the question is asked exactly once, on one surface.
    *
-   * The obligation is read from the parts themselves, never from a marker. A
-   * marker only describes the workspace it was written in: the first boot after
-   * a cutover that discarded the admission file has none, and the emptiness of
-   * the admission store cannot stand in for it, because host-build units are
-   * admitted from their seed records before this runs. Both together still
-   * answered "no" for every workspace created before this change set, which left
-   * every panel and worker unadmitted, holding no clearance, and prompting at
-   * each use with no review anywhere to answer. On a workspace that owes
-   * nothing the set is empty and this does nothing at all, which is what
-   * deletes the startup card for good.
+   * Workspace initialization owns this obligation. A cold process start of an
+   * existing workspace restores its prior decision; it must not rediscover
+   * trust by sweeping current units or treating absent historical admissions
+   * as a newly created workspace.
    */
   const prepareWorkspaceCreationReview = async (): Promise<void> => {
     try {
-      const creationReview = await buildUnitChangeApprovalProvider.creationReview();
-      if (creationReview.units.length === 0) {
+      const creationReview = await workspaceCreationReview.prepareReview(() =>
+        buildUnitChangeApprovalProvider.creationReview()
+      );
+      if (!creationReview || creationReview.units.length === 0) {
         creationReviewUnits = new Set();
         creationReviewOwed = false;
         workspaceCreationReview.resolve();
@@ -7760,15 +7750,19 @@ async function main() {
   // Calling an async function still executes its synchronous prefix inline.
   // Unit discovery and seed verification can be substantial on a cold
   // workspace, so cross a scheduling boundary before starting opportunistic
-  // reconciliation. Explicit mobile/Electron readiness modes await this same
-  // promise below and therefore retain their stronger startup contract.
+  // reconciliation. Pairing readiness demands only its selected host artifact.
+  container
+    .get<import("./appHost.js").AppHost>("appHost")
+    .setDeclared(resolveDeclaredApps(workspaceConfig), { trigger: "startup" });
+  container
+    .get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
+    .setDeclared(runtimeExtensionDeclarations(workspaceConfig));
+  resolveInitialExtensionDeclarations();
   startupWorkspaceUnitReconcile = Promise.resolve()
     .then(runStartupWorkspaceUnitReconcile)
     .then(async () => {
-      // Wait only until both declaration branches have staged their requests.
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
-      await Promise.resolve(startupExtensionStaging);
       await prepareWorkspaceCreationReview();
       void reconcileDefaultAutomations();
       void unitInstallReviewCoordinator
@@ -7813,7 +7807,6 @@ async function main() {
     );
   }
   if (requireElectronReady) {
-    await startupWorkspaceUnitReconcile;
     const appHost = container.get<import("./appHost.js").AppHost>("appHost");
     const readiness = await (startupElectronArtifactPreparation ??
       appHost.prepareElectronArtifact());
@@ -7834,19 +7827,6 @@ async function main() {
     console.log(
       `[Desktop] Electron shell app ready: ${readiness.appId} (${readiness.source}) build ${readiness.buildKey}`
     );
-    try {
-      await Promise.resolve(startupPanelArtifactPreparation);
-    } catch (err) {
-      printReadinessActionBlock("Initial desktop panel is not ready", [
-        "The desktop shell was built, but a panel declared in initPanels could not be prepared.",
-        "Publishing a pairing link now would leave the first desktop surface loading indefinitely.",
-        "",
-        err instanceof Error ? err.message : String(err),
-        "",
-        "Fix the blocking panel build above, then restart this command.",
-      ]);
-      process.exit(1);
-    }
   }
 
   // ===========================================================================
@@ -7925,13 +7905,24 @@ async function main() {
       container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver");
     const shutdownErrors: unknown[] = [];
 
+    startupBackgroundLifetime.abort(new Error("Server shutdown cancelled startup recovery"));
+    stopAuthorityRecoveryOnRestart();
+    await acquisitionCoordinator.quiesceOwnerDelivery();
+
+    await Promise.allSettled([
+      optionalServiceStartup,
+      runtimeRecovery,
+      startupWorkspaceUnitReconcile,
+    ]);
+    await Promise.allSettled([
+      startupExtensionWarming,
+      startupPanelArtifactPreparation,
+      startupElectronArtifactPreparation,
+    ]);
     await cleanupReaper.stop().catch((error) => {
       shutdownErrors.push(error);
       console.error("[Server] Cleanup reaper shutdown failed:", error);
     });
-    stopAuthorityRecoveryOnRestart();
-    await acquisitionCoordinator.quiesceOwnerDelivery();
-
     // Stop scheduling admission before asking activations to release. A
     // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel
     // only that transport and preserve its durable wake row so lifecycle

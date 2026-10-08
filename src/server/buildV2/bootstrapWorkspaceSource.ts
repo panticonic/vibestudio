@@ -1,266 +1,62 @@
-import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-
-import { buildWorktreeManifest } from "@vibestudio/content-addressing";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
-
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 import type { BuildSourceProvider } from "./buildSource.js";
-import { discoverPackageGraph } from "./packageGraph.js";
+import type { GraphNode } from "./packageGraph.js";
 import type { BuildRecord, WorkspaceStateSource } from "./stateTrigger.js";
 
-const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
-
-export interface BootstrapWorkspaceContentMirror {
-  putFile(bytes: Buffer): Promise<{ digest: string }>;
-  putTree(
-    files: readonly { path: string; contentHash: string; mode: number }[],
-    stateHash: string
-  ): Promise<void>;
-}
-
-/**
- * The immutable identity captured before semantic workspace initialization.
- *
- * The source directory may subsequently be used as the live semantic
- * workspace projection (notably by source-coupled development instances), so
- * callers must retain this value instead of asking the source to rediscover
- * its current state.
- */
-export interface BootstrapWorkspaceSnapshot {
-  readonly stateHash: string;
-  /** Re-check the snapshot only while the bootstrap phase is still active. */
-  assertUnchanged(): Promise<void>;
-}
-
-/**
- * Read-only source view used only to break the workspace-source-provider
- * bootstrap fixed point. The directory must already be the atomically
- * materialized exact root snapshot; this class neither fetches nor interprets
- * template state.
- */
+/** One immutable content-store publication breaks the source-provider bootstrap
+ * fixed point. Creation supplies the acquired template tree; restart supplies
+ * persisted protected main. Neither operation infers source from a projection. */
 export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSourceProvider {
-  private snapshot:
-    | {
-        stateHash: string;
-        subtreeHash(path: string): string | null;
-      }
-    | undefined;
-  private publicSnapshot: BootstrapWorkspaceSnapshot | undefined;
-  private sealFlight: Promise<BootstrapWorkspaceSnapshot> | undefined;
-
   constructor(
     readonly workspaceId: string,
-    private readonly sourceRoot: string,
-    private readonly contentMirror?: BootstrapWorkspaceContentMirror
-  ) {}
+    private readonly source: WorkspaceStateSource & BuildSourceProvider,
+    readonly stateHash: string,
+    private readonly executionState: ExecutionSourceStateRef
+  ) {
+    if (!/^state:[0-9a-f]{64}$/u.test(stateHash)) {
+      throw new Error(`Invalid bootstrap content coordinate: ${stateHash}`);
+    }
+  }
 
-  /** Capture the exact source identity once for the bootstrap lifecycle. */
-  async seal(): Promise<BootstrapWorkspaceSnapshot> {
-    if (this.publicSnapshot) return this.publicSnapshot;
-    if (this.sealFlight) return this.sealFlight;
-
-    this.sealFlight = (async () => {
-      const snapshot = await this.readSnapshot(true);
-      this.snapshot = snapshot;
-      const publicSnapshot: BootstrapWorkspaceSnapshot = Object.freeze({
-        stateHash: snapshot.stateHash,
-        assertUnchanged: async () => {
-          const observed = await this.readSnapshot();
-          if (observed.stateHash !== snapshot.stateHash) {
-            throw new Error(
-              "Bootstrap workspace source changed while its provider was being built"
-            );
-          }
-        },
-      });
-      this.publicSnapshot = publicSnapshot;
-      return publicSnapshot;
-    })().finally(() => {
-      this.sealFlight = undefined;
-    });
-    return this.sealFlight;
+  private coordinate(ref: string): string {
+    if (ref !== "main" && ref !== this.stateHash) {
+      throw new Error(`Bootstrap publication ${this.stateHash} cannot resolve ${ref}`);
+    }
+    return this.stateHash;
   }
 
   async ensureFresh(): Promise<{ stateHash: string }> {
-    const snapshot = await this.seal();
-    const observed = await this.readSnapshot();
-    if (observed.stateHash !== snapshot.stateHash) {
-      throw new Error(
-        "Bootstrap workspace source changed after it was sealed; restart from the exact root snapshot"
-      );
-    }
-    return { stateHash: snapshot.stateHash };
+    return { stateHash: this.stateHash };
   }
 
-  async unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>> {
-    const snapshot = await this.requireSnapshot(stateHash);
-    return Object.fromEntries(
-      relPaths.map((relativePath) => [
-        relativePath,
-        snapshot.subtreeHash(normalizeRelativePath(relativePath)),
-      ])
-    );
+  unitHashes(stateHash: string, paths: string[]) {
+    return this.source.unitHashes(this.coordinate(stateHash), paths);
   }
 
   async resolveContextState(_contextId: string): Promise<string> {
-    throw new Error("Bootstrap workspace source has no semantic contexts");
+    throw new Error("Bootstrap publication has no semantic contexts");
   }
 
-  async readFile(stateHash: string, filePath: string) {
-    await this.requireSnapshot(stateHash);
-    const normalized = normalizeRelativePath(filePath);
-    const absolutePath = path.resolve(this.sourceRoot, ...normalized.split("/"));
-    const sourceRoot = `${path.resolve(this.sourceRoot)}${path.sep}`;
-    if (!absolutePath.startsWith(sourceRoot)) {
-      throw new Error(`Bootstrap workspace path escapes its source: ${filePath}`);
-    }
-    let bytes: Buffer;
-    let stat: Awaited<ReturnType<typeof fs.stat>>;
-    try {
-      [bytes, stat] = await Promise.all([fs.readFile(absolutePath), fs.stat(absolutePath)]);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    if (!stat.isFile()) return null;
-    let content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
-    try {
-      content = { kind: "text", text: UTF8_DECODER.decode(bytes) };
-    } catch {
-      content = { kind: "bytes", base64: bytes.toString("base64") };
-    }
-    return {
-      content,
-      stateHash,
-      contentHash: createHash("sha256").update(bytes).digest("hex"),
-      mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
-      size: bytes.byteLength,
-    };
+  readFile(stateHash: string, file: string) {
+    return this.source.readFile(this.coordinate(stateHash), file);
   }
 
-  executionStateForContent(stateHash: string) {
-    if (!this.snapshot || this.snapshot.stateHash !== stateHash) return null;
-    return {
-      kind: "bootstrap-snapshot" as const,
-      snapshotHash: stateHash,
-    };
+  executionStateForContent(stateHash: string): ExecutionSourceStateRef | null {
+    return stateHash === this.stateHash ? this.executionState : null;
   }
 
-  async discoverGraph(stateHash: string) {
-    await this.requireSnapshot(stateHash);
-    return discoverPackageGraph(this.sourceRoot);
+  discoverGraph(stateHash: string) {
+    return this.source.discoverGraph(this.coordinate(stateHash));
+  }
+
+  materializeForBuild(units: GraphNode[], ref: string, workspaceRoot: string) {
+    return this.source.materializeForBuild(units, this.coordinate(ref), workspaceRoot);
   }
 
   onProtectedPublication(_cb: (event: ProtectedPublicationEvent) => void): () => void {
     return () => {};
   }
 
-  async recordBuild(_record: BuildRecord): Promise<void> {
-    // Bootstrap provenance is joined to the semantic initialization receipt;
-    // it is never written into a second build-history channel.
-  }
-
-  async materializeForBuild(
-    _units: Parameters<BuildSourceProvider["materializeForBuild"]>[0],
-    stateRef: string
-  ): Promise<{ sourceRoot: string }> {
-    await this.requireSnapshot(stateRef);
-    return { sourceRoot: this.sourceRoot };
-  }
-
-  private async requireSnapshot(stateHash: string) {
-    if (!this.snapshot) await this.seal();
-    if (!this.snapshot || this.snapshot.stateHash !== stateHash) {
-      throw new Error(`Unknown bootstrap workspace state ${stateHash}`);
-    }
-    return this.snapshot;
-  }
-
-  private async readSnapshot(mirror = false) {
-    const sourceFiles: Array<{ path: string; absolutePath: string }> = [];
-    const visit = async (directory: string, relativeDirectory: string): Promise<void> => {
-      const entries = await fs.readdir(directory, { withFileTypes: true });
-      entries.sort((left, right) => left.name.localeCompare(right.name));
-      for (const entry of entries) {
-        // Repository metadata describes the checkout, not workspace content.
-        // Semantic source imports address committed files and never publish
-        // nested .git databases; including them here gives the bootstrap build
-        // a state hash that the canonical content store can never resolve.
-        if (entry.isDirectory() && entry.name === ".git") continue;
-        const relativePath = normalizeRelativePath(
-          relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-        );
-        const absolutePath = path.join(directory, entry.name);
-        if (entry.isDirectory()) {
-          await visit(absolutePath, relativePath);
-          continue;
-        }
-        if (!entry.isFile()) {
-          throw new Error(
-            `Bootstrap workspace snapshot contains unsupported entry ${relativePath}`
-          );
-        }
-        sourceFiles.push({ path: relativePath, absolutePath });
-      }
-    };
-    await visit(this.sourceRoot, "");
-    const files = new Array<{ path: string; contentHash: string; mode: number }>(
-      sourceFiles.length
-    );
-    let cursor = 0;
-    let failure: { error: unknown } | undefined;
-    const results = await Promise.allSettled(
-      Array.from({ length: Math.min(16, sourceFiles.length) }, async () => {
-        while (!failure && cursor < sourceFiles.length) {
-          const index = cursor++;
-          const file = sourceFiles[index]!;
-          try {
-            const [content, stat] = await Promise.all([
-              fs.readFile(file.absolutePath),
-              fs.stat(file.absolutePath),
-            ]);
-            const contentHash = createHash("sha256").update(content).digest("hex");
-            if (mirror && this.contentMirror) {
-              const stored = await this.contentMirror.putFile(content);
-              if (stored.digest !== contentHash) {
-                throw new Error(
-                  `Bootstrap workspace content mirror changed ${file.path}: expected ${contentHash}, stored ${stored.digest}`
-                );
-              }
-            }
-            files[index] = {
-              path: file.path,
-              contentHash,
-              mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
-            };
-          } catch (error) {
-            failure ??= { error };
-            throw error;
-          }
-        }
-      })
-    );
-    // Settle all owned readers/writers before rejection permits bootstrap cleanup.
-    if (failure) throw failure.error;
-    const rejected = results.find((result) => result.status === "rejected");
-    if (rejected?.status === "rejected") throw rejected.reason;
-    const snapshot = buildWorktreeManifest(files);
-    if (mirror && this.contentMirror) {
-      await this.contentMirror.putTree(files, snapshot.stateHash);
-    }
-    return snapshot;
-  }
-}
-
-function normalizeRelativePath(value: string): string {
-  const normalized = value.replaceAll("\\", "/").replace(/^\.\/+/u, "");
-  if (
-    normalized.length === 0 ||
-    normalized.startsWith("/") ||
-    normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
-  ) {
-    throw new Error(`Invalid bootstrap workspace path ${JSON.stringify(value)}`);
-  }
-  return normalized;
+  async recordBuild(_record: BuildRecord): Promise<void> {}
 }

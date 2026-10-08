@@ -526,6 +526,7 @@ describe("UnitHost", () => {
   function makeHarness(
     opts: {
       active?: boolean;
+      isSeedTrusted?: (node: TestNode) => boolean;
       extraNode?: TestNode;
       applyTrusted?: (node: TestNode) => Promise<void>;
       approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
@@ -602,6 +603,7 @@ describe("UnitHost", () => {
         dependencyEvs: {},
         externalDeps: {},
       }),
+      ...(opts.isSeedTrusted ? { isSeedTrusted: opts.isSeedTrusted } : {}),
       trustResolver: undefined,
       makePendingEntry: (n, decl, building) =>
         entry({
@@ -623,9 +625,7 @@ describe("UnitHost", () => {
         prompted.push(entries);
         return "accepted";
       },
-      ...(opts.approvalCoordinator
-        ? { approvalCoordinator: opts.approvalCoordinator }
-        : {}),
+      ...(opts.approvalCoordinator ? { approvalCoordinator: opts.approvalCoordinator } : {}),
       onApprovalDenied: (items) => {
         denied.push(...items.map((item) => item.node.name));
       },
@@ -635,6 +635,20 @@ describe("UnitHost", () => {
     });
     return { host, registry, applied, removed, prompted, denied, node };
   }
+
+  it("does not inspect seed authority again for an admitted version", async () => {
+    const isSeedTrusted = vi.fn(() => true);
+    const { host } = makeHarness({ isAdmitted: () => true, isSeedTrusted });
+    await expect(
+      host.seedTrustedDeclarations([{ source: "extensions/a", ref: "main" }])
+    ).resolves.toEqual([]);
+    expect(isSeedTrusted).not.toHaveBeenCalled();
+    const fresh = makeHarness({ isAdmitted: () => false, isSeedTrusted });
+    await expect(
+      fresh.host.seedTrustedDeclarations([{ source: "extensions/a", ref: "main" }])
+    ).resolves.toHaveLength(1);
+    expect(isSeedTrusted).toHaveBeenCalledOnce();
+  });
 
   it("applies declared units after approval", async () => {
     const { host, applied, prompted, node } = makeHarness();
@@ -928,7 +942,9 @@ describe("UnitHost", () => {
   it("does not collect approval entries for already approved declarations", async () => {
     const { host, node } = makeHarness({ active: true });
 
-    expect(await host.approvalForDeclarations([{ source: node.relativePath, ref: "main" }])).toEqual({
+    expect(
+      await host.approvalForDeclarations([{ source: node.relativePath, ref: "main" }])
+    ).toEqual({
       entries: [],
       identityKeys: [],
     });

@@ -2,16 +2,14 @@ import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { isValidEventName } from "@vibestudio/shared/events";
 import { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import {
-  verifiedInitiator,
-  type ServiceContext,
-} from "@vibestudio/shared/serviceDispatcher";
+import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { eventsMethods } from "../events.js";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 
+/** Each topic may replay zero or more held payloads, including one per addressed panel. */
 export type EventSnapshotProviders = {
-  [E in EventName]?: (context: ServiceContext) => EventPayloads[E] | undefined;
+  [E in EventName]?: (context: ServiceContext) => Iterable<EventPayloads[E]>;
 };
 
 export interface EventsServiceDefinitionOptions {
@@ -21,7 +19,7 @@ export interface EventsServiceDefinitionOptions {
   onWatchOpened?: (
     events: readonly EventName[],
     context: ServiceContext
-  ) => (() => void) | undefined;
+  ) => (() => void) | undefined | Promise<(() => void) | undefined>;
   methods?: ServiceMethodSchemas;
 }
 
@@ -48,17 +46,21 @@ export function createEventsServiceDefinition(
     authority: { principals: ["user", "code", "host"] },
     methods,
     handler: defineServiceHandler(serviceName, methods, {
-      watch: (ctx, [requestedEvents, watchId]) => {
+      watch: async (ctx, [requestedEvents, watchId]) => {
         const events = (requestedEvents as string[]).map((eventName: string) => {
           if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
           return eventName;
         });
-        const snapshots: Partial<Record<EventName, () => unknown>> = {};
+        const snapshots: Partial<Record<EventName, () => Iterable<unknown>>> = {};
         for (const event of events) {
           const snapshot = opts.snapshots?.[event];
           if (snapshot) snapshots[event] = () => snapshot(ctx);
         }
-        const release = opts.onWatchOpened?.(events, ctx);
+        const release = await opts.onWatchOpened?.(events, ctx);
+        if (ctx.signal?.aborted) {
+          release?.();
+          ctx.signal.throwIfAborted();
+        }
         return eventService.openWatch({
           ...eventWatchOwner(ctx),
           connectionId: ctx.connectionId ?? EventService.DEFAULT_CONNECTION_ID,

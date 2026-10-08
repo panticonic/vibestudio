@@ -1,19 +1,11 @@
 import { AuthError, ConnectionError, networkErrorMessage } from "./output.js";
-import {
-  selectedWorkspacePath,
-  serverAuthRouteUrl,
-  serverRpcHttpUrl,
-} from "@vibestudio/shared/connect";
+import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
 import {
   isIrohCredential,
-  canonicalStoredPairing,
-  saveCliCredentials,
   type CliCredentials,
   type CliDeviceCredentials,
   type CliStoredPairing,
 } from "./credentialStore.js";
-import { resolveLocalHubControlTransport } from "./localHubTransport.js";
-import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
 import { Agent, type Dispatcher } from "undici";
@@ -146,10 +138,6 @@ function responseRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
-}
-
 type RpcRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 async function fetchOrAuthError(url: URL, init: RpcRequestInit): Promise<Response> {
@@ -243,9 +231,7 @@ export class RpcClient {
   private ownsIrohClient = true;
   private releaseEndpointLock: (() => void) | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
-  private localWorkspaceClient: Promise<RpcClient | null> | null = null;
   private httpDispatcher: Agent | null = null;
-  private readonly cliCredentials: CliDeviceCredentials | null;
   private keepPushOpen = false;
   private retainedConnections = 0;
 
@@ -254,7 +240,6 @@ export class RpcClient {
     if (isAgentCliCredentials(creds)) {
       this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
       this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
-      this.cliCredentials = null;
       this.rawToken = creds.agentToken;
       this.deviceId = null;
       this.refreshToken = null;
@@ -263,7 +248,6 @@ export class RpcClient {
     } else if (isRawTokenCredential(creds)) {
       this.pairing = creds.workspacePairing;
       this.endpointSecret = creds.endpointSecret;
-      this.cliCredentials = null;
       this.rawToken = creds.token;
       this.deviceId = null;
       this.refreshToken = null;
@@ -271,11 +255,9 @@ export class RpcClient {
       this.callerKind = "agent";
     } else {
       if (isCompleteDeviceCredentials(creds)) {
-        this.cliCredentials = creds;
         this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
         this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
       } else {
-        this.cliCredentials = null;
         this.pairing = creds.pairing;
         this.endpointSecret = creds.endpointSecret;
       }
@@ -362,8 +344,6 @@ export class RpcClient {
     args: unknown[] = []
   ): Promise<T> {
     if (this.isIroh) {
-      const local = await this.ensureLocalWorkspaceClient();
-      if (local) return await local.callTarget<T>(targetId, method, args);
       return await this.dispatchIroh<T>(targetId, method, args);
     }
     return await this.dispatch<T>(targetId, method, args);
@@ -419,15 +399,10 @@ export class RpcClient {
    * Open an independent transport to the same resolved workspace endpoint.
    *
    * Long-lived streams must not own the connection used for ordinary RPCs.
-   * For a complete workspace credential, resolve the local/remote route once
-   * on this client and clone the resulting endpoint identity rather than
-   * independently routing a second time.
+   * Iroh siblings share the credential endpoint and own separate request
+   * streams; HTTP siblings use the same authenticated workspace URL.
    */
   async openSiblingConnection(): Promise<RpcClient> {
-    if (this.cliCredentials) {
-      const local = await this.ensureLocalWorkspaceClient();
-      if (local) return await local.openSiblingConnection();
-    }
     if (this.isIroh) {
       // QUIC gives every request its own independently flow-controlled stream,
       // so the old Iroh reason for a second physical connection no longer
@@ -469,32 +444,15 @@ export class RpcClient {
   async close(): Promise<void> {
     const iroh = this.irohClient;
     const ws = this.wsClient;
-    const local = this.localWorkspaceClient;
     const httpDispatcher = this.httpDispatcher;
     this.irohClient = null;
     this.wsClient = null;
-    this.localWorkspaceClient = null;
     this.httpDispatcher = null;
     const resources = [
       ...(iroh && this.ownsIrohClient
         ? [{ label: "Iroh client", close: async () => (await iroh).close() }]
         : []),
       ...(ws ? [{ label: "WebSocket client", close: async () => (await ws).close() }] : []),
-      ...(local
-        ? [
-            {
-              label: "local workspace client",
-              close: async () => {
-                // A rejected lazy-open promise represents the operation's
-                // connection/routing failure, not a cleanup failure. There is
-                // no acquired client to close in that case, and rethrowing it
-                // here would mask the actionable error from the call itself.
-                const client = await local.catch(() => null);
-                await client?.close();
-              },
-            },
-          ]
-        : []),
       ...(httpDispatcher
         ? [
             {
@@ -690,70 +648,7 @@ export class RpcClient {
   /** Select the credential's one persistent push/stream transport. */
   private async persistentClient(): Promise<PersistentRpcClient> {
     if (!this.isIroh) return await this.ensureWsClient();
-    const local = await this.ensureLocalWorkspaceClient();
-    return local ? await local.persistentClient() : await this.ensureIrohClient();
-  }
-
-  private ensureLocalWorkspaceClient(): Promise<RpcClient | null> {
-    if (!this.cliCredentials) return Promise.resolve(null);
-    if (!this.localWorkspaceClient) {
-      this.localWorkspaceClient = this.openLocalWorkspaceClient();
-    }
-    return this.localWorkspaceClient;
-  }
-
-  private async openLocalWorkspaceClient(): Promise<RpcClient | null> {
-    const credentials = this.cliCredentials;
-    if (!credentials) return null;
-    const local = await resolveLocalHubControlTransport(credentials);
-    if (!local) return null;
-    const control = new RpcClient({
-      url: local.serverUrl,
-      deviceId: credentials.deviceId,
-      refreshToken: credentials.refreshToken,
-    });
-    let rawRoute: unknown;
-    try {
-      rawRoute = await control.call("hubControl.routeWorkspace", [
-        { workspaceId: credentials.workspaceId },
-      ]);
-    } finally {
-      await control.close().catch(() => undefined);
-    }
-    const route = HubWorkspaceRouteSchema.parse(rawRoute);
-    const expectedPath = selectedWorkspacePath(credentials.workspaceName);
-    const routedUrl = new URL(route.serverUrl);
-    const localUrl = new URL(local.serverUrl);
-    if (
-      route.serverId !== credentials.serverId ||
-      route.workspaceId !== credentials.workspaceId ||
-      route.workspace !== credentials.workspaceName ||
-      routedUrl.protocol !== "http:" ||
-      !isLoopbackHostname(routedUrl.hostname) ||
-      !isLoopbackHostname(localUrl.hostname) ||
-      routedUrl.port !== localUrl.port ||
-      routedUrl.pathname.replace(/\/$/, "") !== expectedPath ||
-      routedUrl.search ||
-      routedUrl.hash
-    ) {
-      throw new Error("The local hub routed the paired device to a different server or workspace");
-    }
-    const refreshedCredentials: CliDeviceCredentials = {
-      ...credentials,
-      url:
-        credentials.transport === "iroh"
-          ? `iroh://${route.workspaceReach.endpointId}${expectedPath}`
-          : route.serverUrl.replace(/\/$/, ""),
-      ...(credentials.transport === "iroh"
-        ? { workspacePairing: canonicalStoredPairing(route.workspaceReach) }
-        : {}),
-    };
-    saveCliCredentials(refreshedCredentials);
-    return new RpcClient({
-      url: route.serverUrl.replace(/\/$/, ""),
-      deviceId: credentials.deviceId,
-      refreshToken: credentials.refreshToken,
-    });
+    return await this.ensureIrohClient();
   }
 
   private ensureWsClient(): Promise<import("./wsClient.js").WsRpcClient> {

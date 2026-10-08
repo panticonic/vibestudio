@@ -2100,20 +2100,23 @@ async function startHubControlTransport(
       snapshots: {
         "hub:workspace-catalog-changed": (ctx) => {
           const owner = eventWatchOwner(ctx);
-          return owner.userId ? workspaceCatalogForUser(state, owner.userId) : undefined;
+          const snapshot = owner.userId ? workspaceCatalogForUser(state, owner.userId) : undefined;
+          return snapshot ? [snapshot] : [];
         },
         "shell-approval:pending-changed": (ctx) => {
           const owner = eventWatchOwner(ctx);
           const pending = approvalQueue.listPending();
-          return {
-            pending: isHostApprovalObserver(owner)
-              ? pending
-              : pending.filter(
-                  (approval) =>
-                    owner.userId &&
-                    approvalVisibleToUser(approval, owner.userId, approvalScopeAccess)
-                ),
-          };
+          return [
+            {
+              pending: isHostApprovalObserver(owner)
+                ? pending
+                : pending.filter(
+                    (approval) =>
+                      owner.userId &&
+                      approvalVisibleToUser(approval, owner.userId, approvalScopeAccess)
+                  ),
+            },
+          ];
         },
       },
     })
@@ -2503,10 +2506,12 @@ export function applyWorkspaceHostRuntimeEnv(
   >,
   currentAppVersion: string
 ): void {
-  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
   env["VIBESTUDIO_APP_VERSION"] = launchSet.appVersion;
   env["VIBESTUDIO_CURRENT_APP_VERSION"] = currentAppVersion;
+  // Current children inherit the hub's exact artifact generation. Its entry
+  // may be live TypeScript and therefore cannot locate compiled artifacts.
   if (!launchSet.historical) return;
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
   // The retained process owns its compiled bundle and build executable. The
   // hub snapshot is deliberately preserved only for its own generation.
   delete env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV];

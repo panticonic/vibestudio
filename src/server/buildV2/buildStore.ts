@@ -1,3 +1,4 @@
+import { createRuntimeLayout } from "@vibestudio/shared/runtimePaths";
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
  * Content-Addressed Build Store — immutable artifact storage.
@@ -1019,7 +1020,14 @@ export function get(key: string): BuildResult | null {
   return null;
 }
 
-/** Hydrate a shared immutable build without blocking the server event loop. */
+/** Installed release artifacts are immutable reconstruction inputs, never workspace records. */
+let releaseBuildRoot: string | null = null;
+
+export function configureReleaseBuilds(appRoot: string): void {
+  releaseBuildRoot = path.join(createRuntimeLayout(appRoot).resourcesRoot, "userland-builds");
+}
+
+/** Hydrate immutable build artifacts through one provenance-binding boundary. */
 export async function getOrHydrate(
   key: string,
   sourceStateHash?: string
@@ -1028,23 +1036,26 @@ export async function getOrHydrate(
   const local = get(key);
   if (local) return local;
 
-  const sharedDir = getSharedBuildDir(key);
-  if (!sharedDir) return null;
-  // A build committed by this process may still be finishing its optional
-  // shared publication. Hydration is the only consumer that needs to wait for
-  // that work; ordinary build completion and local lookup remain independent.
-  await sharedBuildPublicationTasks.get(path.resolve(sharedDir));
-  const cacheRoot = path.dirname(sharedDir);
-  const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
-  try {
-    // A workspace GC tombstone is authoritative over the shared reconstruction
-    // cache. Without this check a successful sweep would immediately resurrect
-    // the same local record on the next lookup.
-    if (isRetiredBuildKey(key)) return null;
-    // The shared record's execution identity belongs to its source workspace;
-    // it is deliberately verified only after its provenance is rebound below.
-    const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
-    if (shared) {
+  if (isRetiredBuildKey(key)) return null;
+  const sources = [
+    ...(releaseBuildRoot ? [{ root: releaseBuildRoot, immutable: true }] : []),
+    ...(getConfiguredSharedBuildResultCacheDir()
+      ? [{ root: getConfiguredSharedBuildResultCacheDir()!, immutable: false }]
+      : []),
+  ];
+  for (const source of sources) {
+    const sharedDir = path.join(source.root, key);
+    const cacheRoot = source.root;
+    await sharedBuildPublicationTasks.get(path.resolve(sharedDir));
+    const lease = source.immutable
+      ? null
+      : derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
+    try {
+      if (isRetiredBuildKey(key)) return null;
+      // The shared record's execution identity belongs to its source workspace;
+      // it is deliberately verified only after its provenance is rebound below.
+      const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
+      if (!shared) continue;
       // Artifact bytes are globally shareable, but workspace build metadata is
       // not. In particular, sourceState and execution commit to the workspace
       // that materialized the build. Rebind that provenance to this workspace
@@ -1110,27 +1121,30 @@ export async function getOrHydrate(
         }
         throw error;
       }
-    }
-    const materialized = readVerifiedLocalBuild(key);
-    if (materialized && !reportedSharedBuildHits.has(key)) {
-      reportedSharedBuildHits.set(key, true);
-      console.info(
-        `[BuildCache] Reused shared build ${materialized.metadata.name} (${key.slice(0, 12)})`
-      );
-    }
-    return materialized;
-  } finally {
-    lease.release();
-    void scheduleDerivedCachePrune(cacheRoot)
-      .then(async (result) => {
-        if (result) await collectSharedArtifactPool();
-      })
-      .catch((error) => {
-        console.warn(
-          `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+      const materialized = readVerifiedLocalBuild(key);
+      if (materialized && !reportedSharedBuildHits.has(key)) {
+        reportedSharedBuildHits.set(key, true);
+        console.info(
+          `[BuildCache] Reused ${source.immutable ? "release" : "shared"} build ${materialized.metadata.name} (${key.slice(0, 12)})`
         );
-      });
+      }
+      return materialized;
+    } finally {
+      lease?.release();
+      if (!source.immutable) {
+        void scheduleDerivedCachePrune(cacheRoot)
+          .then(async (result) => {
+            if (result) await collectSharedArtifactPool();
+          })
+          .catch((error) => {
+            console.warn(
+              `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+      }
+    }
   }
+  return null;
 }
 
 /** Resolve one retained execution of reusable artifact bytes without rebinding
@@ -1230,50 +1244,6 @@ export async function rebindSourceState(
     rememberVerifiedLocalBuild(rebound);
   }
   return rebound;
-}
-
-/**
- * Bootstrap builds are compiled from the filesystem snapshot used only to
- * bring the semantic source provider online. Once semantic startup has
- * reconciled its active entities, those snapshot roots are no longer valid
- * execution sources for the steady-state store and must not enter content GC.
- * Remove only exact matching, non-active cache records; shared artifact bytes
- * remain available for normal workspace-local reconstruction.
- */
-export async function discardBootstrapBuilds(
-  sourceStateHash: string,
-  protectedBuildKeys: ReadonlySet<string>
-): Promise<number> {
-  const buildsDir = getBuildsDir();
-  const trashDir = stateLayout(getUserDataPath()).executionRetention.buildTrashDir;
-  let discarded = 0;
-  const entries = await fs.promises
-    .readdir(buildsDir, { withFileTypes: true })
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
-  for (const entry of entries) {
-    if (!entry.isDirectory() || protectedBuildKeys.has(entry.name)) continue;
-    const buildDir = path.join(buildsDir, entry.name);
-    let metadata: BuildMetadata;
-    try {
-      metadata = readBuildMetadata(buildDir);
-    } catch {
-      continue;
-    }
-    if (metadata.buildKey !== entry.name || metadata.sourceStateHash !== sourceStateHash) continue;
-    const trashPath = path.join(
-      trashDir,
-      `${entry.name}.bootstrap.${crypto.randomBytes(8).toString("hex")}`
-    );
-    await fs.promises.mkdir(trashDir, { recursive: true, mode: 0o700 });
-    forgetVerifiedLocalBuild(buildDir);
-    await fs.promises.rename(buildDir, trashPath);
-    await fs.promises.rm(trashPath, { recursive: true, force: true });
-    discarded += 1;
-  }
-  return discarded;
 }
 
 export function primaryArtifact(

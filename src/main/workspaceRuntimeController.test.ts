@@ -10,6 +10,7 @@ import type { WorkspaceSessionConnection } from "./serverSession.js";
 import type { ApplicationWindowController } from "./applicationWindowController.js";
 import type { CdpHostProvider } from "./cdpHostProvider.js";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { readEventWatchRecords } from "@vibestudio/shared/events";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 
 const edges = vi.hoisted(() => ({
@@ -242,6 +243,7 @@ function fixture(
     recoverRuntimeClientRegistration: vi.fn(async (): Promise<void> => undefined),
     unregisterRuntimeClient: vi.fn(async () => undefined),
     getRuntimeClientSessionId: () => `${workspaceId}-lease-client`,
+    getLocalPresentationSnapshots: vi.fn(() => [] as unknown[]),
     initializePanelTree: vi.fn(async () => undefined),
     recoverShellSnapshot: vi.fn(async () => undefined),
   };
@@ -259,8 +261,7 @@ function fixture(
   const watch = {
     recover: vi.fn(async (): Promise<void> => undefined),
     close: vi.fn(async () => undefined),
-    retainAll: vi.fn(async (): Promise<void> => undefined),
-    retainMany: vi.fn(() => () => {}),
+    retainAll: vi.fn(async () => () => {}),
   };
   edges.watch.mockReturnValueOnce(watch);
   const download = { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) };
@@ -389,6 +390,51 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
 }
 
 describe("workspace runtime ownership", () => {
+  it("retains execution lifecycle events and replays held panel failures whenever a desktop watch opens", async () => {
+    const owner = fixture("system");
+    await owner.runtime.start();
+    expect(owner.watch.retainAll).toHaveBeenCalledWith(
+      expect.arrayContaining(["panel:executionActivated", "panel:executionFailed"])
+    );
+    owner.window.viewManager.getViewInfo.mockReturnValue({
+      type: "app",
+      hostChrome: true,
+      capabilities: ["panel-hosting"],
+      workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+      codeIdentity: { source: "apps/shell" },
+    });
+    const held = ["panel:tree/a", "panel:tree/b"].map((slotId) => ({
+      revision: 5,
+      presentation: { state: "failed", slotId, message: "original compile failure" },
+    }));
+    owner.orchestrator.getLocalPresentationSnapshots.mockReturnValue(held);
+    const definition = owner.runtime.dispatcher
+      .getServiceDefinitions()
+      .find((service) => service.name === "desktopEvents")!;
+    for (const watchId of ["initial", "recovered"]) {
+      const response = (await definition.handler!(
+        { caller: createHostCaller("native-system-shell", "shell") },
+        "watch",
+        [["panel-local-presentation-changed"], watchId]
+      )) as Response;
+      const records = readEventWatchRecords(response);
+      try {
+        await expect(records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
+        for (const payload of held) {
+          await expect(records.next()).resolves.toMatchObject({
+            value: {
+              kind: "snapshot",
+              event: "panel-local-presentation-changed",
+              payload,
+            },
+          });
+        }
+      } finally {
+        await records.return();
+      }
+    }
+  });
+
   it("owns browser ad blocking without a Personal cookie projection", async () => {
     const owner = fixture("system");
     await owner.runtime.start();
@@ -517,10 +563,33 @@ describe("workspace runtime ownership", () => {
           [["shell-approval:pending-changed"], "unprivileged-watch"]
         )
       ).rejects.toThrow();
-      expect(owner.watch.retainMany).not.toHaveBeenCalled();
+      expect(owner.watch.retainAll).toHaveBeenCalledTimes(1);
       expect(openWatch).not.toHaveBeenCalled();
     }
   );
+
+  it("returns the upstream watch failure instead of acknowledging false readiness", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    owner.window.viewManager.getViewInfo.mockReturnValue({
+      type: "app",
+      hostChrome: true,
+      capabilities: ["panel-hosting"],
+      workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+      codeIdentity: { source: "apps/shell" },
+    });
+    const failure = new Error("upstream event admission failed");
+    owner.watch.retainAll.mockRejectedValueOnce(failure);
+    const definition = owner.runtime.dispatcher
+      .getServiceDefinitions()
+      .find((service) => service.name === "desktopEvents")!;
+    await expect(
+      definition.handler!({ caller: createHostCaller("native-system-shell", "shell") }, "watch", [
+        ["panel-local-presentation-changed"],
+        "failed-watch",
+      ])
+    ).rejects.toBe(failure);
+  });
 
   it("retains native chrome's topics for precisely its response lifetime", async () => {
     const owner = fixture("shared");
@@ -536,14 +605,17 @@ describe("workspace runtime ownership", () => {
       .getServiceDefinitions()
       .find((service) => service.name === "desktopEvents")!;
     const releaseTopics = vi.fn();
-    owner.watch.retainMany.mockReturnValueOnce(releaseTopics);
+    owner.watch.retainAll.mockResolvedValueOnce(releaseTopics);
     const response = (await definition.handler!(
       { caller: createHostCaller("native-system-shell", "shell") },
       "watch",
       [["shell-approval:pending-changed"], "chrome-watch"]
     )) as Response;
     try {
-      expect(owner.watch.retainMany).toHaveBeenCalledWith(["shell-approval:pending-changed"]);
+      expect(owner.watch.retainAll).toHaveBeenCalledWith(
+        ["shell-approval:pending-changed"],
+        undefined
+      );
       expect(releaseTopics).not.toHaveBeenCalled();
     } finally {
       await response.body!.cancel();
@@ -686,7 +758,7 @@ describe("workspace runtime ownership", () => {
     const owner = fixture("system");
     const acknowledgement = deferred<void>();
     const original = new Error("watch cancelled");
-    owner.watch.retainAll.mockReturnValueOnce(acknowledgement.promise);
+    owner.watch.retainAll.mockReturnValueOnce(acknowledgement.promise.then(() => () => {}));
     owner.watch.close.mockImplementationOnce(async () => {
       acknowledgement.reject(original);
     });

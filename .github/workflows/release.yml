@@ -106,7 +106,14 @@ jobs:
     name: Build Linux installers (deb/rpm/pacman)
     needs: github-release
     if: ${{ vars.RELEASE_LINUX == 'true' }}
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -143,7 +150,21 @@ jobs:
         # libarchive's bsdtar for pacman. deb needs neither.
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y rpm libarchive-tools
+          sudo apt-get install --no-install-recommends -y rpm libarchive-tools bubblewrap
+
+      - name: Allow packaged MXC user namespaces for release prebuilds
+        run: |
+          profile="$RUNNER_TEMP/vibestudio-release-mxc.apparmor"
+          cat > "$profile" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-*/linux*-unpacked/resources/app.asar.unpacked/dist/mxc/linux-*/lxc-exec" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-release-mxc
+          sudo apparmor_parser -r /etc/apparmor.d/vibestudio-release-mxc
 
       - name: Build Linux installers
         run: pnpm dist:linux
@@ -151,26 +172,26 @@ jobs:
       - name: Generate installer checksums
         run: |
           cd release
-          test "$(find . -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 2
-          test "$(find . -maxdepth 1 -type f -name '*.rpm' | wc -l)" -eq 2
-          test "$(find . -maxdepth 1 -type f -name '*.pkg.tar.zst' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -type f -name '*.rpm' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -type f -name '*.pkg.tar.zst' | wc -l)" -eq 1
           find . -maxdepth 1 -type f \
             \( -name "*.deb" -o -name "*.rpm" -o -name "*.pkg.tar.zst" \) \
             -print0 \
             | sort -z \
             | xargs -0 sha256sum \
-            > SHA256SUMS-linux
-          test -s SHA256SUMS-linux
+            > SHA256SUMS-linux-${{ matrix.arch }}
+          test -s SHA256SUMS-linux-${{ matrix.arch }}
 
       - name: Upload immutable Linux release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: vibestudio-linux-${{ github.sha }}
+          name: vibestudio-linux-${{ matrix.arch }}-${{ github.sha }}
           path: |
             release/*.deb
             release/*.rpm
             release/*.pkg.tar.zst
-            release/SHA256SUMS-linux
+            release/SHA256SUMS-linux-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
 
@@ -185,12 +206,13 @@ jobs:
       - name: Download immutable Linux release candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: vibestudio-linux-${{ github.sha }}
+          pattern: vibestudio-linux-*-${{ github.sha }}
+          merge-multiple: true
           path: release
 
       - name: Verify Linux installer checksums
         working-directory: release
-        run: sha256sum --check SHA256SUMS-linux
+        run: sha256sum --check SHA256SUMS-linux-*
 
       - name: Checkout package publisher
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -1,9 +1,9 @@
 nodeLinker: hoisted
 engineStrict: true
 
-# Desktop releases cross-package x64 and arm64 installers from one Linux
-# runner. Keep both native payloads installed so electron-builder can select
-# the artifact for each target architecture.
+# Keep the native release payloads available to staging and conformance checks.
+# Desktop packaging selects the current architecture and runs its installed
+# compiler/runtime closure on a matching native runner.
 supportedArchitectures:
   os:
     - current

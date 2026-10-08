@@ -50,8 +50,6 @@ const HOST_DIRECT_EVENT_NAMES = [
   "browser-panel:open",
   "panel-created",
   "navigate-to-panel",
-  "panel:executionActivated",
-  "panel:executionFailed",
   "panel:stateArgsChanged",
 ] as const;
 

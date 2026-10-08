@@ -815,6 +815,22 @@ describe("historical workspace runtime environment", () => {
     expect(env["ELECTRON_RUN_AS_NODE"]).toBeUndefined();
   });
 
+  it("preserves the pinned artifact generation when launching a live TypeScript child", () => {
+    const env = { VIBESTUDIO_HOST_ARTIFACT_ROOT: "/host/generations/exact-source-build" };
+    applyWorkspaceHostRuntimeEnv(
+      env,
+      {
+        historical: false,
+        runtimeMode: "node",
+        appVersion: "2.0.0",
+        serverEntry: "/host/src/server/index.ts",
+        appRoot: "/host",
+      },
+      "2.0.0"
+    );
+    expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/host/generations/exact-source-build");
+  });
+
   it("preserves the current host runtime mode and binds its exact app version", () => {
     const env: NodeJS.ProcessEnv = {
       ELECTRON_RUN_AS_NODE: "caller-owned",

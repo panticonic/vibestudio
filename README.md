@@ -441,6 +441,18 @@ The headless server npm package requires the complete Linux x64/ARM64, Apple Sil
 
 The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release. See [native isolation CI](docs/native-isolation-ci.md) for the acceptance matrix, standard-user checks, installer gates, and Windows 11 runner setup.
 
+Desktop packaging builds the default System and Personal desktop units with the
+installed SDK, then bundles their immutable records under `resources/userland-builds`.
+The published template pin set also fixes their shared Base dependency. Each target
+requires a matching native runner because the packaged compiler and runtime execute
+during packaging. A second isolated installation verifies that every record is
+reused before signing and publishing the installers.
+
+First launch binds these artifacts to the new workspace through the ordinary build
+store. Credentials, approval decisions, and workspace databases are never bundled.
+Changed source or a different SDK produces a different build key and uses the normal
+compiler. Development template linking continues to include uncommitted changes.
+
 Native workspace commands and linked Claude use normal networking through stock MXC. Linux requires bubblewrap, with no slirp4netns dependency. Workspace trash deletion remains offline. The existing application egress proxy and its approvals are unchanged. Windows AppContainer may restrict host-loopback access; native Windows validation remains a release gate.
 
 Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its OS-preparation diagnostics refer to an installed tool. Preparation requiring elevation remains an explicit administrator operation; startup never applies it silently.

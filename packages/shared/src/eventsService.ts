@@ -193,7 +193,7 @@ export class EventService {
     watchId: string;
     userId?: string;
     events: EventName[];
-    snapshots?: Partial<Record<EventName, () => unknown>>;
+    snapshots?: Partial<Record<EventName, () => Iterable<unknown>>>;
     onClosed?: () => void;
   }): Response {
     const events = new Set(input.events);
@@ -244,8 +244,9 @@ export class EventService {
           );
           try {
             for (const event of events) {
-              const snapshot = input.snapshots?.[event]?.();
-              if (snapshot !== undefined) session.sendSnapshot(event, snapshot, this.sequence);
+              for (const snapshot of input.snapshots?.[event]?.() ?? []) {
+                session.sendSnapshot(event, snapshot, this.sequence);
+              }
             }
           } catch (error) {
             session.destroy();

@@ -143,8 +143,20 @@ export function createBuildService(deps: {
       getPerformanceProfile: async (_ctx, [unit, ref, options]) => {
         const startedAt = Date.now();
         const firstStartedAt = performance.now();
-        const report = await deps.buildSystem.getBuildReport(unit, ref);
-        const firstElapsedMs = performance.now() - firstStartedAt;
+        const phases = { bundlingMs: 0, validationMs: 0, otherMs: 0 };
+        let phase: keyof typeof phases = "otherMs";
+        let phaseStartedAt = firstStartedAt;
+        const finishPhase = () => {
+          const now = performance.now();
+          phases[phase] += now - phaseStartedAt;
+          phaseStartedAt = now;
+        };
+        const report = await deps.buildSystem.getBuildReport(unit, ref, (progress) => {
+          finishPhase();
+          phase = progress.phase === "bundling" ? "bundlingMs" : "validationMs";
+        });
+        finishPhase();
+        const firstElapsedMs = phaseStartedAt - firstStartedAt;
         const targets = report.builds.flatMap((target) => {
           if (!target.buildKey) return [];
           const build = deps.buildSystem.getBuildByKey(target.buildKey);
@@ -204,7 +216,7 @@ export function createBuildService(deps: {
           source: unit,
           ...(ref ? { ref } : {}),
           startedAt,
-          firstRun: { elapsedMs: firstElapsedMs, cacheState },
+          firstRun: { elapsedMs: firstElapsedMs, cacheState, phases },
           ...(verifiedCacheRun ? { verifiedCacheRun } : {}),
           report,
           targets,

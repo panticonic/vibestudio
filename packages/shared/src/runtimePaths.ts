@@ -70,10 +70,10 @@ export function getPhysicalPathForAsarPath(filePath: string): string {
 
 export function getExistingAppNodeModulesRoots(appRoot: string): string[] {
   const layout = createRuntimeLayout(appRoot);
-  const candidates = [
-    path.join(layout.appUnpackedRoot, "node_modules"),
-    path.join(layout.appRoot, "node_modules"),
-  ];
+  // ASAR and its unpacked projection are one installed dependency realm.
+  // Native tools must use the physical realm; Electron's virtual alias must
+  // not add a second fingerprint input for the same installation.
+  const candidates = [path.join(layout.appUnpackedRoot, "node_modules")];
   // An npm package may use the node_modules directory that directly contains
   // it. That directory is part of the package installation, so include it, but
   // stop there. Walking beyond this boundary lets an unrelated node_modules in

@@ -35,7 +35,7 @@ describe("HostLaunchClient", () => {
     });
   });
 
-  it("prepares an unbuilt configured app before activating its exact release", async () => {
+  it("lets the activation owner prepare an unbuilt configured app", async () => {
     let prepared = false;
     const call = vi.fn(async (service: string, method: string) => {
       if (service === "workspace" && method === "getConfig") {
@@ -75,10 +75,10 @@ describe("HostLaunchClient", () => {
 
     const client = new HostLaunchClient(call);
     await expect(client.launch("electron")).resolves.toMatchObject({ status: "ready" });
-    expect(call).toHaveBeenCalledWith("runtime", "supervision.prepare", [
-      { kind: "app", releaseId: "@workspace-apps/shell" },
-      { ref: "main" },
-    ]);
+    expect(call).not.toHaveBeenCalledWith("runtime", "supervision.prepare", expect.anything());
+    expect(
+      call.mock.calls.filter(([service, method]) => service === "build" && method === "listUnits")
+    ).toHaveLength(1);
     expect(call).toHaveBeenCalledWith("runtime", "supervision.activate", [
       { kind: "app", releaseId: "@workspace-apps/shell" },
     ]);
@@ -152,10 +152,7 @@ describe("HostLaunchClient", () => {
     expect(call).toHaveBeenCalledWith("runtime", "supervision.activate", [
       { kind: "extension", releaseId: "@workspace-extensions/react-native" },
     ]);
-    expect(call).toHaveBeenCalledWith("runtime", "supervision.prepare", [
-      { kind: "app", releaseId: "@workspace-apps/mobile" },
-      { ref: "main" },
-    ]);
+    expect(call).not.toHaveBeenCalledWith("runtime", "supervision.prepare", expect.anything());
   });
 
   it("does not prepare an app while its build is awaiting approval", async () => {

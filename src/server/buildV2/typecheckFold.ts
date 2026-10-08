@@ -217,7 +217,7 @@ export async function typecheckUnit(
         );
       } catch (error) {
         diagnostics.push({
-          source: "authority",
+          source: "infrastructure",
           severity: "error",
           file: `${unitRelativePath}/package.json`,
           line: 1,
@@ -233,7 +233,7 @@ export async function typecheckUnit(
     console.error(`[BuildV2] typecheck fold-in failed for ${unitRelativePath}:`, message);
     return [
       {
-        source: "tsc",
+        source: "infrastructure",
         severity: "error",
         file: unitRelativePath,
         line: 1,

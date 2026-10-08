@@ -1,207 +1,80 @@
-import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import {
-  collectTreeReachableDigests,
-  ensureLayout,
-  mirrorWorktreeTree,
-  putBootstrapBytes,
-} from "../services/blobstoreService.js";
+import { describe, expect, it, vi } from "vitest";
+import type { BuildSourceProvider } from "./buildSource.js";
+import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { BootstrapWorkspaceSource } from "./bootstrapWorkspaceSource.js";
 
-const temporaryRoots: string[] = [];
+const stateHash = `state:${"a".repeat(64)}`;
+function fixture() {
+  const source = {
+    workspaceId: "workspace:test",
+    ensureFresh: vi.fn(async () => ({ stateHash: `state:${"b".repeat(64)}` })),
+    unitHashes: vi.fn(async () => ({ "apps/shell": "immutable-subtree" })),
+    resolveContextState: vi.fn(async () => stateHash),
+    readFile: vi.fn(async () => null),
+    discoverGraph: vi.fn(),
+    materializeForBuild: vi.fn(async () => ({ sourceRoot: "/immutable/materialization" })),
+    onProtectedPublication: vi.fn(() => () => {}),
+    recordBuild: vi.fn(async () => {}),
+  } satisfies WorkspaceStateSource & BuildSourceProvider;
+  const bootstrap = new BootstrapWorkspaceSource(source.workspaceId, source, stateHash, {
+    kind: "bootstrap-snapshot",
+    snapshotHash: stateHash,
+  });
+  return { source, bootstrap };
+}
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))
-  );
-});
+describe("BootstrapWorkspaceSource immutable publication", () => {
+  it("keeps the acquired publication without rediscovering protected main", async () => {
+    const { source, bootstrap } = fixture();
+    await expect(bootstrap.ensureFresh()).resolves.toEqual({ stateHash });
+    await expect(bootstrap.ensureFresh()).resolves.toEqual({ stateHash });
+    expect(source.ensureFresh).not.toHaveBeenCalled();
+  });
 
-describe("BootstrapWorkspaceSource execution identity", () => {
-  it("exposes only the exact sealed snapshot as executable source state", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      `${JSON.stringify({ name: "@workspace/root", private: true }, null, 2)}\n`
-    );
-    const source = new BootstrapWorkspaceSource("workspace:test", root);
-    const snapshot = await source.seal();
-    const { stateHash } = snapshot;
+  it("uses the same exact content coordinate for hashes, reads, graph and materialization", async () => {
+    const { source, bootstrap } = fixture();
+    await bootstrap.unitHashes("main", ["apps/shell"]);
+    await bootstrap.readFile(stateHash, "meta/vibestudio.yml");
+    await bootstrap.discoverGraph("main");
+    await expect(bootstrap.materializeForBuild([], "main", "/projection")).resolves.toEqual({
+      sourceRoot: "/immutable/materialization",
+    });
+    expect(source.unitHashes).toHaveBeenCalledWith(stateHash, ["apps/shell"]);
+    expect(source.readFile).toHaveBeenCalledWith(stateHash, "meta/vibestudio.yml");
+    expect(source.discoverGraph).toHaveBeenCalledWith(stateHash);
+    expect(source.materializeForBuild).toHaveBeenCalledWith([], stateHash, "/projection");
+  });
 
-    expect(source.executionStateForContent(stateHash)).toEqual({
+  it("rejects other publications and contexts instead of substituting bootstrap content", async () => {
+    const { source, bootstrap } = fixture();
+    expect(() => bootstrap.unitHashes(`state:${"b".repeat(64)}`, [])).toThrow("cannot resolve");
+    await expect(bootstrap.resolveContextState("ctx:test")).rejects.toThrow("no semantic contexts");
+    expect(source.unitHashes).not.toHaveBeenCalled();
+    expect(source.resolveContextState).not.toHaveBeenCalled();
+  });
+
+  it("preserves exact execution provenance and never reports another state as executable", () => {
+    const { source, bootstrap } = fixture();
+    expect(bootstrap.executionStateForContent(stateHash)).toEqual({
       kind: "bootstrap-snapshot",
       snapshotHash: stateHash,
     });
-    expect(source.executionStateForContent(`state:${"0".repeat(64)}`)).toBeNull();
+    expect(bootstrap.executionStateForContent(`state:${"b".repeat(64)}`)).toBeNull();
+    const provenance = { kind: "event", eventId: "event:test" } as const;
+    // A restored publication carries the semantic coordinate supplied by its owner.
+    const restored = new BootstrapWorkspaceSource(
+      source.workspaceId,
+      source,
+      stateHash,
+      provenance
+    );
+    expect(restored.executionStateForContent(stateHash)).toBe(provenance);
   });
 
-  it("mirrors the sealed execution source exactly once", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
-    const putFile = vi.fn(async (bytes: Buffer) => ({
-      digest: createHash("sha256").update(bytes).digest("hex"),
-    }));
-    const putTree = vi.fn(async () => {});
-    const source = new BootstrapWorkspaceSource("workspace:test", root, { putFile, putTree });
-
-    const first = await source.seal();
-    await source.seal();
-    await first.assertUnchanged();
-
-    expect(putFile).toHaveBeenCalledOnce();
-    expect(putTree).toHaveBeenCalledOnce();
-    expect(putTree).toHaveBeenCalledWith(
-      [expect.objectContaining({ path: "package.json" })],
-      first.stateHash
-    );
-  });
-
-  it("joins every owned mirror write before propagating its original failure", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await Promise.all(
-      Array.from({ length: 20 }, (_, index) =>
-        fs.writeFile(path.join(root, `${index}.ts`), String(index))
-      )
-    );
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let observeSibling!: () => void;
-    const sibling = new Promise<void>((resolve) => {
-      observeSibling = resolve;
-    });
-    let observeFailure!: () => void;
-    const failure = new Promise<void>((resolve) => {
-      observeFailure = resolve;
-    });
-    const originalError = new Error("content mirror refused this source");
-    const putTree = vi.fn(async () => {});
-    const source = new BootstrapWorkspaceSource("workspace:test", root, {
-      putFile: async (bytes) => {
-        if (bytes.toString() === "0") {
-          await sibling;
-          observeFailure();
-          throw originalError;
-        }
-        observeSibling();
-        await held;
-        return { digest: createHash("sha256").update(bytes).digest("hex") };
-      },
-      putTree,
-    });
-    let settled = false;
-    const sealed = source.seal();
-    void sealed.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      }
-    );
-    try {
-      await failure;
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    } finally {
-      release();
-    }
-    await expect(sealed).rejects.toBe(originalError);
-    expect(putTree).not.toHaveBeenCalled();
-  });
-
-  it("makes the sealed execution source reconstructible by content GC", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    const sourceRoot = path.join(root, "source");
-    const blobsDir = path.join(root, "blobs");
-    await fs.mkdir(sourceRoot);
-    ensureLayout(blobsDir);
-    await fs.writeFile(path.join(sourceRoot, "package.json"), '{"name":"@workspace/root"}\n');
-    const source = new BootstrapWorkspaceSource("workspace:test", sourceRoot, {
-      putFile: (bytes) => putBootstrapBytes(blobsDir, bytes),
-      putTree: async (files, stateHash) => {
-        await mirrorWorktreeTree(blobsDir, [...files], { expectStateHash: stateHash });
-      },
-    });
-
-    const snapshot = await source.seal();
-
-    await expect(collectTreeReachableDigests(blobsDir, snapshot.stateHash)).resolves.not.toBeNull();
-  });
-
-  it("keeps the sealed state addressable after the live source is published", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
-    const source = new BootstrapWorkspaceSource("workspace:test", root);
-    const snapshot = await source.seal();
-
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/published"}\n');
-
-    await expect(snapshot.assertUnchanged()).rejects.toThrow(
-      "Bootstrap workspace source changed while its provider was being built"
-    );
-    await expect(source.ensureFresh()).rejects.toThrow(
-      "Bootstrap workspace source changed after it was sealed"
-    );
-  });
-
-  it("fails closed when the sealed checkout changes", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
-    const source = new BootstrapWorkspaceSource("workspace:test", root);
-    await source.seal();
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/changed"}\n');
-
-    await expect(source.ensureFresh()).rejects.toThrow(
-      "Bootstrap workspace source changed after it was sealed"
-    );
-  });
-
-  it("includes build-output directories in the sealed source identity", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.mkdir(path.join(root, "workers", "provider", "dist"), { recursive: true });
-    await fs.writeFile(path.join(root, "workers", "provider", "package.json"), "{}\n");
-    await fs.writeFile(
-      path.join(root, "workers", "provider", "dist", "index.js"),
-      "export default 1;\n"
-    );
-    const source = new BootstrapWorkspaceSource("workspace:test", root);
-    await source.ensureFresh();
-
-    await fs.writeFile(
-      path.join(root, "workers", "provider", "dist", "index.js"),
-      "export default 2;\n"
-    );
-
-    await expect((await source.seal()).assertUnchanged()).rejects.toThrow(
-      "Bootstrap workspace source changed while its provider was being built"
-    );
-  });
-
-  it("excludes repository metadata from the workspace content identity", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
-    temporaryRoots.push(root);
-    await fs.mkdir(path.join(root, "packages", "example", ".git"), { recursive: true });
-    await fs.writeFile(path.join(root, "packages", "example", "package.json"), "{}\n");
-    await fs.writeFile(path.join(root, "packages", "example", ".git", "HEAD"), "ref: main\n");
-    const source = new BootstrapWorkspaceSource("workspace:test", root);
-    const snapshot = await source.seal();
-
-    await fs.writeFile(path.join(root, "packages", "example", ".git", "HEAD"), "ref: other\n");
-
-    await expect(snapshot.assertUnchanged()).resolves.toBeUndefined();
-    await expect(source.ensureFresh()).resolves.toEqual({ stateHash: snapshot.stateHash });
+  it("propagates the original content-store failure", async () => {
+    const { source, bootstrap } = fixture();
+    const failure = new Error("missing retained content");
+    source.materializeForBuild.mockRejectedValueOnce(failure);
+    await expect(bootstrap.materializeForBuild([], "main", "/projection")).rejects.toBe(failure);
   });
 });

@@ -138,7 +138,7 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
 
     expect(diagnostics).toEqual([
       expect.objectContaining({
-        source: "tsc",
+        source: "infrastructure",
         severity: "error",
         file: "panels/missing",
         message: expect.stringContaining("Typecheck could not complete"),

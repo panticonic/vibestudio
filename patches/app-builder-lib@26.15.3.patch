@@ -1,0 +1,38 @@
+diff --git a/out/node-module-collector/pnpmNodeModulesCollector.js b/out/node-module-collector/pnpmNodeModulesCollector.js
+index 8853912e013d3769f3e763d06720a94091a7ffaa..7907c31614bc52d4d6cc80f8ad4d1947489bfae6 100644
+--- a/out/node-module-collector/pnpmNodeModulesCollector.js
++++ b/out/node-module-collector/pnpmNodeModulesCollector.js
+@@ -5,6 +5,8 @@ const lazy_val_1 = require("lazy-val");
+ const moduleManager_1 = require("./moduleManager");
+ const nodeModulesCollector_1 = require("./nodeModulesCollector");
+ const packageManager_1 = require("./packageManager");
++const path = require("path");
++const semver = require("semver");
+ class PnpmNodeModulesCollector extends nodeModulesCollector_1.NodeModulesCollector {
+     constructor() {
+         super(...arguments);
+@@ -76,6 +78,24 @@ class PnpmNodeModulesCollector extends nodeModulesCollector_1.NodeModulesCollect
+         // land at `<root>/node_modules/A/node_modules/B` — downward BFS is needed to find them.
+         const skipDownwardSearch = !(await this.isHoisted.value);
+         const promise = (async () => {
++            // pnpm list gives exact resolved versions, even when its virtual-store
++            // path does not exist in a hoisted installation. Resolve that exact
++            // version across both locations before considering an override.
++            // Otherwise locatePackageVersion's override fallback can accept the
++            // root version before searching for the requested nested version.
++            if (semver.valid(requiredRange)) {
++                if (parentPath) {
++                    const manifest = path.join(parentPath, "package.json");
++                    if (await this.cache.exists[manifest]) {
++                        const packageJson = await this.cache.json[manifest];
++                        if (packageJson?.version === requiredRange)
++                            return { packageDir: parentPath, packageJson };
++                    }
++                    const fromDep = await this.cache.searchForPackage(parentPath, pkgName, requiredRange, skipDownwardSearch);
++                    if (fromDep) return fromDep;
++                }
++                return this.cache.searchForPackage(this.rootDir, pkgName, requiredRange, skipDownwardSearch);
++            }
+             const fromDep = parentPath ? await this.cache.locatePackageVersion({ pkgName, parentDir: parentPath, requiredRange, skipDownwardSearch }) : null;
+             if (fromDep) {
+                 return fromDep;

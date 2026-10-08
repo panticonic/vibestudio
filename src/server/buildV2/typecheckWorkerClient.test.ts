@@ -23,7 +23,9 @@ describe("TypecheckWorkerClient", () => {
         nodeModulesPaths: [],
         moduleConditions: ["vibestudio-panel", "import", "default"],
       });
-      expect(diagnostics).toEqual([expect.objectContaining({ source: "tsc", severity: "error" })]);
+      expect(diagnostics).toEqual([
+        expect.objectContaining({ source: "infrastructure", severity: "error" }),
+      ]);
     } finally {
       await client.close();
     }

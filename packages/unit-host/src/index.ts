@@ -758,7 +758,11 @@ export class UnitHost<
       } catch {
         continue;
       }
-      if (!this.opts.isSeedTrusted(node, this.opts.candidateIdentity(node, decl))) continue;
+      const identity = this.opts.candidateIdentity(node, decl);
+      // Admission is durable evidence for this exact version. A fresh host
+      // process does not owe another catalog resolution or grant transaction.
+      if (this.opts.isAdmitted?.(identity)) continue;
+      if (!this.opts.isSeedTrusted(node, identity)) continue;
       entries.push(await this.opts.approvalEntry(node, decl));
     }
     return entries;
