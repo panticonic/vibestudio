@@ -105,10 +105,8 @@ async function pairShellToken(ready) {
   ) {
     throw new Error("Pairing response did not include complete device and shell credentials");
   }
-  const workspaces = await rpc(url, issued.shellToken, "hubControl.listWorkspaces");
-  const workspace = Array.isArray(workspaces)
-    ? (workspaces.find((entry) => entry?.name === "dev") ?? workspaces[0])
-    : null;
+  const workspaces = await rpc(url, issued.shellToken, "hubControl.ensureUserWorkspaces");
+  const workspace = workspaces?.system;
   if (typeof workspace?.workspaceId !== "string") {
     throw new Error("Hub did not expose an exact workspace identity");
   }
@@ -241,14 +239,8 @@ async function waitForLogLine(url, shellToken, events, needle) {
 async function stopServer(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGINT");
-  await new Promise((resolve) => {
-    const timeout = setTimeout(resolve, 10_000);
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
-  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve) => child.once("exit", resolve));
 }
 
 async function main() {
