@@ -106,11 +106,14 @@ describe("desktop phone provisioning service", () => {
         path.join(root, "mobile-install.mjs"),
         `
       import { spawn } from 'node:child_process';
-      import { writeFileSync } from 'node:fs';
+      import { writeFileSync, renameSync } from 'node:fs';
       import { bindProcessLifetimeToParent } from ${JSON.stringify(binding)};
       bindProcessLifetimeToParent(); process.channel.unref();
       const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"], {detached:true,stdio:['ignore','pipe','ignore']});
-      child.stdout.once('data', () => writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({leader:process.pid,descendant:child.pid})));
+      child.stdout.once('data', () => {
+        writeFileSync(${JSON.stringify(receipt + ".pending")}, JSON.stringify({leader:process.pid,descendant:child.pid}));
+        renameSync(${JSON.stringify(receipt + ".pending")}, ${JSON.stringify(receipt)});
+      });
       setInterval(() => {}, 1000);
     `
       );
@@ -121,11 +124,20 @@ describe("desktop phone provisioning service", () => {
         resolveScriptPath: (name) => path.join(root, name),
         hubControlClient: hubControlClient(),
       });
+      // Observe the native child's published readiness before starting setup.
+      // Slow process creation is valid; the test runner bounds the investigation.
+      const watcher = fs.watch(root);
+      const ready = new Promise<void>((resolve, reject) => {
+        watcher.on("error", reject);
+        watcher.on("change", (_event, filename) => {
+          if (filename === path.basename(receipt)) resolve();
+        });
+      });
       const response = (await definition.handler({} as never, "provision", [
         { platform: "android", mode: "release" },
       ])) as Response;
       try {
-        await vi.waitFor(() => expect(fs.existsSync(receipt)).toBe(true));
+        await ready;
         const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {
           leader: number;
           descendant: number;
@@ -135,6 +147,7 @@ describe("desktop phone provisioning service", () => {
         expect(processGroupAlive(owned.leader)).toBe(false);
         expect(processGroupAlive(owned.descendant)).toBe(false);
       } finally {
+        watcher.close();
         await response.body!.cancel();
         if (fs.existsSync(receipt)) {
           const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {

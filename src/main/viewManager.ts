@@ -406,6 +406,7 @@ export class ViewManager {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        autoplayPolicy: "document-user-activation-required",
         additionalArguments: options.shellAdditionalArguments,
       },
     });
@@ -723,6 +724,8 @@ export class ViewManager {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // Opening a panel is navigation, not consent to play its media.
+      autoplayPolicy: "document-user-activation-required",
       session: ses,
       ...(config.workspaceIdentity
         ? { additionalArguments: [workspaceTransportArgument(config.workspaceIdentity)] }
