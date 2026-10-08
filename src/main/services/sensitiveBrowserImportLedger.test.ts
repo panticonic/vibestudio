@@ -65,4 +65,22 @@ describe("SensitiveBrowserImportLedger", () => {
       counts: [{ dataType: "passwords", read: 10, stored: 8, skipped: 2, errors: 0 }],
     });
   });
+  it("retains saved counts across application failure and restart", () => {
+    const ledgerPath = file();
+    const input = { sourceId: "source", dataTypes: ["cookies" as const] };
+    const counts = [{ dataType: "cookies" as const, read: 2, stored: 2, skipped: 0, errors: 0 }];
+    const first = new SensitiveBrowserImportLedger(ledgerPath);
+    first.begin("operation", input);
+    first.applying("operation", input, counts);
+    first.applicationFailed("operation", "Apply saved cookies again");
+    const restarted = new SensitiveBrowserImportLedger(ledgerPath);
+    expect(restarted.running()).toEqual([{ operationId: "operation", input }]);
+    expect(restarted.observe("operation")).toMatchObject({ state: "application_failed", counts });
+    restarted.applying("operation", input, counts);
+    expect(restarted.complete("operation", input, counts)).toEqual({
+      operationId: "operation",
+      state: "complete",
+      counts,
+    });
+  });
 });

@@ -2,6 +2,7 @@
   "type": "module",
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
+  "homepage": "https://github.com/panticonic/vibestudio",
   "version": "0.1.83",
   "private": true,
   "bin": {

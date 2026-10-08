@@ -703,6 +703,35 @@
       ]
     },
     "methods": {
+      "applyCookies": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Applies canonical cookies on the authenticated browser host without returning protected records."
+        },
+        "capability": "service:browserEnvironment.applyCookies",
+        "presentation": {
+          "title": "Apply saved browser sessions",
+          "action": "apply saved browser sessions",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          },
+          "description": "Apply saved cookies to this browser environment."
+        }
+      },
       "beginImportAcquisition": {
         "authority": {
           "requirement": {

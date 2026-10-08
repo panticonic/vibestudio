@@ -307,6 +307,8 @@ function fixture(
       publishedServices: [],
     });
   const openShellSurface = vi.fn();
+  const releaseAdBlocking = vi.fn();
+  const attachAdBlocking = vi.fn(() => releaseAdBlocking);
   const runtime = createDesktopWorkspaceRuntime({
     connection: {
       workspaceId,
@@ -324,7 +326,9 @@ function fixture(
     authorize: async () => {
       throw new Error("No service call expected in lifecycle test");
     },
-    adBlockManager: {} as Parameters<typeof createDesktopWorkspaceRuntime>[0]["adBlockManager"],
+    adBlockManager: { attachToSession: attachAdBlocking } as unknown as Parameters<
+      typeof createDesktopWorkspaceRuntime
+    >[0]["adBlockManager"],
     openExternal: vi.fn(async () => undefined),
   });
   closing.push(runtime);
@@ -350,6 +354,8 @@ function fixture(
     directEvents,
     events,
     openShellSurface,
+    attachAdBlocking,
+    releaseAdBlocking,
   };
 }
 
@@ -383,6 +389,14 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
 }
 
 describe("workspace runtime ownership", () => {
+  it("owns browser ad blocking without a Personal cookie projection", async () => {
+    const owner = fixture("system");
+    await owner.runtime.start();
+    expect(owner.attachAdBlocking).toHaveBeenCalledWith({ partition: "persist:workspace-test" });
+    expect(edges.personal).not.toHaveBeenCalled();
+    await owner.runtime.close();
+    expect(owner.releaseAdBlocking).toHaveBeenCalledOnce();
+  });
   it.each(["desktop-local", "external"] as const)(
     "forwards a trusted user's server choice over the authenticated connection to a %s server",
     async (ownership) => {

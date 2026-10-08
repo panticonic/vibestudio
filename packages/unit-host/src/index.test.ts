@@ -812,6 +812,87 @@ describe("UnitHost", () => {
     expect(maxActive).toBe(1);
   });
 
+  it("joins a queued target and propagates the failure that prevents its application", async () => {
+    const second: TestNode = {
+      name: "@workspace-extensions/b",
+      relativePath: "extensions/b",
+      version: "1.0.0",
+    };
+    let rejectFirst!: (error: unknown) => void;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const { host, node, registry } = makeHarness({ extraNode: second, applyTrusted: () => first });
+    const declarations = [node, second].map((target) => ({
+      source: target.relativePath,
+      ref: "main",
+    }));
+    const approval = await host.approvalForDeclarations(declarations);
+    host.acceptPreapprovedTrust(approval.identityKeys);
+    await host.reconcileDeclared(declarations, { waitFor: "staged", maxConcurrentApplies: 1 });
+    const original = new Error("First application failed");
+    const target = host.whenApplied(second.name, new AbortController().signal);
+    const rejected = expect(target).rejects.toBe(original);
+    rejectFirst(original);
+    await rejected;
+    await host.whenSettled();
+    expect(registry.get(second.name)).toMatchObject({
+      status: "error",
+      lastError: original.message,
+    });
+  });
+
+  it("settles the requested target independently of a slower sibling", async () => {
+    const second: TestNode = {
+      name: "@workspace-extensions/b",
+      relativePath: "extensions/b",
+      version: "1.0.0",
+    };
+    let finishSibling!: () => void;
+    const sibling = new Promise<void>((resolve) => {
+      finishSibling = resolve;
+    });
+    const { host, node } = makeHarness({
+      extraNode: second,
+      applyTrusted: async (target) => {
+        if (target.name === second.name) await sibling;
+      },
+    });
+    const declarations = [node, second].map((target) => ({
+      source: target.relativePath,
+      ref: "main",
+    }));
+    const approval = await host.approvalForDeclarations(declarations);
+    host.acceptPreapprovedTrust(approval.identityKeys);
+    await host.reconcileDeclared(declarations, { waitFor: "staged" });
+    try {
+      await host.whenApplied(node.name, new AbortController().signal);
+    } finally {
+      finishSibling();
+      await host.whenSettled();
+    }
+  });
+
+  it("cancels a target waiter without cancelling the owned application", async () => {
+    let finish!: () => void;
+    const application = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const { host, node } = makeHarness({ active: true, applyTrusted: () => application });
+    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }], {
+      waitFor: "staged",
+    });
+    const controller = new AbortController();
+    const waiting = host.whenApplied(node.name, controller.signal);
+    const original = new Error("Caller cancelled");
+    const rejected = expect(waiting).rejects.toBe(original);
+    controller.abort(original);
+    await rejected;
+    finish();
+    await host.whenApplied(node.name, new AbortController().signal);
+    await host.whenSettled();
+  });
+
   it("honors removeUndeclared while applying trusted declarations", async () => {
     const { host, registry, removed, node } = makeHarness({ active: true });
     registry.upsert(
@@ -941,17 +1022,20 @@ describe("UnitHost", () => {
   it("marks runtime declaration failures as registry errors", async () => {
     const { host, registry, node } = makeHarness({ active: true });
     const errors: string[] = [];
+    const original = new Error("activation failed");
 
-    await host.applyRuntimeDeclaration({
-      node,
-      decl: { source: node.relativePath, ref: "main" },
-      needsBuildRefresh: () => false,
-      buildAndActivate: async () => undefined,
-      activateCurrent: async () => {
-        throw new Error("activation failed");
-      },
-      onError: (_node, _decl, message) => errors.push(message),
-    });
+    await expect(
+      host.applyRuntimeDeclaration({
+        node,
+        decl: { source: node.relativePath, ref: "main" },
+        needsBuildRefresh: () => false,
+        buildAndActivate: async () => undefined,
+        activateCurrent: async () => {
+          throw original;
+        },
+        onError: (_node, _decl, message) => errors.push(message),
+      })
+    ).rejects.toBe(original);
 
     expect(registry.get(node.name)).toMatchObject({
       status: "error",

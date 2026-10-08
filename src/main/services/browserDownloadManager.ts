@@ -39,6 +39,8 @@ export class BrowserDownloadManager {
     | Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">
     | undefined;
   private stopped = false;
+  private readonly historyController = new AbortController();
+  private readonly historyLoads = new Set<Promise<void>>();
 
   constructor(
     private readonly deps: {
@@ -61,13 +63,13 @@ export class BrowserDownloadManager {
   ): Promise<void> {
     if (this.stopped) return;
     this.history = store;
-    await this.load();
+    await this.loadHistory();
   }
 
   async start(): Promise<void> {
     this.deps.browserSession.on("will-download", this.onWillDownload);
     try {
-      await this.load();
+      await this.loadHistory();
     } catch (error) {
       log.warn(`Download history unavailable: ${String(error)}`);
     }
@@ -76,12 +78,14 @@ export class BrowserDownloadManager {
   async stop(): Promise<void> {
     this.stopped = true;
     const error = new Error("Download provider stopped");
+    this.historyController.abort(error);
     this.completed.close(error);
     this.deps.browserSession.off("will-download", this.onWillDownload);
     for (const item of this.pendingApproval) item.cancel();
     this.pendingApproval.clear();
     for (const download of this.live.values()) download.item.cancel();
     this.live.clear();
+    await Promise.allSettled(this.historyLoads);
     await this.persistOperation;
   }
 
@@ -356,8 +360,20 @@ export class BrowserDownloadManager {
     });
   }
 
+  private loadHistory(): Promise<void> {
+    const operation = this.load();
+    this.historyLoads.add(operation);
+    void operation.then(
+      () => this.historyLoads.delete(operation),
+      () => this.historyLoads.delete(operation)
+    );
+    return operation;
+  }
+
   private async load(): Promise<void> {
-    const records = (await this.history?.listDownloadRecords(this.deps.hostId)) ?? [];
+    const records =
+      (await this.history?.listDownloadRecords(this.deps.hostId, this.historyController.signal)) ??
+      [];
     if (this.stopped) return;
     for (const record of records.slice(0, 500)) {
       // Native ownership is authoritative while a transfer is alive. History

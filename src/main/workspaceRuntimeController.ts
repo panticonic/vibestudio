@@ -781,6 +781,19 @@ export function createDesktopWorkspaceRuntime(deps: {
           controller.orchestrator.registerRuntimeClient(),
         ] as const);
         assertOpen();
+        let releaseAdBlocking: (() => void) | null = null;
+        container.registerManaged({
+          name: "browser-ad-blocking",
+          async start() {
+            releaseAdBlocking = deps.adBlockManager.attachToSession(
+              session.fromPartition(partition)
+            );
+          },
+          async stop() {
+            releaseAdBlocking?.();
+            releaseAdBlocking = null;
+          },
+        });
         const panelView = () => {
           const value = window.getWorkspacePanelView(workspaceId);
           if (!value) throw new Error("Workspace native views are unavailable");
@@ -867,7 +880,6 @@ export function createDesktopWorkspaceRuntime(deps: {
                 browserPartition: partition,
                 downloads: downloadManager,
                 hostConnectionId,
-                adBlockManager: deps.adBlockManager,
               })
             )
           : Promise.resolve(null);

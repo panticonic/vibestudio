@@ -1,7 +1,9 @@
 {
   "getBrowserEnvironment": {
-    "signature": "browserData.getBrowserEnvironment(): Promise<BrowserEnvironmentIdentity>",
-    "argumentNames": [],
+    "signature": "browserData.getBrowserEnvironment(signal?: AbortSignal): Promise<BrowserEnvironmentIdentity>",
+    "argumentNames": [
+      "signal"
+    ],
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface BrowserEnvironmentIdentity {\n  workspaceId: string;\n  ownerUserId: string;\n  environmentKey: string;\n}\n```"
   },
   "listImportHosts": {
@@ -66,21 +68,21 @@
     "argumentNames": [
       "request"
     ],
-    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportRequest extends SensitiveBrowserImportSelection {\n  operationId: string;\n}\n\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
+    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportRequest extends SensitiveBrowserImportSelection {\n  operationId: string;\n}\n\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"applying\" | \"application_failed\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
   },
   "observeSensitiveImport": {
     "signature": "browserData.observeSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>",
     "argumentNames": [
       "operationId"
     ],
-    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
+    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"applying\" | \"application_failed\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
   },
   "cancelSensitiveImport": {
     "signature": "browserData.cancelSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>",
     "argumentNames": [
       "operationId"
     ],
-    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
+    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"applying\" | \"application_failed\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
   },
   "openBrowserPrivacyManager": {
     "signature": "browserData.openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>",
@@ -272,9 +274,10 @@
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface BrowserDownloadRecord {\n  id: string;\n  environmentKey: string;\n  hostId: string;\n  panelId?: string;\n  origin?: string;\n  url: string;\n  filename: string;\n  savePath: string;\n  receivedBytes: number;\n  totalBytes: number;\n  state: BrowserDownloadState;\n  startedAt: number;\n  updatedAt: number;\n  /** Current native capability; derived when listing, never persisted as history. */\n  canResume?: boolean;\n}\n\nexport type BrowserDownloadState =\n  | \"progressing\"\n  | \"paused\"\n  | \"completed\"\n  | \"cancelled\"\n  | \"interrupted\";\n```"
   },
   "listDownloadRecords": {
-    "signature": "browserData.listDownloadRecords(hostId: string): Promise<BrowserDownloadRecord[]>",
+    "signature": "browserData.listDownloadRecords(hostId: string, signal?: AbortSignal): Promise<BrowserDownloadRecord[]>",
     "argumentNames": [
-      "hostId"
+      "hostId",
+      "signal"
     ],
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface BrowserDownloadRecord {\n  id: string;\n  environmentKey: string;\n  hostId: string;\n  panelId?: string;\n  origin?: string;\n  url: string;\n  filename: string;\n  savePath: string;\n  receivedBytes: number;\n  totalBytes: number;\n  state: BrowserDownloadState;\n  startedAt: number;\n  updatedAt: number;\n  /** Current native capability; derived when listing, never persisted as history. */\n  canResume?: boolean;\n}\n\nexport type BrowserDownloadState =\n  | \"progressing\"\n  | \"paused\"\n  | \"completed\"\n  | \"cancelled\"\n  | \"interrupted\";\n```"
   },

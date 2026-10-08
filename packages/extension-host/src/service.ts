@@ -1563,7 +1563,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: "invoke" | "invokeProvider" | "invokeStream",
     signal?: AbortSignal
   ): Promise<RegistryEntry & { activeBundleKey: string }> {
+    signal = signal
+      ? AbortSignal.any([signal, this.shutdownSignal.signal])
+      : this.shutdownSignal.signal;
     await this.whenDeclarationsStaged(signal, name);
+    const target = this.resolveInvocationEntry(
+      this.deps.resolveProviderExtensionName(name) ?? name
+    );
+    if (target && !this.hasAvailableApprovedBuild(target)) {
+      await this.unitHost.whenApplied(target.name, signal);
+    }
     // Declaration application can finish by deferring an onInvoke build. Wait
     // for that target transition before deciding whether first use must build.
     await this.waitForTargetActivation(name, signal);
@@ -1576,7 +1585,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   /** Pure eligibility lookup: declaration reconciliation owns trust. */
   private lookupForInvoke(name: string): RegistryEntry | null {
     const entry = this.resolveInvocationEntry(name);
-    return entry?.activeBundleKey ? entry : null;
+    return entry && this.hasAvailableApprovedBuild(entry) ? entry : null;
+  }
+
+  private hasAvailableApprovedBuild(entry: RegistryEntry): boolean {
+    return !!(
+      entry.activeBundleKey && this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+    );
   }
 
   /**
@@ -1587,7 +1602,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async prepareTargetBuild(nameOrProvider: string): Promise<void> {
     const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
     const entry = this.resolveInvocationEntry(requestedName);
-    if (!entry || entry.activeBundleKey || entry.status !== "available") return;
+    if (!entry || this.hasAvailableApprovedBuild(entry) || entry.status !== "available") return;
     const node = this.findExtensionNode(entry.name);
     const declaration = this.lastDeclared.find((candidate) => {
       try {
@@ -1618,7 +1633,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    */
   private async waitForTargetActivation(name: string, signal?: AbortSignal): Promise<void> {
     const entry = this.resolveInvocationEntry(name);
-    if (!entry || entry.activeBundleKey || entry.status !== "building") return;
+    if (!entry || this.hasAvailableApprovedBuild(entry)) return;
+    if (entry.status !== "building") return;
     const canonicalName = entry.name;
     const activation = this.activationTails.get(canonicalName);
     if (activation) {
@@ -1662,8 +1678,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       };
       const inspect = () => {
         const current = this.registry.get(canonicalName);
-        if (!current?.activeBundleKey && current?.status === "building") return;
-        finish();
+        if (current && !this.hasAvailableApprovedBuild(current) && current.status === "building")
+          return;
+        finish(
+          current?.status === "error"
+            ? new Error(current.lastError ?? `Extension failed: ${canonicalName}`)
+            : undefined
+        );
       };
       const unsubscribe = this.registry.subscribe((change) => {
         if (change.name === canonicalName) inspect();
@@ -2450,13 +2471,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: () => Promise<void>
   ): Promise<void> {
     const previous = this.activationTails.get(name) ?? Promise.resolve();
-    const result = previous.then(operation);
-    const tail = result.catch(() => {});
-    this.activationTails.set(name, tail);
+    const result = previous.catch(() => {}).then(operation);
+    void result.catch(() => {});
+    this.activationTails.set(name, result);
     try {
       await result;
     } finally {
-      if (this.activationTails.get(name) === tail) {
+      if (this.activationTails.get(name) === result) {
         this.activationTails.delete(name);
       }
     }

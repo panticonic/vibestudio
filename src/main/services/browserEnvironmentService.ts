@@ -85,6 +85,7 @@ export function createBrowserEnvironmentService(deps: {
   getDownloads(): BrowserDownloadManager | null;
   importRouter: BrowserEnvironmentImportRouter;
   browserDataBrokerRepoPath: string | null;
+  applyCookies?: (signal: AbortSignal) => Promise<{ revision: number }>;
 }): ServiceDefinition {
   const codeRequirements: Record<
     string,
@@ -139,6 +140,12 @@ export function createBrowserEnvironmentService(deps: {
     methods: browserEnvironmentMethods,
     authorityPreparation,
     handler: defineServiceHandler("browserEnvironment", browserEnvironmentMethods, {
+      applyCookies: (ctx) => {
+        requireBrowserDataProviderSource(ctx, deps.browserDataBrokerRepoPath);
+        if (!deps.applyCookies)
+          throw new Error("Cookie application is unavailable on this browser host");
+        return deps.applyCookies(ctx.signal ?? new AbortController().signal);
+      },
       listImportHosts: (_ctx) => deps.importRouter.listHosts(_ctx),
       listImportAcquisitionOptions: (_ctx, [hostId]) =>
         deps.importRouter.listAcquisitionOptions(_ctx, hostId),

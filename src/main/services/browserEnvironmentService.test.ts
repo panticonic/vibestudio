@@ -273,4 +273,47 @@ describe("browserEnvironment authority", () => {
       prepare?.({ caller: createVerifiedCaller("shell:main", "shell") }, ["operation"])
     ).toEqual({ selections: [], payload: null });
   });
+  it("applies saved cookies through the admitted provider and propagates cancellation", async () => {
+    const applyCookies = vi.fn(async (ownedSignal: AbortSignal) => {
+      ownedSignal.throwIfAborted();
+      return { revision: 7 };
+    });
+    const definition = createBrowserEnvironmentService({
+      getDownloads: () => null,
+      importRouter: localBrowserEnvironmentImportRouter(() => null),
+      browserDataBrokerRepoPath: "extensions/browser-data",
+      applyCookies,
+    });
+    const caller = createVerifiedCaller("broker", "extension", {
+      callerId: "broker",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "v1",
+      executionDigest: "a".repeat(64),
+      requested: [],
+    });
+    const controller = new AbortController();
+    const signal = controller.signal;
+    await expect(
+      definition.handler({ caller, signal } as never, "applyCookies", [])
+    ).resolves.toEqual({ revision: 7 });
+    expect(applyCookies).toHaveBeenCalledWith(signal);
+    const cancelled = new Error("Cookie application cancelled");
+    controller.abort(cancelled);
+    await expect(definition.handler({ caller, signal } as never, "applyCookies", [])).rejects.toBe(
+      cancelled
+    );
+    const wrong = createVerifiedCaller("panel", "panel", {
+      callerId: "panel",
+      callerKind: "panel",
+      repoPath: "about/browser-import",
+      effectiveVersion: "v1",
+      executionDigest: "a".repeat(64),
+      requested: [],
+    });
+    await expect(
+      definition.handler({ caller: wrong, signal } as never, "applyCookies", [])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(applyCookies).toHaveBeenCalledTimes(2);
+  });
 });

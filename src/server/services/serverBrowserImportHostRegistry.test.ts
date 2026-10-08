@@ -141,94 +141,142 @@ describe("ServerBrowserImportHostRegistry", () => {
       method: "browserEnvironment.releaseImportSource",
       args: ["device:a", "export:temporary"],
     });
-    registry.stop();
+    await registry.stop();
   });
 
-  it("reads protected cookies in the host and writes them directly to the caller vault", async () => {
-    const statePath = mkdtempSync(path.join(tmpdir(), "server-browser-import-"));
-    roots.push(statePath);
-    const dispatch = vi.fn(async () => ({ revision: 1 }));
-    const registry = new ServerBrowserImportHostRegistry({
-      workspaceId: "workspace-a",
-      statePath,
-      doDispatch: { dispatch } as never,
-      createProvider: async () => ({
-        listSources: vi.fn(async () => []),
-        preview: vi.fn(),
-        listOpenTabs: vi.fn(async () => []),
-        openImport: vi.fn(async (sourceId, dataTypes) => ({
-          consume: async (sink: ImportBatchSink) => {
-            expect(sourceId).toBe("firefox-source");
-            expect(dataTypes).toEqual(["cookies"]);
-            await sink.store({
-              jobId: "reader-job",
-              sourceId,
-              dataType: "cookies",
-              batchIndex: 0,
-              idempotencyKey: "reader-job:cookies:0",
-              items: [
-                {
-                  name: "sid",
-                  value: "protected-value",
-                  domain: "example.com",
-                  hostOnly: true,
-                  path: "/",
-                  secure: true,
-                  httpOnly: true,
-                  sameSite: "lax",
-                },
-              ],
-            });
-            const progress = {
-              dataType: "cookies" as const,
-              itemsProcessed: 1,
-              stored: 1,
-              skipped: 0,
-              errors: 0,
-            };
-            await sink.progress(progress);
-            return { dataTypes: [progress], warnings: [] };
-          },
-        })),
-      }),
-    });
-    const context = initiatingContext();
-
-    await registry.startSensitiveImport(
-      context,
-      "server:workspace-a",
-      "firefox-source",
-      ["cookies"],
-      "operation-a"
-    );
-    await vi.waitFor(async () => {
-      expect((await registry.observeSensitiveImport(detachedContext(), "operation-a")).state).toBe(
-        "complete"
+  it.each([true, false])(
+    "preserves protected cookies and reports whether a browser is connected (%s)",
+    async (connected) => {
+      const statePath = mkdtempSync(path.join(tmpdir(), "server-browser-import-"));
+      roots.push(statePath);
+      const dispatch = vi.fn(async () => ({ revision: 1 }));
+      const resolveDeviceConnection = vi.fn(() =>
+        connected ? { callerId: "device:a", call: vi.fn(async () => ({ revision: 1 })) } : null
       );
-    });
+      const registry = new ServerBrowserImportHostRegistry({
+        workspaceId: "workspace-a",
+        statePath,
+        doDispatch: { dispatch } as never,
+        resolveDeviceConnection,
+        createProvider: async () => ({
+          listSources: vi.fn(async () => []),
+          preview: vi.fn(),
+          listOpenTabs: vi.fn(async () => []),
+          openImport: vi.fn(async (sourceId, dataTypes) => ({
+            consume: async (sink: ImportBatchSink) => {
+              expect(sourceId).toBe("firefox-source");
+              expect(dataTypes).toEqual(["cookies"]);
+              await sink.store({
+                jobId: "reader-job",
+                sourceId,
+                dataType: "cookies",
+                batchIndex: 0,
+                idempotencyKey: "reader-job:cookies:0",
+                items: [
+                  {
+                    name: "sid",
+                    value: "protected-value",
+                    domain: "example.com",
+                    hostOnly: true,
+                    path: "/",
+                    secure: true,
+                    httpOnly: true,
+                    sameSite: "lax",
+                  },
+                ],
+              });
+              const progress = {
+                dataType: "cookies" as const,
+                itemsProcessed: 1,
+                stored: 1,
+                skipped: 0,
+                errors: 0,
+              };
+              await sink.progress(progress);
+              return { dataTypes: [progress], warnings: [] };
+            },
+          })),
+        }),
+      });
+      registry.forContext(initiatingContext());
+      const context = initiatingContext();
 
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "vibestudio/internal",
-        className: "BrowserVaultDO",
-        objectKey: expect.stringMatching(/^v1_/),
-      }),
-      "addCookiesBatch",
-      {
-        jobId: "operation-a",
-        batchIndex: 0,
-        cookies: [expect.objectContaining({ name: "sid", value: "protected-value" })],
-      }
-    );
-    await expect(
-      registry.observeSensitiveImport(detachedContext(), "operation-a")
-    ).resolves.toEqual({
-      operationId: "operation-a",
-      state: "complete",
-      counts: [{ dataType: "cookies", read: 1, stored: 1, skipped: 0, errors: 0 }],
-    });
-    registry.stop();
-  });
+      await registry.startSensitiveImport(
+        context,
+        "server:workspace-a",
+        "firefox-source",
+        ["cookies"],
+        "operation-a"
+      );
+      await vi.waitFor(async () => {
+        expect(
+          (await registry.observeSensitiveImport(detachedContext(), "operation-a")).state
+        ).toBe(connected ? "complete" : "application_failed");
+      });
+
+      expect(resolveDeviceConnection).toHaveBeenCalledWith(context);
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "vibestudio/internal",
+          className: "BrowserVaultDO",
+          objectKey: expect.stringMatching(/^v1_/),
+        }),
+        "addCookiesBatch",
+        {
+          jobId: "operation-a",
+          batchIndex: 0,
+          cookies: [expect.objectContaining({ name: "sid", value: "protected-value" })],
+        }
+      );
+      await expect(
+        registry.observeSensitiveImport(detachedContext(), "operation-a")
+      ).resolves.toEqual({
+        operationId: "operation-a",
+        state: connected ? "complete" : "application_failed",
+        ...(!connected
+          ? {
+              error:
+                "Your browser data is saved, but cookie application did not finish. Retry applying the saved cookies; you do not need to import again.",
+            }
+          : {}),
+        counts: [{ dataType: "cookies", read: 1, stored: 1, skipped: 0, errors: 0 }],
+      });
+      const updated = {
+        ...(initiatingContext() as unknown as Record<string, unknown>),
+        caller: browserExtensionCaller("new-version"),
+      };
+      await registry.startSensitiveImport(
+        updated as never,
+        "server:workspace-a",
+        "firefox-source",
+        ["cookies"],
+        "operation-a"
+      );
+      await expect(
+        registry.observeSensitiveImport(detachedContext("new-version"), "operation-a")
+      ).resolves.toMatchObject({ counts: [{ stored: 1 }] });
+      await expect(
+        registry.observeSensitiveImport(detachedContext(), "operation-a")
+      ).rejects.toMatchObject({ code: "EACCES" });
+      const otherAccount = {
+        caller: browserExtensionCaller("new-version"),
+        authorizingCaller: createVerifiedCaller("shell:bob", "shell", null, null, {
+          userId: "user-b",
+          handle: "bob",
+        }),
+      };
+      await expect(
+        registry.startSensitiveImport(
+          otherAccount as never,
+          "server:workspace-a",
+          "firefox-source",
+          ["cookies"],
+          "operation-a"
+        )
+      ).rejects.toMatchObject({ code: "EACCES" });
+      await registry.stop();
+    }
+  );
 
   it("consumes and cancels an opaque read after the verified parent invocation is gone", async () => {
     const statePath = mkdtempSync(path.join(tmpdir(), "server-browser-import-"));
@@ -302,13 +350,13 @@ describe("ServerBrowserImportHostRegistry", () => {
       ["history"]
     );
     expect(() => registry.cancelImportRead(detachedContext("ev-other"), cancelled)).toThrow(
-      "invalid or expired"
+      "invalid"
     );
-    registry.cancelImportRead(detached, cancelled);
+    await registry.cancelImportRead(detached, cancelled);
     await expect(registry.nextImportFrame(detached, cancelled)).rejects.toMatchObject({
       code: "EACCES",
     });
-    expect(() => registry.cancelImportRead(detached, "bir_unknown")).toThrow("invalid or expired");
-    registry.stop();
+    expect(() => registry.cancelImportRead(detached, "bir_unknown")).toThrow("invalid");
+    await registry.stop();
   });
 });

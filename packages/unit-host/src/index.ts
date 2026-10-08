@@ -575,6 +575,7 @@ export class UnitHost<
   private reconciling: Promise<void> | null = null;
   private backgroundFlow: Promise<void> | null = null;
   private currentDeclarationsStaged: Promise<void> | null = null;
+  private readonly applications = new Map<string, Promise<void>>();
   private lastReconciliationError: string | null = null;
   private preapprovedTrust = new Set<string>();
   private preapprovedTrustRevision = 0;
@@ -709,6 +710,35 @@ export class UnitHost<
     await this.currentDeclarationsStaged;
   }
 
+  /** Join this unit's queued or running application, preserving its failure. */
+  async whenApplied(name: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const application = this.applications.get(name);
+    if (!application) return;
+    if (!signal) {
+      await application;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        cleanup();
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void application.then(
+        () => {
+          cleanup();
+          resolve();
+        },
+        (error: unknown) => {
+          cleanup();
+          reject(error);
+        }
+      );
+    });
+  }
+
   /**
    * The declared units that ship in the host build, for the server to admit.
    *
@@ -790,6 +820,7 @@ export class UnitHost<
       const message = err instanceof Error ? err.message : String(err);
       this.markError(node.name, message);
       opts.onError?.(node, decl, message);
+      throw err;
     }
   }
 
@@ -967,6 +998,7 @@ export class UnitHost<
         if (declaredByName.has(entry.name)) continue;
         await this.opts.removeUndeclared(entry);
         this.opts.registry.delete(entry.name);
+        this.applications.delete(entry.name);
         this.opts.emitRemoved(entry);
       }
     }
@@ -991,13 +1023,15 @@ export class UnitHost<
       this.backgroundFlow = tracked;
     }
 
+    const applyTrusted = this.prepareTrustedApplications(trusted, opts.maxConcurrentApplies);
+
     // Every declared unit is now classified (pending entry upserted, approval
     // staged) — release whenDeclarationsStaged() waiters before the builds run.
     opts.onStaged();
 
     // Apply trusted units concurrently, mirroring the post-approval path.
     // Serializing them here turned startup reconcile into a chain of builds.
-    await this.applyTrustedInGroups(trusted, opts.maxConcurrentApplies);
+    await applyTrusted();
   }
 
   private async promptAndApply(
@@ -1018,8 +1052,9 @@ export class UnitHost<
           // Acceptance is the state transition from "waiting for a human"
           // to "work is in flight". Publish it for the whole accepted batch
           // before any member waits for an apply/build slot.
+          const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);
           this.markAcceptedItemsBuilding(items);
-          await this.applyTrustedInGroups(items, maxConcurrentApplies);
+          await apply();
         },
         applyDenied: () => this.opts.onApprovalDenied(items),
       });
@@ -1033,8 +1068,9 @@ export class UnitHost<
       this.opts.onApprovalDenied(items);
       return;
     }
+    const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);
     this.markAcceptedItemsBuilding(items);
-    await this.applyTrustedInGroups(items, maxConcurrentApplies);
+    await apply();
   }
 
   private markAcceptedItemsBuilding(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void {
@@ -1050,26 +1086,65 @@ export class UnitHost<
     }
   }
 
-  private async applyTrustedInGroups(
+  private prepareTrustedApplications(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
     maxConcurrentApplies?: number
-  ): Promise<void> {
-    const concurrency =
-      maxConcurrentApplies === undefined ? Number.POSITIVE_INFINITY : maxConcurrentApplies;
-    const groups = new Map<number, Array<ResolvedUnitDeclaration<Decl, Node>>>();
-    for (const item of items) {
-      const group = this.opts.applyGroup?.(item.node, item.decl) ?? 0;
-      const members = groups.get(group) ?? [];
-      members.push(item);
-      groups.set(group, members);
+  ): () => Promise<void> {
+    const completions = new Map<string, { resolve(): void; reject(error: unknown): void }>();
+    for (const { node } of items) {
+      const application = new Promise<void>((resolve, reject) => {
+        completions.set(node.name, { resolve, reject });
+      });
+      // The owner still observes every rejection; an unobserved target must
+      // not create an unhandled rejection while another unit is building.
+      void application.catch(() => {});
+      this.applications.set(node.name, application);
     }
-    for (const group of [...groups.keys()].sort((a, b) => a - b)) {
-      const pending = [...groups.get(group)!];
-      while (pending.length > 0) {
-        const batch = pending.splice(0, concurrency);
-        await Promise.all(batch.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
+    return async () => {
+      const concurrency = maxConcurrentApplies ?? Number.POSITIVE_INFINITY;
+      const groups = new Map<number, Array<ResolvedUnitDeclaration<Decl, Node>>>();
+      try {
+        for (const item of items) {
+          const group = this.opts.applyGroup?.(item.node, item.decl) ?? 0;
+          const members = groups.get(group) ?? [];
+          members.push(item);
+          groups.set(group, members);
+        }
+        for (const group of [...groups.keys()].sort((a, b) => a - b)) {
+          const pending = [...groups.get(group)!];
+          while (pending.length > 0) {
+            const batch = pending.splice(0, concurrency);
+            const results = await Promise.allSettled(
+              batch.map(async ({ node, decl }) => {
+                const completion = completions.get(node.name)!;
+                try {
+                  await this.opts.applyTrusted(node, decl);
+                  completion.resolve();
+                } catch (error) {
+                  completion.reject(error);
+                  throw error;
+                } finally {
+                  completions.delete(node.name);
+                }
+              })
+            );
+            const errors = results.flatMap((result) =>
+              result.status === "rejected" ? [result.reason] : []
+            );
+            if (errors.length === 1) throw errors[0];
+            if (errors.length > 1) throw new AggregateError(errors, "Unit activation failed");
+          }
+        }
+      } catch (error) {
+        // A failed earlier batch cancels the applications it prevented from
+        // starting. Settle their callers with the same authoritative failure.
+        for (const [name, completion] of completions) {
+          this.markError(name, unitErrorMessage(error));
+          completion.reject(error);
+        }
+        throw error;
       }
-    }
+    };
   }
 
   private trustForCandidate(node: Node, decl: Decl, entry: Entry | null): UnitTrustResolution {

@@ -39,7 +39,11 @@ window.addEventListener("DOMContentLoaded", () => {
     setStatus("Working…");
     try {
       await call(request);
-      setStatus("Done.");
+      setStatus(
+        request.action === "applyCookies"
+          ? "Cookies applied. Save any work in open pages, then reload them to use the saved sessions."
+          : "Done."
+      );
       await render();
       return true;
     } catch (error) {
@@ -68,6 +72,9 @@ window.addEventListener("DOMContentLoaded", () => {
       content.setAttribute("aria-busy", "false");
     }
   };
+  required("apply-cookies").addEventListener("click", () => {
+    void action({ action: "applyCookies" });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       section = BrowserPrivacySectionSchema.parse(button.dataset["section"]);

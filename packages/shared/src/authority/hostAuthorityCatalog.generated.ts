@@ -1142,6 +1142,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "browserEnvironment.applyCookies": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.control",
+      rationale:
+        "Applies canonical cookies on the authenticated browser host without returning protected records.",
+    },
+    capability: "service:browserEnvironment.applyCookies",
+    presentation: {
+      title: "Apply saved browser sessions",
+      action: "apply saved browser sessions",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+      description: "Apply saved cookies to this browser environment.",
+    },
+  },
   "browserEnvironment.beginImportAcquisition": {
     tier: {
       tier: "open",
@@ -9494,6 +9515,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "computer",
     verb: "see",
   },
+  "service:browserEnvironment.applyCookies": {
+    domain: "web",
+    verb: "manage",
+  },
   "service:browserEnvironment.beginImportAcquisition": {
     domain: "files",
     verb: "act",
@@ -10199,6 +10224,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       domain: "computer",
       verb: "see",
     },
+  },
+  "service:browserEnvironment.applyCookies": {
+    title: "Apply saved browser sessions",
+    action: "apply saved browser sessions",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+    description: "Apply saved cookies to this browser environment.",
   },
   "service:browserEnvironment.beginImportAcquisition": {
     title: "Choose browser data to import",

@@ -4161,7 +4161,10 @@ async function main() {
             const callerId = shell.caller.runtime.id;
             const bridge = rpcServer?.getClientBridge(callerId);
             return bridge
-              ? { callerId, call: (method, args) => bridge.call(callerId, method, args) }
+              ? {
+                  callerId,
+                  call: (method, args, options) => bridge.call(callerId, method, args, options),
+                }
               : null;
           },
         });
@@ -4176,7 +4179,7 @@ async function main() {
         return browserImportHosts;
       },
       async stop() {
-        browserImportHosts?.stop();
+        await browserImportHosts?.stop();
         browserImportHosts = null;
         browserEnvironmentDefinition = null;
       },

@@ -18,7 +18,7 @@ export interface SensitiveBrowserImportCount {
 }
 export interface SensitiveBrowserImportStatus {
   operationId: string;
-  state: "running" | "complete" | "cancelled" | "failed";
+  state: "running" | "applying" | "application_failed" | "complete" | "cancelled" | "failed";
   counts: SensitiveBrowserImportCount[];
   error?: string;
 }
@@ -36,13 +36,13 @@ const CountSchema = z
 const StatusSchema = z
   .object({
     operationId: z.string().min(1),
-    state: z.enum(["running", "complete", "cancelled", "failed"]),
+    state: z.enum(["running", "applying", "application_failed", "complete", "cancelled", "failed"]),
     counts: z.array(CountSchema),
     error: z.string().optional(),
   })
   .strict()
   .superRefine((status, ctx) => {
-    if ((status.state === "failed") !== (status.error !== undefined)) {
+    if (["failed", "application_failed"].includes(status.state) !== (status.error !== undefined)) {
       ctx.addIssue({ code: "custom", message: "Only failed imports contain an error" });
     }
   });
@@ -123,7 +123,9 @@ export class SensitiveBrowserImportLedger {
 
   running(): Array<{ operationId: string; input: SensitiveBrowserImportInput }> {
     return [...this.records.values()]
-      .filter((record) => record.status.state === "running")
+      .filter((record) =>
+        ["running", "applying", "application_failed"].includes(record.status.state)
+      )
       .map((record) => ({ operationId: record.operationId, input: cloneInput(record.input) }));
   }
 
@@ -148,7 +150,7 @@ export class SensitiveBrowserImportLedger {
   ): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
     this.assertSameInput(record, input);
-    if (record.status.state !== "running") return cloneStatus(record.status);
+    if (!["running", "applying"].includes(record.status.state)) return cloneStatus(record.status);
     assertExactCounts(input, counts);
     record.status = {
       operationId,
@@ -161,10 +163,41 @@ export class SensitiveBrowserImportLedger {
     return cloneStatus(record.status);
   }
 
+  applying(
+    operationId: string,
+    input: SensitiveBrowserImportInput,
+    counts: SensitiveBrowserImportCount[]
+  ): SensitiveBrowserImportStatus {
+    const record = this.require(operationId);
+    this.assertSameInput(record, input);
+    if (!["running", "applying", "application_failed"].includes(record.status.state))
+      return cloneStatus(record.status);
+    assertExactCounts(input, counts);
+    record.status = {
+      operationId,
+      state: "applying",
+      counts: counts.map((count) => ({ ...count })),
+    };
+    record.updatedAt = Date.now();
+    this.persist();
+    return cloneStatus(record.status);
+  }
+
+  applicationFailed(operationId: string, error: string): SensitiveBrowserImportStatus {
+    const record = this.require(operationId);
+    if (record.status.state !== "applying") return cloneStatus(record.status);
+    record.status = { ...record.status, state: "application_failed", error };
+    record.updatedAt = Date.now();
+    this.persist();
+    return cloneStatus(record.status);
+  }
+
   cancel(operationId: string): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
-    if (record.status.state !== "running") return cloneStatus(record.status);
-    record.status = { ...record.status, state: "cancelled" };
+    if (!["running", "applying", "application_failed"].includes(record.status.state))
+      return cloneStatus(record.status);
+    const { error: _error, ...status } = record.status;
+    record.status = { ...status, state: "cancelled" };
     record.updatedAt = Date.now();
     this.pruneTerminalReceipts();
     this.persist();
@@ -212,7 +245,9 @@ export class SensitiveBrowserImportLedger {
 
   private pruneTerminalReceipts(): void {
     const terminal = [...this.records.values()]
-      .filter((record) => record.status.state !== "running")
+      .filter(
+        (record) => !["running", "applying", "application_failed"].includes(record.status.state)
+      )
       .sort((left, right) => right.updatedAt - left.updatedAt);
     for (const record of terminal.slice(MAX_TERMINAL_RECEIPTS)) {
       this.records.delete(record.operationId);

@@ -163,7 +163,9 @@ describe("browser privacy manager", () => {
 
   it("binds the packaged renderer, rejects foreign senders, dispatches destructive actions, and tears down", async () => {
     const store = vault();
+    const applyCookies = vi.fn(async () => ({ revision: 4 }));
     const manager = new BrowserPrivacyManager({
+      applyCookies,
       vault: store as never,
       getProjection: () =>
         ({
@@ -204,6 +206,8 @@ describe("browser privacy manager", () => {
       inspect: { origin: "https://example.com", passwordCount: 1, cookieCount: 1 },
       diagnostics: { revision: 4 },
     });
+    await handler({ sender: { id: 41 } }, { action: "applyCookies" });
+    expect(applyCookies).toHaveBeenCalledWith(expect.any(AbortSignal));
     for (const request of [
       { action: "deletePassword", id: 1 },
       { action: "removeNeverSave", origin: "https://never.example" },

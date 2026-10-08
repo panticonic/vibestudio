@@ -1019,6 +1019,51 @@ describe("ExtensionHost reconcileDeclared", () => {
     expect(host.registry.get(extensionNode.name)).toBeNull();
   });
 
+  it("joins replacement of a retained approved key whose artifact is missing", async () => {
+    const initial = declarationCompletion();
+    const transport = { call: vi.fn(async () => "restored") };
+    const { host, extensionNode, buildSystem } = makeHost({
+      activeBundleKey: "retired-artifact",
+      initialDeclarationsStaged: initial.promise,
+      extensionTransport: transport,
+    });
+    const build = declarationCompletion();
+    const candidate = await buildSystem.getBuild();
+    buildSystem.getBuild.mockClear();
+    buildSystem.getBuild.mockImplementation(async () => {
+      await build.promise;
+      return candidate;
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    initial.resolve();
+    await vi.waitFor(() => expect(buildSystem.getBuild).toHaveBeenCalledOnce());
+    expect(transport.call).not.toHaveBeenCalled();
+    build.resolve();
+    await expect(invoke).resolves.toBe("restored");
+    expect(host.registry.get(extensionNode.name)?.activeBundleKey).toBe("candidate-key");
+    expect(transport.call).toHaveBeenCalledOnce();
+  });
+
+  it("propagates the replacement build failure to the waiting invocation", async () => {
+    const { host, extensionNode, buildSystem } = makeHost({ activeBundleKey: "retired-artifact" });
+    const build = declarationCompletion();
+    const original = new Error("Replacement artifact could not be materialized");
+    buildSystem.getBuild.mockImplementation(async () => {
+      await build.promise;
+      throw original;
+    });
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    await vi.waitFor(() => expect(buildSystem.getBuild).toHaveBeenCalledOnce());
+    const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
+    const rejected = expect(invoke).rejects.toBe(original);
+    await Promise.resolve();
+    build.resolve();
+    await rejected;
+  });
+
   it("releases an initial classification waiter on original caller cancellation", async () => {
     const initial = declarationCompletion();
     const { host, extensionNode } = makeHost({

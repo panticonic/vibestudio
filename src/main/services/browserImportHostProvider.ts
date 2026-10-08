@@ -41,6 +41,7 @@ export type BrowserImportProviderFrame =
   | { type: "error"; message: string };
 
 interface ImportOperation {
+  promise: Promise<void>;
   abort: AbortController;
   frames: BrowserImportProviderFrame[];
   waiters: Array<(frame: BrowserImportProviderFrame) => void>;
@@ -130,6 +131,7 @@ export class BrowserImportHostProvider {
         "addCookiesBatch" | "addPasswordsBatch" | "addFormFillBatch"
       >;
       sensitiveImportLedger: SensitiveBrowserImportLedger;
+      applyCookies?: (signal: AbortSignal, operationId: string) => Promise<unknown>;
     }
   ) {
     this.createProvider =
@@ -140,6 +142,7 @@ export class BrowserImportHostProvider {
       });
     this.browserVault = options.browserVault;
     this.sensitiveImportLedger = options.sensitiveImportLedger;
+    this.applyCookies = options.applyCookies;
     queueMicrotask(() => this.resumeSensitiveImports());
   }
 
@@ -148,6 +151,9 @@ export class BrowserImportHostProvider {
     | Pick<BrowserVaultNativeClient, "addCookiesBatch" | "addPasswordsBatch" | "addFormFillBatch">
     | undefined;
   private readonly sensitiveImportLedger: SensitiveBrowserImportLedger;
+  private readonly applyCookies:
+    | ((signal: AbortSignal, operationId: string) => Promise<unknown>)
+    | undefined;
 
   summary() {
     return {
@@ -225,6 +231,7 @@ export class BrowserImportHostProvider {
     }
     const operationId = randomUUID();
     const operation: ImportOperation = {
+      promise: Promise.resolve(),
       abort: new AbortController(),
       frames: [],
       waiters: [],
@@ -234,7 +241,7 @@ export class BrowserImportHostProvider {
       nextBatchIndex: 0,
     };
     this.operations.set(operationId, operation);
-    void this.run(operation, sourceId, dataTypes);
+    operation.promise = this.run(operation, sourceId, dataTypes);
     return operationId;
   }
 
@@ -254,7 +261,8 @@ export class BrowserImportHostProvider {
       }
       return status;
     }
-    if (status.state === "running") this.launchSensitiveImport(operationId, input);
+    if (["running", "applying", "application_failed"].includes(status.state))
+      this.launchSensitiveImport(operationId, input);
     return status;
   }
 
@@ -315,9 +323,10 @@ export class BrowserImportHostProvider {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopping = true;
-    for (const operation of this.operations.values()) {
+    const publicOperations = [...this.operations.values()];
+    for (const operation of publicOperations) {
       operation.abort.abort(new Error("Desktop import provider stopped"));
       this.fail(operation, "Desktop import provider stopped");
     }
@@ -325,6 +334,11 @@ export class BrowserImportHostProvider {
     for (const operation of this.sensitiveOperations.values()) {
       operation.abort.abort(new Error("Desktop import provider stopped"));
     }
+    await Promise.allSettled(
+      [...publicOperations, ...this.sensitiveOperations.values()].map(
+        (operation) => operation.promise
+      )
+    );
     this.sensitiveOperations.clear();
   }
 
@@ -471,18 +485,30 @@ export class BrowserImportHostProvider {
       abort,
       promise: Promise.resolve(),
     };
-    operation.promise = this.runSensitiveImport(
-      input.sourceId,
-      input.dataTypes,
-      operationId,
-      abort.signal
-    )
-      .then((counts) => {
-        this.sensitiveImportLedger.complete(operationId, input, counts);
-      })
+    operation.promise = (async () => {
+      const previous = this.sensitiveImportLedger.observe(operationId);
+      const counts =
+        previous.state === "running"
+          ? await this.runSensitiveImport(
+              input.sourceId,
+              input.dataTypes,
+              operationId,
+              abort.signal
+            )
+          : previous.counts;
+      abort.signal.throwIfAborted();
+      if (input.dataTypes.includes("cookies")) {
+        this.sensitiveImportLedger.applying(operationId, input, counts);
+        if (!this.applyCookies)
+          throw new Error("No browser environment is connected to apply saved cookies");
+        await this.applyCookies(abort.signal, operationId);
+        abort.signal.throwIfAborted();
+      }
+      this.sensitiveImportLedger.complete(operationId, input, counts);
+    })()
       .catch((error) => {
         const status = this.sensitiveImportLedger.observe(operationId);
-        if (!this.stopping && status.state === "running") {
+        if (!this.stopping && ["running", "applying"].includes(status.state)) {
           // The native importer may include profile paths or source-record
           // fragments in its diagnostic. Keep that evidence in the trusted
           // host log; the durable status crosses the workspace boundary and
@@ -491,7 +517,14 @@ export class BrowserImportHostProvider {
             `[BrowserImportHostProvider] Sensitive import ${operationId} failed`,
             error
           );
-          this.sensitiveImportLedger.fail(operationId, SENSITIVE_IMPORT_FAILURE_MESSAGE);
+          if (status.state === "applying") {
+            this.sensitiveImportLedger.applicationFailed(
+              operationId,
+              "Your browser data is saved, but cookie application did not finish. Retry applying the saved cookies; you do not need to import again."
+            );
+          } else {
+            this.sensitiveImportLedger.fail(operationId, SENSITIVE_IMPORT_FAILURE_MESSAGE);
+          }
         }
       })
       .finally(() => {
@@ -502,7 +535,7 @@ export class BrowserImportHostProvider {
     this.sensitiveOperations.set(operationId, operation);
   }
 
-  private resumeSensitiveImports(): void {
+  resumeSensitiveImports(): void {
     if (this.stopping) return;
     for (const { operationId, input } of this.sensitiveImportLedger.running()) {
       this.launchSensitiveImport(operationId, input);

@@ -137,7 +137,7 @@ describe("canonical browser cookie projection", () => {
     expect(effectiveCookieContentHash(undefined, [put, remove], key)).toBeNull();
   });
 
-  it("never blocks service startup while the browser-data extension is unavailable", async () => {
+  it("reports unavailability without blocking startup or polling the dependency", async () => {
     vi.useFakeTimers();
     const createCookieJar = vi.fn(() => fakeCookieJar().jar);
     const browserDataClient = {
@@ -152,7 +152,12 @@ describe("canonical browser cookie projection", () => {
       nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
-      serverClient: { stream: vi.fn(), call: vi.fn() } as never,
+      serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
+        stream: vi.fn(),
+        call: vi.fn(),
+      } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
       createCookieJar,
@@ -167,7 +172,7 @@ describe("canonical browser cookie projection", () => {
       expect(browserDataClient.getBrowserEnvironment).toHaveBeenCalledTimes(1)
     );
     expect(onReady).not.toHaveBeenCalled();
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(onUnavailable).toHaveBeenCalledOnce();
     expect(createCookieJar).not.toHaveBeenCalled();
 
     await service.stop?.(undefined);
@@ -200,7 +205,12 @@ describe("canonical browser cookie projection", () => {
       nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: vault as never,
-      serverClient: { stream: vi.fn(), call: vi.fn().mockResolvedValue(null) } as never,
+      serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
       createCookieJar: () => cookies.jar,
@@ -210,11 +220,11 @@ describe("canonical browser cookie projection", () => {
     try {
       await service.start?.(() => undefined);
       await vi.advanceTimersByTimeAsync(6_000);
-      expect(onUnavailable).not.toHaveBeenCalled();
+      expect(onUnavailable).toHaveBeenCalledOnce();
       expect(onReady).not.toHaveBeenCalled();
       expect(cookies.jar.start).not.toHaveBeenCalled();
       approved = true;
-      await vi.advanceTimersByTimeAsync(3_000);
+      await service.recover();
       await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
       expect(cookies.current()).toMatchObject([input()]);
       expect(onReady.mock.calls[0]![0].diagnostics().converged).toBe(true);
@@ -234,7 +244,12 @@ describe("canonical browser cookie projection", () => {
       nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
-      serverClient: { stream: vi.fn(), call: vi.fn() } as never,
+      serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
+        stream: vi.fn(),
+        call: vi.fn(),
+      } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
       createCookieJar: vi.fn(() => fakeCookieJar().jar),
@@ -265,6 +280,7 @@ describe("canonical browser cookie projection", () => {
         applyCookieMutations: vi.fn().mockResolvedValue(undefined),
         ...originScopedReads(1, []),
       };
+      const onRecovery = vi.fn(() => () => {});
       const onReady = vi.fn();
       const onStopped = vi.fn();
       const service = createBrowserCookieProjectionService({
@@ -272,6 +288,8 @@ describe("canonical browser cookie projection", () => {
         browserDataClient: browserDataClient as never,
         browserVault: browserDataClient as never,
         serverClient: {
+          onRecovery,
+          onConnectionStatusChange: vi.fn(() => () => {}),
           stream: vi.fn(),
           call: vi.fn().mockResolvedValue(null),
         } as never,
@@ -286,7 +304,8 @@ describe("canonical browser cookie projection", () => {
         await service.start?.(() => undefined);
         expect(onReady).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(3_000);
+        await service.recover();
+        await (onRecovery.mock.calls[0] as unknown as [() => Promise<void>])[0]();
         await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
         expect(createCookieJar).toHaveBeenCalledWith(
           scopedNativePartition(nativeStorageScope, "persist:browser-environment:environment-test")
@@ -299,6 +318,60 @@ describe("canonical browser cookie projection", () => {
       }
     }
   );
+
+  it("consumes readiness arriving during a failed attachment and publishes subsequent convergence failures", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cookie-readiness-"));
+    let fail!: (error: Error) => void;
+    const first = new Promise<never>((_, reject) => {
+      fail = reject;
+    });
+    let recovery!: () => Promise<void>;
+    const identity = {
+      workspaceId: "workspace",
+      ownerUserId: "user",
+      environmentKey: "environment-test",
+    };
+    const getBrowserEnvironment = vi.fn().mockReturnValueOnce(first).mockResolvedValue(identity);
+    const reads = originScopedReads(3, [stored()]);
+    const state = fakeCookieJar();
+    const onDiagnostics = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "scope",
+      browserDataClient: { getBrowserEnvironment } as never,
+      browserVault: { ...reads, applyCookieMutations: vi.fn() } as never,
+      serverClient: {
+        onRecovery: (callback: () => Promise<void>) => {
+          recovery = callback;
+          return () => {};
+        },
+        onConnectionStatusChange: () => () => {},
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "host",
+      outboxRoot: tempRoot,
+      createCookieJar: () => state.jar,
+      onDiagnostics,
+    });
+    try {
+      await service.start?.(() => undefined);
+      const recovered = recovery();
+      fail(new Error("Original dependency was not ready"));
+      await recovered;
+      await expect(service.applyCookies(new AbortController().signal)).resolves.toEqual({
+        revision: 3,
+      });
+      expect(getBrowserEnvironment).toHaveBeenCalledTimes(2);
+      expect(onDiagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ converged: true }));
+      const disconnected = Object.assign(new Error("Vault disconnected"), { code: "DISCONNECTED" });
+      reads.listCookieOrigins.mockRejectedValue(disconnected);
+      await expect(service.applyCookies(new AbortController().signal)).rejects.toBe(disconnected);
+      expect(onDiagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ converged: false }));
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 
   it("removes a conflicting Secure cookie before projecting its insecure replacement", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
@@ -325,6 +398,8 @@ describe("canonical browser cookie projection", () => {
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
@@ -392,6 +467,8 @@ describe("canonical browser cookie projection", () => {
       } as never,
       browserVault: browserVault as never,
       serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
@@ -443,6 +520,8 @@ describe("canonical browser cookie projection", () => {
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
@@ -496,6 +575,8 @@ describe("canonical browser cookie projection", () => {
       } as never,
       browserVault: browserVault as never,
       serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
@@ -517,14 +598,17 @@ describe("canonical browser cookie projection", () => {
 
       await state.set(browserCookie);
       await vi.waitFor(() => expect(applyCookieMutations).toHaveBeenCalledTimes(1));
-      expect(applyCookieMutations).toHaveBeenCalledWith({
-        mutations: [
-          expect.objectContaining({
-            op: "put",
-            cookie: browserCookie,
-          }),
-        ],
-      });
+      expect(applyCookieMutations).toHaveBeenCalledWith(
+        {
+          mutations: [
+            expect.objectContaining({
+              op: "put",
+              cookie: browserCookie,
+            }),
+          ],
+        },
+        expect.any(AbortSignal)
+      );
     } finally {
       await service.stop?.(undefined);
       await rm(tempRoot, { recursive: true, force: true });
@@ -574,7 +658,12 @@ describe("canonical browser cookie projection", () => {
         }),
       } as never,
       browserVault: browserVault as never,
-      serverClient: { stream, call: vi.fn().mockResolvedValue(null) } as never,
+      serverClient: {
+        onRecovery: vi.fn(() => () => {}),
+        onConnectionStatusChange: vi.fn(() => () => {}),
+        stream,
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
       createCookieJar: () => jar,

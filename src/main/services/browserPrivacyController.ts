@@ -22,11 +22,16 @@ export class BrowserPrivacyController {
     private readonly deps: {
       vault: BrowserVaultNativeClient;
       getProjection(): BrowserCookieProjectionApi | null;
+      applyCookies?: (signal: AbortSignal) => Promise<{ revision: number }>;
     }
   ) {}
 
   async execute(request: BrowserPrivacyRequest): Promise<unknown> {
     switch (request.action) {
+      case "applyCookies":
+        if (!this.deps.applyCookies)
+          throw new Error("Cookie application is unavailable on this device");
+        return this.deps.applyCookies(new AbortController().signal);
       case "snapshot":
         return this.snapshot(request.origin);
       case "snapshotPage":
@@ -105,6 +110,7 @@ export class BrowserPrivacyController {
       case "clearAllCookies":
         await this.deps.vault.clearAllCookies();
         return { ok: true };
+      case "applyCookies":
       case "snapshot":
       case "snapshotPage":
       case "exportChunk":

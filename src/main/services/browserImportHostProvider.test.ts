@@ -344,7 +344,12 @@ describe("BrowserImportHostProvider", () => {
     } as unknown as BrowserVaultNativeClient;
     const provider = new BrowserImportHostProvider(
       { hostId: "desktop", displayName: "Desktop" },
-      { createProvider: async () => importProvider, browserVault, sensitiveImportLedger: ledger() }
+      {
+        createProvider: async () => importProvider,
+        browserVault,
+        sensitiveImportLedger: ledger(),
+        applyCookies: vi.fn(async () => ({ revision: 4 })),
+      }
     );
 
     const started = provider.startSensitiveImport(
@@ -391,6 +396,101 @@ describe("BrowserImportHostProvider", () => {
     expect(JSON.stringify(receipt)).not.toMatch(/secret|warning/i);
   });
 
+  it("waits for cookie application and retries saved data after restart without rereading the source", async () => {
+    const saved = ledger();
+    const input = { sourceId: "deleted-source", dataTypes: ["cookies" as const] };
+    const counts = [{ dataType: "cookies" as const, read: 1, stored: 1, skipped: 0, errors: 0 }];
+    saved.begin("operation", input);
+    saved.applying("operation", input, counts);
+    const createProvider = vi.fn(async () => {
+      throw new Error("Source is no longer available");
+    });
+    const unavailable = new BrowserImportHostProvider(
+      { hostId: "desktop", displayName: "Desktop" },
+      {
+        createProvider,
+        sensitiveImportLedger: saved,
+        applyCookies: async () => {
+          throw new Error("Browser is offline");
+        },
+      }
+    );
+    await vi.waitFor(() =>
+      expect(unavailable.observeSensitiveImport("operation").state).toBe("application_failed")
+    );
+    await unavailable.stop();
+    let finish!: () => void;
+    const application = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const applyCookies = vi.fn(() => application);
+    const restarted = new BrowserImportHostProvider(
+      { hostId: "desktop", displayName: "Desktop" },
+      {
+        createProvider,
+        sensitiveImportLedger: saved,
+        applyCookies,
+      }
+    );
+    await vi.waitFor(() => expect(applyCookies).toHaveBeenCalledOnce());
+    expect(restarted.observeSensitiveImport("operation")).toEqual({
+      operationId: "operation",
+      state: "applying",
+      counts,
+    });
+    expect(createProvider).not.toHaveBeenCalled();
+    finish();
+    await vi.waitFor(() =>
+      expect(restarted.observeSensitiveImport("operation")).toEqual({
+        operationId: "operation",
+        state: "complete",
+        counts,
+      })
+    );
+    await restarted.stop();
+  });
+
+  it("cancels application without discarding saved counts and joins its owned work", async () => {
+    const saved = ledger();
+    const input = { sourceId: "source", dataTypes: ["cookies" as const] };
+    const counts = [{ dataType: "cookies" as const, read: 1, stored: 1, skipped: 0, errors: 0 }];
+    saved.begin("cancel-application", input);
+    saved.applying("cancel-application", input, counts);
+    let applicationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      applicationStarted = resolve;
+    });
+    let joined = false;
+    const provider = new BrowserImportHostProvider(
+      { hostId: "desktop", displayName: "Desktop" },
+      {
+        sensitiveImportLedger: saved,
+        applyCookies: async (signal) => {
+          try {
+            await new Promise<void>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              applicationStarted();
+            });
+          } finally {
+            joined = true;
+          }
+        },
+        createProvider: async () => {
+          throw new Error("Saved data must not be reread");
+        },
+      }
+    );
+    await started;
+    expect(provider.cancelSensitiveImport("cancel-application")).toEqual({
+      operationId: "cancel-application",
+      state: "cancelled",
+      counts,
+    });
+    await provider.stop();
+    expect(joined).toBe(true);
+    expect(saved.observe("cancel-application").counts).toEqual(counts);
+  });
+
   it("coalesces retries by operation id and rejects reuse with different inputs", async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
@@ -430,7 +530,12 @@ describe("BrowserImportHostProvider", () => {
     } as unknown as BrowserVaultNativeClient;
     const provider = new BrowserImportHostProvider(
       { hostId: "desktop", displayName: "Desktop" },
-      { createProvider: async () => importProvider, browserVault, sensitiveImportLedger: ledger() }
+      {
+        createProvider: async () => importProvider,
+        browserVault,
+        sensitiveImportLedger: ledger(),
+        applyCookies: vi.fn(async () => ({ revision: 4 })),
+      }
     );
 
     const first = provider.startSensitiveImport("source", ["passwords"], "retry-id");

@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:f495294b6c8ad86ca25041f9dd652c2d3453dc3c09583c0b2d9cdfa3c109a5a9",
+  "censusDigest": "sha256:849d9e32be0b9dccc08f9d72480fc87444334ec9d6960b7f227bf906b557b614",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -220,6 +220,10 @@
     "host:blobstore.retain": {
       "review": "caller-scoped-retained-content",
       "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:browserEnvironment.applyCookies": {
+      "review": "authenticated-browser-host-cookie-application",
+      "change": "Applies saved canonical cookies only on the authenticated browser host. The receiver requires the declared browserData broker or host principal, passes caller cancellation to the projection owner, returns only the applied revision, and exposes no protected records or website route."
     },
     "host:browserEnvironment.beginImportAcquisition": {
       "review": "trusted-host-browser-export-acquisition",

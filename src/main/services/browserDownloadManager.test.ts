@@ -199,4 +199,24 @@ describe("browser download destinations", () => {
     manager.resume(record.id);
     expect(manager.list()[0]).toMatchObject({ state: "progressing", canResume: false });
   });
+  it("cancels and joins supplementary history loading when the manager stops", async () => {
+    const { manager } = await setup(
+      vi.fn(async () => true),
+      false
+    );
+    let ownedSignal: AbortSignal | undefined;
+    const loading = manager.attachHistory({
+      listDownloadRecords: async (_hostId, signal) => {
+        ownedSignal = signal;
+        return new Promise((_resolve, reject) =>
+          signal!.addEventListener("abort", () => reject(signal!.reason), { once: true })
+        );
+      },
+      upsertDownloadRecord: async () => undefined,
+    });
+    const cancelled = expect(loading).rejects.toThrow("Download provider stopped");
+    await manager.stop();
+    await cancelled;
+    expect(ownedSignal?.aborted).toBe(true);
+  });
 });

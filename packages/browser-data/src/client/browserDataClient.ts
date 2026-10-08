@@ -31,7 +31,12 @@ import type {
 import type { HistoryQuery } from "../types.js";
 
 interface BrowserDataRpc {
-  callService(service: string, method: string, args: unknown[]): Promise<unknown>;
+  callService(
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: { signal?: AbortSignal }
+  ): Promise<unknown>;
 }
 
 type BrowserEnvironmentMethod =
@@ -78,7 +83,7 @@ export interface SensitiveBrowserImportCount {
 }
 export interface SensitiveBrowserImportStatus {
   operationId: string;
-  state: "running" | "complete" | "cancelled" | "failed";
+  state: "running" | "applying" | "application_failed" | "complete" | "cancelled" | "failed";
   counts: SensitiveBrowserImportCount[];
   error?: string;
 }
@@ -92,7 +97,7 @@ export interface SensitiveBrowserImportPreview {
 export type BrowserPrivacySection = "credentials" | "formFill" | "inspect" | "debug" | "export";
 
 export interface BrowserDataClient {
-  getBrowserEnvironment(): Promise<BrowserEnvironmentIdentity>;
+  getBrowserEnvironment(signal?: AbortSignal): Promise<BrowserEnvironmentIdentity>;
   listImportHosts(): Promise<ImportHostSummary[]>;
   listImportAcquisitionOptions(hostId: string): Promise<BrowserImportAcquisitionOption[]>;
   beginImportAcquisition(
@@ -165,7 +170,7 @@ export interface BrowserDataClient {
   getSearchSuggestions(query: string): Promise<BrowserAddressSuggestion[]>;
 
   listDownloads(): Promise<BrowserDownloadRecord[]>;
-  listDownloadRecords(hostId: string): Promise<BrowserDownloadRecord[]>;
+  listDownloadRecords(hostId: string, signal?: AbortSignal): Promise<BrowserDownloadRecord[]>;
   upsertDownloadRecord(record: BrowserDownloadRecord): Promise<void>;
   pauseDownload(id: string): Promise<void>;
   resumeDownload(id: string): Promise<void>;
@@ -183,19 +188,23 @@ export interface BrowserDataClient {
 export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient {
   const callExtension = async <T>(
     method: keyof typeof extensionsMethods & string,
-    ...args: unknown[]
+    args: unknown[],
+    options?: { signal?: AbortSignal }
   ): Promise<T> => {
     const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
     return callTypedServiceMethod(
       "extensions",
       (await import("@vibestudio/service-schemas/extensions")).extensionsMethods,
-      (service, wireMethod, wireArgs) => rpc.callService(service, wireMethod, wireArgs),
+      (service, wireMethod, wireArgs) =>
+        options
+          ? rpc.callService(service, wireMethod, wireArgs, options)
+          : rpc.callService(service, wireMethod, wireArgs),
       method,
       args
     ) as Promise<T>;
   };
   const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
-    callExtension("invokeProvider", "browserData", method, args);
+    callExtension("invokeProvider", ["browserData", method, args]);
   const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
     rpc.callService("browserEnvironment", method, args) as Promise<T>;
   // Workspace-visible browser product records stay on the installed provider.
@@ -205,7 +214,8 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     callNative(method, ...args);
 
   return {
-    getBrowserEnvironment: () => callNative("getBrowserEnvironment"),
+    getBrowserEnvironment: (signal) =>
+      callExtension("invokeProvider", ["browserData", "getBrowserEnvironment", []], { signal }),
     listImportHosts: () => callNative("listImportHosts"),
     listImportAcquisitionOptions: (hostId) => callNative("listImportAcquisitionOptions", hostId),
     beginImportAcquisition: (hostId, acquisitionId) =>
@@ -246,7 +256,8 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     saveSearchEngine: (engine) => callData("saveSearchEngine", engine),
     getSearchSuggestions: (query) => callData("getSearchSuggestions", query),
     listDownloads: () => callBrowserEnvironment("listDownloads"),
-    listDownloadRecords: (hostId) => callData("listDownloadRecords", hostId),
+    listDownloadRecords: (hostId, signal) =>
+      callExtension("invokeProvider", ["browserData", "listDownloadRecords", [hostId]], { signal }),
     upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),
     pauseDownload: (id) => callBrowserEnvironment("pauseDownload", id),
     resumeDownload: (id) => callBrowserEnvironment("resumeDownload", id),

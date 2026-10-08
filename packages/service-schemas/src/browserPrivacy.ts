@@ -65,6 +65,7 @@ export const BrowserPrivacySectionSchema = z.enum([
 export type BrowserPrivacySection = z.infer<typeof BrowserPrivacySectionSchema>;
 
 export const BrowserPrivacyRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("applyCookies") }).strict(),
   z.object({ action: z.literal("snapshot"), origin: z.string().max(4_096) }).strict(),
   z
     .object({

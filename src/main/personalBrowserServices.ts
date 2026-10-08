@@ -1,15 +1,16 @@
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import path from "node:path";
-import { app, session } from "electron";
+import { app } from "electron";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
 import type { ApplicationWindowController } from "./applicationWindowController.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
-import type { AdBlockManager } from "./adblock/adBlockManager.js";
 import { createBrowserDataClient } from "@vibestudio/browser-data";
 import { createBrowserVaultNativeClient } from "./services/browserVaultNativeClient.js";
 import { createAutofillService } from "./services/autofillService.js";
 import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
+import { workspaceProviderExtensionPackageName } from "@vibestudio/workspace/configParser";
 import { FormFillManager } from "./autofill/formFillManager.js";
 
 /** Personal owns imported data, cookie projection, history and autofill. */
@@ -22,7 +23,6 @@ export async function registerPersonalBrowserServices(deps: {
   browserPartition: string;
   downloads: import("./services/browserDownloadManager.js").BrowserDownloadManager;
   hostConnectionId: string;
-  adBlockManager: AdBlockManager;
 }) {
   const {
     connection: conn,
@@ -32,7 +32,6 @@ export async function registerPersonalBrowserServices(deps: {
     browserPermissions,
     browserPartition,
     hostConnectionId,
-    adBlockManager,
   } = deps;
   const sc = conn.serverClient;
   const getViewManager = () => {
@@ -40,9 +39,30 @@ export async function registerPersonalBrowserServices(deps: {
     return new WorkspaceNativeViews(conn.workspaceId, window.viewManager);
   };
   const browserDataClient = createBrowserDataClient({
-    callService: (service, method, args) => sc.call(service, method, args),
+    callService: (service, method, args, options) => sc.call(service, method, args, options),
   });
   const browserVault = createBrowserVaultNativeClient(sc);
+  let projectionService: import("./services/browserCookieProjection.js").BrowserCookieProjectionService;
+  const projectionNoticeId = `browser-cookie-projection:${conn.workspaceId}`;
+  const browserDataBroker = workspaceProviderExtensionPackageName(
+    conn.workspaceConfig,
+    "browserData"
+  );
+  const projectionActions = browserDataBroker
+    ? [
+        {
+          id: `${projectionNoticeId}:privacy`,
+          label: "Open Browser Privacy",
+          invoke: {
+            kind: "extension" as const,
+            extension: browserDataBroker,
+            method: "openBrowserPrivacyManager",
+            args: ["debug"],
+          },
+        },
+      ]
+    : [];
+
   let formFillManager: FormFillManager | null = null;
   let browserCookieProjection:
     | import("./services/browserCookieProjection.js").BrowserCookieProjectionApi
@@ -50,7 +70,6 @@ export async function registerPersonalBrowserServices(deps: {
   let browserFaviconObserver:
     | import("./services/browserFaviconObserver.js").BrowserFaviconObserver
     | null = null;
-  let releaseBrowserAdBlocking: (() => void) | null = null;
   let browserImportHostProvider:
     | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
     | null = null;
@@ -72,6 +91,7 @@ export async function registerPersonalBrowserServices(deps: {
         browserPrivacyManager = new BrowserPrivacyManager({
           vault: browserVault,
           getProjection: () => browserCookieProjection,
+          applyCookies: (signal) => projectionService.applyCookies(signal),
           preloadPath: path.join(__dirname, "browserPrivacyPreload.cjs"),
           htmlPath: path.join(__dirname, "browserPrivacy.html"),
         });
@@ -82,6 +102,7 @@ export async function registerPersonalBrowserServices(deps: {
           },
           {
             browserVault,
+            applyCookies: (signal) => projectionService.applyCookies(signal),
             sensitiveImportLedger: new SensitiveBrowserImportLedger(
               path.join(
                 app.getPath("userData"),
@@ -106,7 +127,8 @@ export async function registerPersonalBrowserServices(deps: {
         return browserDataClient;
       },
       async stop() {
-        browserImportHostProvider?.stop();
+        eventService.emit("notification:dismiss", { id: projectionNoticeId });
+        await browserImportHostProvider?.stop();
         browserImportHostProvider = null;
         browserPrivacyManager?.destroy();
         browserPrivacyManager = null;
@@ -119,46 +141,59 @@ export async function registerPersonalBrowserServices(deps: {
     });
     const { createBrowserCookieProjectionService } =
       await import("./services/browserCookieProjection.js");
-    container.registerManaged(
-      createBrowserCookieProjectionService({
-        nativeStorageScope: conn.nativeStorageScope,
-        browserDataClient,
-        browserVault,
-        serverClient: sc,
-        hostId: `desktop:${conn.workspaceId}`,
-        outboxRoot: app.getPath("userData"),
-        async onReady(api) {
-          if (api.partition !== browserPartition) {
-            throw new Error("Browser cookie projection resolved a different environment");
-          }
-          browserCookieProjection = api;
-          const browserSession = session.fromPartition(api.partition);
-          releaseBrowserAdBlocking?.();
-          releaseBrowserAdBlocking = adBlockManager.attachToSession(browserSession);
-
-          // Download history enriches Personal's imported browser data; a
-          // projection failure must not prevent otherwise healthy browser views.
-          const attach = async (label: string, start: () => Promise<void> | void) => {
-            try {
-              await start();
-            } catch (error) {
-              console.error(
-                `Browser environment: ${label} unavailable; continuing without it: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              );
-            }
-          };
-
-          await attach("download history", () => deps.downloads.attachHistory(browserDataClient));
-        },
-        async onStopped() {
-          releaseBrowserAdBlocking?.();
-          releaseBrowserAdBlocking = null;
-          browserCookieProjection = null;
-        },
-      })
-    );
+    projectionService = createBrowserCookieProjectionService({
+      nativeStorageScope: conn.nativeStorageScope,
+      browserDataClient,
+      browserVault,
+      serverClient: sc,
+      hostId: `desktop:${conn.workspaceId}`,
+      outboxRoot: app.getPath("userData"),
+      brokerPackageName: browserDataBroker,
+      onDiagnostics(diagnostics) {
+        if (diagnostics.converged)
+          eventService.emit("notification:dismiss", { id: projectionNoticeId });
+        else
+          eventService.emit("notification:show", {
+            id: projectionNoticeId,
+            type: "error",
+            ttl: 0,
+            actions: projectionActions,
+            title: "Saved cookies could not be fully applied",
+            message:
+              "Your cookies are saved. Open Browser Privacy and choose Apply saved cookies to retry. Already-open pages may need a reload after application.",
+          });
+      },
+      onUnavailable(error) {
+        eventService.emit("notification:show", {
+          id: projectionNoticeId,
+          type: "error",
+          ttl: 0,
+          actions: isReviewPending(error) ? [] : projectionActions,
+          title: isReviewPending(error)
+            ? "Browser sessions need approval"
+            : "Saved browser sessions are unavailable",
+          message: isReviewPending(error)
+            ? "Complete the pending workspace review to apply your saved cookies. Your saved data has been kept."
+            : "Your saved cookies have been kept. Open Browser Privacy and choose Apply saved cookies to retry; you do not need to import again.",
+        });
+      },
+      async onReady(api) {
+        if (api.partition !== browserPartition) {
+          throw new Error("Browser cookie projection resolved a different environment");
+        }
+        browserCookieProjection = api;
+        browserImportHostProvider?.resumeSensitiveImports();
+        // The download manager owns and cancels its history reads. Loading
+        // supplementary history must not delay applying browser sessions.
+        void deps.downloads.attachHistory(browserDataClient).catch((error) => {
+          console.error("Browser download history unavailable", error);
+        });
+      },
+      async onStopped() {
+        browserCookieProjection = null;
+      },
+    });
+    container.registerManaged(projectionService);
   }
 
   // Register autofill service (uses lazy resolution since formFillManager is created in browser-data start)
@@ -175,6 +210,7 @@ export async function registerPersonalBrowserServices(deps: {
   const { workspaceProviderExtensionRepoPath } = await import("@vibestudio/workspace/configParser");
   const desktopBrowserEnvironment = createBrowserEnvironmentService({
     getDownloads: () => deps.downloads,
+    applyCookies: (signal) => projectionService.applyCookies(signal),
     importRouter: localBrowserEnvironmentImportRouter(() => browserImportHostProvider),
     browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
       conn.workspaceConfig,

@@ -121,7 +121,7 @@ const SensitiveImportCountSchema = z
 const SensitiveImportStatusSchema = z
   .object({
     operationId: z.string().min(1).max(200),
-    state: z.enum(["running", "complete", "cancelled", "failed"]),
+    state: z.enum(["running", "applying", "application_failed", "complete", "cancelled", "failed"]),
     counts: z.array(SensitiveImportCountSchema),
     error: z.string().optional(),
   })
@@ -161,8 +161,37 @@ const ImportProviderFrameSchema = z.discriminatedUnion("type", [
 ]);
 
 export const browserEnvironmentMethods = defineServiceMethods({
+  applyCookies: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.control",
+      rationale:
+        "Applies canonical cookies on the authenticated browser host without returning protected records.",
+    },
+    access: { sensitivity: "write" },
+    description: "Apply canonical cookies to the authenticated browser environment.",
+    website: {
+      kind: "closed",
+      reason: "Cookie application belongs to the authenticated browser host.",
+    } as const,
+    ...reviewedProviderPolicy("applyCookies", {
+      title: "Apply saved browser sessions",
+      action: "apply saved browser sessions",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+      description: "Apply saved cookies to this browser environment.",
+    }),
+    args: z.tuple([]),
+    returns: z.object({ revision: z.number().int().nonnegative() }).strict(),
+  },
   listImportHosts: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -184,7 +213,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   listImportAcquisitionOptions: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -206,7 +239,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   beginImportAcquisition: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -228,7 +265,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   releaseImportSource: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -250,7 +291,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   listImportSources: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -272,7 +317,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   previewImportSource: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -302,7 +351,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   previewSensitiveImport: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -328,7 +381,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   startImportRead: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -354,7 +411,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   startSensitiveImport: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -382,7 +443,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   observeSensitiveImport: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -403,7 +468,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   cancelSensitiveImport: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -424,7 +493,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   nextImportFrame: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -445,7 +518,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   cancelImportRead: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -466,7 +543,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   listImportOpenTabs: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -488,7 +569,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   listDownloads: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -510,7 +595,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   pauseDownload: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -532,7 +621,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   resumeDownload: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -554,7 +647,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   cancelDownload: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -576,7 +673,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   openDownload: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -598,7 +699,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
     }),
   },
   revealDownload: {
-    website: {"kind":"closed","reason":"The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The browserEnvironment receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

@@ -15,7 +15,6 @@ import {
   normalizeCookieExpirationSeconds,
 } from "@vibestudio/browser-data";
 import { browserEnvironmentPartition } from "@vibestudio/shared/panelInterfaces";
-import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -29,58 +28,42 @@ import { ChromiumCookieJar, type BrowserCookieJar } from "./chromiumCookieJar.js
 
 const log = createDevLogger("BrowserCookieProjection");
 
-const EXTENSION_WAIT_INTERVAL_MS = 3_000;
-
-function isExtensionUnavailableError(error: unknown): boolean {
-  if (isReviewPending(error)) return true;
-  const message = error instanceof Error ? error.message : String(error);
-  return /Extension is not installed|Extension failed to start|Unknown service|ENOEXT|ENOTREADY/i.test(
-    message
-  );
-}
-
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("Aborted", "AbortError");
 }
 
-async function waitForExtensionRetry(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw abortError(signal);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(finish, EXTENSION_WAIT_INTERVAL_MS);
+async function withAbort<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
-      clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
       reject(abortError(signal));
     };
-    function finish() {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }
     signal.addEventListener("abort", onAbort, { once: true });
+    let pending: Promise<T>;
+    try {
+      pending = operation();
+    } catch (error) {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+      return;
+    }
+    void pending.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
   });
 }
 
-/** Retry in the service's background lifecycle while the extension activates. */
-async function retryWhileExtensionUnavailable<T>(
-  call: () => Promise<T>,
-  signal: AbortSignal
-): Promise<T> {
-  let waitingLogged = false;
-  for (;;) {
-    if (signal.aborted) throw abortError(signal);
-    try {
-      return await call();
-    } catch (error) {
-      if (!isExtensionUnavailableError(error)) throw error;
-      if (!waitingLogged) {
-        waitingLogged = true;
-        log.info(
-          "browser-data extension is not ready; cookie projection will attach in background"
-        );
-      }
-      await waitForExtensionRetry(signal);
-    }
-  }
+export interface BrowserCookieProjectionService extends ManagedService {
+  applyCookies(signal: AbortSignal): Promise<{ revision: number }>;
+  recover(): Promise<void>;
 }
 
 const REVISION_DEBOUNCE_MS = 150;
@@ -139,16 +122,26 @@ export function createBrowserCookieProjectionService(deps: {
   hostId: string;
   outboxRoot: string;
   createCookieJar?(partition: string): BrowserCookieJar;
+  brokerPackageName?: string | null;
+  onDiagnostics?(diagnostics: BrowserCookieProjectionDiagnostics): void;
   onInitializing?(): void;
   onUnavailable?(error: unknown): void | Promise<void>;
   onReady?(api: BrowserCookieProjectionApi): void | Promise<void>;
   onStopped?(): void | Promise<void>;
-}): ManagedService {
+}): BrowserCookieProjectionService {
   let projection: BrowserCookieProjection | null = null;
   let stopListening: (() => void) | null = null;
   let initializationController: AbortController | null = null;
   let initializationTask: Promise<void> | null = null;
   let hostIntegrationActive = false;
+  let started = false;
+  let initializing = false;
+  let lastInitializationError: unknown;
+  let stopRecovery: (() => void) | null = null;
+  let stopConnection: (() => void) | null = null;
+  let stopDependencyEvents: (() => void) | null = null;
+  let lastWorkerdState: unknown;
+
   const events = new EventsClient({
     stream(targetId, method, args, options) {
       if (targetId !== "main") throw new Error(`Unexpected browser projection target: ${targetId}`);
@@ -168,10 +161,7 @@ export function createBrowserCookieProjectionService(deps: {
     let candidateStopListening: (() => void) | null = null;
     let attached = false;
     try {
-      const identity = await retryWhileExtensionUnavailable(
-        () => deps.browserDataClient.getBrowserEnvironment(),
-        signal
-      );
+      const identity = await deps.browserDataClient.getBrowserEnvironment(signal);
       if (signal.aborted) throw abortError(signal);
 
       const partition = scopedNativePartition(
@@ -181,6 +171,8 @@ export function createBrowserCookieProjectionService(deps: {
       const cookieJar = deps.createCookieJar?.(partition) ?? new ChromiumCookieJar(partition);
       candidate = new BrowserCookieProjection({
         browserVault: deps.browserVault,
+        onDiagnostics: deps.onDiagnostics,
+        signal,
         cookieJar,
         identity,
         partition,
@@ -195,10 +187,8 @@ export function createBrowserCookieProjectionService(deps: {
       });
       // The browser-data extension can report its environment before its DO
       // service has been admitted by the workspace workerd. Probe the same
-      // operation used by reconciliation and keep the projection in its
-      // existing background-attach retry path instead of attaching a broken
-      // projection and emitting a reconciliation warning on every startup.
-      await retryWhileExtensionUnavailable(() => deps.browserVault.listCookieOrigins(), signal);
+      // operation used by reconciliation before publishing browser readiness.
+      await deps.browserVault.listCookieOrigins(signal);
       await candidate.start();
       if (signal.aborted) throw abortError(signal);
 
@@ -231,11 +221,9 @@ export function createBrowserCookieProjectionService(deps: {
       });
       if (signal.aborted) throw abortError(signal);
 
-      const config = (await deps.serverClient.call(
-        "workspace",
-        "getConfig",
-        []
-      )) as WorkspaceConfig | null;
+      const config = (await deps.serverClient.call("workspace", "getConfig", [], {
+        signal,
+      })) as WorkspaceConfig | null;
       if (signal.aborted) throw abortError(signal);
       const broker = config ? workspaceProviderExtensionPackageName(config, "browserData") : null;
       candidateStopListening = stopHealthListening;
@@ -277,6 +265,7 @@ export function createBrowserCookieProjectionService(deps: {
       attached = true;
       log.info("Browser cookie projection attached");
     } catch (error) {
+      lastInitializationError = error;
       if (!signal.aborted) {
         await deps.onUnavailable?.(error);
         log.error(
@@ -289,27 +278,97 @@ export function createBrowserCookieProjectionService(deps: {
       candidateStopListening?.();
       if (candidate) await candidate.stop().catch(() => {});
       if (!attached) {
-        await events.unsubscribeAll().catch(() => {});
         await stopHostIntegration().catch(() => {});
       }
     }
   };
 
-  return {
-    name: "browser-cookie-projection",
-    start() {
+  // A readiness event may arrive while an earlier attachment is failing.
+  // Join that attempt before consuming the new readiness evidence.
+  const recoverAfterReadiness = async (): Promise<void> => {
+    await initializationTask?.catch(() => {});
+    await recover();
+  };
+
+  const recover = async (): Promise<void> => {
+    if (!started || projection) return;
+    if (!initializing) {
+      initializing = true;
+      lastInitializationError = undefined;
       deps.onInitializing?.();
       initializationController = new AbortController();
-      initializationTask = initialize(initializationController.signal);
-      // This service describes eventual attachment, not a boot prerequisite.
-      // Returning immediately keeps extension build/approval off the shell's
-      // startup critical path.
+      initializationTask = initialize(initializationController.signal).finally(() => {
+        initializing = false;
+      });
+      void initializationTask.catch((error) => {
+        lastInitializationError = error;
+      });
+    }
+    await initializationTask;
+  };
+
+  return {
+    name: "browser-cookie-projection",
+    recover,
+    async applyCookies(signal) {
+      signal.throwIfAborted();
+      if (!started) throw new Error("Browser environment is stopped");
+      // Explicit application requests may retry a failed attachment. Dependency
+      // readiness also calls recover; neither path depends on elapsed time.
+      await withAbort(recover, signal);
+      if (!projection)
+        throw lastInitializationError ?? new Error("Browser cookies are unavailable");
+      const activeProjection = projection;
+      return withAbort(() => activeProjection.flush(), signal);
+    },
+    start() {
+      started = true;
+      lastWorkerdState = undefined;
+      stopRecovery = deps.serverClient.onRecovery(() => recoverAfterReadiness());
+      stopConnection = deps.serverClient.onConnectionStatusChange((status) => {
+        if (status === "connected")
+          void recoverAfterReadiness().catch((error) =>
+            log.error(`Browser recovery failed: ${messageOf(error)}`)
+          );
+      });
+      const stopExtension = events.on("extensions:status" as EventName, (payload) => {
+        const state = payload as { name?: string; status?: string } | undefined;
+        if (deps.brokerPackageName && state?.name !== deps.brokerPackageName) return;
+        if (state?.status === "running" || state?.status === "available")
+          void recoverAfterReadiness().catch((error) =>
+            log.error(`Browser recovery failed: ${messageOf(error)}`)
+          );
+      });
+      const stopHealth = events.on("server-health" as EventName, (payload) => {
+        const state = (payload as { workerd?: unknown } | undefined)?.workerd;
+        const changed = state !== lastWorkerdState;
+        lastWorkerdState = state;
+        if (changed && state === "running")
+          void recoverAfterReadiness().catch((error) =>
+            log.error(`Browser recovery failed: ${messageOf(error)}`)
+          );
+      });
+      stopDependencyEvents = () => {
+        stopExtension();
+        stopHealth();
+      };
+      for (const event of ["extensions:status", "server-health"] as EventName[]) {
+        void events
+          .subscribe(event)
+          .catch((error) => log.warn(`Browser readiness watch unavailable: ${messageOf(error)}`));
+      }
+      void recover().catch((error) => log.error(`Browser recovery failed: ${messageOf(error)}`));
       return Promise.resolve();
     },
     async stop() {
-      initializationController?.abort();
-      initializationController = null;
+      started = false;
+      initializationController?.abort(new Error("Browser environment stopped"));
+      stopRecovery?.();
+      stopConnection?.();
+      stopDependencyEvents?.();
+      stopRecovery = stopConnection = stopDependencyEvents = null;
       await initializationTask?.catch(() => {});
+      initializationController = null;
       initializationTask = null;
       await projection?.stop();
       projection = null;
@@ -333,6 +392,7 @@ class BrowserCookieProjection {
   private appliedRevision = 0;
   private mismatchCount = 0;
   private lastError: string | undefined;
+  private lastFailure: unknown;
   private lastLoggedWarning: string | undefined;
   private converged = false;
   private stopped = false;
@@ -349,6 +409,8 @@ class BrowserCookieProjection {
   constructor(
     private readonly deps: {
       browserVault: BrowserVaultNativeClient;
+      onDiagnostics?: (diagnostics: BrowserCookieProjectionDiagnostics) => void;
+      signal: AbortSignal;
       cookieJar: BrowserCookieJar;
       identity: BrowserEnvironmentIdentity;
       partition: string;
@@ -433,7 +495,7 @@ class BrowserCookieProjection {
       await this.reconcileNow(origins);
     });
     if (!this.converged) {
-      throw new Error(this.lastError ?? "Cookie projection did not converge");
+      throw this.lastFailure ?? new Error(this.lastError ?? "Cookie projection did not converge");
     }
     return { revision: this.appliedRevision };
   }
@@ -507,11 +569,15 @@ class BrowserCookieProjection {
     while (this.outbox.length > 0) {
       const batch = this.outbox.slice(0, 250);
       try {
-        await this.deps.browserVault.applyCookieMutations({
-          mutations: batch.map((entry) => entry.mutation),
-        });
+        await this.deps.browserVault.applyCookieMutations(
+          {
+            mutations: batch.map((entry) => entry.mutation),
+          },
+          this.deps.signal
+        );
       } catch (error) {
         if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
+        this.lastFailure = error;
         this.lastError = `Cookie outbox flush failed: ${messageOf(error)}`;
         this.converged = false;
         await this.persistOutbox();
@@ -536,9 +602,11 @@ class BrowserCookieProjection {
         scopedCurrent.map((cookie) => [cookieKeyString(cookieKey(cookie)), cookie])
       );
 
+      const writeErrors: unknown[] = [];
       let writeFailures = 0;
       let firstWriteFailure: string | undefined;
       const recordWriteFailure = (error: unknown) => {
+        writeErrors.push(error);
         writeFailures += 1;
         firstWriteFailure ??= messageOf(error);
       };
@@ -594,13 +662,18 @@ class BrowserCookieProjection {
               ? `, ${writeFailures} write failures; first: ${firstWriteFailure ?? "unknown"}`
               : ""
           })`;
-      if (this.converged) this.lastLoggedWarning = undefined;
+      if (this.converged) {
+        this.lastFailure = undefined;
+        this.lastLoggedWarning = undefined;
+      } else if (writeErrors.length)
+        this.lastFailure = new AggregateError(writeErrors, this.lastError);
       else this.warnOnce(this.lastError ?? "Cookie projection did not converge");
     } catch (error) {
       // A runtime generation transition is a lifecycle state, not a fault:
       // pause the loop and let the readiness signal resume it.
       if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
       this.converged = false;
+      this.lastFailure = error;
       this.lastError = `Cookie reconciliation failed: ${messageOf(error)}`;
       this.warnOnce(this.lastError);
     }
@@ -610,14 +683,16 @@ class BrowserCookieProjection {
     requestedOrigins?: string[]
   ): Promise<{ revision: number; cookies: StoredCookie[] }> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const before = await this.deps.browserVault.listCookieOrigins();
+      const before = await this.deps.browserVault.listCookieOrigins(this.deps.signal);
       const origins = requestedOrigins?.length ? requestedOrigins : before.origins;
       const cookies = (
         await Promise.all(
-          [...new Set(origins)].map((origin) => this.deps.browserVault.getCookiesForOrigin(origin))
+          [...new Set(origins)].map((origin) =>
+            this.deps.browserVault.getCookiesForOrigin(origin, this.deps.signal)
+          )
         )
       ).flat();
-      const after = await this.deps.browserVault.listCookieOrigins();
+      const after = await this.deps.browserVault.listCookieOrigins(this.deps.signal);
       if (before.revision === after.revision) {
         const unique = new Map(
           cookies.map((cookie) => [cookieKeyString(cookieKey(cookie)), cookie])
@@ -629,7 +704,19 @@ class BrowserCookieProjection {
   }
 
   private queueOperation(run: () => Promise<void>): Promise<void> {
-    const next = serializeByKey(this.operationQueue, "projection", run);
+    const next = serializeByKey(this.operationQueue, "projection", async () => {
+      this.lastFailure = undefined;
+      try {
+        await run();
+      } catch (error) {
+        this.converged = false;
+        this.lastFailure = error;
+        this.lastError = `Cookie projection operation failed: ${messageOf(error)}`;
+        throw error;
+      } finally {
+        this.deps.onDiagnostics?.(this.diagnostics());
+      }
+    });
     this.operation = next.then(
       () => undefined,
       (error) => {

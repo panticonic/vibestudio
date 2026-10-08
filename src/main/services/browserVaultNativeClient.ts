@@ -48,13 +48,16 @@ export interface BrowserVaultNativeClient {
   markFormFillValueUsed(id: number): Promise<void>;
   deleteFormFillValue(id: number): Promise<void>;
   clearFormFillValues(): Promise<number>;
-  applyCookieMutations(input: ApplyCookieMutationsRequest): Promise<{ revision: number }>;
-  listCookieOrigins(): Promise<{ revision: number; origins: string[] }>;
+  applyCookieMutations(
+    input: ApplyCookieMutationsRequest,
+    signal?: AbortSignal
+  ): Promise<{ revision: number }>;
+  listCookieOrigins(signal?: AbortSignal): Promise<{ revision: number; origins: string[] }>;
   listCookieOriginsPage(
     offset: number,
     limit: number
   ): Promise<{ items: string[]; total: number; revision: number }>;
-  getCookiesForOrigin(origin: string): Promise<StoredCookie[]>;
+  getCookiesForOrigin(origin: string, signal?: AbortSignal): Promise<StoredCookie[]>;
   listCookiesPage(offset: number, limit: number): Promise<{ items: StoredCookie[]; total: number }>;
   clearCookiesForOrigin(origin: string): Promise<number>;
   clearAllCookies(): Promise<number>;
@@ -102,10 +105,20 @@ export function createBrowserVaultNativeClient(
     markFormFillValueUsed: (id) => call("markFormFillValueUsed", id),
     deleteFormFillValue: (id) => call("deleteFormFillValue", id),
     clearFormFillValues: () => call("clearFormFillValues"),
-    applyCookieMutations: (input) => call("applyCookieMutations", input),
-    listCookieOrigins: () => call("listCookieOrigins"),
+    applyCookieMutations: (input, signal) =>
+      serverClient.call("browserVaultNative", "applyCookieMutations", [input], {
+        signal,
+      }) as Promise<{ revision: number }>,
+    listCookieOrigins: (signal) =>
+      serverClient.call("browserVaultNative", "listCookieOrigins", [], { signal }) as Promise<{
+        revision: number;
+        origins: string[];
+      }>,
     listCookieOriginsPage: (offset, limit) => call("listCookieOriginsPage", offset, limit),
-    getCookiesForOrigin: (origin) => call("getCookiesForOrigin", origin),
+    getCookiesForOrigin: (origin, signal) =>
+      serverClient.call("browserVaultNative", "getCookiesForOrigin", [origin], {
+        signal,
+      }) as Promise<StoredCookie[]>,
     listCookiesPage: (offset, limit) => call("listCookiesPage", offset, limit),
     clearCookiesForOrigin: (origin) => call("clearCookiesForOrigin", origin),
     clearAllCookies: () => call("clearAllCookies"),

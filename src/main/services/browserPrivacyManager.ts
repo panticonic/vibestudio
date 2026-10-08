@@ -21,6 +21,7 @@ export class BrowserPrivacyManager {
     private readonly deps: {
       vault: BrowserVaultNativeClient;
       getProjection(): BrowserCookieProjectionApi | null;
+      applyCookies?: (signal: AbortSignal) => Promise<{ revision: number }>;
       preloadPath: string;
       htmlPath: string;
     }

@@ -8784,6 +8784,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:browserEnvironment.applyCookies",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "applyCookies",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.control",
+      "reviewRationale": "Applies canonical cookies on the authenticated browser host without returning protected records.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.applyCookies"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:browserEnvironment.applyCookies),allOf(capability(code,service:browserEnvironment.applyCookies),workspace-member))",
+      "r3b": {
+        "review": "authenticated-browser-host-cookie-application",
+        "change": "Applies saved canonical cookies only on the authenticated browser host. The receiver requires the declared browserData broker or host principal, passes caller cancellation to the projection owner, returns only the applied revision, and exposes no protected records or website route."
+      },
+      "capability": "service:browserEnvironment.applyCookies",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:browserEnvironment.beginImportAcquisition",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
