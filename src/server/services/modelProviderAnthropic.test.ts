@@ -182,12 +182,29 @@ it("completes browser login through pi's loopback callback and retires manual in
       callback = nativeFetch(url);
     }
   });
-  await f.connect();
+  const result = await f.connect();
   expect((await callback!).ok).toBe(true);
-  expect(JSON.parse(String(fetchToken.mock.calls[0]![1]!.body))).toMatchObject({
+  const [endpoint, init] = fetchToken.mock.calls[0]!;
+  const body = JSON.parse(String(init!.body));
+  expect(endpoint).toBe("https://platform.claude.com/v1/oauth/token");
+  expect(new Headers(init!.headers).get("content-type")).toBe("application/json");
+  expect(body).toMatchObject({
     code: "browser-code",
     redirect_uri: f.url().searchParams.get("redirect_uri"),
+    state: f.url().searchParams.get("state"),
+    code_verifier: f.url().searchParams.get("state"),
+    client_id: f.url().searchParams.get("client_id"),
+    grant_type: "authorization_code",
   });
+  expect(createHash("sha256").update(body.code_verifier).digest("base64url")).toBe(
+    f.url().searchParams.get("code_challenge")
+  );
+  expect(f.storeCredential.mock.calls[0]![1]).toMatchObject({
+    material: { type: "bearer-token", token: "browser-access" },
+    modelProviderSession: { providerId: "anthropic", credential: { refresh: "browser-refresh" } },
+    metadata: { modelProviderId: "anthropic", modelAuthMethod: "subscription" },
+  });
+  expect(JSON.stringify(result)).not.toContain("browser-refresh");
   expect(f.queue.listPending()).toEqual([]);
   expect(f.storeCredential).toHaveBeenCalledOnce();
 });

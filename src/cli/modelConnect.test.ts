@@ -20,7 +20,7 @@ const CREDENTIALS = {
 } satisfies DeviceCredential;
 
 describe("connectModelProvider", () => {
-  it.each(["openai-codex", "anthropic"])(
+  it.each(["openai-codex"])(
     "%s subscribes before connect and forwards the browser callback",
     async (providerId) => {
       const port = await getFreePort();
@@ -340,6 +340,22 @@ describe("connectModelProvider", () => {
 
     expect(awaitPastedCallback).not.toHaveBeenCalled();
     await browserResponse;
+  });
+
+  it("directs native Claude sign-in to the trusted approval UI before opening an RPC", async () => {
+    const createRpc = vi.fn<ModelConnectDependencies["createRpc"]>();
+    await expect(
+      connectModelProvider(
+        CREDENTIALS,
+        "anthropic",
+        {},
+        {
+          createRpc,
+          openExternal: async () => undefined,
+        }
+      )
+    ).rejects.toThrow("Connect it from the provider setup in the chat panel");
+    expect(createRpc).not.toHaveBeenCalled();
   });
 
   it("does not invent a second API-key input flow", async () => {
