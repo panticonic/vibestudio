@@ -1,5 +1,6 @@
 import { modelProviderOAuth, modelProviderMaterial } from "./credentialMechanisms/modelProvider.js";
 import { toCredentialConnectRequest } from "@vibestudio/shared/providerConnect";
+import type { PendingCredentialInputApproval } from "@vibestudio/shared/approvals";
 import {
   createHash,
   createPublicKey,
@@ -1111,25 +1112,27 @@ export function createCredentialConnectionCoordinator(
     const browser = await resolveBrowserHandoffTarget(ctx, handoffTarget, request.browser);
     if (!browser.target) throw new OAuthConnectionError("browser_unavailable");
     let device: ReturnType<ApprovalQueue["presentDeviceCode"]> | undefined;
+    let browserSignIn: PendingCredentialInputApproval["browserSignIn"];
     const open = (url: string) => {
       const parsed = new URL(url);
       if (parsed.protocol !== "https:")
         throw new Error("The provider returned an invalid sign-in URL");
       const target = browser.target!;
-      const result =
-        request.browser === "internal" && target.parentPanelId
-          ? emitToBrowserTarget(target, "browser-panel:open", {
-              url,
-              parentPanelId: target.parentPanelId,
-              callerId: ctx.caller.runtime.id,
-              callerKind: ctx.caller.runtime.kind,
-            })
-          : emitToBrowserTarget(target, "external-open:open", {
-              url,
-              callerId: ctx.caller.runtime.id,
-              callerKind: ctx.caller.runtime.kind,
-            });
+      const parentPanelId = request.browser === "internal" ? target.parentPanelId : undefined;
+      const result = parentPanelId
+        ? emitToBrowserTarget(target, "browser-panel:open", {
+            url,
+            parentPanelId,
+            callerId: ctx.caller.runtime.id,
+            callerKind: ctx.caller.runtime.kind,
+          })
+        : emitToBrowserTarget(target, "external-open:open", {
+            url,
+            callerId: ctx.caller.runtime.id,
+            callerKind: ctx.caller.runtime.kind,
+          });
       if (!result.delivered) throw new OAuthConnectionError("browser_unavailable");
+      return parentPanelId ? "internal" : "external";
     };
     try {
       const credential = await (
@@ -1145,6 +1148,7 @@ export function createCredentialConnectionCoordinator(
               ...identity,
               ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
               title: request.credential.label,
+              ...(prompt.type === "manual_code" && browserSignIn ? { browserSignIn } : {}),
               credentialLabel: request.credential.label,
               audience: request.credential.audience,
               injection: request.credential.injection,
@@ -1158,7 +1162,7 @@ export function createCredentialConnectionCoordinator(
                     ? { type: "select" as const, required: true, options: prompt.options }
                     : {
                         type: prompt.type === "secret" ? ("secret" as const) : ("text" as const),
-                        required: false,
+                        required: prompt.type === "manual_code",
                       }),
                 },
               ],
@@ -1190,7 +1194,21 @@ export function createCredentialConnectionCoordinator(
               { once: true }
             );
             open(event.verificationUri);
-          } else if (event.type === "auth_url") open(event.url);
+          } else if (event.type === "auth_url") {
+            const openedBrowser = open(event.url);
+            const redirectUri = new URL(event.url).searchParams.get("redirect_uri");
+            const redirect = redirectUri ? new URL(redirectUri) : undefined;
+            browserSignIn = {
+              browser: openedBrowser,
+              // The provider's actual loopback return route can finish automatically.
+              // Hosted copy-code callbacks still require the visible code field.
+              callbackExpected:
+                !!redirect &&
+                (redirect.protocol === "http:" || redirect.protocol === "https:") &&
+                isLoopbackHost(redirect.hostname),
+              instructions: event.instructions,
+            };
+          }
         },
       });
       throwIfAborted(operationSignal);

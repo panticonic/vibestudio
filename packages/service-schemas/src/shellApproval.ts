@@ -872,6 +872,14 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       kind: z.literal("credential-input"),
       title: z.string(),
       description: z.string().optional(),
+      browserSignIn: z
+        .object({
+          browser: z.enum(["internal", "external"]),
+          callbackExpected: z.boolean(),
+          instructions: z.string().optional(),
+        })
+        .strict()
+        .optional(),
       credentialLabel: z.string(),
       audience: z.array(audienceSchema),
       injection: credentialInjectionSchema,

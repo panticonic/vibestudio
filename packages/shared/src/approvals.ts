@@ -620,6 +620,13 @@ export interface PendingCredentialInputApproval extends PendingApprovalBase {
   kind: "credential-input";
   title: string;
   description?: string;
+  /** Present only after the provider's sign-in URL has been handed to a browser. */
+  browserSignIn?: {
+    browser: "internal" | "external";
+    /** Native OAuth uses a loopback redirect that can finish without manual input. */
+    callbackExpected: boolean;
+    instructions?: string;
+  };
   credentialLabel: string;
   audience: UrlAudience[];
   injection: CredentialInjection;

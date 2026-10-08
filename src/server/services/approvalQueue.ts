@@ -474,6 +474,7 @@ export interface CredentialInputApprovalQueueRequest extends ApprovalQueueReques
   kind: "credential-input";
   title: string;
   description?: string;
+  browserSignIn?: PendingCredentialInputApproval["browserSignIn"];
   credentialLabel: string;
   audience: UrlAudience[];
   injection: CredentialInjection;
@@ -1437,6 +1438,7 @@ export function createApprovalQueue(deps: {
         kind: "credential-input",
         title: req.title,
         description: req.description,
+        ...(req.browserSignIn ? { browserSignIn: req.browserSignIn } : {}),
         credentialLabel: req.credentialLabel,
         audience: req.audience,
         injection: req.injection,

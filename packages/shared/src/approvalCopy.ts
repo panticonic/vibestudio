@@ -854,6 +854,18 @@ export function getApprovalCopy(approval: PendingApproval): {
     case "client-config":
       return HOST_APPROVAL_COPY.headlines.setupService(formatServiceName(approval.configId));
     case "credential-input":
+      if (approval.browserSignIn)
+        return {
+          title: "Waiting for browser sign-in",
+          summary: [
+            approval.browserSignIn.browser === "external"
+              ? "A sign-in page has opened in your external browser. Complete sign-in there, then return here."
+              : "Complete sign-in in the workspace browser, then return here.",
+            approval.browserSignIn.instructions,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        };
       return HOST_APPROVAL_COPY.headlines.credentialInput(
         approval.credentialLabel,
         formatCredentialInputAudienceSummary(approval)

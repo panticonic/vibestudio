@@ -107,12 +107,20 @@ it("uses native Claude copy-code PKCE and keeps renewable provider state private
     wireApprovals.push(JSON.parse(JSON.stringify(pending)));
     const field = pending.fields[0]!;
     if (field.type === "select") {
+      expect(pending.browserSignIn).toBeUndefined();
       expect(field.options.map((option) => option.id)).toEqual(["browser", "copy_code"]);
       void queue.submitCredentialInput(pending.approvalId, { value: "copy_code" });
-    } else
+    } else {
+      expect(pending.browserSignIn).toEqual({
+        browser: "external",
+        callbackExpected: false,
+        instructions:
+          "Complete login in your browser, then copy the code Anthropic shows and paste it here.",
+      });
       void queue.submitCredentialInput(pending.approvalId, {
         value: "auth-code#" + f.url().searchParams.get("state"),
       });
+    }
   });
   const result = await f.connect();
   expect(shellApprovalMethods.listPending.returns.parse(wireApprovals)).toEqual(wireApprovals);
@@ -174,6 +182,10 @@ it("completes browser login through pi's loopback callback and retires manual in
     if (pending.fields[0]!.type === "select") {
       void queue.submitCredentialInput(pending.approvalId, { value: "browser" });
     } else if (!callback) {
+      expect(shellApprovalMethods.listPending.returns.parse([pending])).toEqual([pending]);
+      expect(pending.browserSignIn).toMatchObject({ browser: "external", callbackExpected: true });
+      expect(pending.browserSignIn?.instructions).toContain("paste the final redirect URL");
+      expect(pending.fields[0]!.required).toBe(true);
       const url = new URL(f.url().searchParams.get("redirect_uri")!);
       expect(url.hostname).toBe("localhost");
       expect(url.pathname).toBe("/callback");
