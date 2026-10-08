@@ -1018,28 +1018,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       );
     this.validateBuildForTarget(entry.name, selected.target, build);
 
-    const current = appVersionRecordFromEntry(entry);
-    const remaining = entry.previousVersions.filter(
-      (candidate) => candidate.activeBundleKey !== selected.activeBundleKey
-    );
-    const updated = this.registry.patch(entry.name, {
-      version: selected.version,
-      target: selected.target,
-      capabilities: selected.capabilities,
-      activeEv: selected.activeEv,
-      activeSourceHash: selected.activeSourceHash,
-      activeBundleKey: selected.activeBundleKey,
-      activeDependencyEvs: selected.activeDependencyEvs,
-      activeExternalDeps: selected.activeExternalDeps,
-      activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
-      status: "running",
-      lastError: null,
-      lastErrorDetails: null,
-      activationTrust: null,
-      previousVersions: current
-        ? appVersionHistory([current, ...remaining])
-        : appVersionHistory(remaining),
-    });
+    const updated = this.selectAppVersion(entry, selected, "running", null);
     this.activateAppEntity(updated, build);
     await this.terminal.sync(updated, entry);
     const activated = this.registry.get(updated.name) ?? updated;
@@ -1136,13 +1115,28 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!prepared?.activeBundleKey) throw new Error(`App ${sourceOrName} has no active build`);
     if (!build) throw new Error(`Active app build is missing: ${prepared.activeBundleKey}`);
     this.validateBuildForTarget(prepared.name, prepared.target, build);
+    const previousPrincipal =
+      prepared.target === "terminal" ? this.deps.entityCache?.resolve(prepared.name) : null;
     const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
     this.activateAppEntity(entry, build);
     if (entry.target === "terminal") {
       if (this.terminal.isRunningBuild(entry.name, prepared.activeBundleKey)) {
         return;
       } else {
-        await this.terminal.start(entry);
+        try {
+          await this.terminal.start(entry);
+        } catch (error) {
+          try {
+            this.reconcileTerminalActivationFailure(entry, prepared, previousPrincipal, error);
+          } catch (reconciliationError) {
+            throw new AggregateError(
+              [error, reconciliationError],
+              `Terminal app ${entry.name} failed to start and its release state could not be reconciled`,
+              { cause: error }
+            );
+          }
+          throw error;
+        }
       }
     }
     this.emitAvailable(entry, { lifecycleType: "available" }, build);
@@ -1155,6 +1149,82 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.retireAppEntity(entry.name);
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
     this.emitStatus(entry.name, "stopped", null);
+  }
+
+  private reconcileTerminalActivationFailure(
+    failedEntry: AppRegistryEntry,
+    previousEntry: AppRegistryEntry,
+    previousPrincipal: EntityRecord | null | undefined,
+    error: unknown
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const currentPrincipal = this.deps.entityCache?.resolve(failedEntry.name);
+    if (
+      currentPrincipal?.kind === "app" &&
+      currentPrincipal.status === "active" &&
+      currentPrincipal.activeBuildKey === failedEntry.activeBundleKey
+    ) {
+      this.retireAppEntity(failedEntry.name);
+    }
+
+    if (
+      !previousPrincipal ||
+      previousPrincipal.kind !== "app" ||
+      previousPrincipal.status !== "active"
+    ) {
+      this.registry.patch(failedEntry.name, { status: "error", lastError: message });
+      return;
+    }
+    const previousBuildKey = previousPrincipal.activeBuildKey;
+    const priorRelease = previousEntry.previousVersions.find(
+      (version) => version.activeBundleKey === previousBuildKey
+    );
+    if (!priorRelease) {
+      this.registry.patch(failedEntry.name, { status: "error", lastError: message });
+      return;
+    }
+
+    const oldBuildIsRunning =
+      !!previousBuildKey && this.terminal.isRunningBuild(failedEntry.name, previousBuildKey);
+    if (oldBuildIsRunning) this.deps.entityCache?._onActivate(previousPrincipal);
+    const current = this.registry.get(failedEntry.name) ?? failedEntry;
+    this.selectAppVersion(
+      current,
+      priorRelease,
+      oldBuildIsRunning ? "running" : "available",
+      message
+    );
+    this.emitStatus(failedEntry.name, oldBuildIsRunning ? "running" : "available", message);
+  }
+
+  private selectAppVersion(
+    entry: AppRegistryEntry,
+    selected: AppVersionRecord,
+    status: AppRegistryEntry["status"],
+    lastError: string | null
+  ): AppRegistryEntry {
+    const current = appVersionRecordFromEntry(entry);
+    const remaining = entry.previousVersions.filter(
+      (candidate) => candidate.activeBundleKey !== selected.activeBundleKey
+    );
+    return this.registry.patch(entry.name, {
+      version: selected.version,
+      target: selected.target,
+      capabilities: selected.capabilities,
+      activeEv: selected.activeEv,
+      activeSourceHash: selected.activeSourceHash,
+      activeBundleKey: selected.activeBundleKey,
+      activeDependencyEvs: selected.activeDependencyEvs,
+      activeExternalDeps: selected.activeExternalDeps,
+      activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
+      status,
+      lastError,
+      lastErrorDetails: null,
+      activationTrust: null,
+      previousVersions: current
+        ? appVersionHistory([current, ...remaining])
+        : appVersionHistory(remaining),
+    });
   }
 
   listWorkspaceUnitLogs(name: string): Array<{

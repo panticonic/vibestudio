@@ -85,30 +85,40 @@ export class TerminalAppRuntime {
   }
 
   async start(entry: AppRegistryEntry, options: { forceRestart?: boolean } = {}): Promise<void> {
-    if (!this.runner) {
-      this.deps.registry.patch(entry.name, {
-        status: "error",
-        lastError: "Terminal app runner is not configured",
-      });
-      this.deps.emitStatus(entry.name, "error", "Terminal app runner is not configured");
-      return;
+    try {
+      if (!this.runner) throw new Error("Terminal app runner is not configured");
+      if (!entry.activeBundleKey) throw new Error(`Terminal app ${entry.name} has no active build`);
+      const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+      if (!build) throw new Error(`Terminal app build is missing: ${entry.activeBundleKey}`);
+      this.deps.validateBuild(entry.name, build);
+      await this.runner.start(
+        {
+          appId: entry.name,
+          source: normalizeRepoPath(entry.source.repo),
+          buildKey: entry.activeBundleKey,
+          effectiveVersion: entry.activeEv,
+          gatewayUrl: this.deps.getGatewayUrl(),
+          build,
+          interactive: entry.interactive ?? false,
+        },
+        options
+      );
+    } catch (error) {
+      try {
+        this.updateStatus(
+          entry.name,
+          "error",
+          error instanceof Error ? error.message : String(error)
+        );
+      } catch (statusError) {
+        throw new AggregateError(
+          [error, statusError],
+          `Terminal app ${entry.name} failed to start and its error status could not be published`,
+          { cause: error }
+        );
+      }
+      throw error;
     }
-    if (!entry.activeBundleKey) throw new Error(`Terminal app ${entry.name} has no active build`);
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
-    if (!build) throw new Error(`Terminal app build is missing: ${entry.activeBundleKey}`);
-    this.deps.validateBuild(entry.name, build);
-    await this.runner.start(
-      {
-        appId: entry.name,
-        source: normalizeRepoPath(entry.source.repo),
-        buildKey: entry.activeBundleKey,
-        effectiveVersion: entry.activeEv,
-        gatewayUrl: this.deps.getGatewayUrl(),
-        build,
-        interactive: entry.interactive ?? false,
-      },
-      options
-    );
   }
 
   async stop(appId: string): Promise<void> {

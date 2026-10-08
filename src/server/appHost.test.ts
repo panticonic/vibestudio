@@ -132,6 +132,7 @@ function makeHarness(
     affectedBuildUnits?: string[];
     isSystemWorkspace?: () => boolean;
     connectionGrants?: AppHostDeps["connectionGrants"];
+    configureTerminalRunner?: boolean;
     ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
   } = {}
 ) {
@@ -314,7 +315,9 @@ function makeHarness(
     approvalCoordinator,
     notificationService,
     entityCache,
-    connectionGrants: opts.connectionGrants,
+    connectionGrants:
+      opts.connectionGrants ??
+      (opts.configureTerminalRunner ? new ConnectionGrantService({ entityCache }) : undefined),
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "apps/shell/package.json"
         ? fs.readFileSync(path.join(appPath, "package.json"), "utf8")
@@ -1843,8 +1846,10 @@ describe("AppHost", () => {
     ).toMatchObject({ allowed: false });
   });
 
-  it("activates terminal apps as launchable terminal process builds", async () => {
-    const { host, buildSystem, eventService, graphNode, approvalQueue } = makeHarness();
+  it("publishes terminal availability only after its process start succeeds", async () => {
+    const { host, buildSystem, eventService, graphNode, approvalQueue, entityCache } = makeHarness({
+      configureTerminalRunner: true,
+    });
     fs.writeFileSync(
       path.join(graphNode.path, "package.json"),
       JSON.stringify({
@@ -1921,7 +1926,7 @@ describe("AppHost", () => {
     expect(host.registry.get(graphNode.name)).toMatchObject({
       target: "terminal",
       activeBundleKey: "terminal-key",
-      capabilities: ["clipboard"],
+      capabilities: ["clipboard" as const],
       status: "available",
     });
     await host.activateRelease(graphNode.name);
@@ -1942,6 +1947,94 @@ describe("AppHost", () => {
         error: null,
       })
     );
+
+    const failedUpdate = {
+      ...terminalBuild,
+      metadata: {
+        ...terminalBuild.metadata,
+        ev: "ev-terminal-update",
+        sourceStateHash: "state:terminal-update",
+      },
+      artifacts: [
+        {
+          path: "index.mjs",
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: "export {};\n",
+        },
+      ],
+    };
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "terminal-key"
+        ? (terminalBuild as never)
+        : key === "terminal-key-update"
+          ? (failedUpdate as never)
+          : null
+    );
+    const priorRelease = {
+      version: "1.0.0",
+      activatedAt: 1,
+      target: "terminal" as const,
+      capabilities: ["clipboard" as const],
+      activeEv: "ev-terminal",
+      activeSourceHash: "state:test",
+      activeBundleKey: "terminal-key",
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+    };
+    const selectFailedCandidate = () =>
+      host.registry.patch(graphNode.name, {
+        version: "2.0.0",
+        activeEv: "ev-terminal-update",
+        activeSourceHash: "state:terminal-update",
+        activeBundleKey: "terminal-key-update",
+        previousVersions: [priorRelease],
+        activationTrust: { source: "candidate" } as never,
+      });
+    const terminalStart = vi.spyOn(host.terminal, "start");
+    const liveFailure = new Error("candidate terminal process failed before replacing prior build");
+    selectFailedCandidate();
+    terminalStart.mockRejectedValue(liveFailure);
+    await expect(host.activateRelease(graphNode.name)).rejects.toBe(liveFailure);
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      activeBundleKey: "terminal-key",
+      status: "running",
+      lastError: liveFailure.message,
+      activationTrust: null,
+    });
+    expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
+      activeBuildKey: "terminal-key",
+    });
+
+    selectFailedCandidate();
+    const stoppedFailure = new Error(
+      "candidate terminal process failed after replacing prior build"
+    );
+    terminalStart.mockImplementation(async () => {
+      await host.terminal.stop(graphNode.name);
+      throw stoppedFailure;
+    });
+    await expect(host.activateRelease(graphNode.name)).rejects.toBe(stoppedFailure);
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      activeBundleKey: "terminal-key",
+      status: "available",
+      lastError: stoppedFailure.message,
+      previousVersions: [expect.objectContaining({ activeBundleKey: "terminal-key-update" })],
+      activationTrust: null,
+    });
+    expect(entityCache.resolveActive(graphNode.name)).toBeNull();
+
+    await host.terminal.stop(graphNode.name);
+    host.registry.patch(graphNode.name, { status: "available", lastError: null });
+    eventService.emit.mockClear();
+    const launchFailure = new Error("terminal process could not start");
+    vi.spyOn(host.terminal, "start").mockRejectedValue(launchFailure);
+    await expect(host.ensureActivated(graphNode.name)).rejects.toBe(launchFailure);
+    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(entityCache.resolveActive(graphNode.name)).toBeNull();
+    expect(host.registry.get(graphNode.name)).toMatchObject({ status: "error" });
   });
 
   it("preserves an already-running terminal build during reconciliation and launch refresh", async () => {
