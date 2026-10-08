@@ -102,6 +102,8 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // Discovering or invoking native browser-export enrollment is prominent:
   // those operations expose device capabilities or open trusted platform UI.
   // Releasing the exact opaque staging source only removes transient host state.
+  // Applying saved cookies changes the authenticated browser session and stays prominent.
+  { key: "service:browserEnvironment.applyCookies", notability: "headline" },
   { key: "service:browserEnvironment.beginImportAcquisition", notability: "headline" },
   { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
   { key: "service:browserEnvironment.cancelImportRead", notability: "everyday" },

@@ -105,6 +105,8 @@ describe("HeadlessHost lifecycle guards", () => {
       call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
         if (method === "workspace.getInfo") {
           return {
+            appVersion: "0.1.84",
+            currentAppVersion: "0.1.84",
             id: "workspace-test",
             name: "Test",
             path: "/workspace",

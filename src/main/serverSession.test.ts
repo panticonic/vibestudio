@@ -82,6 +82,8 @@ describe("remote startup workspace focus", () => {
     };
     const workspace = {
       call: vi.fn(async () => ({
+        appVersion: "0.1.84",
+        currentAppVersion: "0.1.84",
         id: "system-id",
         name: "System",
         config: { id: "system-id", systemEpoch: 0 },
@@ -146,6 +148,8 @@ describe("remote startup workspace focus", () => {
     };
     const workspace = {
       call: vi.fn(async () => ({
+        appVersion: "0.1.84",
+        currentAppVersion: "0.1.84",
         id: "system-id",
         name: "System",
         config: { id: "system-id", systemEpoch: 0 },
