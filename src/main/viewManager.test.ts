@@ -1065,8 +1065,15 @@ describe("ViewManager", () => {
       warn.mockRestore();
     });
 
-    it("keeps an unbound panel hidden until hosted shell binds its measured slot", () => {
+    it("keeps an unbound panel laid out but hidden until hosted shell binds its measured slot", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       vm.setViewVisible("panel-1", true);
       vm.createView({
         id: "@workspace-apps/shell",
@@ -1077,13 +1084,23 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       (panelView.setVisible as Mock).mockClear();
       vm.setViewVisible("panel-1", true);
 
       expect(vm.isViewVisible("panel-1")).toBe(true);
-      expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
 
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -2345,7 +2362,7 @@ describe("ViewManager", () => {
       expect(children[children.length - 1]).not.toBe(panelView);
     });
 
-    it("keeps panel views natively hidden behind the bootstrap launch gate when configured", () => {
+    it("keeps panel views laid out but natively hidden behind the bootstrap launch gate", () => {
       const gatedVm = new ViewManager({
         window: mockWindow,
         shellPreload: "/path/to/preload.js",
@@ -2356,12 +2373,21 @@ describe("ViewManager", () => {
         id: "panel-1",
         type: "panel",
       });
+      const measuredBounds = { x: 100, y: 40, width: 700, height: 500 };
+      gatedVm.setViewBounds("panel-1", measuredBounds);
+      expect(panelView.setBounds).toHaveBeenLastCalledWith(measuredBounds);
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       (panelView.setVisible as Mock).mockClear();
 
       gatedVm.setViewVisible("panel-1", true);
 
       expect(gatedVm.isViewVisible("panel-1")).toBe(true);
-      expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
 
       gatedVm.createView({
@@ -2376,7 +2402,12 @@ describe("ViewManager", () => {
 
       gatedVm.setViewVisible("panel-1", true);
 
-      expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
 
       declareAndAttachPanelSlot(gatedVm, "@workspace-apps/shell", {

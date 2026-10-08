@@ -750,8 +750,11 @@ export class ViewManager {
       view.webContents.setBackgroundThrottling(false);
     }
 
-    // Start invisible at origin with zero size
-    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    // Visibility and layout are independent. A hidden runtime still boots and
+    // embeds may choose resources from its initial viewport without revisiting
+    // that choice on resize. Start with the available layout, not a collapsed one.
+    const initialBounds = hostChrome ? this.fullWindowBounds() : this.calculatePanelBounds();
+    view.setBounds(initialBounds);
     view.setVisible(false);
 
     // Add to window's content view. This appends at the top of the stack, so
@@ -766,7 +769,7 @@ export class ViewManager {
       type: config.type,
       parentId: config.parentId,
       visible: false,
-      bounds: { x: 0, y: 0, width: 0, height: 0 },
+      bounds: initialBounds,
       partition: config.partition,
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
       appCapabilities: config.type === "app" ? [...(config.appCapabilities ?? [])] : [],
@@ -1155,9 +1158,7 @@ export class ViewManager {
     if (this.automationSurfaceIds.has(id) && !managed.visible) {
       this.presentAutomationSurface(managed);
     } else {
-      managed.view.setBounds(
-        this.shouldHideUnslottedPanelView(managed) ? this.hiddenBounds() : bounds
-      );
+      managed.view.setBounds(bounds);
     }
   }
 
@@ -1370,7 +1371,6 @@ export class ViewManager {
         if (managed.type !== "panel") continue;
         if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
         else {
-          managed.view.setBounds(this.hiddenBounds());
           managed.view.setVisible(false);
         }
       }
@@ -1972,20 +1972,15 @@ export class ViewManager {
     return this.hidePanelViewsUntilHostedShellReady;
   }
 
-  private hiddenBounds(): ViewBounds {
-    return { x: 0, y: 0, width: 0, height: 0 };
-  }
-
   private applyNativePanelVisibility(managed: ManagedView, bounds: ViewBounds): boolean {
+    managed.view.setBounds(bounds);
     if (this.shouldHideUnslottedPanelView(managed)) {
       if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
       else {
-        managed.view.setBounds(this.hiddenBounds());
         managed.view.setVisible(false);
       }
       return false;
     }
-    managed.view.setBounds(bounds);
     if (this.shellOverlayActive) {
       managed.view.setVisible(false);
       return false;
