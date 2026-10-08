@@ -152,7 +152,9 @@ export async function registerPersonalBrowserServices(deps: {
       onDiagnostics(diagnostics) {
         if (diagnostics.converged)
           eventService.emit("notification:dismiss", { id: projectionNoticeId });
-        else
+        // Browser-originated cookies are briefly pending while their outbox
+        // synchronizes. Only an actual projection failure needs a warning.
+        else if (diagnostics.lastError)
           eventService.emit("notification:show", {
             id: projectionNoticeId,
             type: "error",

@@ -12,6 +12,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  type BrowserCookieProjectionDiagnostics,
   cookieContentHash,
   createBrowserCookieProjectionService,
   effectiveCookieContentHash,
@@ -366,7 +367,12 @@ describe("canonical browser cookie projection", () => {
       const disconnected = Object.assign(new Error("Vault disconnected"), { code: "DISCONNECTED" });
       reads.listCookieOrigins.mockRejectedValue(disconnected);
       await expect(service.applyCookies(new AbortController().signal)).rejects.toBe(disconnected);
-      expect(onDiagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ converged: false }));
+      expect(onDiagnostics).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          converged: false,
+          lastError: expect.stringContaining("Vault disconnected"),
+        })
+      );
     } finally {
       await service.stop?.(undefined);
       await rm(tempRoot, { recursive: true, force: true });
@@ -549,6 +555,69 @@ describe("canonical browser cookie projection", () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 250));
       expect(browserDataClient.applyCookieMutations).not.toHaveBeenCalled();
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a newly set website cookie as pending without reporting a failure", async () => {
+    vi.useFakeTimers();
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const state = fakeCookieJar();
+    const canonical: StoredCookie[] = [];
+    let revision = 0;
+    let captured!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      captured = resolve;
+    });
+    const onDiagnostics = vi.fn((diagnostics: BrowserCookieProjectionDiagnostics) => {
+      if (diagnostics.outboxDepth > 0) captured();
+    });
+    const applyCookieMutations = vi.fn(async () => {
+      canonical.push(stored());
+      revision = 1;
+    });
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "scope",
+      browserDataClient: {
+        getBrowserEnvironment: vi.fn().mockResolvedValue({
+          workspaceId: "workspace",
+          ownerUserId: "user",
+          environmentKey: "environment",
+        }),
+      } as never,
+      browserVault: {
+        listCookieOrigins: vi.fn(async () => ({ revision, origins: ["https://example.test"] })),
+        getCookiesForOrigin: vi.fn(async () => [...canonical]),
+        applyCookieMutations,
+      } as never,
+      serverClient: {
+        onRecovery: () => () => {},
+        onConnectionStatusChange: () => () => {},
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "host",
+      outboxRoot: tempRoot,
+      createCookieJar: () => state.jar,
+      onDiagnostics,
+    });
+    try {
+      await service.start?.(() => undefined);
+      await service.applyCookies(new AbortController().signal);
+      await state.set(input());
+      await vi.advanceTimersByTimeAsync(150);
+      await pending;
+      const diagnostics = onDiagnostics.mock.lastCall![0];
+      expect(diagnostics).toMatchObject({ converged: false, outboxDepth: 1 });
+      expect(diagnostics.lastError).toBeUndefined();
+      expect(state.current()).toEqual([input()]);
+      expect(applyCookieMutations).not.toHaveBeenCalled();
+      await expect(service.applyCookies(new AbortController().signal)).resolves.toEqual({
+        revision: 1,
+      });
+      expect(onDiagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ converged: true }));
     } finally {
       await service.stop?.(undefined);
       await rm(tempRoot, { recursive: true, force: true });
