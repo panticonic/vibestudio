@@ -29,6 +29,14 @@ describe("Chromium launch ownership", () => {
     const profileDir = browser.profileDir;
     expect(fs.existsSync(profileDir)).toBe(true);
     const nativeOptions = spawn.mock.calls[0]![2];
+    const runtimeDir = nativeOptions.env.TMPDIR;
+    expect(runtimeDir).not.toBe(process.env.TMPDIR);
+    expect(nativeOptions.env.TMP).toBe(runtimeDir);
+    expect(nativeOptions.env.TEMP).toBe(runtimeDir);
+    if (process.env.TMPDIR && process.env.TMPDIR.length > 60) {
+      expect(runtimeDir.length).toBeLessThan(60);
+    }
+    expect(fs.statSync(runtimeDir).mode & 0o777).toBe(0o700);
     expect(nativeOptions.env.XDG_CONFIG_HOME).toBe(path.join(profileDir, "config"));
     expect(nativeOptions.env.XDG_CACHE_HOME).toBe(path.join(profileDir, "cache"));
     expect(nativeOptions.env.CHROME_CONFIG_HOME).toBe(path.join(profileDir, "config"));
@@ -51,6 +59,7 @@ describe("Chromium launch ownership", () => {
     await stopping;
     expect(joined).toBe(true);
     expect(fs.existsSync(profileDir)).toBe(false);
+    expect(fs.existsSync(runtimeDir)).toBe(false);
     expect(fs.existsSync(options.profileRoot)).toBe(true);
   });
   it("bounds startup diagnostics and awaits process close before rejecting an exited launch", async () => {
@@ -77,6 +86,7 @@ describe("Chromium launch ownership", () => {
     expect(error.message.length).toBeLessThan(2200);
     expect(child.kill).not.toHaveBeenCalled();
     expect(fs.readdirSync(options.profileRoot)).toEqual([]);
+    expect(fs.existsSync(spawn.mock.calls[0]![2].env.TMPDIR)).toBe(false);
   });
   it("preserves the terminating signal when Chromium exits before publishing its endpoint", async () => {
     const child = new Child();
@@ -101,24 +111,29 @@ describe("Chromium launch ownership", () => {
     expect(await launching).toBe(failure);
     expect(child.stderr.listenerCount("data")).toBe(0);
     expect(fs.readdirSync(options.profileRoot)).toEqual([]);
+    expect(fs.existsSync(spawn.mock.calls[0]![2].env.TMPDIR)).toBe(false);
   });
   it("reclaims its acquired profile when spawn throws synchronously", async () => {
     const failure = new Error("native spawn failed");
     spawn.mockImplementation(() => { throw failure; });
     await expect(launchChromium(options)).rejects.toBe(failure);
     expect(fs.readdirSync(options.profileRoot)).toEqual([]);
+    expect(fs.existsSync(spawn.mock.calls[0]![2].env.TMPDIR)).toBe(false);
   });
   it("owns distinct profiles for concurrent launches without touching sibling state", async () => {
     fs.writeFileSync(path.join(options.profileRoot, "unowned"), "preserve");
     const children = [new Child(), new Child()];
     spawn.mockReturnValueOnce(children[0]).mockReturnValueOnce(children[1]);
     const launching = [launchChromium(options), launchChromium(options)];
+    const runtimeDirs = spawn.mock.calls.map((call) => call[2].env.TMPDIR);
+    expect(new Set(runtimeDirs).size).toBe(2);
     for (const child of children) child.stderr.emit("data", Buffer.from("DevTools listening on ws://127.0.0.1:123/devtools/browser/owned\n"));
     const browsers = await Promise.all(launching);
     expect(browsers[0]!.profileDir).not.toBe(browsers[1]!.profileDir);
     const retiring = browsers.map((browser) => browser.stop());
     for (const child of children) { child.signalCode = "SIGKILL"; child.emit("close"); }
     await Promise.all(retiring);
+    for (const runtimeDir of runtimeDirs) expect(fs.existsSync(runtimeDir)).toBe(false);
     expect(fs.readdirSync(options.profileRoot)).toEqual(["unowned"]);
   });
 });

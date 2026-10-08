@@ -20,6 +20,30 @@ export interface LaunchedChromium {
   stop(): Promise<void>;
 }
 
+function chromiumRuntimeTempRoot(executablePath: string): string {
+  const snapName = snapNameFromExecutablePath(executablePath);
+  if (snapName) return path.join(os.homedir(), "snap", snapName, "common");
+  if (process.platform === "win32") return os.tmpdir();
+  return "/var/tmp";
+}
+
+async function removeOwnedDirectories(profileDir: string, runtimeDir: string): Promise<void> {
+  const results = await Promise.allSettled([
+    fs.promises.rm(profileDir, { recursive: true, force: true }),
+    fs.promises.rm(runtimeDir, { recursive: true, force: true }),
+  ]);
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      "Failed to remove owned Chromium profile or runtime directory",
+      { cause: failures[0]?.reason }
+    );
+  }
+}
+
 function snapNameFromExecutablePath(executablePath: string): string | null {
   const normalized = path.resolve(executablePath);
   if (path.dirname(normalized) !== "/snap/bin") return null;
@@ -71,6 +95,23 @@ export async function launchChromium(opts: {
   }
   fs.mkdirSync(profileRoot, { recursive: true });
   const profileDir = fs.mkdtempSync(path.join(profileRoot, "chromium-"));
+  let runtimeDir: string;
+  try {
+    const runtimeTempRoot = chromiumRuntimeTempRoot(opts.executablePath);
+    fs.mkdirSync(runtimeTempRoot, { recursive: true });
+    runtimeDir = fs.mkdtempSync(path.join(runtimeTempRoot, "vsc-"));
+  } catch (error) {
+    try {
+      await fs.promises.rm(profileDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Chromium runtime directory setup failed and profile cleanup failed",
+        { cause: error }
+      );
+    }
+    throw error;
+  }
   const args = [
     "--headless=new",
     "--remote-debugging-port=0",
@@ -96,13 +137,27 @@ export async function launchChromium(opts: {
       // user's global config/cache even with a separate --user-data-dir.
       env: {
         ...process.env,
+        // Chromium places its single-instance and crash-handler Unix sockets
+        // under TMPDIR. The caller's instance TMPDIR can exceed AF_UNIX's path
+        // limit, so keep only transient IPC under this private short directory.
+        TMPDIR: runtimeDir,
+        TMP: runtimeDir,
+        TEMP: runtimeDir,
         XDG_CONFIG_HOME: path.join(profileDir, "config"),
         XDG_CACHE_HOME: path.join(profileDir, "cache"),
         CHROME_CONFIG_HOME: path.join(profileDir, "config"),
       },
     });
   } catch (error) {
-    await fs.promises.rm(profileDir, { recursive: true, force: true });
+    try {
+      await removeOwnedDirectories(profileDir, runtimeDir);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Chromium spawn failed and owned directory cleanup failed",
+        { cause: error }
+      );
+    }
     throw error;
   }
   const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
@@ -111,7 +166,7 @@ export async function launchChromium(opts: {
     (retirement ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       await closed;
-      await fs.promises.rm(profileDir, { recursive: true, force: true });
+      await removeOwnedDirectories(profileDir, runtimeDir);
     })());
   let wsEndpoint: string;
   try {
@@ -157,7 +212,15 @@ export async function launchChromium(opts: {
       child.once("error", onError);
     });
   } catch (error) {
-    await stop();
+    try {
+      await stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Chromium launch failed and owned directory cleanup failed",
+        { cause: error }
+      );
+    }
     throw error;
   }
 
