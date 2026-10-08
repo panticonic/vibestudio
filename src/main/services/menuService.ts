@@ -147,6 +147,10 @@ export function createMenuService(deps: {
             .flatMap((section, index) =>
               index === 0 ? section : [{ type: "separator" } as const, ...section]
             );
+          const contents = deps.getPanelWebContents(panelId);
+          const nativeId = contents ? vm.findViewIdByWebContentsId(contents.id) : null;
+          if (nativeId)
+            template.unshift(vm.panelFullscreenMenuItem(nativeId), { type: "separator" });
           const menu = Menu.buildFromTemplate(template);
           menu.popup({
             window: vm.getWindow(),

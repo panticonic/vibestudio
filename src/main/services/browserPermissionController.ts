@@ -78,6 +78,7 @@ export class BrowserPermissionController {
         | "isContentOverlayWebContentsId"
         | "getViewPartition"
         | "getViewInfo"
+        | "canFullscreenView"
       > | null;
       isTargetUnderAutomation(targetId: string): boolean;
       requestDeviceMediaAccess?: typeof requestDeviceMediaAccess;
@@ -173,7 +174,7 @@ export class BrowserPermissionController {
     requestingOrigin: string,
     details: PermissionCheckHandlerHandlerDetails
   ): boolean => {
-    if (permission === "fullscreen") return this.isBrowserPanel(contents);
+    if (permission === "fullscreen") return this.canFullscreen(contents);
     if (!SENSITIVE_PERMISSIONS.has(permission)) return false;
     if (!contents) return false;
 
@@ -227,7 +228,7 @@ export class BrowserPermissionController {
     details: PermissionRequest
   ): void => {
     if (permission === "fullscreen") {
-      callback(this.isBrowserPanel(contents));
+      callback(this.canFullscreen(contents));
       return;
     }
     if (!SENSITIVE_PERMISSIONS.has(permission)) {
@@ -495,6 +496,13 @@ export class BrowserPermissionController {
     }
   }
 
+  private canFullscreen(contents: WebContents | null): boolean {
+    if (!contents || contents.isDestroyed() || this.stopped) return false;
+    const manager = this.deps.getViewManager();
+    const viewId = manager?.findViewIdByWebContentsId(contents.id);
+    return Boolean(viewId && manager?.canFullscreenView(viewId));
+  }
+
   private isBrowserPanel(contents: WebContents | null): boolean {
     if (!contents || contents.isDestroyed()) return false;
     const manager = this.deps.getViewManager();
@@ -558,7 +566,7 @@ export class BrowserPermissionController {
 export function viewMayRequestPeripheral(
   view:
     | {
-        type: string;
+        type: NonNullable<ReturnType<ViewManager["getViewInfo"]>>["type"];
         capabilities: readonly string[];
         codeIdentity?: {
           source?: string;

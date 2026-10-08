@@ -102,6 +102,14 @@ describe("chords the chrome owns wherever focus is", () => {
     ).toBe("back");
   });
 
+  it("claims the fullscreen chord so a focused website cannot consume it", () => {
+    const input =
+      keyPlatform === "mac"
+        ? press({ key: "f", meta: true, control: true })
+        : press({ key: "F11" });
+    expect(chromeOwnedBinding(input)).toBe("toggleFullScreen");
+  });
+
   it("leaves the page everything else, including the chord that closes a panel", () => {
     // Closing the panel someone is typing in is the one unrecoverable action
     // in this family, so it stays with the menu rather than the keyboard.

@@ -118,6 +118,7 @@ function controllerHarness(options: { contentOverlay?: boolean } = {}) {
     findViewIdByWebContentsId: (id: number) => (id === 42 ? "panel:terminal" : null),
     isContentOverlayWebContentsId: (id: number) => options.contentOverlay === true && id === 43,
     getViewInfo: (id: string) => (id === "panel:terminal" ? viewInfo : null),
+    canFullscreenView: vi.fn(() => true),
     getViewPartition: (id: string) => (id === "panel:terminal" ? undefined : null),
   };
   const contents = {
@@ -140,12 +141,39 @@ function controllerHarness(options: { contentOverlay?: boolean } = {}) {
     controller,
     contents,
     url,
+    manager,
     released: () => released,
     listener: () => eventListener,
   };
 }
 
 describe("browser permission capability mapping", () => {
+  it("uses presented-panel ownership for both fullscreen permission paths", () => {
+    const { controller, contents, manager } = controllerHarness();
+    const decide = vi.fn();
+    for (const visible of [true, false]) {
+      manager.canFullscreenView.mockReturnValue(visible);
+      expect(
+        controller.checkPermission(
+          contents,
+          "fullscreen",
+          "https://workspace.test",
+          {} as Electron.PermissionCheckHandlerHandlerDetails
+        )
+      ).toBe(visible);
+      controller.requestPermission(
+        contents,
+        "fullscreen",
+        decide,
+        {} as Electron.PermissionRequest
+      );
+      expect(decide).toHaveBeenLastCalledWith(visible);
+    }
+    controller.stop();
+    controller.requestPermission(contents, "fullscreen", decide, {} as Electron.PermissionRequest);
+    expect(decide).toHaveBeenLastCalledWith(false);
+  });
+
   it("cancels a native OS prompt when the document reloads", async () => {
     let resolve!: (value: boolean) => void;
     const harness = mediaHarness({
@@ -360,7 +388,7 @@ describe("browser permission capability mapping", () => {
   });
 
   it("admits exact-identity workspace panels only within the declared resource scope", () => {
-    const exactIdentity = {
+    const exactIdentity: NonNullable<Parameters<typeof viewMayRequestPeripheral>[0]> = {
       type: "panel",
       capabilities: [],
       codeIdentity: {

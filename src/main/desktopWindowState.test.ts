@@ -65,6 +65,19 @@ describe("desktop window restoration", () => {
     vi.runAllTimers();
   });
 
+  it("saves the window preference while temporary fullscreen presentation is active", () => {
+    const file = stateFile();
+    const window = Object.assign(new EventEmitter(), {
+      isDestroyed: () => false,
+      getNormalBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
+      isMaximized: () => false,
+      isFullScreen: () => true,
+    });
+    new DesktopWindowState(file).attach(window as unknown as BaseWindow, vi.fn(), () => false);
+    window.emit("close");
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).fullscreen).toBe(false);
+  });
+
   it("persists movement during the session without needing a clean quit", () => {
     vi.useFakeTimers();
     const file = stateFile();

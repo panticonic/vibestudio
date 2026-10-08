@@ -123,6 +123,9 @@ export class WorkspaceNativeViews {
   getWebContents(id: string) {
     return this.window.getWebContents(this.nativeId(id));
   }
+  canFullscreenView(id: string): boolean {
+    return this.window.canFullscreenView(this.nativeId(id));
+  }
   getViewInfo(id: string) {
     return this.window.getViewInfo(this.nativeId(id));
   }

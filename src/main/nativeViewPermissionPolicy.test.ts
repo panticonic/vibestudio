@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ViewManager } from "./viewManager";
 import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy";
 
 describe("native permission fallback", () => {
@@ -6,16 +7,24 @@ describe("native permission fallback", () => {
     const manager = {
       isContentOverlayWebContentsId: () => false,
       findViewIdByWebContentsId: () => "app",
-      getViewInfo: () => ({ type: "app", capabilities: ["window-management"] }),
+      getViewInfo: (): NonNullable<ReturnType<ViewManager["getViewInfo"]>> => ({
+        type: "app",
+        capabilities: ["window-management"],
+        visible: true,
+        hostChrome: false,
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+      }),
+      canFullscreenView: () => false,
     };
-    expect(nativeViewMayUsePermission(manager as never, 42, "display-capture")).toBe(false);
-    expect(nativeViewMayUsePermission(manager as never, 42, "pointerLock")).toBe(true);
+    expect(nativeViewMayUsePermission(manager, 42, "display-capture")).toBe(false);
+    expect(nativeViewMayUsePermission(manager, 42, "pointerLock")).toBe(true);
   });
   function views(overlay = true) {
     return {
       isContentOverlayWebContentsId: (id: number) => overlay && id === 42,
       findViewIdByWebContentsId: vi.fn(() => null),
       getViewInfo: vi.fn(() => null),
+      canFullscreenView: vi.fn(() => false),
     };
   }
 
@@ -43,12 +52,12 @@ describe("native permission fallback", () => {
   });
 
   it("preserves app capability checks and browser fullscreen", () => {
-    const view = {
+    const view: NonNullable<ReturnType<ViewManager["getViewInfo"]>> = {
       type: "app",
       visible: true,
       hostChrome: false,
       bounds: { x: 0, y: 0, width: 800, height: 600 },
-      capabilities: [] as "clipboard"[],
+      capabilities: [],
     };
     const manager = {
       ...views(false),
@@ -56,10 +65,13 @@ describe("native permission fallback", () => {
       getViewInfo: () => view,
     };
     expect(nativeViewMayUsePermission(manager, 42, "clipboard-read")).toBe(false);
-    view.capabilities.push("clipboard");
+    view.capabilities = ["clipboard"];
     expect(nativeViewMayUsePermission(manager, 42, "clipboard-read")).toBe(true);
-    view.type = "browser";
+    view.type = "panel";
+    manager.canFullscreenView.mockReturnValue(true);
     expect(nativeViewMayUsePermission(manager, 42, "fullscreen")).toBe(true);
+    manager.canFullscreenView.mockReturnValue(false);
+    expect(nativeViewMayUsePermission(manager, 42, "fullscreen")).toBe(false);
     expect(nativeViewMayUsePermission(manager, 42, "clipboard-read")).toBe(false);
   });
 });

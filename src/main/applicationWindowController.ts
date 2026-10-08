@@ -210,9 +210,6 @@ export class ApplicationWindowController {
           }
         : {}),
     });
-    windowState?.attach(window, (error) =>
-      log.warn(`[window] Failed to save window state: ${String(error)}`)
-    );
     const viewManager = new ViewManager({
       window,
       shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
@@ -225,6 +222,11 @@ export class ApplicationWindowController {
       headless: this.deps.isHeadlessHost,
       hidePanelViewsUntilHostedShellReady: true,
     });
+    windowState?.attach(
+      window,
+      (error) => log.warn(`[window] Failed to save window state: ${String(error)}`),
+      () => viewManager.getWindowFullscreenPreference()
+    );
     if (this.deps.onCodeIdentityChanged)
       viewManager.onCodeIdentityChanged(this.deps.onCodeIdentityChanged);
     const websiteNotifications = new WebsiteNotificationBridge({

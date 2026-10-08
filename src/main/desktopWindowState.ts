@@ -62,7 +62,11 @@ export class DesktopWindowState {
     );
   }
 
-  attach(window: BaseWindow, onError: (error: unknown) => void): void {
+  attach(
+    window: BaseWindow,
+    onError: (error: unknown) => void,
+    isFullscreen = () => window.isFullScreen()
+  ): void {
     // Apply presentation state only after creating the normal window bounds.
     if (this.state?.maximized) window.maximize();
     if (this.state?.fullscreen) window.setFullScreen(true);
@@ -74,7 +78,7 @@ export class DesktopWindowState {
       const state: WindowState = {
         bounds: window.getNormalBounds(),
         maximized: window.isMaximized(),
-        fullscreen: window.isFullScreen(),
+        fullscreen: isFullscreen(),
       };
       try {
         fs.mkdirSync(path.dirname(this.file), { recursive: true });

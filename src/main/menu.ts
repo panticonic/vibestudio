@@ -211,6 +211,7 @@ const CHROME_OWNED_BINDINGS = [
   "newPanel",
   "nextPanel",
   "previousPanel",
+  "toggleFullScreen",
 ] as const satisfies readonly DesktopBindingId[];
 
 function keyInputOf(input: Electron.Input): DesktopKeyInput {
@@ -250,6 +251,11 @@ export function isCommandOverlayInput(input: Electron.Input): boolean {
 
 function performChromeBinding(id: DesktopBindingId): void {
   switch (id) {
+    case "toggleFullScreen":
+      void _menuViewManager
+        ?.toggleWindowFullscreen()
+        .catch((error) => console.error("[Menu] Failed to change fullscreen", error));
+      return;
     case "commandPalette":
       emitMenuEvent("open-command-palette");
       return;
@@ -431,7 +437,21 @@ export function buildHamburgerMenuTemplate(
     { label: "Zoom Out", accelerator: key("zoomOut"), click: () => zoomFocusedPanel(-1) },
     { label: "Reset Zoom", accelerator: key("resetZoom"), click: () => resetFocusedPanelZoom() },
     { type: "separator" },
-    { label: "Toggle Full Screen", role: "togglefullscreen", accelerator: key("toggleFullScreen") },
+    {
+      label: "Toggle Full Screen",
+      accelerator: key("toggleFullScreen"),
+      click: () => performChromeBinding("toggleFullScreen"),
+    },
+    {
+      label: "Toggle Panel Full Screen",
+      click: () => {
+        const id = focusedPanelViewId();
+        if (id)
+          void _menuViewManager
+            ?.togglePanelFullscreen(id)
+            .catch((error) => console.error("[Menu] Failed to change panel fullscreen", error));
+      },
+    },
     { label: "Minimize", role: "minimize" },
     { type: "separator" },
     { label: "Refresh Panel Display", click: () => refreshPanelDisplay() },
@@ -737,7 +757,21 @@ export function setupMenu(
         { label: "Zoom In", accelerator: key("zoomIn"), click: () => zoomFocusedPanel(1) },
         { label: "Zoom Out", accelerator: key("zoomOut"), click: () => zoomFocusedPanel(-1) },
         { type: "separator" },
-        { role: "togglefullscreen", accelerator: key("toggleFullScreen") },
+        {
+          label: "Toggle Full Screen",
+          accelerator: key("toggleFullScreen"),
+          click: () => performChromeBinding("toggleFullScreen"),
+        },
+        {
+          label: "Toggle Panel Full Screen",
+          click: () => {
+            const id = focusedPanelViewId();
+            if (id)
+              void _menuViewManager
+                ?.togglePanelFullscreen(id)
+                .catch((error) => console.error("[Menu] Failed to change panel fullscreen", error));
+          },
+        },
         { type: "separator" },
         {
           label: "Toggle Panel Developer Tools",

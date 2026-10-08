@@ -41,6 +41,7 @@ import { interceptChromeShortcuts, isChromeOwnedInput } from "./menu.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
+import { FullscreenPresentation } from "./fullscreenPresentation.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import {
   NATIVE_PANEL_SURFACE_PROTOCOL_VERSION,
@@ -224,6 +225,14 @@ interface ManagedView {
       isMainFrame: boolean
     ) => void;
     destroyed: () => void;
+    enterHtmlFullscreen: () => void;
+    leaveHtmlFullscreen: () => void;
+    navigationStarted: (
+      event: Electron.Event,
+      url: string,
+      isInPlace: boolean,
+      isMainFrame: boolean
+    ) => void;
   };
 }
 
@@ -329,6 +338,7 @@ export class ViewManager {
     consentBarHeight: 0,
   };
   private panelViewportBounds: ViewBounds | null = null;
+  private readonly fullscreen: FullscreenPresentation;
   /** ID of the currently visible panel (to apply bounds updates) */
   private visiblePanelId: string | null = null;
   private nativePanelSlots: NativePanelSlotModel = {
@@ -396,6 +406,35 @@ export class ViewManager {
     hidePanelViewsUntilHostedShellReady?: boolean;
   }) {
     this.window = options.window;
+    this.fullscreen = new FullscreenPresentation({
+      isWindowFullscreen: () => this.window.isFullScreen(),
+      setWindowFullscreen: (value) => {
+        if (!this.window.isDestroyed()) this.window.setFullScreen(value);
+      },
+      canPresent: (id) => this.canFullscreenView(id),
+      present: () => {
+        for (const managed of this.views.values()) {
+          if (managed.view.webContents.isDestroyed()) continue;
+          managed.view.setBounds(managed.bounds);
+          managed.view.setVisible(
+            managed.visible &&
+              !this.shouldHideUnslottedPanelView(managed) &&
+              (managed.id !== "shell" || this.bootstrapShellAttached)
+          );
+        }
+        this.reconcileNativeLayerOrder();
+        const id = this.fullscreen.viewId ?? this.getFocusedPanelId();
+        const contents = id ? this.views.get(id)?.view.webContents : null;
+        if (contents && !contents.isDestroyed()) contents.focus();
+      },
+      exitDocument: async (id) => {
+        const contents = this.views.get(id)?.view.webContents;
+        if (!contents || contents.isDestroyed()) return;
+        await contents.executeJavaScript(
+          "document.fullscreenElement ? document.exitFullscreen() : undefined"
+        );
+      },
+    });
     this.headless = options.headless ?? false;
     this.hidePanelViewsUntilHostedShellReady = options.hidePanelViewsUntilHostedShellReady ?? false;
     // Create the minimal shipped bootstrap launch gate. The full shell is a
@@ -407,6 +446,8 @@ export class ViewManager {
         contextIsolation: true,
         sandbox: true,
         autoplayPolicy: "document-user-activation-required",
+        // The compositor owns the window and panel geometry for every fullscreen mode.
+        disableHtmlFullscreenWindowResize: true,
         additionalArguments: options.shellAdditionalArguments,
       },
     });
@@ -526,6 +567,11 @@ export class ViewManager {
     this.window.on("unmaximize", syncWindowBounds);
     this.window.on("enter-full-screen", syncWindowBounds);
     this.window.on("leave-full-screen", syncWindowBounds);
+    this.window.on("leave-full-screen", () => {
+      void this.fullscreen
+        .windowLeftFullscreen()
+        .catch((error) => console.error("[ViewManager] Failed to exit document fullscreen", error));
+    });
 
     // Track window visibility for protected view management
     this.window.on("hide", () => this.handleWindowVisibility(false));
@@ -560,9 +606,17 @@ export class ViewManager {
     interceptChromeShortcuts(contents);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key !== "Escape") return;
-      if (this.shellContentOverlay.getVisibleViews().length === 0) return;
-      event.preventDefault();
-      this.forwardContentOverlayIntent({ type: "host-escape" });
+      if (this.shellContentOverlay.getVisibleViews().length > 0) {
+        event.preventDefault();
+        this.forwardContentOverlayIntent({ type: "host-escape" });
+      } else if (this.fullscreen.viewId && !this.fullscreen.html) {
+        // Chromium owns Escape for its DOM fullscreen tree. Intercepting it
+        // and issuing a script exit would bypass its exclusive-access handling.
+        event.preventDefault();
+        void this.fullscreen
+          .escape()
+          .catch((error) => console.error("[ViewManager] Failed to leave fullscreen", error));
+      }
     });
     contents.on("before-mouse-event", (_event, mouse) => {
       if (mouse.type !== "mouseDown" || !this.shellContentOverlay.isVisible("quickfire")) return;
@@ -670,6 +724,46 @@ export class ViewManager {
     return { x: 0, y: 0, width: size[0] ?? 0, height: size[1] ?? 0 };
   }
 
+  canFullscreenView(id: string): boolean {
+    const managed = this.views.get(id);
+    return Boolean(
+      managed?.type === "panel" &&
+      managed.visible &&
+      !managed.view.webContents.isDestroyed() &&
+      !this.shouldHideUnslottedPanelView(managed) &&
+      (!this.fullscreen.viewId || this.fullscreen.viewId === id)
+    );
+  }
+
+  getWindowFullscreenPreference(): boolean {
+    return this.fullscreen.windowFullscreen;
+  }
+
+  getFullscreenPanelId(): string | null {
+    return this.fullscreen.viewId;
+  }
+
+  async togglePanelFullscreen(id: string): Promise<void> {
+    if (this.fullscreen.viewId === id) await this.fullscreen.exit();
+    else this.fullscreen.enterPanel(id);
+  }
+
+  toggleWindowFullscreen(): Promise<void> {
+    return this.fullscreen.toggleWindow();
+  }
+
+  panelFullscreenMenuItem(id: string): MenuItemConstructorOptions {
+    return {
+      label: this.fullscreen.viewId === id ? "Exit Panel Full Screen" : "Enter Panel Full Screen",
+      enabled: this.canFullscreenView(id),
+      click: () => {
+        void this.togglePanelFullscreen(id).catch((error) =>
+          console.error("[ViewManager] Failed to change panel fullscreen", error)
+        );
+      },
+    };
+  }
+
   private updateHostChromeBounds(): void {
     const bounds = this.fullWindowBounds();
     for (const managed of this.views.values()) {
@@ -726,6 +820,8 @@ export class ViewManager {
       sandbox: true,
       // Opening a panel is navigation, not consent to play its media.
       autoplayPolicy: "document-user-activation-required",
+      // The compositor owns the window and panel geometry for every fullscreen mode.
+      disableHtmlFullscreenWindowResize: true,
       session: ses,
       ...(config.workspaceIdentity
         ? { additionalArguments: [workspaceTransportArgument(config.workspaceIdentity)] }
@@ -805,6 +901,7 @@ export class ViewManager {
         }
       },
       renderProcessGone: (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
+        void this.fullscreen.retire(config.id);
         if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === config.id) {
           this.nativePanelSlots.hostedShellReady = false;
           this.clearAllPanelSlots();
@@ -848,6 +945,30 @@ export class ViewManager {
         this.unregisterView(managed, webContentsId, false);
         if (!this.window.isDestroyed()) this.window.contentView.removeChildView(view);
       },
+      enterHtmlFullscreen: () => {
+        if (this.canFullscreenView(config.id)) this.fullscreen.enterHtml(config.id);
+        else
+          void view.webContents
+            .executeJavaScript("document.fullscreenElement ? document.exitFullscreen() : undefined")
+            .catch((error) =>
+              console.error("[ViewManager] Failed to reject stale fullscreen request", error)
+            );
+      },
+      leaveHtmlFullscreen: () => {
+        void this.fullscreen
+          .leaveHtml(config.id)
+          .catch((error) =>
+            console.error("[ViewManager] Failed to complete document fullscreen exit", error)
+          );
+      },
+      navigationStarted: (
+        _event: Electron.Event,
+        _url: string,
+        isInPlace: boolean,
+        isMainFrame: boolean
+      ) => {
+        if (isMainFrame && !isInPlace) void this.fullscreen.retire(config.id);
+      },
     };
 
     managed.handlers = handlers;
@@ -863,6 +984,9 @@ export class ViewManager {
     view.webContents.on("console-message", handlers.consoleMessage);
     view.webContents.on("did-fail-load", handlers.didFailLoad);
     view.webContents.once("destroyed", handlers.destroyed);
+    view.webContents.on("enter-html-full-screen", handlers.enterHtmlFullscreen);
+    view.webContents.on("leave-html-full-screen", handlers.leaveHtmlFullscreen);
+    view.webContents.on("did-start-navigation", handlers.navigationStarted);
 
     // Apply protection if this view is in the protected set
     // (handles case where view is recreated after crash while still protected)
@@ -1059,6 +1183,11 @@ export class ViewManager {
     }
 
     // Inspect Element (always available)
+    const viewId = this.findViewIdByWebContentsId(contents.id);
+    if (viewId && this.views.get(viewId)?.type === "panel") {
+      if (items.length > 0) items.push({ type: "separator" });
+      items.push(this.panelFullscreenMenuItem(viewId));
+    }
     if (items.length > 0) {
       items.push({ type: "separator" });
     }
@@ -1111,6 +1240,9 @@ export class ViewManager {
       contents.off("render-process-gone", managed.handlers.renderProcessGone);
       contents.off("console-message", managed.handlers.consoleMessage);
       contents.off("did-fail-load", managed.handlers.didFailLoad);
+      contents.off("enter-html-full-screen", managed.handlers.enterHtmlFullscreen);
+      contents.off("leave-html-full-screen", managed.handlers.leaveHtmlFullscreen);
+      contents.off("did-start-navigation", managed.handlers.navigationStarted);
       contents.off("destroyed", managed.handlers.destroyed);
     }
 
@@ -1127,6 +1259,7 @@ export class ViewManager {
 
   private unregisterView(managed: ManagedView, webContentsId: number, rememberSlot: boolean): void {
     const { id } = managed;
+    void this.fullscreen.retire(id);
     const nativeSlotId =
       managed.type === "panel" ? this.nativePanelSlots.panelToSlot.get(id) : undefined;
     if (rememberSlot && nativeSlotId) {
@@ -1160,6 +1293,7 @@ export class ViewManager {
     } else {
       managed.view.setBounds(bounds);
     }
+    if (this.fullscreen.viewId) this.reconcileNativeLayerOrder();
   }
 
   setPanelViewportBounds(bounds: ViewBounds | null): void {
@@ -1695,7 +1829,7 @@ export class ViewManager {
   forwardMouseClick(id: string, point: { x: number; y: number }): boolean {
     const managed = this.views.get(id);
     if (!managed || managed.view.webContents.isDestroyed()) return false;
-    const { bounds } = managed;
+    const bounds = this.fullscreen.viewId === id ? this.fullWindowBounds() : managed.bounds;
     if (
       point.x < bounds.x ||
       point.y < bounds.y ||
@@ -1733,6 +1867,12 @@ export class ViewManager {
     }
 
     managed.visible = visible;
+    if (!visible)
+      void this.fullscreen
+        .retire(id, true)
+        .catch((error) =>
+          console.error("[ViewManager] Failed to retire hidden fullscreen document", error)
+        );
 
     if (visible && managed.hostChrome) {
       const bounds = this.fullWindowBounds();
@@ -2105,6 +2245,11 @@ export class ViewManager {
     const managed = this.views.get(slot.panelId);
     if (managed) {
       managed.visible = false;
+      void this.fullscreen
+        .retire(managed.id, true)
+        .catch((error) =>
+          console.error("[ViewManager] Failed to retire released fullscreen document", error)
+        );
       if (this.automationSurfaceIds.has(managed.id)) this.presentAutomationSurface(managed);
       else managed.view.setVisible(false);
       if (options.notifyHidden !== false) {
@@ -2278,6 +2423,14 @@ export class ViewManager {
    */
   private reconcileNativeLayerOrder(): void {
     if (this.window.isDestroyed()) return;
+    const fullscreenId = this.fullscreen.viewId;
+    if (fullscreenId && !this.canFullscreenView(fullscreenId)) {
+      void this.fullscreen
+        .retire(fullscreenId, true)
+        .catch((error) =>
+          console.error("[ViewManager] Failed to retire fullscreen presentation", error)
+        );
+    }
 
     // Compute the desired top-of-stack ordering first (pure), so we can skip
     // the remove/add churn entirely when the layer tree is already correct.
@@ -2322,6 +2475,20 @@ export class ViewManager {
     }
     if (!this.nativePanelSlots.hostedShellReady) {
       plan("shell");
+    }
+
+    if (this.fullscreen.viewId) {
+      const owner = this.views.get(this.fullscreen.viewId)!;
+      desired.length = 0;
+      raisedIds.clear();
+      plan(owner.id);
+      owner.view.setBounds(this.fullWindowBounds());
+      owner.view.setVisible(true);
+      // Hidden-but-attached chrome can retain native drag regions. Only the
+      // fullscreen owner and trusted overlays reside in the native layer tree.
+      for (const managed of this.views.values()) {
+        if (managed.id !== owner.id) this.window.contentView.removeChildView(managed.view);
+      }
     }
 
     // No-op check: the layer tree is already correct when (a) the desired
@@ -2878,7 +3045,7 @@ export class ViewManager {
 
   getViewInfo(id: string): {
     workspaceIdentity?: WorkspaceViewIdentity;
-    type: string;
+    type: ViewConfig["type"];
     visible: boolean;
     hostChrome: boolean;
     bounds: ViewBounds;

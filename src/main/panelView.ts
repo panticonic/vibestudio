@@ -1058,7 +1058,8 @@ export class PanelView implements PanelViewLike {
         event.preventDefault();
         const parsed = this.parseManagedPanelUrl(url);
         if (parsed) {
-          const fallback = this.getHostedViewInfo(panelId)?.type === "app" ? "root" : "current";
+          const fallback =
+            this.viewManager.getViewInfo(panelId)?.type === "app" ? "root" : "current";
           void this.handleManagedLink(panelId, parsed, url, fallback).catch((err: unknown) =>
             this.handlePanelLinkError(panelId, err, url)
           );
@@ -1090,7 +1091,7 @@ export class PanelView implements PanelViewLike {
       const parsed = this.parseManagedPanelUrl(url);
       if (!parsed) return;
 
-      const viewInfo = this.getHostedViewInfo(panelId);
+      const viewInfo = this.viewManager.getViewInfo(panelId);
       if (viewInfo?.type === "app") {
         event.preventDefault();
         void this.handleManagedLink(panelId, parsed, url, "root").catch((err: unknown) =>
@@ -1148,13 +1149,6 @@ export class PanelView implements PanelViewLike {
     return this.requestSiteCapability(contents, "popups");
   }
 
-  private getHostedViewInfo(viewId: string): { type?: string } | null {
-    const viewManager = this.viewManager as unknown as {
-      getViewInfo?: (id: string) => { type?: string } | null;
-    };
-    return viewManager.getViewInfo?.(viewId) ?? null;
-  }
-
   /**
    * App-hosted views act under their own (capability-gated) authority when they
    * open managed links. Panel-hosted views do NOT: acting as the panel would
@@ -1164,7 +1158,7 @@ export class PanelView implements PanelViewLike {
    * trusted chrome — returning no scoped caller routes the call that way.
    */
   private scopedCallerForHostedView(viewId: string): PanelLinkCaller | undefined {
-    const viewInfo = this.getHostedViewInfo(viewId);
+    const viewInfo = this.viewManager.getViewInfo(viewId);
     if (viewInfo?.type === "app") return { callerId: viewId, callerKind: "app" };
     return undefined;
   }

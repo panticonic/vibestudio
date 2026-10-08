@@ -5,7 +5,10 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 export function nativeViewMayUsePermission(
   views: Pick<
     ViewManager,
-    "isContentOverlayWebContentsId" | "findViewIdByWebContentsId" | "getViewInfo"
+    | "isContentOverlayWebContentsId"
+    | "findViewIdByWebContentsId"
+    | "getViewInfo"
+    | "canFullscreenView"
   >,
   webContentsId: number,
   permission: string
@@ -18,7 +21,7 @@ export function nativeViewMayUsePermission(
   const viewId = views.findViewIdByWebContentsId(webContentsId);
   if (!viewId) return false;
   const view = views.getViewInfo(viewId);
-  if (permission === "fullscreen" && view?.type === "browser") return true;
+  if (permission === "fullscreen") return views.canFullscreenView(viewId);
   const capability: AppCapability | null =
     permission === "notifications"
       ? "notifications"
@@ -26,7 +29,7 @@ export function nativeViewMayUsePermission(
         ? "open-external"
         : permission === "clipboard-read" || permission === "clipboard-sanitized-write"
           ? "clipboard"
-          : permission === "fullscreen" || permission === "pointerLock"
+          : permission === "pointerLock"
             ? "window-management"
             : null;
   return capability !== null && view?.type === "app" && view.capabilities.includes(capability);

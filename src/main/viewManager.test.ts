@@ -78,6 +78,8 @@ vi.mock("electron", () => {
     isDestroyed: vi.fn().mockReturnValue(false),
     isVisible: vi.fn().mockReturnValue(true),
     isFocused: vi.fn().mockReturnValue(true),
+    isFullScreen: vi.fn().mockReturnValue(false),
+    setFullScreen: vi.fn(),
     showInactive: vi.fn(),
     show: vi.fn(),
     hide: vi.fn(),
@@ -124,6 +126,7 @@ vi.mock("electron", () => {
 // Import after mocks are set up
 import { ViewManager } from "./viewManager.js";
 import { createNativePanelHost } from "./nativePanelHost.js";
+import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 
 function declareAndAttachPanelSlot(
   manager: ViewManager,
@@ -870,6 +873,117 @@ describe("ViewManager", () => {
       });
 
       expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
+    });
+  });
+
+  describe("fullscreen panels", () => {
+    function harness(browser = false) {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const view = vm.createView({ id: "panel", type: "panel", browser });
+      vm.setViewVisible("panel", true);
+      return { vm, view };
+    }
+    function emit(
+      contents: ReturnType<ViewManager["getShellWebContents"]>,
+      name: string,
+      ...args: unknown[]
+    ) {
+      for (const [event, listener] of (contents.on as Mock).mock.calls) {
+        if (event === name) listener(...args);
+      }
+    }
+
+    it("admits browser and workspace media only while their panels are presented", () => {
+      for (const browser of [false, true]) {
+        const { vm, view } = harness(browser);
+        expect(nativeViewMayUsePermission(vm, view.webContents.id, "fullscreen")).toBe(true);
+        vm.setViewVisible("panel", false);
+        expect(nativeViewMayUsePermission(vm, view.webContents.id, "fullscreen")).toBe(false);
+      }
+    });
+
+    it("expands the same native view and restores the latest slot layout without reloading", async () => {
+      const { vm, view } = harness();
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
+        appCapabilities: ["panel-hosting"],
+      });
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
+        nativeSlotId: "primary",
+        bindingId: "binding",
+        panelId: "panel",
+        bounds: { x: 100, y: 40, width: 700, height: 500 },
+        focused: true,
+      });
+      await vm.togglePanelFullscreen("panel");
+      expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 });
+      expect(mockWindow.contentView.children).toContain(view);
+      expect(mockWindow.contentView.children).not.toContain(hostView);
+      const bounds = { x: 120, y: 50, width: 600, height: 400 };
+      vm.updatePanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "primary",
+        bindingId: "binding",
+        rendererInstanceId: "renderer-test",
+        bindingSequence: 1,
+        operationSequence: 2,
+        bounds,
+      });
+      expect(vm.getViewInfo("panel")?.bounds).toEqual(bounds);
+      expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 });
+      await vm.togglePanelFullscreen("panel");
+      expect(view.setBounds).toHaveBeenLastCalledWith(bounds);
+      expect(mockWindow.contentView.children).toContain(hostView);
+      expect(view.webContents.reload).not.toHaveBeenCalled();
+      expect(view.webContents.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("sizes HTML fullscreen across the window and restores it on document exit", async () => {
+      const { vm, view } = harness(true);
+      emit(view.webContents, "enter-html-full-screen");
+      expect(vm.getFullscreenPanelId()).toBe("panel");
+      expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 });
+      emit(view.webContents, "leave-html-full-screen");
+      await vi.waitFor(() => expect(vm.getFullscreenPanelId()).toBeNull());
+      expect(vm.getFullscreenPanelId()).toBeNull();
+      expect(view.setBounds).toHaveBeenLastCalledWith(vm.getViewInfo("panel")?.bounds);
+    });
+
+    it("lets Escape leave panel fullscreen even if the page consumes keyboard events", async () => {
+      const { vm, view } = harness();
+      await vm.togglePanelFullscreen("panel");
+      const event = { preventDefault: vi.fn() };
+      emit(view.webContents, "before-input-event", event, { type: "keyDown", key: "Escape" });
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(vm.getFullscreenPanelId()).toBeNull();
+    });
+
+    it("retires ownership on main-frame navigation, but retains it for iframe and same-document navigation", () => {
+      const { vm, view } = harness();
+      emit(view.webContents, "enter-html-full-screen");
+      emit(view.webContents, "did-start-navigation", {}, "https://example.com/frame", false, false);
+      emit(view.webContents, "did-start-navigation", {}, "https://example.com/#hash", true, true);
+      expect(vm.getFullscreenPanelId()).toBe("panel");
+      emit(view.webContents, "did-start-navigation", {}, "https://example.com/next", false, true);
+      expect(vm.getFullscreenPanelId()).toBeNull();
+      expect(mockWindow.setFullScreen).toHaveBeenLastCalledWith(false);
+    });
+
+    it("releases native fullscreen on a renderer crash or view destruction", () => {
+      const { vm, view } = harness();
+      emit(view.webContents, "enter-html-full-screen");
+      emit(view.webContents, "render-process-gone", {}, { reason: "crashed" });
+      expect(vm.getFullscreenPanelId()).toBeNull();
+      emit(view.webContents, "enter-html-full-screen");
+      vm.destroyView("panel");
+      expect(vm.getFullscreenPanelId()).toBeNull();
+      expect(mockWindow.setFullScreen).toHaveBeenLastCalledWith(false);
     });
   });
 

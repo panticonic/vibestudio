@@ -24,6 +24,41 @@ share an approval. A remembered block can be removed through browser permissions
 Camera approval never authorizes screen capture, and `window-management` never
 implies display access.
 
+## Playback and fullscreen
+
+Playback requires document user activation by default. Opening a video link in
+another panel does not grant autoplay activation to that new page.
+
+A presented browser or workspace panel can use the standard Fullscreen API,
+including videos in cross-origin iframes that permit fullscreen. The compositor
+expands the existing native view to the whole window and removes sibling chrome
+from the native layer tree. It keeps slot layout updates live, restoring the
+latest geometry on exit without reloading the page.
+
+Use **View → Toggle Panel Full Screen** or **Enter Panel Full Screen** in a
+panel's context menu to expand normal panel content. Escape leaves media
+fullscreen first, then panel fullscreen. **Toggle Full Screen** (F11 on Linux
+and Windows, Ctrl+Cmd+F on macOS) controls the whole window and also exits an
+active panel/media presentation. Navigation, destruction, or withdrawal of the
+panel releases presentation ownership. Temporary media/panel presentation does
+not change the saved window fullscreen preference.
+
+Electron's `disableHtmlFullscreenWindowResize` makes the compositor the sole
+owner of native window transitions; Chromium still owns the document fullscreen
+tree and media Escape behavior. View types remain `shell`, `panel`, and `app`;
+browser mode is a separate panel property. Both native fullscreen permission
+paths consult the compositor's presentation eligibility.
+
+Native verification on Linux:
+
+```sh
+xvfb-run -a node scripts/fullscreen-electron-smoke.mjs
+```
+
+The check creates and cleans up its own window, profile, and local fixture
+servers. It exercises actual Electron media fullscreen, Escape, cross-origin
+nesting, panel restoration, and navigation.
+
 ## Source selection and Electron's limitation
 
 Electron 45 classifies both standard display capture and older

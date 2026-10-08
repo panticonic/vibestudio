@@ -1,3 +1,4 @@
+import type { ViewConfig } from "./viewManager.js";
 import {
   callerKindForPrincipalKind,
   isPrincipalKind,
@@ -8,7 +9,7 @@ import {
 export type ElectronViewCallerKind = Extract<CallerKind, "shell" | "panel" | "app">;
 
 export interface ElectronViewInfoForCallerResolution {
-  type: string;
+  type: ViewConfig["type"];
   hostChrome?: boolean;
 }
 

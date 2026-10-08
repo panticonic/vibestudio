@@ -34,6 +34,13 @@ describe("workspace-qualified native view boundary", () => {
     expect(window.destroyView).not.toHaveBeenCalledWith(personal.nativeId("panel"));
   });
 
+  it("checks fullscreen eligibility in the owning workspace", () => {
+    const window = { canFullscreenView: vi.fn(() => true) };
+    const project = new WorkspaceNativeViews("project", window as unknown as ViewManager);
+    expect(project.canFullscreenView("panel")).toBe(true);
+    expect(window.canFullscreenView).toHaveBeenCalledWith(project.nativeId("panel"));
+  });
+
   it("does not turn another workspace's WebContents into a local caller", () => {
     const window = {
       findViewIdByWebContentsId: vi.fn(() =>
