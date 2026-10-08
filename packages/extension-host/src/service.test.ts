@@ -93,6 +93,7 @@ function makeHost(
     approvalDecision?: "accepted" | "deny";
     openUnitReviewFor?: ExtensionHostDeps["openUnitReviewFor"];
     activeEv?: string | null;
+    candidateEv?: string | null;
     depEv?: string | null;
     activeDepEv?: string | null;
     activeExternalDeps?: Record<string, string>;
@@ -207,7 +208,7 @@ function makeHost(
       dir: path.join(statePath, "builds", "candidate-key"),
       artifacts: buildArtifacts("candidate-key"),
       metadata: {
-        ev: "ev-candidate",
+        ev: overrides.candidateEv ?? "ev-candidate",
         sourceStateHash: "state:test",
         execution: { executionDigest: "c".repeat(64) },
         authority: {
@@ -291,7 +292,8 @@ function makeHost(
         : null
     ),
     getEffectiveVersion: vi.fn((name: string) => {
-      if (name === extensionNode.name) return overrides.activeEv ?? "ev-current";
+      if (name === extensionNode.name)
+        return overrides.candidateEv ?? overrides.activeEv ?? "ev-current";
       if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
       return null;
     }),
@@ -302,7 +304,7 @@ function makeHost(
       manifest: { authority: { requests: [], provides: [] } },
       serviceBindings: [],
       serviceReviews: [],
-      effectiveVersion: overrides.activeEv ?? "ev-current",
+      effectiveVersion: overrides.candidateEv ?? overrides.activeEv ?? "ev-current",
       dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
     })),
@@ -316,6 +318,8 @@ function makeHost(
   };
   const host = new ExtensionHost({
     initialDeclarationsStaged: overrides.initialDeclarationsStaged,
+    isAdmitted: overrides.isAdmitted,
+    resolveUnitOrigins: overrides.resolveUnitOrigins,
     launchNativeExtension: vi.fn(() => {
       throw new Error("This service fixture has no native process launcher");
     }),
@@ -1527,6 +1531,138 @@ describe("ExtensionHost reconcileDeclared", () => {
 });
 
 describe("ExtensionHost activation", () => {
+
+  it("does not launch a foreign exact extension after its origin review is denied", async () => {
+    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
+      installed: false,
+      isAdmitted: () => false,
+      resolveUnitOrigins: async (repoPaths) =>
+        new Map(
+          repoPaths.map((repoPath) => [
+            repoPath,
+            {
+              url: "https://github.com/third-party/git-tools",
+              originKey: "github.com/third-party",
+              registrableDomain: "github.com",
+              version: "1.0.0",
+              isHostBuild: false,
+              firstEncounter: true,
+            },
+          ])
+        ),
+      approvalDecision: "deny",
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    await host.whenSettled();
+    expect(approvalQueue.request).toHaveBeenCalledOnce();
+    const requestCalls = (
+      approvalQueue.request as unknown as {
+        mock: { calls: Array<[{ origins?: ReadonlyMap<string, unknown> }]> };
+      }
+    ).mock.calls;
+    expect(requestCalls[0]?.[0].origins?.get(extensionNode.relativePath)).toMatchObject({
+      url: "https://github.com/third-party/git-tools",
+      isHostBuild: false,
+      firstEncounter: true,
+    });
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      status: "pending-approval",
+      activeBundleKey: null,
+    });
+
+    await expect(host.ensureActivated(extensionNode.name)).rejects.toMatchObject({
+      code: "EACCES",
+      errorData: {
+        authorityFailure: { reasonCode: "approval-required" },
+      },
+    });
+
+    // Preparing the exact candidate is allowed; launching it needs admission.
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "interactive",
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      status: "pending-approval",
+      activeBundleKey: null,
+    });
+  });
+
+  it("keeps the previously admitted image inspectable and runnable when an update is denied", async () => {
+    const { host, extensionNode, approvalQueue } = makeHost({
+      activeEv: "ev-old",
+      candidateEv: "ev-candidate",
+      status: "stopped",
+      isAdmitted: (_repoPath, effectiveVersion) => effectiveVersion === "ev-old",
+      resolveUnitOrigins: async (repoPaths) =>
+        new Map(
+          repoPaths.map((repoPath) => [
+            repoPath,
+            {
+              url: "https://github.com/third-party/git-tools",
+              originKey: "github.com/third-party",
+              registrableDomain: "github.com",
+              version: "2.0.0",
+              isHostBuild: false,
+              firstEncounter: true,
+            },
+          ])
+        ),
+      approvalDecision: "deny",
+    });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    await host.whenSettled();
+    expect(approvalQueue.request).toHaveBeenCalledOnce();
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeBundleKey: "bundle-key",
+      activeEv: "ev-old",
+      status: "stopped",
+    });
+
+    const prepare =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject({
+      payload: { executionDigest: "a".repeat(64) },
+    });
+    await expect(host.ensureActivated(extensionNode.name)).resolves.toBeUndefined();
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ bundlePath: expect.stringContaining("bundle-key") })
+    );
+  });
+
+  it("uses the admitted active image while activation is still pending", async () => {
+    const { host, extensionNode } = makeHost({
+      activeEv: "ev-old",
+      candidateEv: "ev-candidate",
+      isAdmitted: (_repoPath, effectiveVersion) => effectiveVersion === "ev-old",
+    });
+    const started = declarationCompletion();
+    const releaseStart = declarationCompletion();
+    vi.spyOn(host.processes, "start").mockImplementation(async () => {
+      started.resolve();
+      await releaseStart.promise;
+    });
+    const activation = host.ensureActivated(extensionNode.name);
+    await started.promise;
+
+    const prepare =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject({
+      payload: { executionDigest: "a".repeat(64) },
+    });
+    releaseStart.resolve();
+    await activation;
+  });
+
+  it("refuses a stored exact image that was never accepted", async () => {
+    const { host, extensionNode } = makeHost({ isAdmitted: () => false });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(host.activate(extensionNode.name)).rejects.toMatchObject({
   ledgerTest("execution.extension", async () => {
     const { host, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);

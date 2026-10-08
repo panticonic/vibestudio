@@ -966,8 +966,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               "EINVAL"
             );
           }
-          const entry = await this.requireInvocationEntry(name, "invoke", ctx.signal);
-          const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+          const { entry, build } = await this.prepareTargetArtifact(name, ctx.signal);
           const details = extensionMetadataDetails(build?.metadata);
           const declaration = details?.methodAuthority?.[method];
           const executionDigest = build?.metadata.execution?.executionDigest;
@@ -979,7 +978,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               "EPROTO"
             );
           }
-          this.assertWebsiteMethod(ctx, entry, method);
+          this.assertWebsiteMethodPolicy(ctx, method, build);
           if (declaration.effect.kind === "open") {
             return preparedAuthorityState([], {
               extension: entry.name,
@@ -1488,12 +1487,20 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   private assertWebsiteMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
+    const build = entry.activeBundleKey
+      ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey) ?? null)
+      : null;
+    this.assertWebsiteMethodPolicy(ctx, method, build);
+  }
+
+  private assertWebsiteMethodPolicy(
+    ctx: ServiceContext,
+    method: string,
+    build: ReturnType<NonNullable<BuildSystemLike["getBuildByKey"]>> | null
+  ): void {
     const caller = verifiedInitiator(ctx);
     const website = websiteAuthorityIdentity(caller);
     if (!website) return;
-    const build = entry.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
-      : null;
     const policy = extensionMetadataDetails(build?.metadata)?.methodAuthority?.[method]?.website;
     if ((caller.website && !caller.website.connected) || policy?.kind !== "eligible")
       throw new ServiceError(
@@ -1624,6 +1631,46 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.deferredBuildIdentityKeys.delete(node.name);
   }
 
+  /** Resolve the exact declared artifact for static authority inspection without
+   * making it the active image or starting native code. */
+  private async prepareTargetArtifact(
+    nameOrProvider: string,
+    signal?: AbortSignal
+  ): Promise<{
+    entry: RegistryEntry;
+    build: NonNullable<ReturnType<NonNullable<BuildSystemLike["getBuildByKey"]>>>;
+  }> {
+    const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
+    signal = signal
+      ? AbortSignal.any([signal, this.shutdownSignal.signal])
+      : this.shutdownSignal.signal;
+    await this.whenDeclarationsStaged(signal, requestedName);
+    let entry = this.resolveInvocationEntry(requestedName);
+    if (entry && this.hasAvailableApprovedBuild(entry)) {
+      const active = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey!);
+      if (active) return { entry, build: active };
+    }
+    const node = entry ? this.findExtensionNode(entry.name) : this.findExtensionNode(requestedName);
+    const declaration = this.lastDeclared.find((item) => {
+      try {
+        return this.findExtensionNode(item.source).name === node.name;
+      } catch {
+        return false;
+      }
+    });
+    if (entry && this.hasAvailableApprovedBuild(entry)) {
+      const active = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey!);
+      if (active) return { entry, build: active };
+    }
+    if (!declaration) throw this.extensionUnavailableError(requestedName, "invoke");
+
+    const build = await this.prepareBuild(node, declaration.ref, "interactive");
+    return {
+      entry: entry ?? this.pendingEntryFor(node, declaration, false),
+      build,
+    };
+  }
+
   /**
    * A declared, already-approved extension may still be completing its first
    * build when a panel reaches it. Await only that extension's existing
@@ -1634,65 +1681,33 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async waitForTargetActivation(name: string, signal?: AbortSignal): Promise<void> {
     const entry = this.resolveInvocationEntry(name);
     if (!entry || this.hasAvailableApprovedBuild(entry)) return;
-    if (entry.status !== "building") return;
-    const canonicalName = entry.name;
-    const activation = this.activationTails.get(canonicalName);
-    if (activation) {
-      if (!signal) {
-        await activation;
-        return;
-      }
-      if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    const ownedSignal = signal
+      ? AbortSignal.any([signal, this.shutdownSignal.signal])
+      : this.shutdownSignal.signal;
+    ownedSignal.throwIfAborted();
+    const awaitActivation = async () => {
+      const activation = this.activationTails.get(entry.name);
+      if (!activation) return;
       await new Promise<void>((resolve, reject) => {
-        const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-        signal.addEventListener("abort", onAbort, { once: true });
+        const onAbort = () => reject(ownedSignal.reason);
+        ownedSignal.addEventListener("abort", onAbort, { once: true });
         void activation.then(
           () => {
-            signal.removeEventListener("abort", onAbort);
+            ownedSignal.removeEventListener("abort", onAbort);
             resolve();
           },
           (error: unknown) => {
-            signal.removeEventListener("abort", onAbort);
+            ownedSignal.removeEventListener("abort", onAbort);
             reject(error);
           }
         );
       });
-      return;
-    }
+      ownedSignal.throwIfAborted();
+    };
 
-    // A trusted first build can be queued behind the bounded startup build
-    // pool: its registry entry is already `building`, but its activation tail
-    // does not exist until that target gets a worker slot. Join the exact
-    // registry transition instead of failing early or waiting for unrelated
-    // approvals/reconciliation to settle.
-    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (error?: unknown) => {
-        if (settled) return;
-        settled = true;
-        unsubscribe();
-        signal?.removeEventListener("abort", onAbort);
-        if (error !== undefined) reject(error);
-        else resolve();
-      };
-      const inspect = () => {
-        const current = this.registry.get(canonicalName);
-        if (current && !this.hasAvailableApprovedBuild(current) && current.status === "building")
-          return;
-        finish(
-          current?.status === "error"
-            ? new Error(current.lastError ?? `Extension failed: ${canonicalName}`)
-            : undefined
-        );
-      };
-      const unsubscribe = this.registry.subscribe((change) => {
-        if (change.name === canonicalName) inspect();
-      });
-      const onAbort = () => finish(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-      signal?.addEventListener("abort", onAbort, { once: true });
-      inspect();
-    });
+    await awaitActivation();
+    await this.unitHost.whenApplied(entry.name, ownedSignal);
+    await awaitActivation();
   }
 
   private async ensureTargetRunning(
@@ -1723,6 +1738,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     try {
       await this.ensureActivated(entry.name);
     } catch (error) {
+      if (error instanceof ServiceError) throw error;
       throw new ServiceError(
         "extensions",
         operation,
@@ -2381,6 +2397,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         `Approved extension build is missing from build store: ${entry.activeBundleKey}`
       );
     }
+    this.requireExactAdmission(name, entry.source.repo, build.metadata.ev, "activate");
     const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
     await this.processes.start({
@@ -2392,6 +2409,45 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       rpcToken: token,
     });
     this.registerBuildProvidersFor(entry);
+  }
+
+  /** Native execution requires acceptance of the exact bytes, independently of
+   * the capability grants those bytes may request after they start. */
+  private requireExactAdmission(
+    name: string,
+    repoPath: string,
+    effectiveVersion: string,
+    operation: string
+  ): void {
+    if (!this.deps.isAdmitted || this.deps.isAdmitted(repoPath, effectiveVersion)) return;
+
+    const review = this.deps.openUnitReviewFor({ repoPath, effectiveVersion });
+    if (review) {
+      const reason = `Waiting for you to finish reviewing ${review.title}.`;
+      throw new ServiceAccessError("extensions", operation, reason, "EREVIEWPENDING", {
+        authorityFailure: {
+          reasonCode: "review-pending",
+          reason,
+          remediation: {
+            kind: "resolve-open-review",
+            message: "Finish the review that is already open, then retry the exact invocation.",
+            review,
+          },
+        },
+      });
+    }
+
+    const reason = `The exact extension build ${repoPath}@${effectiveVersion} has not been accepted to run.`;
+    throw new ServiceAccessError("extensions", operation, reason, "EACCES", {
+      authorityFailure: {
+        reasonCode: "approval-required",
+        reason,
+        remediation: {
+          kind: "request-user-approval",
+          message: `Accept ${name} in the workspace launch review, then retry.`,
+        },
+      },
+    });
   }
 
   private async buildAndActivate(
@@ -2408,12 +2464,19 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     priority: "interactive" | "background"
   ): Promise<void> {
     const node = this.findExtensionNode(name);
+    const build = await this.prepareBuild(node, ref, priority);
     const previous = this.registry.get(node.name);
     const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
     this.unitHost.markBuilding(node.name);
-    const build = await this.deps.buildSystem.getBuild(node.name, ref, {
-      priority,
-    });
+    try {
+      this.requireExactAdmission(node.name, node.relativePath, build.metadata.ev, "activate");
+    } catch (error) {
+      this.registry.patch(node.name, {
+        status: this.processes.isRunning(node.name) ? "running" : (previous?.status ?? "available"),
+        lastError: previous?.lastError ?? null,
+      });
+      throw error;
+    }
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const activeDependencyEvs = this.currentDependencyEvs(node);
     const activeExternalDeps = this.currentExternalDeps(node);
@@ -2464,6 +2527,15 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       }
       throw err;
     }
+  }
+
+  private async prepareBuild(
+    node: ReturnType<ExtensionHost["findExtensionNode"]>,
+    ref: string | undefined,
+    priority: "interactive" | "background"
+  ): Promise<Awaited<ReturnType<BuildSystemLike["getBuild"]>>> {
+    this.validateExtensionManifestAtPath(node.path, node.name);
+    return this.deps.buildSystem.getBuild(node.name, ref, { priority });
   }
 
   private async runActivationExclusive(
