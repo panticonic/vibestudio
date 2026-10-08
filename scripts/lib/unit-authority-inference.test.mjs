@@ -312,6 +312,61 @@ describe("inferEventsClientCapabilities", () => {
 });
 
 describe("declared host-method capability dependencies", () => {
+  it("declares the build authority needed by every shipped panel import loader", () => {
+    const matrix = JSON.parse(
+      fs.readFileSync(
+        new URL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
+        "utf8"
+      )
+    );
+    const loader = fs.readFileSync(
+      new URL("../../packages/service-schemas/src/clients/evalImportLoader.ts", import.meta.url),
+      "utf8"
+    );
+    const required = new Set();
+    for (const [, method] of loader.matchAll(/\bbuild\.(\w+)\s*\(/g)) {
+      const declaration = matrix.build.methods[method];
+      assert.ok(declaration, `Unknown import-loader build method: ${method}`);
+      if (declaration.tier.tier !== "open") required.add(declaration.capability);
+    }
+    assert.ok(required.size > 0);
+
+    function usesImportLoader(directory) {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (["node_modules", "dist"].includes(entry.name)) continue;
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (usesImportLoader(file)) return true;
+        } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name)) {
+          if (/\bcreatePanelImportLoader\s*\(/.test(fs.readFileSync(file, "utf8"))) return true;
+        }
+      }
+      return false;
+    }
+
+    const missing = [];
+    for (const unit of shippedUnitDirectories()) {
+      if (!usesImportLoader(unit.directory)) continue;
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(unit.directory, "package.json"), "utf8")
+      );
+      const requests = manifest.vibestudio?.authority?.requests ?? [];
+      for (const capability of required) {
+        if (
+          !requests.some(
+            (request) =>
+              request.capability === capability &&
+              request.resource?.kind === "prefix" &&
+              request.resource.prefix === "" &&
+              !request.packages?.length
+          )
+        )
+          missing.push(`${unit.name}: ${capability}`);
+      }
+    }
+    assert.deepEqual(missing, []);
+  });
+
   it("seals context-boundary authority into the workspace navigation commit", () => {
     const matrix = JSON.parse(
       fs.readFileSync(
