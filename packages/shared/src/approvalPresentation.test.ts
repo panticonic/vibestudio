@@ -59,6 +59,19 @@ describe("shared approval presentation", () => {
     expect(select(state, [personal, system], "missing")).toBe(state);
   });
 
+  it("keeps preparation inspectable without inheriting another request's expanded state", () => {
+    const preparing = { ...personal, actionable: false };
+    const ready = reconcile(createApprovalPresentationState(), [preparing, system]);
+    expect(ready.selectedKey).toBe(key(system));
+    const background = reconcile(ready, [preparing]);
+    expect(background.selectedKey).toBe(key(preparing));
+    expect(background.open).toBe(false);
+    const inspected = select(background, [preparing], key(preparing));
+    expect(inspected.open).toBe(true);
+    expect(reconcile(inspected, [preparing]).open).toBe(true);
+    expect(reconcile(inspected, []).open).toBe(false);
+  });
+
   it("shows a new actionable request instead of an unrelated preparation", () => {
     const preparing = { ...personal, actionable: false };
     const state = reconcile(createApprovalPresentationState(), [preparing]);

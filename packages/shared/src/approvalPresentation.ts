@@ -38,7 +38,13 @@ export function reconcileApprovalPresentation(
       : items.length
         ? approvalPresentationKey(items.find((item) => item.actionable) ?? items[0]!)
         : null;
-  const open = selectedKey !== null && (state.open || newlyActionable);
+  const nextSelected = items.find((item) => approvalPresentationKey(item) === selectedKey);
+  // An expanded request owns its presentation. Completing it may open the next
+  // decision, but must not expand unrelated background preparation.
+  const open =
+    selectedKey !== null &&
+    (newlyActionable ||
+      (state.open && (selectedKey === state.selectedKey || nextSelected?.actionable === true)));
   return selectedKey === state.selectedKey &&
     open === state.open &&
     actionableKeys.size === state.actionableKeys.size &&
