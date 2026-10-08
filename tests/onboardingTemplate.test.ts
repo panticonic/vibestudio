@@ -42,6 +42,14 @@ describe("shipped Personal first-run workspace", () => {
     ]);
   });
 
+  it("leaves model selection to live settings instead of shipping a provider requirement", () => {
+    for (const runtime of [baseRuntime, personalRuntime, composedRuntime]) {
+      expect(
+        (parse(runtime) as { defaultAgentConfig?: unknown }).defaultAgentConfig
+      ).toBeUndefined();
+    }
+  });
+
   it("automatically starts the single state-aware onboarding chat", () => {
     const manifest = parse(personalRuntime) as {
       initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
