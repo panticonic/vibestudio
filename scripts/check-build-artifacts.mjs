@@ -40,6 +40,7 @@ const contracts = [
     mustContain: [
       '"use strict"',
       'import("esbuild-svelte")',
+      'import("@panticonic/pi-ai/providers/all")',
       'require("node-pty")',
       // The workspace owner resolves and stages this installed binary with
       // createRequire; the confined disk worker receives its admitted path.
@@ -83,7 +84,11 @@ const contracts = [
     path: "dist/server.mjs",
     runtime: "standalone Node server",
     format: "esm",
-    mustContain: [SERVER_ESM_BANNER, 'import("esbuild-svelte")'],
+    mustContain: [
+      SERVER_ESM_BANNER,
+      'import("esbuild-svelte")',
+      'import("@panticonic/pi-ai/providers/all")',
+    ],
     mustContainAny: [['from "node-pty"', 'from"node-pty"']],
     forbidden: [
       {

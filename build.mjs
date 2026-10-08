@@ -187,10 +187,9 @@ const serverElectronConfig = {
     "vitest",
     "vitest/node",
     "vite",
-    // Agent SDKs: must stay external — they use import.meta.url at module scope
-    // to locate config files, which breaks when bundled into CJS.
-    "@earendil-works/pi-agent-core",
-    "@earendil-works/pi-ai",
+    // Pi's lazy provider modules resolve OAuth flows relative to import.meta.url.
+    // Preserve the installed ESM package boundary in this CommonJS server.
+    "@panticonic/pi-ai",
   ],
   sourcemap: isDev,
   minify: !isDev,
@@ -291,10 +290,8 @@ const serverConfig = {
     "vitest",
     "vitest/node",
     "vite",
-    // Agent SDKs: must stay external — they use import.meta.url at module scope
-    // to locate config files relative to their install path.
-    "@earendil-works/pi-agent-core",
-    "@earendil-works/pi-ai",
+    // Pi's lazy provider modules resolve OAuth flows relative to their package.
+    "@panticonic/pi-ai",
   ],
   plugins: [electronStubPlugin],
   sourcemap: isDev,
