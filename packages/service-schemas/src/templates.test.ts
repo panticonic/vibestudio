@@ -23,7 +23,6 @@ describe("templates contract", () => {
     expect(Object.keys(templatesMethods)).toEqual([
       "updateAssistant",
       "updateSignal",
-      "acknowledgeUpdates",
       "updateStatus",
       "checkUpdates",
       "installed",
@@ -140,4 +139,18 @@ describe("templates contract", () => {
       }).repositories
     ).toEqual(["workers/agent"]);
   });
+});
+
+it("requires current host coordinates in update status", () => {
+  expect(
+    templatesMethods.updateStatus.returns.safeParse({ workspaceEpoch: 0, checks: [] }).success
+  ).toBe(false);
+  expect(
+    templatesMethods.updateStatus.returns.parse({
+      workspaceEpoch: 0,
+      workspaceAppVersion: "0.1.84",
+      currentAppVersion: "0.1.84",
+      checks: [],
+    })
+  ).toHaveProperty("currentAppVersion", "0.1.84");
 });

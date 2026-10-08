@@ -9212,7 +9212,7 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "workspaceTemplateSource.readEpoch": {
+  "workspaceTemplateSource.readCompatibility": {
     tier: {
       tier: "open",
       session: "family",

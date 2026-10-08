@@ -104,6 +104,32 @@ export function getPlatformPackageBinaryPath(
   );
 }
 
+/** Resolve the build executable from the selected installation, including unpacked ASAR payloads. */
+export function getEsbuildBinaryPath(
+  appRoot: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string | null {
+  const packageByPlatformArch: Record<string, string> = {
+    "darwin:arm64": "darwin-arm64",
+    "darwin:x64": "darwin-x64",
+    "linux:arm64": "linux-arm64",
+    "linux:x64": "linux-x64",
+    "win32:arm64": "win32-arm64",
+    "win32:ia32": "win32-ia32",
+    "win32:x64": "win32-x64",
+  };
+
+  const pkg = packageByPlatformArch[`${platform}:${arch}`];
+  if (!pkg) {
+    return null;
+  }
+
+  const binaryName = platform === "win32" ? "esbuild.exe" : "esbuild";
+  const binaryPath = getPlatformPackageBinaryPath(appRoot, `@esbuild/${pkg}`, binaryName);
+  return fs.existsSync(binaryPath) ? binaryPath : null;
+}
+
 /** Windows intentionally uses host permissions; Unix uses installed MXC. */
 export function getNativeExecutionInstallation(
   appRoot: string,

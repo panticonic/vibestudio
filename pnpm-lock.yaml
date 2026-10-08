@@ -1217,6 +1217,9 @@ importers:
 
   packages/workspace-contracts:
     dependencies:
+      semver:
+        specifier: ^7.8.4
+        version: 7.8.5
       zod:
         specifier: ^3.25.76
         version: 3.25.76

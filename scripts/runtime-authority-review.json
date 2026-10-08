@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:849d9e32be0b9dccc08f9d72480fc87444334ec9d6960b7f227bf906b557b614",
+  "censusDigest": "sha256:db06eb2a5d5b25b4ca961c078756eb316b96e31e23df21688794291353b03d2e",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -1677,9 +1677,9 @@
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing instance-designated catalog read for the reviewed templates extension and authenticated shell. It exposes template URLs and presentation metadata, never checkout paths or credentials."
     },
-    "host:workspaceTemplateSource.readEpoch": {
+    "host:workspaceTemplateSource.readCompatibility": {
       "review": "verified-exact-source-compatibility-read",
-      "change": "Reads only the compatibility epoch from an exact pinned template source, including sources with newer manifest schemas. The receiver limits callers to authenticated user or code principals and does not activate the source, expose its files, or mutate a workspace."
+      "change": "Reads the stable compatibility requirement, including installed dependency floors, and reports the available matching host for an exact pinned source. Future runtime fields remain uninterpreted. Verified source consumers receive no workspace mutation authority."
     },
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",

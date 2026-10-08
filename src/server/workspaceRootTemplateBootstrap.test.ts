@@ -87,7 +87,9 @@ function fixture(
           throw new Error(`no snapshot for ${requested.commit}`);
         })())
   );
+  const blobs = new Map<string, Uint8Array>();
   return {
+    blobs,
     pin,
     acquire,
     statePath,
@@ -99,7 +101,11 @@ function fixture(
       acquire,
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       sink: {
-        put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
+        put: async (bytes) => {
+          const digest = sha256Hex(bytes);
+          blobs.set(digest, bytes);
+          return { digest, size: bytes.byteLength };
+        },
       },
       ...(options.designation ? { designation: options.designation } : {}),
       ...(options.resolveTrack ? { resolveTrack: options.resolveTrack } : {}),
@@ -278,7 +284,11 @@ describe("WorkspaceRootTemplateBootstrap", () => {
       acquire: unavailableAcquire,
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       sink: {
-        put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
+        put: async (bytes) => {
+          const digest = sha256Hex(bytes);
+          fx.blobs.set(digest, bytes);
+          return { digest, size: bytes.byteLength };
+        },
       },
     });
 
@@ -380,6 +390,9 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     // Personal never restated defaultRepo, so it keeps the one Base supplied.
     expect(composedManifest).toContain("projects/default");
     expect(composedManifest).toContain("Personal");
+    expect(
+      new TextDecoder().decode(fx.blobs.get(sha256Hex(new TextEncoder().encode(composedManifest))))
+    ).toBe(composedManifest);
     // The receipt says what the workspace is made of, dependency first.
     const receipt = JSON.parse(
       fs.readFileSync(path.join(fx.statePath, "workspace-creation/materialization-v1.json"), "utf8")

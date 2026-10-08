@@ -1,3 +1,7 @@
+import {
+  WorkspaceAppCompatibilitySchema,
+  AppVersionSchema,
+} from "@vibestudio/workspace-contracts/appCompatibility";
 import { templatePublicationReviewSchema } from "./gitInterop.js";
 import { missionRecordSchema } from "./missions.js";
 import { WorkspaceSourceReviewSchema } from "@vibestudio/workspace-contracts/workspaceSource";
@@ -229,15 +233,20 @@ export const templateUpdateCheckSchema = z
   .object({
     source: WorkspaceTemplatePinSchema,
     checkedAt: z.number(),
-    status: z.enum(["current", "available", "different-epoch", "error"]),
+    status: z.enum(["current", "available", "different-epoch", "requires-app-update", "error"]),
     target: WorkspaceTemplatePinSchema.optional(),
     targetEpoch: z.number().int().nonnegative().optional(),
+    targetMinimumAppVersion: AppVersionSchema.optional(),
+    targetAppVersion: AppVersionSchema.optional(),
+    hostError: z.string().optional(),
     error: z.string().optional(),
   })
   .strict();
 export const templateUpdateStatusSchema = z
   .object({
     workspaceEpoch: z.number().int().nonnegative(),
+    workspaceAppVersion: AppVersionSchema,
+    currentAppVersion: AppVersionSchema,
     checks: z.array(templateUpdateCheckSchema),
   })
   .strict();
@@ -254,21 +263,13 @@ export const templatesMethods = defineServiceMethods({
   },
   updateSignal: {
     description:
-      "Check upstream and return a model-free automation signal only for unannounced updates.",
+      "Check upstream, deliver actionable owner inbox notifications, and finish without a model turn.",
     website: { kind: "closed", reason: "Workspace update automation is private." } as const,
     args: z.tuple([]),
     returns: z
       .object({ protocol: z.literal("automation-signal.v1"), prompt: z.string().nullable() })
       .strict(),
     access: READ,
-  },
-  acknowledgeUpdates: {
-    description:
-      "Record exact updates after the agent has successfully notified the user; does not apply updates.",
-    website: { kind: "closed", reason: "Workspace update automation is private." } as const,
-    args: z.tuple([z.object({ targets: z.array(WorkspaceTemplatePinSchema) }).strict()]),
-    returns: z.void(),
-    access: WRITE,
   },
   updateStatus: {
     description: "Read cached upstream availability without preparing or applying an update.",
@@ -614,7 +615,7 @@ export const workspaceTemplateSourceMethods = defineServiceMethods({
     returns: WorkspaceTemplatePinSchema.nullable(),
     access: READ,
   },
-  readEpoch: {
+  readCompatibility: {
     tier: {
       tier: "open",
       session: "family",
@@ -626,9 +627,14 @@ export const workspaceTemplateSourceMethods = defineServiceMethods({
     authority: { principals: ["user", "code"] },
     website: { kind: "closed", reason: "Exact workspace source metadata is private." } as const,
     description:
-      "Read only the compatibility epoch from an exact source, including future manifest schemas.",
+      "Read the compatibility generation and minimum app version from an exact source, including future manifest schemas.",
     args: z.tuple([WorkspaceTemplatePinSchema]),
-    returns: z.number().int().nonnegative(),
+    returns: WorkspaceAppCompatibilitySchema.and(
+      z.object({
+        availableAppVersion: AppVersionSchema.optional(),
+        hostError: z.string().optional(),
+      })
+    ),
     access: READ,
   },
   inspectExact: {

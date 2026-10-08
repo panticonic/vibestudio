@@ -11,6 +11,7 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
  * Persistent deduplication belongs to the Automations service; this cache only
  * coalesces connection/startup notifications in this host process. */
 export function createWorkspaceAutomationProvisioner(deps: {
+  appVersion: string;
   config(): WorkspaceConfig;
   members(): UserSubject[];
   runtime(): Pick<RuntimeServiceInternal, "createEntity">;
@@ -62,6 +63,7 @@ export function createWorkspaceAutomationProvisioner(deps: {
               id,
               contextId: entity.contextId,
               definition,
+              appVersion: deps.appVersion,
             });
             completed.add(key);
           } catch (error) {

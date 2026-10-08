@@ -1,3 +1,6 @@
+import { appCompatibilityError } from "@vibestudio/workspace-contracts/appCompatibility";
+import { parseWorkspaceAppCompatibilityEnvelope } from "@vibestudio/workspace/configParser";
+import { stateLayout } from "./stateLayout.js";
 import {
   WORKSPACE_SOURCES_ENV,
   readWorkspaceSources,
@@ -32,7 +35,7 @@ import type {
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
+import { getPhysicalAppPath, getEsbuildBinaryPath } from "@vibestudio/shared/runtimePaths";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -2491,12 +2494,25 @@ export function buildWorkspaceChildEnv(input: {
   return env;
 }
 
-/** Keep the runtime selector local to historical launch sets. */
+/** Bind the child to its exact host while retaining the surrounding app version. */
 export function applyWorkspaceHostRuntimeEnv(
   env: NodeJS.ProcessEnv,
-  launchSet: Pick<WorkspaceHostLaunchSet, "historical" | "runtimeMode">
+  launchSet: Pick<
+    WorkspaceHostLaunchSet,
+    "historical" | "runtimeMode" | "appVersion" | "serverEntry" | "appRoot"
+  >,
+  currentAppVersion: string
 ): void {
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
+  env["VIBESTUDIO_APP_VERSION"] = launchSet.appVersion;
+  env["VIBESTUDIO_CURRENT_APP_VERSION"] = currentAppVersion;
   if (!launchSet.historical) return;
+  // The retained process owns its compiled bundle and build executable. The
+  // hub snapshot is deliberately preserved only for its own generation.
+  delete env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV];
+  const esbuildBinary = getEsbuildBinaryPath(launchSet.appRoot);
+  if (esbuildBinary) env["ESBUILD_BINARY_PATH"] = esbuildBinary;
+  else delete env["ESBUILD_BINARY_PATH"];
   if (launchSet.runtimeMode === "electron-node") env["ELECTRON_RUN_AS_NODE"] = "1";
   else delete env["ELECTRON_RUN_AS_NODE"];
 }
@@ -2577,6 +2593,19 @@ async function startWorkspaceRuntime(
           path.join(getCentralDataPath(), "host-versions"),
           launchRecord.systemEpoch
         );
+  if (launchRecord) {
+    const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
+    const blobsDir = stateLayout(path.join(getWorkspaceDir(workspaceName), "state")).blobsDir;
+    const manifest = await readFileAtTree(blobsDir, launchRecord.stateHash, "meta/vibestudio.yml");
+    if (!manifest) throw new Error("Workspace publication has no runtime manifest");
+    const bytes = await getBytes(blobsDir, manifest.contentHash);
+    if (!bytes) throw new Error("Workspace runtime manifest bytes are unavailable");
+    const error = appCompatibilityError(
+      parseWorkspaceAppCompatibilityEnvelope(bytes.toString("utf8")),
+      launchSet.appVersion
+    );
+    if (error) throw new Error(error);
+  }
   if (!launchSet.serverEntry) throw new Error("Workspace child launch set has no server entry");
   const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `vibestudio-workspace-${workspaceName}-`));
   const readyFile = path.join(readyDir, "ready.json");
@@ -2603,7 +2632,7 @@ async function startWorkspaceRuntime(
     creationIntent,
     workspaceSources: state.workspaceSources,
   });
-  applyWorkspaceHostRuntimeEnv(childEnv, launchSet);
+  applyWorkspaceHostRuntimeEnv(childEnv, launchSet, state.version);
   const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
   if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
   state.workspaceChildTokens.set(runtimeToken, workspaceId);

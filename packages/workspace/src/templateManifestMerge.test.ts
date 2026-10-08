@@ -22,6 +22,15 @@ function layer(
 }
 
 describe("mergeTemplateManifests", () => {
+  it("retains the strongest dependency floor even when the parent or local layer declares a lower one", () => {
+    const merged = mergeTemplateManifests([
+      layer("base", {}, { minimumAppVersion: "0.1.83" }),
+      layer("personal", {}, { minimumAppVersion: "0.1.70" }),
+      layer("workspace", {}),
+    ]);
+    expect(merged.document["minimumAppVersion"]).toBe("0.1.83");
+  });
+
   it("inherits named automation defaults and lets a dependent suppress one without losing others", () => {
     const automation = {
       source: "workers/agent-worker",

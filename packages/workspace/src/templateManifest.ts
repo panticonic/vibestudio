@@ -1,3 +1,4 @@
+import { WorkspaceAppCompatibilitySchema } from "@vibestudio/workspace-contracts/appCompatibility";
 import { mergeTemplateManifests, type TemplateManifestLayer } from "./templateManifestMerge.js";
 import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import YAML from "yaml";
@@ -143,6 +144,7 @@ export function parseTemplateManifestContent(
       ...(authoring.description === undefined ? {} : { description: authoring.description }),
     },
   });
+  WorkspaceAppCompatibilitySchema.parse(top);
   if (top.systemEpoch !== expectedSystemEpoch) {
     throw new Error(
       `systemEpoch ${top.systemEpoch} is incompatible with workspace epoch ${expectedSystemEpoch}`

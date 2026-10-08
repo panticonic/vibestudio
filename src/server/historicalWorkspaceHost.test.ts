@@ -1,8 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveHistoricalWorkspaceHost, semverMajor } from "./historicalWorkspaceHost.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveHistoricalWorkspaceHost,
+  semverMajor,
+  requireCompatibleTransitionHost,
+} from "./historicalWorkspaceHost.js";
 
 describe("historical workspace host", () => {
   const roots: string[] = [];
@@ -40,5 +44,39 @@ describe("historical workspace host", () => {
       historical: true,
     });
     expect(() => resolveHistoricalWorkspaceHost(versions, 1)).toThrow(/unavailable or invalid/u);
+    fs.rmSync(path.join(root, "runtime/node"));
+    try {
+      resolveHistoricalWorkspaceHost(versions, 2);
+      expect.fail("Missing runtime must not resolve");
+    } catch (error) {
+      expect((error as Error).message).toContain("another workspace");
+      expect((error as Error).cause).toBeInstanceOf(Error);
+      expect(((error as Error).cause as Error).message).toContain("executable is missing");
+    }
   });
+});
+
+it("checks the minimum release of the actual target host before an epoch handoff", () => {
+  const historical = vi.fn(() => ({ appVersion: "1.1.0" }) as never);
+  expect(() =>
+    requireCompatibleTransitionHost({
+      requirement: { systemEpoch: 1, minimumAppVersion: "1.2.0" },
+      currentAppVersion: "2.0.0",
+      historical,
+    })
+  ).toThrow("1.2.0");
+  expect(
+    requireCompatibleTransitionHost({
+      requirement: { systemEpoch: 2, minimumAppVersion: "2.1.0" },
+      currentAppVersion: "2.1.0",
+      historical,
+    })
+  ).toBe("2.1.0");
+  expect(() =>
+    requireCompatibleTransitionHost({
+      requirement: { systemEpoch: 2, minimumAppVersion: "2.1.0" },
+      currentAppVersion: "2.0.0",
+      historical,
+    })
+  ).toThrow("2.1.0");
 });

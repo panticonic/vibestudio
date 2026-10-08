@@ -1,3 +1,4 @@
+import { strongestMinimumAppVersion } from "@vibestudio/workspace-contracts/appCompatibility";
 import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ParsedTemplateManifest, TemplateRepositoryInventory } from "./templateManifest.js";
@@ -111,6 +112,11 @@ export function mergeTemplateManifests(
       document[key] = value;
     }
   }
+
+  const minimumAppVersion = strongestMinimumAppVersion(
+    layers.map((layer) => layer.manifest.top.minimumAppVersion)
+  );
+  if (minimumAppVersion) document["minimumAppVersion"] = minimumAppVersion;
 
   for (const key of [...UNIQUE_SOURCE_LISTS, ...ACCUMULATING_LISTS]) {
     const merged: unknown[] = [];

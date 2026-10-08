@@ -1,7 +1,7 @@
 import { canonicalSnapshotDigest, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 import type { TemplateSourceTree } from "@vibestudio/service-schemas/templates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
@@ -99,7 +99,7 @@ describe("workspaceTemplateSource", () => {
     const put = vi.fn(async (_bytes: Uint8Array) => undefined);
     const service = createWorkspaceTemplateSourceService({
       put,
-      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      hostVersion: () => WORKSPACE_APP_VERSION,
       acquire,
       resolveLocal,
       localRegistry: () => registry,
@@ -178,7 +178,7 @@ describe("workspaceTemplateSource", () => {
     );
     const service = createWorkspaceTemplateSourceService({
       put: vi.fn(),
-      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      hostVersion: () => `${foreignEpoch}.1.0`,
       acquire,
       resolveLocal: () => null,
       localRegistry: () => null,
@@ -189,10 +189,106 @@ describe("workspaceTemplateSource", () => {
       ref: "refs/heads/main",
       commit: "a".repeat(40),
     };
-    await expect(service.handler(ctx, "readEpoch", [pin])).resolves.toBe(foreignEpoch);
+    await expect(service.handler(ctx, "readCompatibility", [pin])).resolves.toEqual({
+      systemEpoch: foreignEpoch,
+      availableAppVersion: `${foreignEpoch}.1.0`,
+    });
     await expect(service.handler(ctx, "inspectExact", [pin])).rejects.toThrow();
     await expect(
-      service.handler({ caller: createVerifiedCaller("other", "app") }, "readEpoch", [pin])
+      service.handler({ caller: createVerifiedCaller("other", "app") }, "readCompatibility", [pin])
     ).rejects.toThrow(/reviewed source consumer/);
   });
+});
+
+it("rejects an exact source requiring a newer app before composition or workspace mutation", async () => {
+  const acquire = vi.fn(async () =>
+    snapshot(
+      sourceManifest.replace(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}`,
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nminimumAppVersion: 0.99.0`
+      )
+    )
+  );
+  const put = vi.fn();
+  const service = createWorkspaceTemplateSourceService({
+    hostVersion: () => WORKSPACE_APP_VERSION,
+    acquire,
+    put,
+    resolveLocal: () => null,
+    localRegistry: () => null,
+  });
+  const ctx = { caller: createVerifiedCaller("shell:user-1", "shell") };
+  const pin = {
+    url: "https://example.invalid/source.git",
+    ref: "refs/heads/main",
+    commit: "a".repeat(40),
+  };
+  await expect(service.handler(ctx, "readCompatibility", [pin])).resolves.toEqual({
+    systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    minimumAppVersion: "0.99.0",
+    availableAppVersion: WORKSPACE_APP_VERSION,
+  });
+  await expect(service.handler(ctx, "composeExact", [{ sources: [pin] }])).rejects.toThrow(
+    "0.99.0"
+  );
+  expect(put).not.toHaveBeenCalled();
+});
+
+it("composes a compatible target generation as source data without admitting it into the old host", async () => {
+  const foreignEpoch = WORKSPACE_SYSTEM_EPOCH + 1;
+  const manifest = sourceManifest.replace(
+    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}`,
+    `systemEpoch: ${foreignEpoch}\nminimumAppVersion: ${foreignEpoch}.1.0`
+  );
+  const put = vi.fn();
+  const hostVersion = vi.fn(() => `${foreignEpoch}.2.0`);
+  const service = createWorkspaceTemplateSourceService({
+    hostVersion,
+    acquire: async () => snapshot(manifest),
+    put,
+    resolveLocal: () => null,
+    localRegistry: () => null,
+  });
+  const ctx = { caller: createVerifiedCaller("shell:user-1", "shell") };
+  const pin = {
+    url: "https://example.invalid/source.git",
+    ref: "refs/heads/main",
+    commit: "a".repeat(40),
+  };
+  const composed = (await service.handler(ctx, "composeExact", [
+    { sources: [pin] },
+  ])) as TemplateSourceTree;
+  expect(composed.sources).toEqual([pin]);
+  expect(hostVersion).toHaveBeenCalledWith(foreignEpoch);
+  expect(new TextDecoder().decode(put.mock.calls[0]![0])).toContain(`systemEpoch: ${foreignEpoch}`);
+});
+
+it("leaves target preparation blocked when its matching host is unavailable", async () => {
+  const foreignEpoch = WORKSPACE_SYSTEM_EPOCH + 1;
+  const put = vi.fn();
+  const service = createWorkspaceTemplateSourceService({
+    hostVersion: () => {
+      throw new Error("Target host is unavailable");
+    },
+    acquire: async () =>
+      snapshot(
+        sourceManifest.replace(
+          `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}`,
+          `systemEpoch: ${foreignEpoch}`
+        )
+      ),
+    put,
+    resolveLocal: () => null,
+    localRegistry: () => null,
+  });
+  const ctx = { caller: createVerifiedCaller("shell:user-1", "shell") };
+  const pin = {
+    url: "https://example.invalid/source.git",
+    ref: "refs/heads/main",
+    commit: "a".repeat(40),
+  };
+  await expect(service.handler(ctx, "composeExact", [{ sources: [pin] }])).rejects.toThrow(
+    "Target host is unavailable"
+  );
+  expect(put).not.toHaveBeenCalled();
 });

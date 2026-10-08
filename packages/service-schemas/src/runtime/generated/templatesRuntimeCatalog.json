@@ -582,7 +582,7 @@
     }
   },
   "updateSignal": {
-    "description": "Check upstream and return a model-free automation signal only for unannounced updates.",
+    "description": "Check upstream, deliver actionable owner inbox notifications, and finish without a model turn.",
     "access": {
       "sensitivity": "read"
     },
@@ -613,59 +613,6 @@
       "additionalProperties": false
     }
   },
-  "acknowledgeUpdates": {
-    "description": "Record exact updates after the agent has successfully notified the user; does not apply updates.",
-    "access": {
-      "sensitivity": "write"
-    },
-    "argsSchema": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 1,
-      "items": [
-        {
-          "type": "object",
-          "properties": {
-            "targets": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "url": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "credential": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256
-                  },
-                  "ref": {
-                    "type": "string"
-                  },
-                  "commit": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{40}$"
-                  }
-                },
-                "required": [
-                  "url",
-                  "ref",
-                  "commit"
-                ],
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": [
-            "targets"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "returnsSchema": {}
-  },
   "updateStatus": {
     "description": "Read cached upstream availability without preparing or applying an update.",
     "access": {
@@ -683,6 +630,12 @@
         "workspaceEpoch": {
           "type": "integer",
           "minimum": 0
+        },
+        "workspaceAppVersion": {
+          "type": "string"
+        },
+        "currentAppVersion": {
+          "$ref": "#/properties/workspaceAppVersion"
         },
         "checks": {
           "type": "array",
@@ -725,6 +678,7 @@
                   "current",
                   "available",
                   "different-epoch",
+                  "requires-app-update",
                   "error"
                 ]
               },
@@ -734,6 +688,15 @@
               "targetEpoch": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "targetMinimumAppVersion": {
+                "$ref": "#/properties/workspaceAppVersion"
+              },
+              "targetAppVersion": {
+                "$ref": "#/properties/workspaceAppVersion"
+              },
+              "hostError": {
+                "type": "string"
               },
               "error": {
                 "type": "string"
@@ -750,6 +713,8 @@
       },
       "required": [
         "workspaceEpoch",
+        "workspaceAppVersion",
+        "currentAppVersion",
         "checks"
       ],
       "additionalProperties": false
@@ -773,6 +738,12 @@
           "type": "integer",
           "minimum": 0
         },
+        "workspaceAppVersion": {
+          "type": "string"
+        },
+        "currentAppVersion": {
+          "$ref": "#/properties/workspaceAppVersion"
+        },
         "checks": {
           "type": "array",
           "items": {
@@ -814,6 +785,7 @@
                   "current",
                   "available",
                   "different-epoch",
+                  "requires-app-update",
                   "error"
                 ]
               },
@@ -823,6 +795,15 @@
               "targetEpoch": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "targetMinimumAppVersion": {
+                "$ref": "#/properties/workspaceAppVersion"
+              },
+              "targetAppVersion": {
+                "$ref": "#/properties/workspaceAppVersion"
+              },
+              "hostError": {
+                "type": "string"
               },
               "error": {
                 "type": "string"
@@ -839,6 +820,8 @@
       },
       "required": [
         "workspaceEpoch",
+        "workspaceAppVersion",
+        "currentAppVersion",
         "checks"
       ],
       "additionalProperties": false

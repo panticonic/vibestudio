@@ -37982,10 +37982,10 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:workspaceTemplateSource.readEpoch",
+      "id": "host:workspaceTemplateSource.readCompatibility",
       "rpcPlane": "host-service",
       "owner": "workspaceTemplateSource",
-      "method": "readEpoch",
+      "method": "readCompatibility",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "protected-write",
@@ -37993,7 +37993,7 @@
       "reviewRationale": "Verified source consumers read only the stable compatibility envelope; foreign source is never activated.",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:workspaceTemplateSource.readEpoch"
+        "key": "service:workspaceTemplateSource.readCompatibility"
       },
       "authorityPrincipals": [
         "user",
@@ -38018,12 +38018,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.readEpoch),workspace-member),allOf(capability(code,service:workspaceTemplateSource.readEpoch),workspace-member))",
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.readCompatibility),workspace-member),allOf(capability(code,service:workspaceTemplateSource.readCompatibility),workspace-member))",
       "r3b": {
         "review": "verified-exact-source-compatibility-read",
-        "change": "Reads only the compatibility epoch from an exact pinned template source, including sources with newer manifest schemas. The receiver limits callers to authenticated user or code principals and does not activate the source, expose its files, or mutate a workspace."
+        "change": "Reads the stable compatibility requirement, including installed dependency floors, and reports the available matching host for an exact pinned source. Future runtime fields remain uninterpreted. Verified source consumers receive no workspace mutation authority."
       },
-      "capability": "service:workspaceTemplateSource.readEpoch",
+      "capability": "service:workspaceTemplateSource.readCompatibility",
       "parityAssertion": "generated-census:host-authority"
     },
     {

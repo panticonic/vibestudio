@@ -7,7 +7,7 @@ import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   createRuntimeLayout,
   getPhysicalAppPath as getSharedPhysicalAppPath,
-  getPlatformPackageBinaryPath,
+  getEsbuildBinaryPath as getInstalledEsbuildBinaryPath,
 } from "@vibestudio/shared/runtimePaths";
 import { isDev } from "./utils.js";
 
@@ -219,24 +219,7 @@ export function getEsbuildBinaryPath(): string | null {
     return null;
   }
 
-  const packageByPlatformArch: Record<string, string> = {
-    "darwin:arm64": "darwin-arm64",
-    "darwin:x64": "darwin-x64",
-    "linux:arm64": "linux-arm64",
-    "linux:x64": "linux-x64",
-    "win32:arm64": "win32-arm64",
-    "win32:ia32": "win32-ia32",
-    "win32:x64": "win32-x64",
-  };
-
-  const pkg = packageByPlatformArch[`${process.platform}:${process.arch}`];
-  if (!pkg) {
-    return null;
-  }
-
-  const binaryName = process.platform === "win32" ? "esbuild.exe" : "esbuild";
-  const binaryPath = getPlatformPackageBinaryPath(getAppRoot(), `@esbuild/${pkg}`, binaryName);
-  return fs.existsSync(binaryPath) ? binaryPath : null;
+  return getInstalledEsbuildBinaryPath(getAppRoot());
 }
 
 /**

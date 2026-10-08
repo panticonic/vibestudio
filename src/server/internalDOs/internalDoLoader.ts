@@ -141,7 +141,8 @@ export function internalDOExecutionArtifacts(
 
 function loadBundle(): InternalDOBundle {
   // A supervising hub snapshots the exact product runtime once per hub boot
-  // and gives every workspace child (including crash replacements) this path.
+  // and gives its own generation’s workspace children (including crash
+  // replacements) this path. Retained hosts load their own compiled bundle.
   // Source-mode build artifacts are shared by developer instances and may be
   // rebuilt concurrently; rereading the mutable dist file on child recovery
   // would silently change the execution identity mid-boot.

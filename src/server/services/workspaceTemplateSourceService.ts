@@ -1,4 +1,5 @@
-import { parseWorkspaceSystemEpochEnvelope } from "@vibestudio/workspace/configParser";
+import { appCompatibilityError } from "@vibestudio/workspace-contracts/appCompatibility";
+import { parseWorkspaceAppCompatibilityEnvelope } from "@vibestudio/workspace/configParser";
 import {
   composeDeclaredTemplateLayers,
   enumerateRootTemplateRepositories,
@@ -35,7 +36,7 @@ export async function acquireExactWorkspaceSource<T>(input: {
 }
 
 export function createWorkspaceTemplateSourceService(deps: {
-  systemEpoch: number;
+  hostVersion(epoch: number): string;
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   resolveLocal(url: string): WorkspaceTemplatePin | null;
   localRegistry(): TemplateRegistry | null;
@@ -50,10 +51,9 @@ export function createWorkspaceTemplateSourceService(deps: {
     const snapshot = await deps.acquire(pin);
     const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
     if (!bytes) throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
-    const manifest = parseTemplateManifestContent(
-      Buffer.from(bytes).toString("utf8"),
-      deps.systemEpoch
-    );
+    const content = Buffer.from(bytes).toString("utf8");
+    const requirement = parseWorkspaceAppCompatibilityEnvelope(content);
+    const manifest = parseTemplateManifestContent(content, requirement.systemEpoch);
     rootRuntimeFromTemplateManifest(manifest);
     validateTemplateSnapshotInventory(
       manifest.inventory,
@@ -73,11 +73,12 @@ export function createWorkspaceTemplateSourceService(deps: {
         const normalize = normalizeTemplateGitUrl;
         if (new Set(sources.map((source) => normalize(source.url))).size !== sources.length)
           throw new Error("Each installed template source must have one exact pin");
+        const acquiredRoot = await acquireValidated(root);
         const composed = await composeDeclaredTemplateLayers({
           pin: root,
           purpose,
-          root: (await acquireValidated(root)).snapshot,
-          expectedSystemEpoch: deps.systemEpoch,
+          root: acquiredRoot.snapshot,
+          expectedSystemEpoch: acquiredRoot.manifest.top.systemEpoch,
           acquire: async (pin) => (await acquireValidated(pin)).snapshot,
           resolveTrack: async (address) => {
             const pinned = sources.find(
@@ -92,6 +93,14 @@ export function createWorkspaceTemplateSourceService(deps: {
         // blobs so the native VCS receives content-addressed snapshots only.
         const manifestBytes = composed.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
         if (!manifestBytes) throw new Error("Composed source lost its manifest");
+        const runtime = rootRuntimeFromTemplateManifest(
+          parseTemplateManifestContent(
+            Buffer.from(manifestBytes).toString("utf8"),
+            acquiredRoot.manifest.top.systemEpoch
+          )
+        );
+        const error = appCompatibilityError(runtime, deps.hostVersion(runtime.systemEpoch));
+        if (error) throw new Error(error);
         await deps.put(manifestBytes);
         return {
           sources: composed.layers,
@@ -114,13 +123,23 @@ export function createWorkspaceTemplateSourceService(deps: {
         requireReviewedSourceConsumer(ctx.caller);
         return deps.resolveLocal(url);
       },
-      readEpoch: async (ctx, [pin]) => {
+      readCompatibility: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);
         const snapshot = await deps.acquire(pin);
         const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
         if (!bytes)
           throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
-        return parseWorkspaceSystemEpochEnvelope(Buffer.from(bytes).toString("utf8"));
+        const requirement = parseWorkspaceAppCompatibilityEnvelope(
+          Buffer.from(bytes).toString("utf8")
+        );
+        try {
+          return { ...requirement, availableAppVersion: deps.hostVersion(requirement.systemEpoch) };
+        } catch (error) {
+          return {
+            ...requirement,
+            hostError: error instanceof Error ? error.message : String(error),
+          };
+        }
       },
       inspectExact: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);

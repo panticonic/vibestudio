@@ -33,6 +33,7 @@ function fixture() {
   const failed = vi.fn();
   const entity = vi.fn(async (_id: string): Promise<EntityRecord | null> => null);
   const deps = {
+    appVersion: "0.1.83",
     config: () => config,
     members: () => members,
     runtime: () => ({ createEntity }),

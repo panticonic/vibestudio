@@ -13,13 +13,15 @@
     "./types": "./src/types.ts",
     "./workspaceSource": "./src/workspaceSource.ts",
     "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts",
-    "./automations": "./src/automations.ts"
+    "./automations": "./src/automations.ts",
+    "./appCompatibility": "./src/appCompatibility.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace-contracts/src"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "semver": "^7.8.4"
   },
   "devDependencies": {
     "vitest": "^3.2.7"

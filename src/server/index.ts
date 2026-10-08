@@ -100,7 +100,7 @@ import {
   newlyReferencedWorkerSources,
   workspaceWorkerClassReferences,
 } from "./workspaceWorkerClassReferences.js";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   assertWorkspaceHostLaunchBinding,
   readWorkspaceHostLaunchRecord,
@@ -108,12 +108,15 @@ import {
 } from "@vibestudio/workspace/hostLaunchRecord";
 import {
   parseWorkspaceSystemEpochEnvelope,
+  parseWorkspaceAppCompatibilityEnvelope,
   WORKSPACE_CONFIG_PATH,
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   resolveHistoricalWorkspaceHost,
+  requireCompatibleTransitionHost,
+  semverMajor,
   WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
 } from "./historicalWorkspaceHost.js";
 
@@ -810,7 +813,7 @@ async function main() {
   // Build version this server was launched from. The desktop spawner stamps
   // VIBESTUDIO_APP_VERSION; attach-or-spawn compares it against the current app
   // build and stops-and-respawns on mismatch (converge to current version).
-  const serverVersion = process.env["VIBESTUDIO_APP_VERSION"] ?? "0.1.0";
+  const serverVersion = process.env["VIBESTUDIO_APP_VERSION"] ?? WORKSPACE_APP_VERSION;
   // Host-wide background-work registry (eval runs) — read by the idle-exit
   // monitor so a detached server won't self-reap while work is in flight.
   const { createActivityRegistry } = await import("./services/activityRegistry.js");
@@ -2360,7 +2363,15 @@ async function main() {
     await import("./services/workspaceTemplateSourceService.js");
   container.registerRpc(
     createWorkspaceTemplateSourceService({
-      systemEpoch: workspaceConfig.systemEpoch,
+      hostVersion: (epoch) => {
+        if (epoch === WORKSPACE_SYSTEM_EPOCH) return WORKSPACE_APP_VERSION;
+        const currentAppVersion = process.env["VIBESTUDIO_CURRENT_APP_VERSION"];
+        if (currentAppVersion && semverMajor(currentAppVersion) === epoch) return currentAppVersion;
+        return resolveHistoricalWorkspaceHost(
+          path.join(getCentralDataPath(), "host-versions"),
+          epoch
+        ).appVersion;
+      },
       acquire: acquireWorkspaceTemplate,
       resolveTrack: resolveTemplateTrack,
       put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
@@ -3145,19 +3156,15 @@ async function main() {
             `Workspace already runs on epoch ${targetEpoch}; publish this change normally`
           );
         }
-        const installedEpochRaw = process.env["VIBESTUDIO_CURRENT_SYSTEM_EPOCH"];
-        const installedEpoch = installedEpochRaw ? Number(installedEpochRaw) : Number.NaN;
-        if (!Number.isInteger(installedEpoch) || installedEpoch < 0) {
+        const currentAppVersion = process.env["VIBESTUDIO_CURRENT_APP_VERSION"];
+        if (!currentAppVersion)
           throw new Error("Epoch transitions require a current hub-owned workspace runtime");
-        }
-        if (targetEpoch !== installedEpoch) {
-          // Merely opening this exact launch set proves the target is available.
-          // The old host deliberately does not parse an unknown future schema.
-          resolveHistoricalWorkspaceHost(
-            path.join(getCentralDataPath(), "host-versions"),
-            targetEpoch
-          );
-        }
+        requireCompatibleTransitionHost({
+          requirement: parseWorkspaceAppCompatibilityEnvelope(manifest),
+          currentAppVersion,
+          historical: (epoch) =>
+            resolveHistoricalWorkspaceHost(path.join(getCentralDataPath(), "host-versions"), epoch),
+        });
         signal?.throwIfAborted();
         reportProgress?.({
           label: "Target workspace host is available",
@@ -7352,6 +7359,7 @@ async function main() {
   const { createWorkspaceAutomationProvisioner } =
     await import("./services/workspaceAutomationProvisioning.js");
   const automationProvisioner = createWorkspaceAutomationProvisioner({
+    appVersion: process.env["VIBESTUDIO_CURRENT_APP_VERSION"] ?? WORKSPACE_APP_VERSION,
     config: () => workspaceConfig,
     members: () =>
       listWorkspaceMemberUserIds().flatMap((userId) => {

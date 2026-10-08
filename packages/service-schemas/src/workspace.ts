@@ -96,7 +96,11 @@ export type WorkspaceFindUnitForPathResult = z.infer<typeof WorkspaceFindUnitFor
 export const workspaceMethods = defineServiceMethods({
   // Read methods
   getInfo: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -108,6 +112,10 @@ export const workspaceMethods = defineServiceMethods({
       "Filesystem paths (source, state, contexts) and resolved config for the active workspace.",
     args: z.tuple([]),
     returns: z.object({
+      appVersion: z.string().describe("Exact application version running this workspace host."),
+      currentAppVersion: z
+        .string()
+        .describe("Installed application version of the surrounding hub."),
       id: z.string().min(1).describe("Opaque host-owned identity of the active workspace."),
       name: z.string().min(1).describe("User-facing catalog name of the active workspace."),
       path: z.string().describe("Absolute path to the workspace source tree."),
@@ -122,7 +130,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getActive: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -136,7 +148,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getConfig: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -150,7 +166,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   validateConfig: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -167,7 +187,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   setInitPanels: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.configure",
     tier: {
       tier: "gated",
@@ -210,7 +234,11 @@ export const workspaceMethods = defineServiceMethods({
   // SECURITY: arbitrary config-field writes — server-internal use
   // by default, but userland can request a one-shot approval.
   setConfigField: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.configure",
     tier: {
       tier: "gated",
@@ -242,7 +270,11 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["title", "My Workspace"] }],
   },
   applyPreparedConfig: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: WORKSPACE_PREPARED_CONFIG_CAPABILITY,
     tier: {
       tier: "open",
@@ -304,7 +336,11 @@ export const workspaceMethods = defineServiceMethods({
   // from the workspace source tree. Kept server-side because they touch
   // the filesystem; panels/workers call these over the RPC transport.
   getAgentsMd: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -319,7 +355,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listSkills: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -343,7 +383,11 @@ export const workspaceMethods = defineServiceMethods({
     authority: { principals: ["host", "user", "code"] },
   },
   readSkill: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -368,7 +412,11 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -382,7 +430,11 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   ensureContextFolder: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "context.materialize",
     tier: {
       tier: "gated",
@@ -417,7 +469,11 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["ctx-abc"] }],
   },
   findUnitForPath: {
-    website: {"kind":"closed","reason":"The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

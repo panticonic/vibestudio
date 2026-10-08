@@ -744,22 +744,97 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
 });
 
 describe("historical workspace runtime environment", () => {
+  it("binds all retained artifacts and the build executable to the selected installation", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "retained-tools-"));
+    try {
+      const suffix = process.platform === "win32" ? "esbuild.exe" : "esbuild";
+      const binary = path.join(
+        root,
+        "node_modules",
+        "@esbuild",
+        `${process.platform}-${process.arch}`,
+        "bin",
+        suffix
+      );
+      fs.mkdirSync(path.dirname(binary), { recursive: true });
+      fs.writeFileSync(binary, "retained tool");
+      const env: NodeJS.ProcessEnv = {
+        VIBESTUDIO_HOST_ARTIFACT_ROOT: "/new/dist",
+        VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/new/hub-bundle",
+        ESBUILD_BINARY_PATH: "/new/esbuild",
+      };
+      applyWorkspaceHostRuntimeEnv(
+        env,
+        {
+          historical: true,
+          runtimeMode: "node",
+          appVersion: "1.2.0",
+          appRoot: root,
+          serverEntry: path.join(root, "dist", "server.mjs"),
+        },
+        "2.0.0"
+      );
+      expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe(path.join(root, "dist"));
+      expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBeUndefined();
+      expect(env["ESBUILD_BINARY_PATH"]).toBe(binary);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("opts a retained Electron executable into Node mode", () => {
     const env: NodeJS.ProcessEnv = {};
-    applyWorkspaceHostRuntimeEnv(env, { historical: true, runtimeMode: "electron-node" });
+    applyWorkspaceHostRuntimeEnv(
+      env,
+      {
+        historical: true,
+        runtimeMode: "electron-node",
+        appVersion: "1.2.0",
+        serverEntry: "/retained/dist/server.cjs",
+        appRoot: "/retained",
+      },
+      "2.0.0"
+    );
+    expect(env["VIBESTUDIO_APP_VERSION"]).toBe("1.2.0");
+    expect(env["VIBESTUDIO_CURRENT_APP_VERSION"]).toBe("2.0.0");
     expect(env["ELECTRON_RUN_AS_NODE"]).toBe("1");
   });
 
   it("does not leak Electron's Node mode into a retained Node executable", () => {
     const env: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "1" };
-    applyWorkspaceHostRuntimeEnv(env, { historical: true, runtimeMode: "node" });
+    applyWorkspaceHostRuntimeEnv(
+      env,
+      {
+        historical: true,
+        runtimeMode: "node",
+        appVersion: "1.2.0",
+        serverEntry: "/retained/dist/server.cjs",
+        appRoot: "/retained",
+      },
+      "2.0.0"
+    );
     expect(env["ELECTRON_RUN_AS_NODE"]).toBeUndefined();
   });
 
-  it("leaves the current host environment unchanged", () => {
-    const env: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "caller-owned" };
-    applyWorkspaceHostRuntimeEnv(env, { historical: false, runtimeMode: "node" });
+  it("preserves the current host runtime mode and binds its exact app version", () => {
+    const env: NodeJS.ProcessEnv = {
+      ELECTRON_RUN_AS_NODE: "caller-owned",
+      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/current/hub-bundle",
+      ESBUILD_BINARY_PATH: "/current/esbuild",
+    };
+    applyWorkspaceHostRuntimeEnv(
+      env,
+      {
+        historical: false,
+        runtimeMode: "node",
+        appVersion: "2.0.0",
+        serverEntry: "/current/dist/server.cjs",
+        appRoot: "/current",
+      },
+      "2.0.0"
+    );
     expect(env["ELECTRON_RUN_AS_NODE"]).toBe("caller-owned");
+    expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/current/hub-bundle");
+    expect(env["ESBUILD_BINARY_PATH"]).toBe("/current/esbuild");
   });
 });
 

@@ -1,3 +1,4 @@
+import { WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 /**
  * Workspace RPC service — current-workspace configuration and lifecycle.
  *
@@ -253,6 +254,8 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         const config = deps.getConfig();
         const name = activeWorkspaceName();
         return {
+          appVersion: WORKSPACE_APP_VERSION,
+          currentAppVersion: process.env["VIBESTUDIO_CURRENT_APP_VERSION"] ?? WORKSPACE_APP_VERSION,
           id: deps.workspaceId ?? config.id ?? name,
           name,
           path: workspace.path,

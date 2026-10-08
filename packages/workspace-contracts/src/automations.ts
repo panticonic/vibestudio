@@ -63,6 +63,7 @@ export const WorkspaceAutomationSchema = z
     summary: z.string().min(1).max(4000),
     action: agentActionSchema,
     trigger: triggerSchema,
+    events: z.array(z.literal("app-update")).optional(),
     operations: z.array(operationIntentSchema).max(256),
   })
   .strict();

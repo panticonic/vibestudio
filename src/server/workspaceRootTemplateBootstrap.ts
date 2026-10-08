@@ -488,6 +488,12 @@ export class WorkspaceRootTemplateBootstrap {
       snapshotPaths: snapshot.files.map((file) => file.path),
       repositories,
     });
+    const manifestBytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+    if (!manifestBytes) throw new Error("Composed template has no manifest bytes");
+    const manifestBlob = await this.deps.sink.put(manifestBytes);
+    if (manifestBlob.digest !== sha256Hex(manifestBytes)) {
+      throw new Error("Content sink changed the composed manifest identity");
+    }
     await publishRepositoryContentTrees(repositories, this.deps.sink);
     this.acquiredSnapshot = snapshot;
     return {

@@ -1,9 +1,15 @@
 import {
+  WorkspaceAppCompatibilitySchema,
+  appCompatibilityError,
+  strongestMinimumAppVersion,
+} from "@vibestudio/workspace-contracts/appCompatibility";
+import {
   parseTemplateManifestContent,
   rootRuntimeFromTemplateManifest,
 } from "./templateManifest.js";
 import YAML from "yaml";
-import { ZodError, type ZodIssue } from "zod";
+import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
+import { z, ZodError, type ZodIssue } from "zod";
 import type {
   WorkspaceAppDecl,
   WorkspaceConfig,
@@ -23,7 +29,7 @@ import {
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { validateWorkspaceGitConfig } from "./remotes.js";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
@@ -44,6 +50,53 @@ export function parseWorkspaceSystemEpochEnvelope(content: string): number {
     throw new Error("meta/vibestudio.yml: `systemEpoch` must be a nonnegative integer");
   }
   return systemEpoch as number;
+}
+
+const compatibilityMetadataSchema = z.object({
+  template: z
+    .object({
+      dependencies: z.array(z.object({ url: z.string() })).optional(),
+      installation: z
+        .object({
+          sources: z.array(z.object({ pin: z.object({ url: z.string() }), manifest: z.string() })),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+/** Read only the stable requirement and installed source graph. The remaining
+ * runtime schema may belong to a future host and must not be interpreted here. */
+export function parseWorkspaceAppCompatibilityEnvelope(content: string) {
+  const document: unknown = YAML.parse(content);
+  const requirement = WorkspaceAppCompatibilitySchema.parse(document);
+  const metadata = compatibilityMetadataSchema.parse(document).template;
+  if (!metadata?.installation) return requirement;
+  const sources = new Map(
+    metadata.installation.sources.map((source) => [
+      normalizeTemplateGitUrl(source.pin.url),
+      source.manifest,
+    ])
+  );
+  const visited = new Set<string>();
+  const minima = [requirement.minimumAppVersion];
+  const visit = (url: string) => {
+    const key = normalizeTemplateGitUrl(url);
+    if (visited.has(key)) return;
+    visited.add(key);
+    const source = sources.get(key);
+    if (!source) throw new Error(`Installed source ${url} has no compatibility metadata`);
+    const parsed: unknown = YAML.parse(source);
+    const inherited = WorkspaceAppCompatibilitySchema.parse(parsed);
+    if (inherited.systemEpoch !== requirement.systemEpoch)
+      throw new Error(`Installed source ${url} requires another app generation`);
+    minima.push(inherited.minimumAppVersion);
+    for (const dependency of compatibilityMetadataSchema.parse(parsed).template?.dependencies ?? [])
+      visit(dependency.url);
+  };
+  for (const dependency of metadata.dependencies ?? []) visit(dependency.url);
+  const minimumAppVersion = strongestMinimumAppVersion(minima);
+  return { ...requirement, ...(minimumAppVersion ? { minimumAppVersion } : {}) };
 }
 
 /**
@@ -128,6 +181,11 @@ export function validateResolvedWorkspaceConfig(config: WorkspaceConfig): Worksp
       `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} requires workspace host epoch ${config.systemEpoch}, but this process is epoch ${WORKSPACE_SYSTEM_EPOCH}; open it through the current hub or publish a prepared change with epochTransition`
     );
   }
+  const compatibilityError = appCompatibilityError(
+    WorkspaceAppCompatibilitySchema.parse(config),
+    WORKSPACE_APP_VERSION
+  );
+  if (compatibilityError) throw new Error(compatibilityError);
   validateDeclaredUnits(config);
   return config;
 }

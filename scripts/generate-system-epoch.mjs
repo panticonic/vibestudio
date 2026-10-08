@@ -12,7 +12,8 @@ const epoch = semver.major(version);
 const destination = path.join(root, "packages/shared/src/vcs/systemEpoch.generated.ts");
 const content =
   "/** Generated from the root application SemVer by scripts/generate-system-epoch.mjs. */\n" +
-  `export const GENERATED_WORKSPACE_SYSTEM_EPOCH = ${epoch} as const;\n`;
+  `export const GENERATED_WORKSPACE_SYSTEM_EPOCH = ${epoch} as const;\n` +
+  `export const GENERATED_WORKSPACE_APP_VERSION = ${JSON.stringify(version)} as const;\n`;
 
 if (process.argv.includes("--check")) {
   if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== content) {

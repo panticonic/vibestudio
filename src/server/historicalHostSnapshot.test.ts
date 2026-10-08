@@ -1,6 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import {
+  applyWorkspaceHostRuntimeEnv,
+  buildWorkspaceChildArgs,
+  buildWorkspaceChildEnv,
+} from "./hubServer.js";
+import { resolveHistoricalWorkspaceHost } from "./historicalWorkspaceHost.js";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -193,4 +201,71 @@ it("retains a packaged Electron executable with its entire application tree", ()
   expect(result.marker.runtimeMode).toBe("electron-node");
   expect(result.marker.executable).toBe(path.join("app", "vibestudio"));
   expect(fs.existsSync(path.join(result.destination, result.marker.serverEntry))).toBe(true);
+});
+
+it("launches a retained server with its own artifacts after the original installation is replaced", async () => {
+  const input = fixture(
+    "1.2.0",
+    `
+    import { readFileSync } from "node:fs";
+    import { join } from "node:path";
+    const artifacts = process.env.VIBESTUDIO_HOST_ARTIFACT_ROOT;
+    console.log(JSON.stringify({
+      hostVersion: process.env.VIBESTUDIO_APP_VERSION,
+      currentVersion: process.env.VIBESTUDIO_CURRENT_APP_VERSION,
+      bundle: readFileSync(join(artifacts, "internal-do.bundle.mjs"), "utf8"),
+      worker: readFileSync(join(artifacts, "workerd-programs", "main.mjs"), "utf8"),
+      hubBundle: process.env.VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH ?? null,
+      appRoot: process.env.VIBESTUDIO_APP_ROOT,
+    }));
+  `
+  );
+  fs.mkdirSync(path.join(input.app, "dist", "workerd-programs"));
+  fs.writeFileSync(path.join(input.app, "dist", "internal-do.bundle.mjs"), "retained bundle");
+  fs.writeFileSync(path.join(input.app, "dist", "workerd-programs", "main.mjs"), "retained worker");
+  publishHistoricalHostSnapshot({
+    centralDataPath: input.central,
+    artifactRoot: input.app,
+    appRoot: input.app,
+    serverEntry: path.join(input.app, "dist", "server.mjs"),
+    executable: process.execPath,
+    appVersion: "1.2.0",
+    platform: "linux",
+  });
+  const launchSet = resolveHistoricalWorkspaceHost(path.join(input.central, "host-versions"), 1);
+  fs.rmSync(input.app, { recursive: true });
+  const env = buildWorkspaceChildEnv({
+    baseEnv: {
+      ...process.env,
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(input.app, "new-generation"),
+      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: path.join(input.app, "new-hub-bundle"),
+      ESBUILD_BINARY_PATH: path.join(input.app, "new-esbuild"),
+    },
+    appRoot: launchSet.appRoot,
+    workspaceName: "retained-integration",
+    workspaceId: "ws_retained_integration",
+    hubUrl: "http://127.0.0.1:1",
+    identityDbPath: path.join(input.central, "identity.db"),
+    workspaceChildToken: "test-token",
+  });
+  applyWorkspaceHostRuntimeEnv(env, launchSet, "2.0.0");
+  const { stdout } = await promisify(execFile)(
+    launchSet.executable,
+    buildWorkspaceChildArgs({
+      entry: launchSet.serverEntry,
+      workspaceName: "retained-integration",
+      appRoot: launchSet.appRoot,
+      readyFile: path.join(input.central, "ready.json"),
+    }),
+    { env, cwd: launchSet.appRoot }
+  );
+  expect(JSON.parse(stdout)).toEqual({
+    hostVersion: "1.2.0",
+    currentVersion: "2.0.0",
+    bundle: "retained bundle",
+    worker: "retained worker",
+    hubBundle: null,
+    appRoot: launchSet.appRoot,
+  });
+  expect(env["ESBUILD_BINARY_PATH"]).toBeUndefined();
 });

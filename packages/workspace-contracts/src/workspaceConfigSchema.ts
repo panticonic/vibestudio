@@ -1,3 +1,4 @@
+import { AppVersionSchema } from "./appCompatibility.js";
 import { WorkspaceAutomationsSchema } from "./automations.js";
 import { z } from "zod";
 import {
@@ -408,6 +409,7 @@ export const WorkspaceConfigSchema = z
   .object({
     id: z.string(),
     systemEpoch: z.number().int().nonnegative(),
+    minimumAppVersion: AppVersionSchema.optional(),
     defaultRepo: z.string().optional(),
     git: z
       .object({

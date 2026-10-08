@@ -52,6 +52,18 @@ export const CHANNEL_INVITE_NOTIFICATION_KIND = "channel.invite";
  */
 export const AGENT_MESSAGE_NOTIFICATION_KIND = "agent.message";
 
+export const TEMPLATE_UPDATE_NOTIFICATION_KIND = "workspace.template-update";
+
+/** The producer supplies the review request; opening it starts an ordinary
+ * agent conversation and grants no publication authority. */
+export function templateUpdateNotificationPrompt(notification: UserNotification): string | null {
+  if (notification.kind !== TEMPLATE_UPDATE_NOTIFICATION_KIND) return null;
+  const data = notification.data;
+  if (!data || typeof data !== "object") return null;
+  const prompt = (data as { prompt?: unknown }).prompt;
+  return typeof prompt === "string" && prompt.trim() ? prompt : null;
+}
+
 export interface AgentMessageNotificationData {
   channelId: string;
   channelTargetId: string;

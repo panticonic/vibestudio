@@ -22267,7 +22267,7 @@
         "capability": null,
         "presentation": null
       },
-      "readEpoch": {
+      "readCompatibility": {
         "authority": {
           "principals": [
             "user",

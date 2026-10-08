@@ -406,3 +406,37 @@ describe("workspace package-name helpers (centralized scopes)", () => {
     expect(() => workspaceExtensionPackageName("apps/shell")).toThrow();
   });
 });
+
+it("enforces installed dependency floors through the stable future-schema envelope", async () => {
+  const { parseWorkspaceAppCompatibilityEnvelope } = await import("./configParser");
+  const { appCompatibilityError } =
+    await import("@vibestudio/workspace-contracts/appCompatibility");
+  const pin = {
+    url: "https://example.test/base.git",
+    ref: "refs/heads/main",
+    commit: "a".repeat(40),
+  };
+  const manifest = JSON.stringify({
+    systemEpoch: 1,
+    futureRuntimeField: { unsupported: true },
+    template: {
+      dependencies: [{ url: pin.url }],
+      installation: {
+        sources: [
+          {
+            pin,
+            manifest: JSON.stringify({
+              systemEpoch: 1,
+              minimumAppVersion: "1.5.0",
+              futureUnits: true,
+            }),
+          },
+        ],
+      },
+    },
+  });
+  const requirement = parseWorkspaceAppCompatibilityEnvelope(manifest);
+  expect(requirement).toEqual({ systemEpoch: 1, minimumAppVersion: "1.5.0" });
+  expect(appCompatibilityError(requirement, "1.0.0")).toContain("1.5.0");
+  expect(appCompatibilityError(requirement, "1.6.0")).toBeNull();
+});

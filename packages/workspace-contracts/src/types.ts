@@ -481,6 +481,8 @@ export interface WorkspaceConfig {
   id: string;
   /** Semantic storage, host projections, and workspace runtime ABI epoch. */
   systemEpoch: number;
+  /** Minimum compatible app release within the declared generation. */
+  minimumAppVersion?: string;
   /**
    * Repo used as the base for bare VCS file paths such as `notes.md`.
    * This is workspace policy, not a host convention: omit it to require every
