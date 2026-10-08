@@ -5052,6 +5052,39 @@ describe("RpcServer caller identity", () => {
     });
   });
 
+  it("preserves evidence lookup failures instead of converting them to access denials", async () => {
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+      agentId: "agent:stable",
+      userId: "user:one",
+    };
+    const failure = Object.assign(new Error("Evidence service disconnected"), {
+      code: "ECONNRESET",
+      errorKind: "transport",
+      errorData: { source: "workspace-source", operation: "getLogEvent" },
+    });
+    const { server } = createServer({
+      resolveExactCausalInvocation: async () => {
+        throw failure;
+      },
+    });
+    await expect(
+      resolveCausalParent(
+        server,
+        createVerifiedCaller("do:agents:Agent:one", "do", null, binding),
+        {
+          causalParent: {
+            kind: "trajectory-invocation",
+            ...channelTrajectoryFor(binding.channelId),
+            invocationId: "invocation:tool",
+          },
+        }
+      )
+    ).rejects.toBe(failure);
+  });
+
   it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {
     const resolveExactCausalInvocation = vi.fn(async () => null);
     const { server } = createServer({ resolveExactCausalInvocation });

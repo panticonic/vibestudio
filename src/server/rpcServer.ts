@@ -1469,19 +1469,11 @@ export class RpcServer {
     if (!resolver) {
       throw createRelayError("Exact causal invocation verification is unavailable", "EACCES");
     }
-    let resolved: {
-      initiatingUser: UserSubject | null;
-      taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
-      nativeInvocation?: import("@vibestudio/rpc").NativeInvocationIdentity | null;
-    } | null;
-    try {
-      resolved = await resolver(causalParent, binding ?? null);
-    } catch (error) {
-      throw createRelayError(
-        `Exact causal invocation verification failed: ${error instanceof Error ? error.message : String(error)}`,
-        "EACCES"
-      );
-    }
+    // Failure to read the evidence is not evidence of denied authority. Keep
+    // the resolver's original failure so callers can distinguish an unavailable
+    // dependency from a missing or invalid causal invocation. Dispatch still
+    // remains blocked until verification succeeds.
+    let resolved = await resolver(causalParent, binding ?? null);
     if (!resolved) {
       throw createRelayError(
         `Causal invocation does not exist: ${causalParent.invocationId}`,
