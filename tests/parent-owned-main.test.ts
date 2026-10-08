@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
@@ -118,18 +118,21 @@ it.skipIf(process.platform !== "linux")(
     const { createDevelopmentClientLifetime } = await tsImport(${JSON.stringify(resolve("scripts/development-client-lifecycle.ts"))}, import.meta.url);
     await runParentOwnedMain(async signal => {
       const lifetime = createDevelopmentClientLifetime(${JSON.stringify(root)});
-      const pids = [];
+      const helpers = [];
+      let secretService;
       const stop = () => lifetime.requestStop();
       signal.addEventListener("abort", stop, { once: true });
       if (signal.aborted) stop();
       try {
-        await startEphemeralLinuxSecretService(${JSON.stringify(root)}, start => {
-          const child = lifetime.acquire(start); pids.push(child.pid); return child;
-        });
-        console.log(JSON.stringify({ ready: true, ownerPid: process.pid, pids }));
+        secretService = await startEphemeralLinuxSecretService(${JSON.stringify(root)}, start => {
+          const child = lifetime.acquire(start); helpers.push(child); return child;
+        }, lifetime.retireChild, { signal });
+        const pids = helpers.filter(child => child.exitCode === null).map(child => child.pid);
+        console.log(JSON.stringify({ ready: true, ownerPid: process.pid, pids, runtimeDir: secretService.env.XDG_RUNTIME_DIR }));
         await new Promise(done => { if (signal.aborted) done(); else signal.addEventListener("abort", done, { once: true }); });
       } finally {
         signal.removeEventListener("abort", stop);
+        await secretService?.dispose();
         await lifetime.close();
       }
     });
@@ -142,7 +145,7 @@ it.skipIf(process.platform !== "linux")(
     const launcherOwner = OwnedProcessGroup.create(launcher);
     const identities: OwnedProcessIdentity[] = [];
     try {
-      const ready = await new Promise<{ ownerPid: number; pids: number[] }>(
+      const ready = await new Promise<{ ownerPid: number; pids: number[]; runtimeDir: string }>(
         (resolveReady, reject) => {
           let output = "";
           let errors = "";
@@ -171,6 +174,7 @@ it.skipIf(process.platform !== "linux")(
           timeout: 12_000,
         })
         .toEqual(["absent", "absent", "absent"]);
+      await expect(access(dirname(ready.runtimeDir))).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await launcherOwner.retire("SIGKILL");

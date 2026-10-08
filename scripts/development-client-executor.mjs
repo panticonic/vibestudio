@@ -105,6 +105,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-client-executor-"));
   const lifetime = createDevelopmentClientLifetime(tempRoot);
+  let secretService;
   let stopRequested = false;
   const stop = () => {
     stopRequested = true;
@@ -119,7 +120,12 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     const deepLink = await mintPairingLink(parsed.instanceId, parsed.ttlMs, lifetime.acquire);
     if (stopRequested) return;
     console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
-    const secrets = await startEphemeralLinuxSecretService(tempRoot, lifetime.acquire);
+    secretService = await startEphemeralLinuxSecretService(
+      tempRoot,
+      lifetime.acquire,
+      lifetime.retireChild,
+      { signal: ownerSignal }
+    );
     if (stopRequested) return;
 
     const userDataDir = path.join(tempRoot, "electron-user-data");
@@ -130,7 +136,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
       VIBESTUDIO_APP_ROOT: repoRoot,
       ELECTRON_DISABLE_GPU: "1",
       ELECTRON_DISABLE_SANDBOX: "1",
-      ...secrets.env,
+      ...secretService.env,
     };
     // Instance routing belongs to the server this client pairs *into*; an
     // inherited one would send it to a different workspace entirely.
@@ -146,7 +152,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         "--no-sandbox",
         // xvfb-run provides X11 even when the parent desktop uses Wayland.
         "--ozone-platform=x11",
-        ...secrets.electronArgs,
+        ...secretService.electronArgs,
         `--user-data-dir=${userDataDir}`,
         repoRoot,
         deepLink,
@@ -182,7 +188,11 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
     ownerSignal.removeEventListener("abort", stop);
-    await lifetime.close();
+    try {
+      await secretService?.dispose();
+    } finally {
+      await lifetime.close();
+    }
   }
 }
 

@@ -60,6 +60,7 @@ export function createDevelopmentClientLifetime(tempRoot: string) {
   let closing: Promise<void> | undefined;
   return {
     acquire: lifetime.acquire,
+    retireChild: lifetime.retireChild,
     requestStop: lifetime.requestStop,
     close() {
       closing ??= lifetime.retire().then(() => rm(tempRoot, { recursive: true, force: true }));

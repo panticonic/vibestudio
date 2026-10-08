@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, access } from "node:fs/promises";
+import { mkdtemp, access, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,28 +47,47 @@ describe.skipIf(process.platform === "win32")("development client lifetime", () 
     await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it.skipIf(process.platform !== "linux")("joins real keyring helpers and cancels creation after asynchronous setup", async () => {
-    const root = await mkdtemp(join(tmpdir(), "vs-keyring-"));
+    const scratch = await mkdtemp(join(tmpdir(), "vs-keyring-"));
+    const root = join(scratch, "r".repeat(80));
+    await mkdir(root);
     const lifetime = createDevelopmentClientLifetime(root);
     const groups: number[] = [];
+    let secrets: Awaited<ReturnType<typeof startEphemeralLinuxSecretService>> | undefined;
+    let ipcRuntimeDir: string | undefined;
     try {
-      const secrets = await startEphemeralLinuxSecretService(root, (start: () => import("node:child_process").ChildProcess) => {
+      secrets = await startEphemeralLinuxSecretService(root, (start: () => import("node:child_process").ChildProcess) => {
         const child = lifetime.acquire(start);
         if (child.pid) groups.push(child.pid);
         return child;
-      });
-      expect(secrets.env.DBUS_SESSION_BUS_ADDRESS).toContain(root);
-      expect(groups).toHaveLength(2);
+      }, lifetime.retireChild);
+      expect(secrets.env.DBUS_SESSION_BUS_ADDRESS).not.toContain(root);
+      expect(secrets.env.DBUS_SESSION_BUS_ADDRESS.length).toBeLessThan(90);
+      expect(secrets.env.XDG_RUNTIME_DIR).not.toContain(root);
+      ipcRuntimeDir = secrets.env.XDG_RUNTIME_DIR;
+      expect(groups).toHaveLength(3);
     } finally {
-      await lifetime.close();
+      try {
+        await secrets?.dispose();
+      } finally {
+        try {
+          await lifetime.close();
+        } finally {
+          await rm(scratch, { recursive: true, force: true });
+        }
+      }
     }
     for (const pid of groups) {
       expectGroupStopped(pid);
     }
     await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
-
+    await expect(access(ipcRuntimeDir!)).rejects.toMatchObject({ code: "ENOENT" });
     const cancelledRoot = await mkdtemp(join(tmpdir(), "vs-keyring-cancel-"));
     const cancelled = createDevelopmentClientLifetime(cancelledRoot);
-    const startup = startEphemeralLinuxSecretService(cancelledRoot, cancelled.acquire);
+    const startup = startEphemeralLinuxSecretService(
+      cancelledRoot,
+      cancelled.acquire,
+      cancelled.retireChild
+    );
     cancelled.requestStop();
     try {
       await expect(startup).rejects.toThrow("Client lifetime is stopping");

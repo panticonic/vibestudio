@@ -74,6 +74,8 @@ if (!instance || !directory || !process.send)
   throw new Error("Managed server owner requires an IPC lease");
 const lifetime = createDevelopmentClientLifetime(directory);
 const children = [];
+const startupController = new AbortController();
+let secretService;
 let closing = false;
 let shutdown;
 const send = (message) => {
@@ -115,17 +117,28 @@ const start = async () => {
   );
   if (closing) return;
   const pairingLink = JSON.parse(stdout.trim().split("\n").at(-1)).pairing.deepLink;
-  const secrets = await startEphemeralLinuxSecretService(directory, (startChild) => {
-    const child = lifetime.acquire(startChild);
-    children.push(child);
-    return child;
-  });
+  secretService = await startEphemeralLinuxSecretService(
+    directory,
+    (startChild) => {
+      const child = lifetime.acquire(startChild);
+      children.push(child);
+      return child;
+    },
+    lifetime.retireChild,
+    { signal: startupController.signal }
+  );
   if (closing) return;
-  send({ kind: "ready", pairingLink, secrets, helperPids: children.map((child) => child.pid) });
+  send({
+    kind: "ready",
+    pairingLink,
+    secrets: { env: secretService.env, electronArgs: secretService.electronArgs },
+    helperPids: children.map((child) => child.pid),
+  });
 };
 let startup;
 function stop() {
   closing = true;
+  startupController.abort(new Error("Managed server owner is stopping"));
   lifetime.requestStop();
   return (shutdown ??= (async () => {
     let failed = false;
@@ -143,6 +156,12 @@ function stop() {
     await startup?.catch(() => {});
     try {
       await managed("stop");
+    } catch (error) {
+      failed = true;
+      console.error(error);
+    }
+    try {
+      await secretService?.dispose();
     } catch (error) {
       failed = true;
       console.error(error);

@@ -2401,7 +2401,12 @@ async function main(parentOwnerSignal) {
     desktopEnvironment =
       process.platform === "darwin"
         ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
-        : await startEphemeralLinuxSecretService(tempRoot, acquireProcess);
+        : await startEphemeralLinuxSecretService(
+            tempRoot,
+            acquireProcess,
+            processLifetime.retireChild,
+            { signal: ownerSignal }
+          );
     desktopEnvironments.push(desktopEnvironment);
 
     // 1. Start the same remote-serve launcher users run. No relay override is
@@ -2921,7 +2926,12 @@ async function main(parentOwnerSignal) {
           const environment =
             process.platform === "darwin"
               ? createMacosTestKeychain({ home: path.join(memberRoot, "home"), electronBinary })
-              : await startEphemeralLinuxSecretService(memberRoot, acquireProcess);
+              : await startEphemeralLinuxSecretService(
+                  memberRoot,
+                  acquireProcess,
+                  processLifetime.retireChild,
+                  { signal: ownerSignal }
+                );
           desktopEnvironments.push(environment);
           const member = await launchDesktopApp(
             memberDeepLink,
